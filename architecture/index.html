@@ -23,7 +23,7 @@
       
       
       <link rel="icon" href="../assets/images/favicon.png">
-      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.8.0">
     
     
       
@@ -31,7 +31,7 @@
       
     
     
-      <link rel="stylesheet" href="../assets/stylesheets/main.ec1eaa64.min.css">
+      <link rel="stylesheet" href="../assets/stylesheets/main.57a0d79d.min.css">
       
       
 
@@ -556,6 +556,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Storage layer">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#reading-a-large-run-folder-without-scanning-it" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Reading a large run folder without scanning it
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -577,6 +594,23 @@
       
     </span>
   </a>
+  
+    <nav class="md-nav" aria-label="Automations">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#events-reaching-an-occurrence" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Events reaching an occurrence
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
   
 </li>
       
@@ -1465,6 +1499,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Storage layer">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#reading-a-large-run-folder-without-scanning-it" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Reading a large run folder without scanning it
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -1486,6 +1537,23 @@
       
     </span>
   </a>
+  
+    <nav class="md-nav" aria-label="Automations">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#events-reaching-an-occurrence" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Events reaching an occurrence
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
   
 </li>
       
@@ -1797,6 +1865,10 @@ record exactly once), and no doubled side effects.</p>
 - inspection: <code>VARS_QUERY</code> (read-only access to <code>RunState.vars</code> paths; parsing helpers in <code>src/abstractruntime/core/vars.py</code>)</p>
 <h3 id="host-wired-effects">Host-wired effects<a class="headerlink" href="#host-wired-effects" title="Permanent link">&para;</a></h3>
 <p>The kernel defines the protocol; concrete integrations provide handlers:
+- <code>PUBLISH_EVENT</code> ("Publish to channel"): the kernel validates the payload; the host's
+  <code>Runtime.set_publish_event_handler(...)</code> appends the event to the user's stream (see
+  <a href="../automations/#publish-to-channel">automations.md</a>)
+- <code>SCHEDULE_RUN</code>: the kernel validates the request and plans a one-shot automation (tools at most the caller's ceiling, never <code>schedule_run</code> itself); the host's <code>Runtime.set_schedule_run_handler(...)</code> creates it, because only the host knows the target workflow, the owner and the workspace (see <a href="../automations/#wakes-schedule_run">automations.md</a>)
 - <code>LLM_CALL</code>, <code>TOOL_CALLS</code>, <code>MODEL_RESIDENCY</code>: provided by AbstractCore integration (<code>src/abstractruntime/integrations/abstractcore/effect_handlers.py</code>). The integration supports local/remote/hybrid execution, cached sessions/prompt-cache control with per-session attribution and clearing, host memory snapshots, discovery/catalog snapshots, model residency including host-wide provider-server rows in listings, residency locks with <code>force</code>-gated unload and context-estimate relays, durable run-scoped media child runs, media inputs, generated media outputs, provider progress callbacks as ledger events, provider-key header routing for remote servers, passthrough tools, approval-gated local tool execution, and workspace-scoped file and shell tools (run vars <code>workspace_*</code>, inherited by child runs; the host's built-in deny prefixes are enforced without being rendered into the model's prompt).
 - <code>MEMORY_KG_*</code>: provided by the AbstractMemory bridge (<code>src/abstractruntime/integrations/abstractmemory/effect_handlers.py</code>)</p>
 <h3 id="reliability-retries-idempotency">Reliability: retries + idempotency<a class="headerlink" href="#reliability-retries-idempotency" title="Permanent link">&para;</a></h3>
@@ -1815,7 +1887,61 @@ record exactly once), and no doubled side effects.</p>
 - <code>HashChainedLedgerStore</code> for tamper-evidence (<code>src/abstractruntime/storage/ledger_chain.py</code>)
 - <code>ArtifactStore</code> + helpers (<code>src/abstractruntime/storage/artifacts.py</code>)
 - <code>OffloadingRunStore</code> / <code>OffloadingLedgerStore</code> to keep checkpoints bounded (<code>src/abstractruntime/storage/offloading.py</code>)
+- <code>MailboxQueryableRunStore</code> (<code>list_mailbox_runs</code>, <code>next_wait_deadline</code>) on every built-in run store, for event fan-out and wake scheduling without a recency window
 - snapshots/bookmarks (<code>src/abstractruntime/storage/snapshots.py</code>)</p>
+<h3 id="reading-a-large-run-folder-without-scanning-it">Reading a large run folder without scanning it<a class="headerlink" href="#reading-a-large-run-folder-without-scanning-it" title="Permanent link">&para;</a></h3>
+<p>A JSON run folder can hold tens of thousands of run files. <code>JsonFileRunStore</code> keeps in memory what
+listings and lookups need, so a host polling it never globs or stats every file:</p>
+<div class="highlight"><pre><span></span><code>flowchart LR
+  subgraph Writers["Writers on one run folder"]
+    Own["This store object&lt;br/&gt;(save / create / delete)"]
+    Other["Another process&lt;br/&gt;(a split host's other half)"]
+  end
+  Folder[("Run files&lt;br/&gt;&amp;lt;run_id&amp;gt;.json")]
+  Log[(".runs_created.log&lt;br/&gt;+ - ~ = lines")]
+  subgraph Store["JsonFileRunStore (in memory)"]
+    Active["Active index&lt;br/&gt;RUNNING / WAITING"]
+    Trusted["Trusted run index&lt;br/&gt;every run's listing fields"]
+    Waits["Event-wait and&lt;br/&gt;mailbox indexes"]
+    Token["change_token()&lt;br/&gt;(log size, counter)"]
+  end
+  Recon["Reconciliation&lt;br/&gt;(background, ≤ 60 s when moved, ≥ every 10 min)"]
+  Own --&gt; Folder
+  Own --&gt; Log
+  Own --&gt; Active
+  Own --&gt; Trusted
+  Own --&gt; Token
+  Other --&gt; Folder
+  Other --&gt; Log
+  Log --&gt;|"next lookup"| Active
+  Log --&gt;|"next lookup"| Trusted
+  Log --&gt;|"size moved, or every 2 s"| Waits
+  Folder -.-&gt;|"mtime moved"| Waits
+  Folder -.-&gt;|"mtime moved: re-read RUNNING / WAITING entries"| Trusted
+  Recon --&gt;|repairs, logs a warning| Trusted
+  Folder -.-&gt; Recon
+</code></pre></div>
+<ul>
+<li><strong>Active index</strong>: <code>list_runs</code> / <code>list_run_index</code> for RUNNING or WAITING and the scheduler's due-wait
+  poll, re-verified against each file at listing time.</li>
+<li><strong>Trusted run index</strong> (<code>trust_index=True</code>, the default): every other listing without a session
+  scope is answered from memory; <code>trust_index=False</code> (verify) answers with the scan and counts
+  differences (<code>run_index_stats()</code>). The background reconciliation repairs what a writer that
+  bypassed the creation journal left out; <code>load()</code> always reads disk.</li>
+<li><strong>Event-wait and mailbox indexes</strong> see runs another process parked (refreshed before each
+  lookup when the journal or the folder moved, at least every 2 s).</li>
+<li><strong>Change tokens</strong>: <code>JsonFileRunStore.change_token()</code> and <code>ObservableLedgerStore.change_token()</code>
+  (with <code>changed_run_ids(token)</code>) let a periodic reader skip a pass when nothing changed and read
+  only what did.</li>
+<li><strong>Active-consumers index</strong> (<code>abstractruntime.automations.consumers</code>): one snapshot per runtime of
+  which ACTIVE automation reads which trigger, rebuilt on the store's automation generation, so
+  "who listens to this connection or mailbox?" reads no run file.</li>
+<li><strong>Artifacts</strong>: <code>ArtifactStore.list_session_candidates(session_id, owner_run_id=)</code> answers a
+  session's artifacts through catalog indexes instead of reading the catalog.</li>
+</ul>
+<p>Details and the exact counters: <a href="../api/#storage-layer-durability-backends">api.md, Storage layer</a>
+and <a href="../artifacts/">artifacts.md</a>. One process ticks a folder; see
+<a href="../automations/#storage-guarantees">automations.md, Storage guarantees</a>.</p>
 <h2 id="drivers-scheduler">Drivers: scheduler<a class="headerlink" href="#drivers-scheduler" title="Permanent link">&para;</a></h2>
 <p>The scheduler is an in-process driver loop that resumes due waits and can deliver external events:
 - <code>Scheduler</code> (<code>src/abstractruntime/scheduler/scheduler.py</code>) polls <code>QueryableRunStore.list_due_wait_until(...)</code>
@@ -1824,8 +1950,9 @@ record exactly once), and no doubled side effects.</p>
 <p>An automation runs a target workflow on a trigger, and is itself a durable run. The controller is a packaged
 VisualFlow bundle (<code>abstractframework.automation-controller@1.0.0</code>) whose nodes are <code>automation</code> adapters; it waits on
 one <code>WAIT_EVENT</code> with a deadline, starts each occurrence as an asynchronous <code>START_SUBWORKFLOW</code> child with a
-deterministic id, and records every transition as an <code>automation.*</code> ledger record. No new effect type or driver is
-involved: a host drives a controller like any other run. See <a href="../automations/">automations.md</a>.</p>
+deterministic id, and records every transition as an <code>automation.*</code> ledger record. The controller needs no effect type or driver of its
+own: a host drives it like any other run. A run creates a one-shot automation for later through <code>SCHEDULE_RUN</code> (a
+wake). See <a href="../automations/">automations.md</a>.</p>
 <div class="highlight"><pre><span></span><code>flowchart LR
   subgraph Host["Host (AbstractGateway run loop, or drive_automation)"]
     Loop["tick due runs /&lt;br/&gt;resume finished subworkflow parents"]
@@ -1834,8 +1961,10 @@ involved: a host drives a controller like any other run. See <a href="../automat
   subgraph Automations["automations/ + triggers/"]
     Commands["apply_automation_command"]
     Controller["controller run&lt;br/&gt;(automation-controller@1.0.0)"]
-    Triggers["trigger registry&lt;br/&gt;schedule@1, schedule@2, manual@1,&lt;br/&gt;email.received@1, entry-point sources"]
-    Inbox["event inbox&lt;br/&gt;(email/, filled by the host's watcher)"]
+    Triggers["trigger registry&lt;br/&gt;schedule@1, schedule@2, manual@1,&lt;br/&gt;email.received@1, feed.item@1,&lt;br/&gt;webhook.received@1, entry-point sources"]
+    Conns["trigger connections&lt;br/&gt;(per user: feed URL, webhook secret)"]
+    Inbox["event inbox&lt;br/&gt;(streams email:… and trigger:…,&lt;br/&gt;filled by the host's feeders)"]
+    Wakes["wakes&lt;br/&gt;(SCHEDULE_RUN plans,&lt;br/&gt;the host creates)"]
     Queries["get_automation / list_occurrences /&lt;br/&gt;list_attention / pending_waits /&lt;br/&gt;list_automations"]
   end
   subgraph Runs["runs"]
@@ -1855,6 +1984,9 @@ involved: a host drives a controller like any other run. See <a href="../automat
   Loop --&gt; Occ
   Controller --&gt;|"prepare / admit / rearm"| Triggers
   Controller --&gt;|"events after its cursor"| Inbox
+  Commands -.-&gt;|"create / revise:&lt;br/&gt;connection_id check"| Conns
+  Occ --&gt;|"SCHEDULE_RUN"| Wakes
+  Wakes --&gt;|"one-shot automation"| Commands
   Controller --&gt;|"START_SUBWORKFLOW run_id"| Occ
   Occ --&gt; Desc
   Controller --&gt; RS
@@ -1864,6 +1996,29 @@ involved: a host drives a controller like any other run. See <a href="../automat
   Queries --&gt; RS
   Queries --&gt; LS
 </code></pre></div>
+<h3 id="events-reaching-an-occurrence">Events reaching an occurrence<a class="headerlink" href="#events-reaching-an-occurrence" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code>flowchart LR
+  subgraph Sources["host-side feeders"]
+    Mail["mail watcher&lt;br/&gt;(EmailInboxFeeder.poll)"]
+    Feed["feed poller&lt;br/&gt;(poll_feed_connections)"]
+    Hook["webhook route&lt;br/&gt;(append_webhook_event,&lt;br/&gt;Standard Webhooks check)"]
+    Test["console test-fire&lt;br/&gt;(test_fire)"]
+  end
+  Inbox["EventInbox&lt;br/&gt;stream per mailbox folder / per connection&lt;br/&gt;dedupe on dedupekey"]
+  Ctrl["controller run&lt;br/&gt;admit: adapter batches events&lt;br/&gt;after its cursor"]
+  Occ["occurrence run&lt;br/&gt;prompt: [Trigger …] header (+ untrusted frame)&lt;br/&gt;input_data.event: CloudEvents 1.0&lt;br/&gt;_meta.origin: trigger / person / agent"]
+  Mail --&gt; Inbox
+  Feed --&gt; Inbox
+  Hook --&gt; Inbox
+  Test --&gt; Inbox
+  Sources -.-&gt;|"wake the bound controllers"| Ctrl
+  Inbox --&gt; Ctrl
+  Ctrl --&gt;|"START_SUBWORKFLOW"| Occ
+</code></pre></div>
+<p>Feeders append one event per mail, feed item or webhook call to the inbox stream of a mailbox folder
+(<code>email:&lt;tenant&gt;:&lt;user&gt;:&lt;mailbox&gt;:&lt;folder&gt;</code>) or of a trigger connection (<code>trigger:&lt;connection_id&gt;</code>), then wake the
+automations bound to it. The controller reads only its own streams, its adapter turns the pending events into one
+admission, and the occurrence receives the envelope as a CloudEvents 1.0 event beside its prompt header.</p>
 <p>Email automations read the runtime's durable event inbox: the host's mail watcher appends each new message
 (<code>abstractruntime.email.feeder</code>) and wakes the controller, and the <code>email.received@1</code> adapter batches the messages
 after the automation's cursor. Tool calls resolve the executing run's email account through the host's per-runtime
@@ -1878,6 +2033,8 @@ resolver at call time. See <a href="../email/">email.md</a>.</p>
   application.</li>
 <li><strong>One lock per run.</strong> <code>run_mutation_lock(run_id)</code> serializes <code>tick</code>, <code>resume</code> commits and automation commands in a
   process. v1 supports one writer process per store.</li>
+<li><strong>Origin is recorded once.</strong> Every occurrence carries <code>_meta.origin</code> (<code>trigger</code>, <code>person</code> for a run-now, <code>agent</code>
+  for a wake) frozen with its inputs; hosts stamp the runs they start with <code>origin_for(...)</code>.</li>
 <li><strong>Turns are defined once.</strong> <code>select_session_turns</code> decides which runs are a session's turns (parent-less runs
   except controllers, plus occurrences). History bundles, session replay, growing context and discussion seeds all
   use it, and <code>list_run_index(root_only=True)</code> returns the same turn roots.</li>
@@ -1986,10 +2143,10 @@ resolver at call time. See <a href="../email/">email.md</a>.</p>
     
       
       
-      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.instant", "navigation.tracking", "navigation.top", "content.code.copy"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.instant", "navigation.tracking", "navigation.top", "content.code.copy"], "search": "../assets/javascripts/workers/search.a7633da7.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
     
     
-      <script src="../assets/javascripts/bundle.d7400e89.min.js"></script>
+      <script src="../assets/javascripts/bundle.c21346df.min.js"></script>
       
     
   </body>

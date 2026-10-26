@@ -23,7 +23,7 @@
       
       
       <link rel="icon" href="../../assets/images/favicon.png">
-      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.8.0">
     
     
       
@@ -31,7 +31,7 @@
       
     
     
-      <link rel="stylesheet" href="../../assets/stylesheets/main.ec1eaa64.min.css">
+      <link rel="stylesheet" href="../../assets/stylesheets/main.57a0d79d.min.css">
       
       
 
@@ -1730,7 +1730,7 @@
 <h2 id="install">Install<a class="headerlink" href="#install" title="Permanent link">&para;</a></h2>
 <div class="highlight"><pre><span></span><code>pip<span class="w"> </span>install<span class="w"> </span>abstractruntime
 </code></pre></div>
-<p>The base install includes AbstractCore 2.24.0 or newer. That is the supported baseline for the current server auth split (<code>Authorization</code> for server auth, <code>X-AbstractCore-Provider-API-Key</code> for provider overrides), generated-media contracts, image upscaling, capability catalog, prompt-cache control-plane endpoints (including session attribution via <code>/acore/prompt_cache/key_meta</code>), host memory snapshots, the host-wide loaded-model sweep used by residency listings, the process-wide MLX residency report and eject used by model unload, durable bloc prompt-cache helpers, bindings and lifecycle operations, task-aware model residency for text/image/video/TTS/STT, current tool catalog, AbstractCore's public output-selector contract, async/sync text-generation output-selector parity, video generation endpoints, the public local vision-cache catalog helper used by Runtime discovery, vision adapter discovery plus batch/LoRA media controls, and the released shared workspace/file-filter utility surface used by Runtime packaging and integration checks.</p>
+<p>The base install includes AbstractCore 2.29.0 or newer. That is the supported baseline for the current server auth split (<code>Authorization</code> for server auth, <code>X-AbstractCore-Provider-API-Key</code> for provider overrides), generated-media contracts, image upscaling, capability catalog, prompt-cache control-plane endpoints (including session attribution via <code>/acore/prompt_cache/key_meta</code>), host memory snapshots, the host-wide loaded-model sweep used by residency listings, the process-wide MLX residency report and eject used by model unload, durable bloc prompt-cache helpers, bindings and lifecycle operations, task-aware model residency for text/image/video/TTS/STT, current tool catalog, AbstractCore's public output-selector contract, async/sync text-generation output-selector parity, video generation endpoints, the public local vision-cache catalog helper used by Runtime discovery, vision adapter discovery plus batch/LoRA media controls, and the released shared workspace/file-filter utility surface used by Runtime packaging and integration checks.</p>
 <p>The base install also includes the remote-light media/capability plugins needed
 for AbstractCore's multimodal <code>generate(..., output=...)</code> path. Local
 image/video/voice/music generation still depends on configured AbstractCore
@@ -2524,6 +2524,7 @@ job.</p>
 <li>Changing the default text model (<code>set_default_provider_model</code>, which the gateway calls when the console default changes) unloads the previous in-process model, unless the pool still uses it or it is locked. The previous model is freed before the new default is loaded, so the two are never in memory together. If the previous model is still generating, the switch does not cancel that call; the model is unloaded when the call ends.</li>
 <li>A model is unloaded only when nothing else in the process still uses it: other services and users, entity runtimes and the AbstractCore server's runtimes register the models they pool, override, lock, are loading or use as their default, and the unload skips a model any of them uses. Multi-local clients (the client <code>create_local_runtime(...)</code> builds) register these claims; a standalone <code>LocalAbstractCoreLLMClient</code> does not, so a host that shares a process between several runtimes should build them with <code>create_local_runtime(...)</code>.</li>
 <li>The switch unload and the failed-load cleanup need an AbstractCore release with the process residency claim registry (<code>abstractcore.providers.process_residency.eject_unclaimed</code>). With an older AbstractCore the previous model stays loaded and <code>last_switch_ejects</code> reports <code>skipped</code> with the reason; unload it explicitly or upgrade AbstractCore. <code>list_model_residency</code> diagnostics list <code>pending_ejects</code> (waiting for a running call to end) and <code>last_switch_ejects</code> (unloaded, kept because it is still in use, or failed, with the reason).</li>
+<li>A process that never generates (for example an HTTP front end beside a separate runner process) can skip loading the default model: call <code>set_default_model_warmup(False)</code> (<code>abstractruntime.integrations.abstractcore.llm_client</code>, process-wide, no environment variable) once before building its runtimes. A <code>MultiLocalAbstractCoreLLMClient</code> then builds its default client at the first call instead of at construction and on a default switch. Default on; <code>default_model_warmup()</code> reads it.</li>
 <li>Chat compaction summarizes a run with the model the run uses. Only a run with no model of its own is summarized with the current default model; the summarizer does not keep the model that was the default at startup.</li>
 <li>A load with <code>ttl_s</code> or <code>keep_alive</code> for an in-process model, or for a model that is already loaded, lists them under <code>unsupported_options</code> with a warning. A load that fails part-way unloads what it loaded.</li>
 <li>Changing a capability default (image, voice, music) unloads the models the old capability routes had loaded before the new routes take effect.</li>
@@ -2916,10 +2917,10 @@ durable Runtime runs. The AbstractCore server dependencies must be installed.</p
     
       
       
-      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.instant", "navigation.tracking", "navigation.top", "content.code.copy"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.instant", "navigation.tracking", "navigation.top", "content.code.copy"], "search": "../../assets/javascripts/workers/search.a7633da7.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
     
     
-      <script src="../../assets/javascripts/bundle.d7400e89.min.js"></script>
+      <script src="../../assets/javascripts/bundle.c21346df.min.js"></script>
       
     
   </body>

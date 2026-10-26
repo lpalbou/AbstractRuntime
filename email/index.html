@@ -23,7 +23,7 @@
       
       
       <link rel="icon" href="../assets/images/favicon.png">
-      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.8.0">
     
     
       
@@ -31,7 +31,7 @@
       
     
     
-      <link rel="stylesheet" href="../assets/stylesheets/main.ec1eaa64.min.css">
+      <link rel="stylesheet" href="../assets/stylesheets/main.57a0d79d.min.css">
       
       
 
@@ -637,6 +637,28 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#the-email-record" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The Email record
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#mail-verbs-for-flows" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Mail verbs for flows
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#sending-from-an-automation-without-a-model" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1224,6 +1246,28 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#the-email-record" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The Email record
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#mail-verbs-for-flows" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Mail verbs for flows
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#sending-from-an-automation-without-a-model" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1441,6 +1485,7 @@ is never appended again (its id stays recorded).</p>
 <div class="highlight"><pre><span></span><code><span class="n">trigger</span> <span class="o">=</span> <span class="p">{</span>
     <span class="s2">"source_id"</span><span class="p">:</span> <span class="s2">"email.received"</span><span class="p">,</span> <span class="s2">"source_version"</span><span class="p">:</span> <span class="mi">1</span><span class="p">,</span>
     <span class="s2">"config"</span><span class="p">:</span> <span class="p">{</span>
+        <span class="s2">"account"</span><span class="p">:</span> <span class="s2">"self"</span><span class="p">,</span>           <span class="c1"># default: the primary mailbox; or a mailbox id of the user ("second")</span>
         <span class="s2">"uses_model"</span><span class="p">:</span> <span class="kc">True</span><span class="p">,</span>          <span class="c1"># default; "every" then defaults to "1h" (false: "60s")</span>
         <span class="s2">"every"</span><span class="p">:</span> <span class="s2">"1h"</span><span class="p">,</span>               <span class="c1"># batch interval, at least "60s"</span>
         <span class="s2">"folder"</span><span class="p">:</span> <span class="s2">"INBOX"</span><span class="p">,</span>
@@ -1451,6 +1496,11 @@ is never appended again (its id stays recorded).</p>
 <span class="p">}</span>
 </code></pre></div>
 <ul>
+<li><strong>Mailbox</strong> (framework backlog 1044): <code>account</code> is <code>"self"</code> (the default; <code>"default"</code> too) for the user's primary
+  mailbox, or the id of another of the user's mailboxes (letters, digits, <code>_ . @ + -</code>; never a <code>tenant:user:id</code>
+  reference). The automation then reads only that mailbox's streams (<code>email:&lt;tenant&gt;:&lt;user&gt;:&lt;id&gt;:&lt;folder&gt;</code>) and its
+  occurrences act for it (<code>_runtime.email_account</code> = <code>&lt;tenant&gt;:&lt;user&gt;:&lt;id&gt;</code>, <code>email_binding_for_trigger</code>). The host
+  checks that the id names a readable mailbox of the automation's owner; the trigger only checks its shape.</li>
 <li><strong>Filters</strong> are typed: <code>from_in</code> (addresses), <code>from_domain_in</code> (exact domains; list a subdomain to match it),
   <code>to_in</code> (any To or Cc address), <code>subject_contains</code> (one literal, case-insensitive substring) and <code>has_attachment</code>.
   There are no patterns or expressions.</li>
@@ -1501,6 +1551,160 @@ is never appended again (its id stays recorded).</p>
   tools named in <code>policy.untrusted_input_tools</code> (sending tools never), and every other call waits for a person,
   <code>send_email</code> to the user's own address included. The executor's own defaults never decide for an email-triggered
   run or its child runs (<code>_runtime.untrusted_input</code>); see <a href="../automations/#tool-approval">automations.md</a>.</li>
+</ul>
+<h2 id="the-email-record">The Email record<a class="headerlink" href="#the-email-record" title="Permanent link">&para;</a></h2>
+<p>One shape describes a message everywhere a flow meets mail: the <code>messages</code> of an <code>email.received@1</code>
+occurrence, a <a href="../automations/#testing-a-triggered-flow-with-sample-inputs">sample</a>, and the results of the mail
+verbs below (<code>triggers.email_received.email_record</code>).</p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>id</code></td>
+<td><code>"&lt;uidvalidity&gt;:&lt;uid&gt;:&lt;folder&gt;"</code>: names the message for the mail verbs. A folder the server rebuilds gets a new UIDVALIDITY, and its old ids are refused (<code>email_message_not_found</code>), never guessed</td>
+</tr>
+<tr>
+<td><code>message_id</code></td>
+<td>the Message-ID header</td>
+</tr>
+<tr>
+<td><code>mailbox</code></td>
+<td>the mailbox's address, or its id when the host bound it without one</td>
+</tr>
+<tr>
+<td><code>folder</code></td>
+<td>the folder holding the message</td>
+</tr>
+<tr>
+<td><code>thread_id</code></td>
+<td>the conversation: the first Message-ID of <code>References</code>, else <code>In-Reply-To</code>, else the message's own Message-ID</td>
+</tr>
+<tr>
+<td><code>from</code>, <code>to</code>, <code>cc</code>, <code>subject</code>, <code>date</code></td>
+<td>the headers as written</td>
+</tr>
+<tr>
+<td><code>body_text</code>, <code>body_html</code></td>
+<td>the bodies; null when not read (<code>mail.search</code>) or over the reading limit</td>
+</tr>
+<tr>
+<td><code>attachments</code></td>
+<td><code>[{index, name, size, type, artifact}]</code>: <code>artifact</code> is null until <code>mail.attachment</code> saves the part</td>
+</tr>
+<tr>
+<td><code>seen</code>, <code>flagged</code>, <code>labels</code></td>
+<td>from the message's flags; <code>labels</code> merges the keywords that are not system flags with the message's Gmail labels; null when the source did not keep them</td>
+</tr>
+</tbody>
+</table>
+<h2 id="mail-verbs-for-flows">Mail verbs for flows<a class="headerlink" href="#mail-verbs-for-flows" title="Permanent link">&para;</a></h2>
+<p>Flows handle mail deterministically with fixed-verb nodes. Each node type compiles to one <code>TOOL_INVOKE</code> effect
+whose verb is baked from the node type (it never comes from a pin, and a model cannot author it); the runtime runs
+it on the run's mailbox without an approval prompt, because the person authored the node. Results use the tool
+envelope (<code>results[0].output</code>); a refusal is <code>success: false</code> with <code>error_detail = {code, cause, fix}</code>.</p>
+<table>
+<thead>
+<tr>
+<th>Node type</th>
+<th>Verb</th>
+<th>Arguments</th>
+<th>Output</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>mail_search</code></td>
+<td><code>mail.search</code></td>
+<td><code>query</code> (<code>from</code>: an address or a domain, <code>to</code>, <code>subject</code>: a substring, <code>text</code>: anywhere in the message, <code>since</code> / <code>until</code>: days, <code>until</code> exclusive, <code>unseen</code>, <code>flagged</code>, <code>labels</code>: all of them), <code>folder</code>, <code>limit</code> (1..500, default 50)</td>
+<td><code>{emails, has_more}</code>: Email records without bodies, newest first</td>
+</tr>
+<tr>
+<td><code>mail_get</code></td>
+<td><code>mail.get</code></td>
+<td><code>ids</code></td>
+<td><code>{emails, missing}</code>: Email records with bodies</td>
+</tr>
+<tr>
+<td><code>mail_mark</code></td>
+<td><code>mail.mark</code></td>
+<td><code>ids</code>, <code>seen?</code>, <code>flagged?</code></td>
+<td><code>{ids, changed}</code></td>
+</tr>
+<tr>
+<td><code>mail_label</code></td>
+<td><code>mail.label</code></td>
+<td><code>ids</code>, <code>add?</code>, <code>remove?</code> (Gmail labels, else IMAP keywords)</td>
+<td><code>{ids, changed}</code></td>
+</tr>
+<tr>
+<td><code>mail_move</code></td>
+<td><code>mail.move</code></td>
+<td><code>ids</code>, <code>folder</code> (destination)</td>
+<td><code>{ids, moved}</code></td>
+</tr>
+<tr>
+<td><code>mail_delete</code></td>
+<td><code>mail.delete</code></td>
+<td><code>ids</code>, <code>permanent</code> (default false: to the Trash folder)</td>
+<td><code>{ids, deleted}</code></td>
+</tr>
+<tr>
+<td><code>mail_send</code></td>
+<td><code>mail.send</code></td>
+<td><code>to</code>, <code>cc?</code>, <code>bcc?</code>, <code>subject</code>, <code>text</code>, <code>html?</code>, <code>attachments?</code> (artifact refs)</td>
+<td><code>{message_id, accepted, refused}</code></td>
+</tr>
+<tr>
+<td><code>mail_reply</code></td>
+<td><code>mail.reply</code></td>
+<td><code>id</code>, <code>text</code>, <code>html?</code>, <code>reply_all</code> (default false)</td>
+<td><code>{message_id, accepted, refused}</code></td>
+</tr>
+<tr>
+<td><code>mail_forward</code></td>
+<td><code>mail.forward</code></td>
+<td><code>id</code>, <code>to</code>, <code>note?</code>, <code>include_attachments</code> (default true)</td>
+<td><code>{message_id, accepted, refused}</code></td>
+</tr>
+<tr>
+<td><code>mail_attachment</code></td>
+<td><code>mail.attachment</code></td>
+<td><code>id</code>, <code>index</code></td>
+<td><code>{artifact, name, size, type}</code></td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li><strong>Mailbox.</strong> Every verb takes <code>mailbox</code>: a mailbox id of the user (<code>"self"</code> or <code>"default"</code> for the primary), or the
+  address of the run's own mailbox or of the primary (what an Email record's or a trigger's <code>mailbox</code> holds; an
+  unknown address is refused with <code>invalid_mailbox</code>, in words). Without it the verb uses the run's own mailbox (an
+  email-triggered occurrence is bound to its trigger's mailbox), else the primary.</li>
+<li><strong>Ids.</strong> <code>ids</code> and <code>id</code> take one id, one Email record (named by its <code>id</code>, so a ForEach item can be passed as is), or
+  a list of either. The host's resolver opens it (<code>Runtime.set_email_context_resolver</code>, <code>use="action"</code>); credentials never
+  reach vars or results.</li>
+<li><strong>Reading never changes the mailbox.</strong> <code>mail.search</code>, <code>mail.get</code> and <code>mail.attachment</code> read on one connection,
+  read-only; nothing is marked read.</li>
+<li><strong>Read only or Read and write.</strong> Each mailbox has an access the person chooses (AbstractCore's
+  <code>EmailAccount.access</code>). <code>mark</code>, <code>label</code>, <code>move</code>, <code>delete</code>, <code>send</code>, <code>reply</code> and <code>forward</code> need Read and write;
+  on a read-only mailbox the verb answers <code>email_mailbox_read_only</code> ("This mailbox is read-only: automations only
+  read it.", fix: turn on Read and write for that address in My email). <code>send</code>, <code>reply</code> and <code>forward</code> also need the
+  mailbox's outgoing server (SMTP); without one they answer <code>email_mailbox_cannot_send</code> ("This mailbox can't send:
+  it has no outgoing server.", fix: add the outgoing server for that address in My email). Both are refused before
+  connecting.</li>
+<li><strong>Sending.</strong> <code>send</code>, <code>reply</code> and <code>forward</code> go through AbstractCore's <code>guarded_send</code>: the account's recipient policy
+  and rate limits apply, and the framework marks automatic mail as such.</li>
+<li><strong>One connection per verb.</strong> Each verb holds one IMAP connection (a writable one for <code>mark</code>, <code>label</code>, <code>move</code> and
+  <code>delete</code>), whatever the number of ids.</li>
+<li><strong>Errors.</strong> <code>invalid_arguments</code>, <code>invalid_mailbox</code>, <code>email_not_configured</code>, <code>email_mailbox_read_only</code>,
+  <code>email_mailbox_cannot_send</code>,
+  <code>email_message_not_found</code>, <code>artifact_store_missing</code>, and AbstractCore's own <code>email_*</code> codes (sign-in, policy, rate
+  limits).</li>
+<li>Requires AbstractCore 2.30.0 or newer (its <code>EmailClient</code> mailbox verbs and Gmail labels).</li>
 </ul>
 <h2 id="sending-from-an-automation-without-a-model">Sending from an automation without a model<a class="headerlink" href="#sending-from-an-automation-without-a-model" title="Permanent link">&para;</a></h2>
 <p>The send-email action is a target for automations whose steps need no model ("forward invoices to me"):</p>
@@ -1593,10 +1797,10 @@ See <a href="../automations/#notifications-attention-and-retries">automations.md
     
       
       
-      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.instant", "navigation.tracking", "navigation.top", "content.code.copy"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.instant", "navigation.tracking", "navigation.top", "content.code.copy"], "search": "../assets/javascripts/workers/search.a7633da7.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
     
     
-      <script src="../assets/javascripts/bundle.d7400e89.min.js"></script>
+      <script src="../assets/javascripts/bundle.c21346df.min.js"></script>
       
     
   </body>

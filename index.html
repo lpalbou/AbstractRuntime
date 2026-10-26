@@ -21,7 +21,7 @@
       
       
       <link rel="icon" href="assets/images/favicon.png">
-      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.8.0">
     
     
       
@@ -29,7 +29,7 @@
       
     
     
-      <link rel="stylesheet" href="assets/stylesheets/main.ec1eaa64.min.css">
+      <link rel="stylesheet" href="assets/stylesheets/main.57a0d79d.min.css">
       
       
 
@@ -1165,8 +1165,8 @@
 <li><code>../README.md</code> — install + quick start</li>
 <li><code>getting-started.md</code> — first steps (recommended)</li>
 <li><code>api.md</code> — public API surface (imports + pointers)</li>
-<li><code>architecture.md</code> — how the runtime is structured (with diagrams)</li>
-<li><code>troubleshooting.md</code> — symptom-oriented setup, runtime, and integration fixes</li>
+<li><code>architecture.md</code> — how the runtime is structured (with diagrams), including how a JSON run store reads a large folder without scanning it (run index, change tokens, cross-process refresh)</li>
+<li><code>troubleshooting.md</code> — symptom-oriented setup, runtime, and integration fixes (waits, automations, webhooks, mail steps, feeds, workspaces)</li>
 <li><code>proposal.md</code> — design goals and scope boundaries</li>
 </ul>
 <h2 id="guides">Guides<a class="headerlink" href="#guides" title="Permanent link">&para;</a></h2>
@@ -1176,7 +1176,7 @@
 <li><code>artifacts.md</code> — Runtime artifact identity, descriptors, provenance, catalog search, and access stats</li>
 <li><code>integrations/abstractcore.md</code> — wiring <code>LLM_CALL</code> / <code>TOOL_CALLS</code>, the <code>config_facade</code> models/engines/host-jobs passthroughs for hosts, the <code>structured_facade</code> response_format check for hosts, cached sessions with per-session prompt-cache listing/clearing, host memory snapshots, model-residency listings, locks and model switching, live token streaming, workspace-scoped tools, durable bloc prompt-cache control, media inputs, generated media outputs, video progress events, and tool approval waits via AbstractCore</li>
 <li><code>tools-comms.md</code> — enabling the optional comms toolset (email/WhatsApp/Telegram)</li>
-<li><code>email.md</code> — email for each user: run-scoped account binding and the host resolver, sending without asking (self and pre-authorised recipients), the durable event inbox and mail feeder, the <code>email.received@1</code> trigger, and the send-email action</li>
+<li><code>email.md</code> — email for each user: run-scoped account binding and the host resolver, sending without asking (self and pre-authorised recipients), the durable event inbox and mail feeder, the <code>email.received@1</code> trigger on the primary or any other mailbox of the user, mail verbs for flows (changes and sends only on a Read and write mailbox: <code>email_mailbox_read_only</code>, <code>email_mailbox_cannot_send</code>), and the send-email action</li>
 <li><code>tool-approval.md</code> — tool risk tiers, the run-policy rank ceiling, and per-call refiners (the <code>send_email</code> recipient rule: self and pre-authorised recipients)</li>
 <li><code>api.md#workflowbundles-flow-and-visualflow-distribution</code> — VisualFlow compiler APIs, media nodes, and document nodes (<code>read_pdf</code> / <code>write_pdf</code> / <code>write_docx</code>)</li>
 <li><code>api.md#sessions-and-history</code> — session history replay: one window, the most recent 50,000 tokens of whole turns (<code>HISTORY_REPLAY_MAX_TOKENS</code>), returned as a <code>ReplayedHistory</code> whose <code>.report</code> records what was replayed and dropped</li>
@@ -1185,7 +1185,7 @@
 </ul>
 <h2 id="features-reference">Features (reference)<a class="headerlink" href="#features-reference" title="Permanent link">&para;</a></h2>
 <ul>
-<li><code>automations.md</code> — automations: a workflow run on a schedule or on request as a durable controller run; triggers (<code>schedule@1</code>, <code>schedule@2</code> calendar rules in a time zone, <code>manual@1</code>, <code>email.received@1</code>, entry-point sources), commands, independent or growing context, discussions forked at any occurrence (own writable workspace, the automation's workspace mounted read-only), tool approval, typed waits, notifications and retries, and the storage guarantees (create-if-absent, per-run lock, turn roots, session kinds, one writer process per store)</li>
+<li><code>automations.md</code> — automations: a workflow run on a schedule, on an event or on request as a durable controller run; triggers (<code>schedule@1</code>, <code>schedule@2</code> calendar rules in a time zone, <code>manual@1</code>, <code>email.received@1</code>, <code>feed.item@1</code> RSS 2.0 / RSS 1.0 / Atom, <code>webhook.received@1</code> Standard Webhooks, entry-point sources), per-user trigger connections, the CloudEvents envelope (<code>input_data.event</code>), run origin (<code>_meta.origin</code>), wakes (<code>SCHEDULE_RUN</code>: work later in the same session, with at most the caller's tools), Publish to channel (<code>PUBLISH_EVENT</code>, alerts with <code>recipient</code> and <code>channels</code>), commands, independent or growing context, discussions forked at any occurrence (own writable workspace, the automation's workspace mounted read-only), tool approval, typed waits, notifications and retries, and the storage guarantees (create-if-absent, per-run lock, turn roots, session kinds, one writer process per store)</li>
 <li><code>entity-runtime.md</code> — per-entity runtimes for summoned entities: homes, the one-writer lease, act-only diary privacy (<code>$act_only</code> refs), durable visit waits with deadlines</li>
 <li><code>evidence.md</code> — artifact-backed evidence capture for external-boundary tools</li>
 <li><code>mcp-worker.md</code> — MCP worker CLI (<code>abstractruntime-mcp-worker</code>)</li>
@@ -1260,10 +1260,10 @@
     
       
       
-      <script id="__config" type="application/json">{"annotate": null, "base": ".", "features": ["navigation.instant", "navigation.tracking", "navigation.top", "content.code.copy"], "search": "assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+      <script id="__config" type="application/json">{"annotate": null, "base": ".", "features": ["navigation.instant", "navigation.tracking", "navigation.top", "content.code.copy"], "search": "assets/javascripts/workers/search.a7633da7.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
     
     
-      <script src="assets/javascripts/bundle.d7400e89.min.js"></script>
+      <script src="assets/javascripts/bundle.c21346df.min.js"></script>
       
     
   </body>

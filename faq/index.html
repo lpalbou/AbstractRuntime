@@ -23,7 +23,7 @@
       
       
       <link rel="icon" href="../assets/images/favicon.png">
-      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.8.0">
     
     
       
@@ -31,7 +31,7 @@
       
     
     
-      <link rel="stylesheet" href="../assets/stylesheets/main.ec1eaa64.min.css">
+      <link rel="stylesheet" href="../assets/stylesheets/main.57a0d79d.min.css">
       
       
 
@@ -858,6 +858,39 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#how-do-i-run-an-automation-on-new-mail-a-feed-item-or-a-webhook-call" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        How do I run an automation on new mail, a feed item or a webhook call?
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#can-an-agent-schedule-work-for-later-or-set-a-reminder" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Can an agent schedule work for later or set a reminder?
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#how-do-i-know-who-or-what-started-a-run" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        How do I know who or what started a run?
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#what-happens-to-scheduled-ticks-while-the-host-is-down" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1553,6 +1586,39 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#how-do-i-run-an-automation-on-new-mail-a-feed-item-or-a-webhook-call" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        How do I run an automation on new mail, a feed item or a webhook call?
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#can-an-agent-schedule-work-for-later-or-set-a-reminder" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Can an agent schedule work for later or set a reminder?
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#how-do-i-know-who-or-what-started-a-run" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        How do I know who or what started a run?
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#what-happens-to-scheduled-ticks-while-the-host-is-down" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1968,6 +2034,23 @@ like any run (<code>drive_automation</code> does this in-process). Nothing is de
 occurrences and history and stays listed with status <code>archived</code>.</p>
 <p>The <code>Scheduler</code> is different: it is a driver loop that resumes due waits of existing runs. It does not create runs.</p>
 <p>Docs: <code>automations.md</code>. Code: <code>src/abstractruntime/automations/*</code>, <code>src/abstractruntime/triggers/*</code>.</p>
+<h2 id="how-do-i-run-an-automation-on-new-mail-a-feed-item-or-a-webhook-call">How do I run an automation on new mail, a feed item or a webhook call?<a class="headerlink" href="#how-do-i-run-an-automation-on-new-mail-a-feed-item-or-a-webhook-call" title="Permanent link">&para;</a></h2>
+<p>Use an event trigger. <code>email.received@1</code> reads one of the user's mailboxes (<code>config.account</code>: <code>"self"</code> for the primary,
+or a mailbox id). <code>feed.item@1</code> and <code>webhook.received@1</code> read a <strong>trigger connection</strong>: register the feed URL or the
+webhook endpoint once with <code>TriggerConnectionStore.create(...)</code>, then bind any number of automations to it with
+<code>config.connection_id</code>. The host runs the feeders (mail watcher, <code>poll_feed_connections</code>, the webhook route calling
+<code>append_webhook_event</code>). Each occurrence receives the events in <code>input_data.event</code> (CloudEvents 1.0) and, for a string
+prompt, inside a fixed untrusted frame. Docs: <code>automations.md#trigger-connections</code>, <code>email.md</code>.</p>
+<h2 id="can-an-agent-schedule-work-for-later-or-set-a-reminder">Can an agent schedule work for later or set a reminder?<a class="headerlink" href="#can-an-agent-schedule-work-for-later-or-set-a-reminder" title="Permanent link">&para;</a></h2>
+<p>Yes, when the host registers <code>Runtime.set_schedule_run_handler(...)</code>. A run issues <code>SCHEDULE_RUN</code> (the AbstractAgent
+builtin <code>schedule_run</code>) with <code>after_s</code>, <code>at</code> or <code>on</code> a trigger event, and a <code>task</code> or a reminder <code>note</code>. The runtime
+plans a one-shot automation that runs as a new turn of the same session by default, with at most the caller's tools
+and never <code>schedule_run</code> itself; a note's answer becomes an attention item so the reminder reaches the person.
+Archiving the automation before it fires cancels it. Docs: <code>automations.md#wakes-schedule_run</code>.</p>
+<h2 id="how-do-i-know-who-or-what-started-a-run">How do I know who or what started a run?<a class="headerlink" href="#how-do-i-know-who-or-what-started-a-run" title="Permanent link">&para;</a></h2>
+<p>Read <code>origin_of(run.vars)</code> (<code>abstractruntime.core.run_origin</code>): <code>{kind: person | trigger | agent | system, actor,
+client, ref}</code>. Occurrences get it from the controller; hosts stamp the runs they start with <code>origin_for(...)</code>. Runs
+started before origins existed return <code>None</code>. Docs: <code>automations.md#run-origin</code>.</p>
 <h2 id="what-happens-to-scheduled-ticks-while-the-host-is-down">What happens to scheduled ticks while the host is down?<a class="headerlink" href="#what-happens-to-scheduled-ticks-while-the-host-is-down" title="Permanent link">&para;</a></h2>
 <p>When the controller next runs, the missed ticks are coalesced: one occurrence runs, for the latest due tick, and its
 event payload reports the skipped range (<code>coalesced: {first_tick, last_tick, missed_count}</code>). Resuming a paused
@@ -2005,8 +2088,12 @@ the discussion never writes back into the automation's session, state or ledger.
 <p>Docs: <code>automations.md#discussions</code>, <code>automations.md#read-only-mounts</code>.</p>
 <h2 id="can-several-processes-share-one-run-store">Can several processes share one run store?<a class="headerlink" href="#can-several-processes-share-one-run-store" title="Permanent link">&para;</a></h2>
 <p>v1 supports one writer process per store: one process ticks, resumes and commands runs. <code>run_mutation_lock</code> serializes
-writers inside that process only. Several store objects or read-only processes on one JSON run folder stay
-consistent through the creation journal (<code>.runs_created.log</code>).</p>
+writers inside that process only. Several store objects or other processes on one JSON run folder stay consistent
+through the creation journal (<code>.runs_created.log</code>): a host split in two (an API process that creates runs and
+delivers events, a runner process that ticks them) works on one folder, and an event the API process delivers
+reaches a run the runner process parked (the event-wait and mailbox indexes refresh at the latest 2 s after the
+other process's change). A process that never generates can skip loading the default model with
+<code>set_default_model_warmup(False)</code> (<a href="../integrations/abstractcore/#unloading-and-switching-models">integrations/abstractcore.md</a>).</p>
 <p>Docs: <code>automations.md#storage-guarantees</code>.</p>
 <h2 id="why-is-my-ask_user-answer-a-dict">Why is my <code>ASK_USER</code> answer a dict?<a class="headerlink" href="#why-is-my-ask_user-answer-a-dict" title="Permanent link">&para;</a></h2>
 <p><code>Runtime.resume(..., payload=...)</code> always takes a <strong>dict</strong> payload. If the wait has a <code>result_key</code>, the runtime stores that dict into <code>RunState.vars</code> at <code>result_key</code>.<br />
@@ -2250,10 +2337,10 @@ Safety depends on whether workflow code/spec has changed since the snapshot was 
     
       
       
-      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.instant", "navigation.tracking", "navigation.top", "content.code.copy"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.instant", "navigation.tracking", "navigation.top", "content.code.copy"], "search": "../assets/javascripts/workers/search.a7633da7.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
     
     
-      <script src="../assets/javascripts/bundle.d7400e89.min.js"></script>
+      <script src="../assets/javascripts/bundle.c21346df.min.js"></script>
       
     
   </body>

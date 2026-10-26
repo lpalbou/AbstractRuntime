@@ -23,7 +23,7 @@
       
       
       <link rel="icon" href="../assets/images/favicon.png">
-      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.8.0">
     
     
       
@@ -31,7 +31,7 @@
       
     
     
-      <link rel="stylesheet" href="../assets/stylesheets/main.ec1eaa64.min.css">
+      <link rel="stylesheet" href="../assets/stylesheets/main.57a0d79d.min.css">
       
       
 
@@ -518,6 +518,28 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#an-automation-on-a-connection-is-refused-connection_not_found-connection_required" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        An automation on a connection is refused (connection_not_found, connection_required)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#a-webhook-call-is-refused" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        A webhook call is refused
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#a-start-fails-with-identity_conflict" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -555,6 +577,28 @@
     <span class="md-ellipsis">
       
         A tool is refused because the workspace is read-only
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#a-mail-step-is-refused-email_mailbox_read_only-email_mailbox_cannot_send" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        A mail step is refused (email_mailbox_read_only, email_mailbox_cannot_send)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#a-feed-connection-reports-feed_unreadable" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        A feed connection reports feed_unreadable
       
     </span>
   </a>
@@ -1278,6 +1322,28 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#an-automation-on-a-connection-is-refused-connection_not_found-connection_required" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        An automation on a connection is refused (connection_not_found, connection_required)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#a-webhook-call-is-refused" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        A webhook call is refused
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#a-start-fails-with-identity_conflict" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1315,6 +1381,28 @@
     <span class="md-ellipsis">
       
         A tool is refused because the workspace is read-only
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#a-mail-step-is-refused-email_mailbox_read_only-email_mailbox_cannot_send" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        A mail step is refused (email_mailbox_read_only, email_mailbox_cannot_send)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#a-feed-connection-reports-feed_unreadable" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        A feed connection reports feed_unreadable
       
     </span>
   </a>
@@ -1384,6 +1472,10 @@ python<span class="w"> </span>-m<span class="w"> </span>pip<span class="w"> </sp
 <div class="highlight"><pre><span></span><code><span class="n">state</span> <span class="o">=</span> <span class="n">rt</span><span class="o">.</span><span class="n">get_state</span><span class="p">(</span><span class="n">run_id</span><span class="p">)</span>
 <span class="nb">print</span><span class="p">(</span><span class="n">state</span><span class="o">.</span><span class="n">status</span><span class="p">,</span> <span class="n">state</span><span class="o">.</span><span class="n">waiting</span><span class="o">.</span><span class="n">wait_key</span> <span class="k">if</span> <span class="n">state</span><span class="o">.</span><span class="n">waiting</span> <span class="k">else</span> <span class="kc">None</span><span class="p">)</span>
 </code></pre></div>
+<p>Two processes on one run folder (a host's API process delivers an event, its runner process parked the
+run): a <code>JsonFileRunStore</code> sees the other process's parked runs before each event lookup, at the latest
+2 s after the change (<a href="../api/#storage-layer-durability-backends">api.md, Storage layer</a>). Check that both
+processes use the same folder and the same AbstractRuntime version.</p>
 <h2 id="generated-media-is-missing-or-too-large-for-run-state">Generated media is missing or too large for run state<a class="headerlink" href="#generated-media-is-missing-or-too-large-for-run-state" title="Permanent link">&para;</a></h2>
 <p>Symptom:
 - Image, voice, music, or transcription outputs fail, or binary content is not present in <code>RunState.vars</code>.</p>
@@ -1500,6 +1592,37 @@ python<span class="w"> </span>-m<span class="w"> </span>pip<span class="w"> </sp
 - <code>list_occurrences(...)</code> shows a new item, and <code>next_fire_at</code> moves to the following tick.</p>
 <p>Docs:
 - <code>automations.md#the-controller</code>, <code>automations.md#commands</code></p>
+<h2 id="an-automation-on-a-connection-is-refused-connection_not_found-connection_required">An automation on a connection is refused (<code>connection_not_found</code>, <code>connection_required</code>)<a class="headerlink" href="#an-automation-on-a-connection-is-refused-connection_not_found-connection_required" title="Permanent link">&para;</a></h2>
+<p>Symptom:
+- <code>create_automation(...)</code> or <code>automation.revise</code> raises <code>AutomationError</code> with <code>reason_code</code>
+  <code>connection_required</code>, <code>connection_not_found</code>, <code>connection_source_mismatch</code> or <code>connection_disabled</code>.</p>
+<p>Likely causes:
+- The trigger (<code>feed.item@1</code>, <code>webhook.received@1</code>) needs <code>config.connection_id</code> and the request has none.
+- The runtime has no connection store (<code>Runtime.set_trigger_connection_store(...)</code> was not called).
+- The id belongs to another user: connections are per principal (<code>"&lt;tenant&gt;:&lt;user&gt;"</code>, the request's pair), and a
+  foreign id reads exactly like an unknown one.
+- The connection is of another source, or its status is <code>disabled</code>.</p>
+<p>Fix:
+- Create the connection for the same principal and source (<code>TriggerConnectionStore.create(...)</code>), wire the store on
+  the runtime, and pass <code>principal=</code> to <code>apply_automation_command</code> when you revise onto another connection.</p>
+<p>Docs:
+- <code>automations.md#trigger-connections</code></p>
+<h2 id="a-webhook-call-is-refused">A webhook call is refused<a class="headerlink" href="#a-webhook-call-is-refused" title="Permanent link">&para;</a></h2>
+<p>Symptom:
+- <code>append_webhook_event(...)</code> returns <code>status: "refused"</code> (401, 413, 415) or <code>status: "duplicate"</code> (409), and the
+  connection's <code>last_error</code> names the reason.</p>
+<p>Likely causes:
+- <code>missing_headers</code> / <code>bad_timestamp</code>: the sender does not send <code>webhook-id</code>, <code>webhook-timestamp</code> and
+  <code>webhook-signature</code>.
+- <code>bad_signature</code>: the body was changed, or the sender signs with another secret (read the connection's secret with
+  <code>store.secrets(connection_id, principal=...)</code>).
+- <code>stale</code>: the sender's clock differs from the host's by more than <code>tolerance_s</code> (default 300 s).
+- <code>replayed_id</code>: the same <code>webhook-id</code> was already received; the first call was delivered.</p>
+<p>Fix:
+- Sign <code>"&lt;webhook-id&gt;.&lt;webhook-timestamp&gt;.&lt;raw body&gt;"</code> with HMAC-SHA256 under the base64-decoded secret (without
+  <code>whsec_</code>) and send <code>v1,&lt;base64 signature&gt;</code>; send JSON with <code>Content-Type: application/json</code> or UTF-8 text.</p>
+<p>Docs:
+- <code>automations.md#webhookreceived1</code></p>
 <h2 id="a-start-fails-with-identity_conflict">A start fails with <code>identity_conflict</code><a class="headerlink" href="#a-start-fails-with-identity_conflict" title="Permanent link">&para;</a></h2>
 <p>Symptom:
 - <code>Runtime.start(..., run_id=...)</code> raises <code>RunIdentityConflict</code>, or <code>create_automation</code>, <code>start_discussion</code> or
@@ -1558,6 +1681,25 @@ python<span class="w"> </span>-m<span class="w"> </span>pip<span class="w"> </sp
   <code>abstractruntime.integrations.abstractcore.tool_effects</code>.</p>
 <p>Docs:
 - <code>automations.md#read-only-mounts</code>, <code>automations.md#read-only-workspaces</code></p>
+<h2 id="a-mail-step-is-refused-email_mailbox_read_only-email_mailbox_cannot_send">A mail step is refused (<code>email_mailbox_read_only</code>, <code>email_mailbox_cannot_send</code>)<a class="headerlink" href="#a-mail-step-is-refused-email_mailbox_read_only-email_mailbox_cannot_send" title="Permanent link">&para;</a></h2>
+<p>Symptom:
+- A flow's <code>mail_mark</code>, <code>mail_label</code>, <code>mail_move</code>, <code>mail_delete</code>, <code>mail_send</code>, <code>mail_reply</code> or <code>mail_forward</code> step
+  fails with one of these codes, before any connection to the mailbox.</p>
+<p>Cause and fix:
+- <code>email_mailbox_read_only</code>: the person keeps that mailbox <strong>Read only</strong> (AbstractCore's <code>EmailAccount.access</code>).
+  Turn on Read and write for it in the host (the gateway: My email), or use a read verb (<code>mail_search</code>, <code>mail_get</code>,
+  <code>mail_attachment</code>).
+- <code>email_mailbox_cannot_send</code>: the mailbox is Read and write but has no outgoing server. Add its SMTP server in the
+  host; mark, label, move and delete keep working meanwhile.</p>
+<p>See <a href="../email/#mail-verbs-for-flows">email.md, Mail verbs for flows</a>.</p>
+<h2 id="a-feed-connection-reports-feed_unreadable">A feed connection reports <code>feed_unreadable</code><a class="headerlink" href="#a-feed-connection-reports-feed_unreadable" title="Permanent link">&para;</a></h2>
+<p>Symptom:
+- The connection's <code>last_error</code> names a document that is not a feed.</p>
+<p>Cause and fix:
+- <code>parse_feed</code> reads RSS 2.0, RSS 1.0 (RDF with the <code>http://purl.org/rss/1.0/</code> channel) and Atom 1.0. An RDF
+  document without an RSS 1.0 channel, an HTML page, or a document above 5 MB is refused. Point the connection at
+  the site's feed address; the next poll clears the error.</p>
+<p>See <a href="../automations/#feeditem1">automations.md, <code>feed.item@1</code></a>.</p>
 <h2 id="mcp-worker-command-is-not-found">MCP worker command is not found<a class="headerlink" href="#mcp-worker-command-is-not-found" title="Permanent link">&para;</a></h2>
 <p>Symptom:
 - <code>abstractruntime-mcp-worker</code> is not available on the command line.</p>
@@ -1622,10 +1764,10 @@ abstractruntime-mcp-worker<span class="w"> </span>--help
     
       
       
-      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.instant", "navigation.tracking", "navigation.top", "content.code.copy"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.instant", "navigation.tracking", "navigation.top", "content.code.copy"], "search": "../assets/javascripts/workers/search.a7633da7.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
     
     
-      <script src="../assets/javascripts/bundle.d7400e89.min.js"></script>
+      <script src="../assets/javascripts/bundle.c21346df.min.js"></script>
       
     
   </body>

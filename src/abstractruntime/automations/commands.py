@@ -43,6 +43,7 @@ from typing import Any, Dict, Optional
 from ..core.models import RunStatus, WaitReason
 from ..triggers.protocol import format_timestamp
 from ..triggers.registry import get_trigger_adapter
+from .consumers import invalidate_active_consumers
 from .ledger import (
     append_observation,
     commit_decision,
@@ -402,6 +403,9 @@ def apply_automation_command(
                 command_id=command_id,
             )
         _follow_ups(runtime, automation_id, type)
+        # The active-consumers index (`automations.consumers`): after the follow-ups, so an
+        # unarchive's revived controller (or a replayed command's) is what the rebuild reads.
+        invalidate_active_consumers(runtime)
         return result
 
 

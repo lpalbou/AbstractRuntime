@@ -33,6 +33,7 @@ from ..utils.workspace_paths import READ_ONLY_KEY
 from ..storage.artifacts import is_artifact_ref
 from .attention import normalize_occurrence_output, resolve_strict
 from .bundle import controller_workflow_spec
+from .consumers import invalidate_active_consumers
 from .controller import AUTOMATION_GRANT_SOURCE, apply_context_mode
 from .ledger import (
     append_observation,
@@ -165,6 +166,7 @@ def create_automation(
             reason_code="identity_conflict",
             field="request_id",
         ) from exc
+    invalidate_active_consumers(runtime)  # a new controller (`automations.consumers`)
     run = runtime.run_store.load(automation_id)
     persisted = definition_of(run)
     append_observation(

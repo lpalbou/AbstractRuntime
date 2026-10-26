@@ -306,6 +306,12 @@ URL", "this webhook endpoint and its secret"), registered once and reused by any
   `"idle"` (nothing uses it: a feed is not fetched; a webhook still accepts and stores calls). `create(..., paused=, always_listen=)` and
   `update(..., paused=, always_listen=)` set the two switches; `status` keeps its own meaning.
   `connection.to_dict(usage=connection_usage(runtime, connection))` adds `listening` and `used_by` to the record.
+  `connections_usage(runtime, connections)` answers a list from one snapshot. Every "who reads this stream?"
+  answer (`connection_usage`, `stream_consumers`, `email_trigger_consumers`, the wakes, the feed poll) comes from
+  the runtime's active-consumers index (`abstractruntime.automations.consumers`): one pass over the controller
+  runs, rebuilt only after a controller's status or trigger changes (a JSON-file store signals it on save; creation,
+  commands and decisions signal it for every store: `invalidate_active_consumers`), and at the latest every 30
+  seconds (another process); no run file is read per call.
 - The owner is a principal string, `"<tenant>:<user>"` (`connection_principal(tenant, user)`). Reads given a
   principal answer only that principal's connections, and a foreign id reads exactly like an unknown one.
 - Each connection has one inbox stream, `trigger:<connection_id>` (`connection_stream`). Feeders append to it with

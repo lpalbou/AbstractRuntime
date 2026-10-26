@@ -215,17 +215,22 @@ def _flag(value: Any, field: str) -> bool:
 LISTENING_STATES = ("paused", "listening", "idle")
 
 
-def connection_usage(runtime: Any, conn: TriggerConnection) -> Dict[str, Any]:
+def connection_usage(runtime: Any, conn: TriggerConnection, *, snapshot: Any = None) -> Dict[str, Any]:
     """The derived listening state of a connection (for APIs and feeders):
 
     - `used_by`: how many ACTIVE automations read its stream (`stream_consumers`);
     - `listening`: `"paused"` (the connection is paused or its status is `disabled`: nothing is
       fetched or accepted), `"listening"` (polled / accepting now: used by an active automation, or
       `always_listen`), `"idle"` (nothing uses it: a feed is not fetched; a webhook still accepts calls).
-    """
-    from ..email.automations import stream_consumers
 
-    used_by = len(stream_consumers(runtime, conn.stream)) if runtime is not None else 0
+    Answered from the runtime's active-consumers index (`automations.consumers`; `snapshot`: one
+    already taken, as `connections_usage` does for a list): no run file is read per call.
+    """
+    if snapshot is None and runtime is not None:
+        from ..automations.consumers import consumers_snapshot
+
+        snapshot = consumers_snapshot(runtime)
+    used_by = len(snapshot.connection_consumers(conn.connection_id)) if snapshot is not None else 0
     if conn.paused or conn.status == "disabled":
         state = "paused"
     elif used_by > 0 or conn.always_listen:
@@ -233,6 +238,16 @@ def connection_usage(runtime: Any, conn: TriggerConnection) -> Dict[str, Any]:
     else:
         state = "idle"
     return {"listening": state, "used_by": used_by}
+
+
+def connections_usage(runtime: Any, conns: List[TriggerConnection]) -> List[Dict[str, Any]]:
+    """`connection_usage` of each connection (same order), from ONE index snapshot."""
+    snapshot = None
+    if runtime is not None and conns:
+        from ..automations.consumers import consumers_snapshot
+
+        snapshot = consumers_snapshot(runtime)
+    return [connection_usage(runtime, conn, snapshot=snapshot) for conn in conns]
 
 
 def _default_adapter_lookup(source_id: str, source_version: int) -> Any:
@@ -696,25 +711,11 @@ test_fire.__test__ = False  # type: ignore[attr-defined]  # not a pytest test
 
 
 def connection_trigger_consumers(runtime: Any, *, connection_id: Optional[str] = None) -> List[str]:
-    """Ids of active automations bound to a trigger connection (to `connection_id` when given)."""
-    from ..automations.ledger import definition_of
-    from ..automations.models import automation_status
+    """Ids of active automations bound to a trigger connection (to `connection_id` when given),
+    from the runtime's active-consumers index (`automations.consumers`)."""
+    from ..automations.consumers import consumers_snapshot
 
-    out: List[str] = []
-    for row in runtime.run_store.list_run_index(limit=1_000_000, role="controller"):
-        run = runtime.run_store.load(str(row.get("run_id")))
-        if run is None:
-            continue
-        try:
-            trigger = definition_of(run)["trigger"]
-        except (LookupError, KeyError, TypeError):
-            continue
-        cid = binding_connection_id(trigger)
-        if not cid or (connection_id is not None and cid != connection_id):
-            continue
-        if automation_status(run) == "active":
-            out.append(run.run_id)
-    return sorted(out)
+    return consumers_snapshot(runtime).connection_consumers(connection_id)
 
 
 def wake_connection_automations(runtime: Any, connection_id: str) -> List[str]:
@@ -761,6 +762,7 @@ __all__ = [
     "check_connection_id",
     "connection_event",
     "connection_usage",
+    "connections_usage",
     "connection_event_type",
     "connection_principal",
     "connection_source_uri",

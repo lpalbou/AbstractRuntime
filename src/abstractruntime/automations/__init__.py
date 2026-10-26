@@ -9,6 +9,8 @@
 - `commands`: `apply_automation_command`, the only command applier.
 - `attention`: notify convention, attention paging, human-wait detection.
 - `service`: create / read / discuss / legacy projection / standalone driver.
+- `consumers`: the active-consumers index (which active automations read which stream),
+  one per runtime, rebuilt only when an automation changes.
 """
 
 from .attention import (
@@ -28,6 +30,7 @@ from .bundle import (
     controller_workflow_spec,
     register_controller_bundle,
 )
+from .consumers import ActiveConsumersIndex, active_consumers_index, invalidate_active_consumers
 from .commands import AUTOMATION_COMMAND_TYPES, apply_automation_command, record_automation_command_result
 from .ledger import find_by_idempotency_key
 from .models import (
@@ -51,6 +54,7 @@ from .service import (
 
 __all__ = [
     "ANSWER_PAYLOADS",
+    "ActiveConsumersIndex",
     "AUTOMATION_COMMAND_TYPES",
     "AUTOMATION_NAMESPACE",
     "AutomationDefinition",
@@ -59,6 +63,7 @@ __all__ = [
     "CONTROLLER_BUNDLE_REF",
     "CONTROLLER_WORKFLOW_ID",
     "ControllerBundleError",
+    "active_consumers_index",
     "adopt_legacy_schedule_projection",
     "apply_automation_command",
     "automation_status",
@@ -68,6 +73,7 @@ __all__ = [
     "drive_automation",
     "find_by_idempotency_key",
     "get_automation",
+    "invalidate_active_consumers",
     "is_interactive_wait",
     "list_attention",
     "list_occurrences",

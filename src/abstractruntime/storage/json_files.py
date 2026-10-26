@@ -37,6 +37,24 @@ logger = logging.getLogger(__name__)
 _SCAN_SIDECAR_VERSION = 3
 
 
+def _consumer_fields(run: RunState) -> Dict[str, Any]:
+    """`automation_consumer` on a CONTROLLER's row only: `{status, trigger}` (the automation's
+    status and trigger binding), so the active-consumers index (`automations.consumers`) is
+    built from index rows without loading controller runs. Other rows carry nothing more."""
+    meta = run.vars.get("_meta") if isinstance(run.vars, dict) else None
+    if not (isinstance(meta, dict) and isinstance(meta.get("automation"), dict)):
+        return {}
+    from ..automations.consumers import consumer_index_fields
+
+    return {"automation_consumer": consumer_index_fields(run)}
+
+
+def _lacks_consumer_fields(fields: Dict[str, Any]) -> bool:
+    """A controller row memoized before `automation_consumer` existed (an older sidecar): re-parse
+    it once instead of bumping the sidecar version (which would re-parse every run file)."""
+    return fields.get("role") == "controller" and "automation_consumer" not in fields
+
+
 @dataclass
 class _ActiveEntry:
     """What the ACTIVE index knows about one run id (see `JsonFileRunStore`)."""
@@ -326,6 +344,7 @@ class JsonFileRunStore(RunStore):
             **run_lifecycle_index_fields(run.vars),
             **automation_index_fields(run.vars, run_id=str(run.run_id)),
             **workspace_index_fields(run.vars),
+            **_consumer_fields(run),
         }
 
     def _scan_memo_put(self, rid: str, token: tuple[int, int, int], fields: Dict[str, Any]) -> None:
@@ -338,9 +357,18 @@ class JsonFileRunStore(RunStore):
             # every field flip bought nothing and cost a 4.4MB write
             # per 32 saves. New/pruned/deleted rids are what a restart
             # actually wants to remember.
-            if rid not in self._scan_memo:
+            prev = self._scan_memo.get(rid)
+            if prev is None:
                 self._scan_dirty += 1
             self._scan_memo[rid] = (token, fields)
+        consumer = fields.get("automation_consumer")
+        if consumer is not None and (prev is None or prev[1].get("automation_consumer") != consumer):
+            # A controller appeared, or its automation status / trigger changed, through ANY save
+            # this process makes (or a file another process changed, seen by a scan): the
+            # active-consumers index's change signal (`automations.consumers`).
+            from ..automations.consumers import invalidate_active_consumers
+
+            invalidate_active_consumers(self)
 
     def _scan_memo_prune(self, seen_rids: set) -> None:
         """Drop memo entries whose files vanished (scan-memo adversary P2-4:
@@ -438,7 +466,7 @@ class JsonFileRunStore(RunStore):
         if rid and token[0] > 0:
             with self._scan_memo_lock:
                 cached = self._scan_memo.get(rid)
-            if cached is not None and tuple(cached[0]) == token:
+            if cached is not None and tuple(cached[0]) == token and not _lacks_consumer_fields(cached[1]):
                 fields = cached[1]
                 return None if fields.get("__unparseable") else fields
         # ANY load failure tombstones for scans (adversary P2-3: a valid-JSON

@@ -30,6 +30,7 @@ import copy
 from typing import Any, Dict, List, Mapping, Optional
 
 from ..core.models import RunState, StepRecord, StepStatus
+from .consumers import delta_changes_consumers, invalidate_active_consumers
 from .models import SCHEMA_VERSION
 
 EMIT_EVENT = "emit_event"
@@ -162,13 +163,17 @@ def reconcile(run: RunState, *, run_store: Any, ledger_store: Any) -> bool:
     if not intent:
         return False
     record = find_by_idempotency_key(ledger_store, run.run_id, intent["key"])
+    changed = False
     if record is not None:
         payload = record_payload(record)
         if int(payload.get("state_version") or 0) > int(state.get("state_version") or 0):
             _apply_delta(run, payload.get("delta") or {})
             state["state_version"] = int(payload["state_version"])
+            changed = delta_changes_consumers(payload.get("delta"))
     state["intent"] = None
     run_store.save(run)
+    if changed:
+        invalidate_active_consumers(run_store)
     return True
 
 
@@ -213,6 +218,8 @@ def commit_decision(
     state["state_version"] = version
     state["intent"] = None
     run_store.save(run)
+    if delta_changes_consumers(delta):
+        invalidate_active_consumers(run_store)  # a new definition, or paused/exhausted changed
     return payload
 
 

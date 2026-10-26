@@ -9,6 +9,8 @@
   ANY inbox stream (framework backlog 1042): `trigger:<connection_id>` (a webhook or feed
   connection), `email:<tenant>:<user>:<account_id>:<folder>` (one mailbox folder). Which
   automations read a stream is decided by their binding alone (`automation_reads_stream`).
+  Every "who reads it?" answer comes from the runtime's active-consumers index
+  (`automations.consumers`): one pass over the controller runs per change, not per call.
 - `prune_email_inbox(runtime, retention=...)`: apply the inbox retention (default 90 days AND
   10,000 events) without removing mail an active email automation has not read yet.
 """
@@ -68,31 +70,25 @@ def automation_reads_stream(trigger: Mapping[str, Any], stream: str, *, self_acc
 
 
 def _active_consumers(runtime: Any, wanted: Callable[[Mapping[str, Any]], bool]) -> List[str]:
-    from ..automations.ledger import definition_of
-    from ..automations.models import automation_status
+    """Ids of the active automations whose binding passes `wanted`, from the runtime's
+    active-consumers index (`automations.consumers`: one pass over the controllers per
+    change, never per call)."""
+    from ..automations.consumers import consumers_snapshot
 
-    run_store = runtime.run_store
-    out: List[str] = []
-    for row in run_store.list_run_index(limit=1_000_000, role="controller"):
-        run = run_store.load(str(row.get("run_id")))
-        if run is None:
-            continue
-        try:
-            trigger = definition_of(run)["trigger"]
-        except (LookupError, KeyError, TypeError):
-            continue
-        if not isinstance(trigger, Mapping) or not wanted(trigger):
-            continue
-        if automation_status(run) == "active":
-            out.append(run.run_id)
-    return sorted(out)
+    return consumers_snapshot(runtime).automation_ids(wanted)
+
+
+def _self_account_ref(runtime: Any) -> Optional[str]:
+    binding = getattr(runtime, "email_binding", None)
+    return str(getattr(binding, "account_ref", "") or "") or None
 
 
 def stream_consumers(runtime: Any, stream: str) -> List[str]:
-    """Ids of active (not paused, archived or finished) automations that read inbox `stream`."""
-    binding = getattr(runtime, "email_binding", None)
-    self_ref = str(getattr(binding, "account_ref", "") or "") or None
-    return _active_consumers(runtime, lambda trigger: automation_reads_stream(trigger, stream, self_account_ref=self_ref))
+    """Ids of active (not paused, archived or finished) automations that read inbox `stream`
+    (answered from the runtime's active-consumers index, `automations.consumers`)."""
+    from ..automations.consumers import consumers_snapshot
+
+    return consumers_snapshot(runtime).stream_consumers(stream, self_account_ref=_self_account_ref(runtime))
 
 
 def _wake(runtime: Any, automation_ids: List[str], *, reason: str) -> List[str]:

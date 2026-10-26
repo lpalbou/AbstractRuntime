@@ -158,12 +158,14 @@ Kernel (import-light):
 - host pause at step boundaries: `Runtime.tick(..., step_gate=...)`
 - run-tree tool ceiling: an explicit `allowed_tools` list can only narrow across child runs, and approval policy never widens it
 - automations: run a workflow on a schedule (`schedule@1` fixed UTC intervals; `schedule@2` adds daily, weekly and monthly rules at a wall time in an IANA time zone), when mail arrives in one of the user's mailboxes (`email.received@1`, `docs/email.md`), on new feed items (`feed.item@1`), on a signed webhook call (`webhook.received@1`) or on request (`manual@1`) as a durable controller run; per-user trigger connections (feed URLs, webhook endpoints with sealed signing secrets) reused by any automation; every occurrence receives its trigger as a CloudEvents 1.0 event (`input_data.event`) and records who or what started it (`_meta.origin`); runs can schedule work for later with `SCHEDULE_RUN` (a one-shot wake in the same session, at most the caller's tools, reminders that reach the person), whose occurrences are deterministic child runs and session turns, with commands, independent or growing context, discussions forked at any occurrence (own workspace, automation workspace mounted read-only), tool approval, typed waits and quiet-by-default notifications (`docs/automations.md`)
+- flows that act and tell: mail verbs on the run's mailbox (`mail_search`, `mail_get`, `mail_mark`, `mail_label`, `mail_move`, `mail_delete`, `mail_send`, `mail_reply`, `mail_forward`, `mail_attachment`; changes and sends only on a mailbox the person keeps Read and write, `docs/email.md`) and Publish to channel (`PUBLISH_EVENT`: an event on the user's stream, optionally an alert with its `recipient` and `channels`, handed to the host through `Runtime.set_publish_event_handler`, `docs/automations.md`)
 - explicit run ids: `Runtime.start(..., run_id=...)` creates a run only if the id is free (`RunStore.create_if_absent`), and `run_mutation_lock(run_id)` serializes a run's writers in a process
 
 Durability + storage:
 - stores: in-memory, JSON/JSONL, SQLite (`src/abstractruntime/storage/*`)
 - durable command inbox primitives (idempotent, append-only): `CommandStore`, `CommandCursorStore` (`src/abstractruntime/storage/commands.py`, `src/abstractruntime/storage/sqlite.py`)
 - artifacts + offloading (store large payloads by reference)
+- large JSON run folders without scans: an in-memory active index and trusted run index (`trust_index`, `run_index_stats()`, background reconciliation), change tokens on the run store and the ledger (`change_token()`, `changed_run_ids()`), event-wait indexes that see another process's parked runs, and the active-consumers index for "who listens?" (`docs/architecture.md`, `docs/api.md`)
 - snapshots/bookmarks (`docs/snapshots.md`)
 - tamper-evident hash-chained ledger (`docs/provenance.md`)
 
@@ -237,8 +239,8 @@ sr = create_scheduled_runtime(
 | [Architecture](docs/architecture.md) | Component map + diagrams |
 | [Overview](docs/proposal.md) | Design goals, core concepts, and scope |
 | [AbstractCore Integration](docs/integrations/abstractcore.md) | `LLM_CALL` / `TOOL_CALLS`, host facades, models/engines/host jobs |
-| [Automations](docs/automations.md) | Scheduled, event-driven and on-request workflows: controller, triggers (schedules, mail, feeds, webhooks), trigger connections, the CloudEvents envelope, run origin, wakes (`SCHEDULE_RUN`), commands, context, discussions, storage guarantees |
-| [Email](docs/email.md) | Email for each user: run-scoped account binding, sending without asking, the event inbox and mail feeder, the `email.received@1` trigger on any of the user's mailboxes, the send-email action |
+| [Automations](docs/automations.md) | Scheduled, event-driven and on-request workflows: controller, triggers (schedules, mail, feeds in RSS 2.0/RSS 1.0/Atom, webhooks), trigger connections, the CloudEvents envelope, run origin, wakes (`SCHEDULE_RUN`), Publish to channel (alerts with `recipient` and `channels`), commands, context, discussions, storage guarantees |
+| [Email](docs/email.md) | Email for each user: run-scoped account binding, sending without asking, the event inbox and mail feeder, the `email.received@1` trigger on any of the user's mailboxes, mail verbs for flows (Read only / Read and write), the send-email action |
 | [Artifacts](docs/artifacts.md) | Artifact identity, descriptors, catalog search and access stats |
 | [Tool Approval](docs/tool-approval.md) | Tool risk tiers, run-policy ceiling, per-call refiners |
 | [Comms Toolset](docs/tools-comms.md) | Opt-in email/WhatsApp/Telegram tools |
@@ -745,6 +747,63 @@ Decorators/helpers:
 - `MailboxQueryableRunStore` (`list_mailbox_runs`, `next_wait_deadline`) on every built-in run store, for event fan-out and wake scheduling without a recency window
 - snapshots/bookmarks (`src/abstractruntime/storage/snapshots.py`)
 
+### Reading a large run folder without scanning it
+
+A JSON run folder can hold tens of thousands of run files. `JsonFileRunStore` keeps in memory what
+listings and lookups need, so a host polling it never globs or stats every file:
+
+```mermaid
+flowchart LR
+  subgraph Writers["Writers on one run folder"]
+    Own["This store object<br/>(save / create / delete)"]
+    Other["Another process<br/>(a split host's other half)"]
+  end
+  Folder[("Run files<br/>&lt;run_id&gt;.json")]
+  Log[(".runs_created.log<br/>+ - ~ = lines")]
+  subgraph Store["JsonFileRunStore (in memory)"]
+    Active["Active index<br/>RUNNING / WAITING"]
+    Trusted["Trusted run index<br/>every run's listing fields"]
+    Waits["Event-wait and<br/>mailbox indexes"]
+    Token["change_token()<br/>(log size, counter)"]
+  end
+  Recon["Reconciliation<br/>(background, ≤ 60 s when moved, ≥ every 10 min)"]
+  Own --> Folder
+  Own --> Log
+  Own --> Active
+  Own --> Trusted
+  Own --> Token
+  Other --> Folder
+  Other --> Log
+  Log -->|"next lookup"| Active
+  Log -->|"next lookup"| Trusted
+  Log -->|"size moved, or every 2 s"| Waits
+  Folder -.->|"mtime moved"| Waits
+  Folder -.->|"mtime moved: re-read RUNNING / WAITING entries"| Trusted
+  Recon -->|repairs, logs a warning| Trusted
+  Folder -.-> Recon
+```
+
+- **Active index**: `list_runs` / `list_run_index` for RUNNING or WAITING and the scheduler's due-wait
+  poll, re-verified against each file at listing time.
+- **Trusted run index** (`trust_index=True`, the default): every other listing without a session
+  scope is answered from memory; `trust_index=False` (verify) answers with the scan and counts
+  differences (`run_index_stats()`). The background reconciliation repairs what a writer that
+  bypassed the creation journal left out; `load()` always reads disk.
+- **Event-wait and mailbox indexes** see runs another process parked (refreshed before each
+  lookup when the journal or the folder moved, at least every 2 s).
+- **Change tokens**: `JsonFileRunStore.change_token()` and `ObservableLedgerStore.change_token()`
+  (with `changed_run_ids(token)`) let a periodic reader skip a pass when nothing changed and read
+  only what did.
+- **Active-consumers index** (`abstractruntime.automations.consumers`): one snapshot per runtime of
+  which ACTIVE automation reads which trigger, rebuilt on the store's automation generation, so
+  "who listens to this connection or mailbox?" reads no run file.
+- **Artifacts**: `ArtifactStore.list_session_candidates(session_id, owner_run_id=)` answers a
+  session's artifacts through catalog indexes instead of reading the catalog.
+
+Details and the exact counters: [api.md, Storage layer](api.md#storage-layer-durability-backends)
+and [artifacts.md](artifacts.md). One process ticks a folder; see
+[automations.md, Storage guarantees](automations.md#storage-guarantees).
+
 ## Drivers: scheduler
 
 The scheduler is an in-process driver loop that resumes due waits and can deliver external events:
@@ -1040,7 +1099,6 @@ Run index and creation (all built-in run stores, including the offloading wrappe
 - `JsonFileRunStore` answers `list_runs` / `list_run_index` for `status=running` or `status=waiting` (without `session_id`) from an in-memory **active index**: the set of active run ids, built from one directory scan (at host boot through `warm_session_index()`, else on the first such listing) and kept current by `save`, `create_if_absent`, `delete` and the creation journal. Every candidate is re-verified against its file at listing time, so a run that ended or vanished is never listed. Rows, order (file mtime, then file name, then the final `updated_at` sort), filters and limits are the same as the directory scan's; a listing of a 10,000-run store costs milliseconds instead of a full scan. `JsonFileRunStore(..., use_active_index=False)` keeps the plain scan. `rescan_active_index()` reconciles the index with the directory in the caller's thread; a background rescan runs at most every `JsonFileRunStore.ACTIVE_INDEX_RESCAN_S` (60 s) to pick up writers that bypass the store. `list_due_wait_until` (the scheduler's due-wait poll) takes its candidates from the index too. Other listings (a terminal status, no status, a session scope) scan as before.
 - **Trusted run index** (`JsonFileRunStore(..., trust_index=True)`, the default): every listing the active index does not answer (no status or a finished status, no `session_id`: `list_run_index`, `list_runs`, `latest_occurrence_row`) is answered from memory once one complete pass (the active-index build, at host boot through `warm_session_index()`) has read every run file: ranked by file mtime then file name, same filters, rows and limits as the directory scan, with no glob and no stat of a run file (11,500 files: about 1-20 ms instead of a 0.25 s scan that waits for the interpreter lock under contention). It is kept current by the store's own saves, creates and deletes, the creation journal (including `=<run_id>`), and a re-read of its RUNNING/WAITING entries when the folder's mtime moved (another process ticking a run writes no journal line). A background **reconciliation** (the active-index rescan, a daemon thread, never on a caller's path) re-reads the folder at most every `ACTIVE_INDEX_RESCAN_S` (60 s) when the folder or the journal moved, and at least every `RUN_INDEX_FULL_RECONCILE_S` (600 s); a difference it finds (a writer that bypassed the journal) is repaired and logged as a warning. The risk is a stale row until then, never a lost run: `load()` reads disk. `trust_index=False` (**verify**, the shadow mode) answers every such listing with the directory scan, as before, and compares it with the in-memory answer. `run_index_stats()` (forwarded by `OffloadingRunStore`) returns `mode`, `complete`, `entries`, `active_entries`, `trusted_listings`, `scanned_listings`, `shadow_compared`, `shadow_mismatches` (verify mode: stable comparisons whose answers differed; 0 means the index would have answered every listing the same), `shadow_unstable` (a write overlapped the comparison: no verdict), `last_mismatch`, `reconciles`, `reconcile_repairs` and `last_reconcile`; each mismatch and each repair is also logged as a `JsonFileRunStore:` warning. `reconcile_run_index()` runs the reconciliation in the caller's thread. Needs the active index (`use_active_index=False` is the plain scan, without shadow).
 - The creation journal (`.runs_created.log` in the run folder) carries one line per change another store object or process must learn about: `+<run_id>` created, `-<run_id>` deleted, `~<run_id>` became active again (resumed, re-opened, first save after a restart, or saved after another writer touched the file). Lines are written before the file change they announce; readers apply the lines they have not seen at their next lookup, and a line whose file has not landed yet (or does not read active yet) is re-checked until it does. Readers from AbstractRuntime 0.10.0 ignore `~` lines, and writers from 0.10.0 never write them: a re-open made by such a writer reaches other store objects through the periodic rescan. `=<run_id>`: a run that is not active changed its file (it finished, or a finished run was re-saved), written AFTER the file is published; older readers ignore it, and a change made by an older writer reaches the trusted run index through the reconciliation.
-- `integrations.abstractcore.llm_client.set_default_model_warmup(enabled)`: whether a new `MultiLocalAbstractCoreLLMClient` builds (for a local model: loads) its default model at construction and on a default switch. Default on. A process that serves no model turns it off once at boot (the gateway's `serve --no-runner`); the default client is then built at its first call. `default_model_warmup()` reads the setting.
 - `JsonFileRunStore` event-wait and mailbox indexes (`list_event_waiters`, `list_event_waiters_by_prefix`, `list_mailbox_runs`) see what another process saved on the same folder (a split gateway: API process + runner process). Before each lookup the store reads its change signal (the creation log's size and the folder's mtime): when either moved, or at least every `EVENT_INDEX_REFRESH_S` (2 s), it stats each running or waiting run and re-reads the ones whose file changed since it last filed them. An idle store pays two stats per lookup; its own saves are never re-read. `event_index_stats()` returns `{refreshes, refiled, tracked}`.
 - `JsonFileRunStore.change_token()` answers "did any run of this folder change?" with one stat: `(creation-log size, active-index counter)`. Every save, create and delete through the store moves the counter; another process's create, delete or became-active line moves the log size. Not seen: another process re-saving a run that stays active (one ticking process per folder); ending a run, or re-saving a finished one, writes `=<run_id>`. `changed_run_ids(token)` names the runs this store changed since `token`, or `None` when that is unknown (the log moved, or more than 8,192 changes ago). `ObservableLedgerStore.change_token()` / `changed_run_ids(token)` do the same for ledger appends (process-local). The gateway runner's scan gate and its mail notification check compare these tokens instead of reading the directory.
 
@@ -1156,7 +1214,7 @@ from abstractruntime.triggers import get_trigger_adapter, trigger_sources
 - `create_automation(runtime, request, *, now=None, actor_id=None)`: creates the controller root run (the automation) with a deterministic id; raises `AutomationError` (`invalid_definition`, `unsupported_feature`, `unknown_trigger_source`, `identity_conflict`)
 - `apply_automation_command(runtime, *, automation_id, command_id, type, payload=None, actor=None, expected_revision=None)`: the only writer of automation state; returns `{status: "applied" | "rejected", error?, duplicate}`; idempotent per `command_id`
 - `record_automation_command_result(...)`: records a host-side failure of a command as a rejected result
-- reads: `get_automation(run_store, id)`, `list_occurrences(runtime, id, cursor=, limit=)`, `list_attention(ledger_store, id, after_seq=, cursor=, limit=)`, `pending_waits(run_store, id, limit=)` with typed waits (`ask_user`, `tool_approval`, `event`) and `ANSWER_PAYLOADS`; `list_automations(run_store, status=, cursor=, limit=)`, `automation_summary(run)`, `latest_occurrence(run_store, id)`
+- reads: `get_automation(run_store, id)`, `list_occurrences(runtime, id, cursor=, limit=)`, `list_attention(ledger_store, id, after_seq=, cursor=, limit=)`, `pending_waits(run_store, id, limit=)` with typed waits (`ask_user`, `tool_approval`, `event`) and `ANSWER_PAYLOADS`; `list_automations(run_store, status=, cursor=, limit=, index_rows=)`, `automation_summary(run)`, `latest_occurrence(run_store, id)` (the index row); from `abstractruntime.automations`: `latest_occurrence(runtime, id, user_turn=)` (the newest occurrence row, read from the ledger's end), `pending_waits_by_automation(run_store, limit=)` (one read for a whole listing), `automation_generation(runtime_or_store)` (the change counter a host keys its cached listings on) and the active-consumers index (`active_consumers_index`, `invalidate_active_consumers`; see `automations.md#trigger-connections`)
 - `start_discussion(runtime, *, automation_id, occurrence_index, request_id, prompt, workspace_root, actor_id=None)`: a separate conversation forked at any occurrence N, seeded with the automation's whole timeline 1..N, working in its own writable `workspace_root` with the automation's workspace mounted read-only
 - controller bundle: `register_controller_bundle(registry)`, `controller_workflow_spec()`, `controller_bundle_path()`; `CONTROLLER_WORKFLOW_ID` is `abstractframework.automation-controller@1.0.0:controller`
 - trigger sources: `trigger_sources()`, `get_trigger_adapter(id, version)`, built-ins `schedule@1`, `schedule@2` (daily/weekly/monthly rules in an IANA time zone; `validate_time_zone`, `time_zone_names`), `manual@1`, `email.received@1`, `feed.item@1` and `webhook.received@1`, third-party sources through the `abstractruntime.trigger_sources` entry-point group
@@ -1247,6 +1305,7 @@ Entry points:
 - discovery-facade delegation is implemented by the configured AbstractCore LLM clients in `src/abstractruntime/integrations/abstractcore/llm_client.py` (`list_providers`, `list_provider_models`, `get_voice_catalog`, `list_tts_models`, `list_stt_models`, `list_music_providers`, `list_music_models`, `list_vision_provider_models`, `list_cached_vision_models`, `list_vision_adapters`)
 - the host's OpenAI credential for AbstractVoice's `openai` engines, `voice_openai_api_key`, travels two ways. For discovery, pass it to `get_voice_catalog`, `list_tts_models` or `list_stt_models`; the local clients hand it to the voice plugin's config, and a remote client never sends it (a remote AbstractCore server uses its own voice configuration). For execution, put it in `create_local_runtime(llm_kwargs={"voice_openai_api_key": ...})`. Constructor kwargs become the provider's `config`, which is also the capability-plugin config. Providers read only the keys they name, so a `voice_*` key changes no text request (tests `tests/test_voice_openai_api_key_path.py`)
 - host-facade client delegation is implemented by the configured AbstractCore LLM clients in `src/abstractruntime/integrations/abstractcore/llm_client.py` (`get_prompt_cache_capabilities`, `get_prompt_cache_stats`, `prompt_cache_set`, `prompt_cache_update`, `prompt_cache_fork`, `prompt_cache_clear`, `prompt_cache_prepare_modules`, `upsert_text_bloc`, `get_bloc_record`, `list_blocs`, `get_bloc_kv_manifest`, `ensure_bloc_kv_artifact`, `load_bloc_kv_artifact`, `list_bloc_kv_artifacts`, `delete_bloc_kv_artifact`, `prune_bloc_kv_artifacts`, `delete_bloc`, `get_model_residency_capabilities`, `list_model_residency`, `load_model_residency`, `unload_model_residency`, `get_memory_snapshot`, `list_session_prompt_caches`, `clear_session_prompt_caches`, `lock_model_residency`, `unlock_model_residency`, `get_context_estimate`); the last six are optional in the client contract, and the facade returns `{"ok": false, "supported": false, ...}` when the configured client does not implement one
+- `integrations.abstractcore.llm_client.set_default_model_warmup(enabled)` (process-wide, no environment variable): whether a new `MultiLocalAbstractCoreLLMClient` builds (for a local model: loads) its default model at construction and on a default switch. Default on. A process that serves no model turns it off once at boot (the gateway's `serve --no-runner`); the default client is then built at its first call. `default_model_warmup()` reads the setting (see `integrations/abstractcore.md#unloading-and-switching-models`)
 - switching the default model (`set_default_provider_model` on the pooled client) unloads the previous in-process model unless an owner in the process still uses it; `list_model_residency` diagnostics report `pending_ejects` and `last_switch_ejects`, and `unload_model_residency(runtime_id=...)` accepts any listed `local:<task>:<provider>:<model>` id, including `local:embedding:<provider>:<model>` rows (see `integrations/abstractcore.md#unloading-and-switching-models`)
 - `lock_model_residency`, `unlock_model_residency`, and `get_context_estimate` accept an optional payload mapping and/or keyword arguments (keyword arguments win on conflicts); a lock requires provider-verified residency — locking a non-resident pair refuses with a structured `model_not_resident` payload (load with `lock: true` instead; remotely the Core server's HTTP 409 refusal is converted to the same payload), while unlock never requires residency so a locked-but-evicted pair is always releasable; a locked model refuses `unload_model_residency` with a structured `model_locked` payload — locally as a client-side per-`(provider, model)` lock, remotely by converting the Core server's HTTP 409 refusal — and unloads only with `force=true`, releasing the lock only after the unload succeeds
 - the `MODEL_RESIDENCY` effect supports `list_loaded`, `load`, `unload`, `lock`, and `unlock` operations with the same soft-fail semantics; on `unload`, `force` is forwarded only when authored in the effect payload
@@ -1469,8 +1528,12 @@ Docs: `automations.md#discussions`, `automations.md#read-only-mounts`.
 ## Can several processes share one run store?
 
 v1 supports one writer process per store: one process ticks, resumes and commands runs. `run_mutation_lock` serializes
-writers inside that process only. Several store objects or read-only processes on one JSON run folder stay
-consistent through the creation journal (`.runs_created.log`).
+writers inside that process only. Several store objects or other processes on one JSON run folder stay consistent
+through the creation journal (`.runs_created.log`): a host split in two (an API process that creates runs and
+delivers events, a runner process that ticks them) works on one folder, and an event the API process delivers
+reaches a run the runner process parked (the event-wait and mailbox indexes refresh at the latest 2 s after the
+other process's change). A process that never generates can skip loading the default model with
+`set_default_model_warmup(False)` ([integrations/abstractcore.md](integrations/abstractcore.md#unloading-and-switching-models)).
 
 Docs: `automations.md#storage-guarantees`.
 
@@ -1805,6 +1868,11 @@ state = rt.get_state(run_id)
 print(state.status, state.waiting.wait_key if state.waiting else None)
 ```
 
+Two processes on one run folder (a host's API process delivers an event, its runner process parked the
+run): a `JsonFileRunStore` sees the other process's parked runs before each event lookup, at the latest
+2 s after the change ([api.md, Storage layer](api.md#storage-layer-durability-backends)). Check that both
+processes use the same folder and the same AbstractRuntime version.
+
 ## Generated media is missing or too large for run state
 
 Symptom:
@@ -2078,6 +2146,33 @@ Fix:
 
 Docs:
 - `automations.md#read-only-mounts`, `automations.md#read-only-workspaces`
+
+## A mail step is refused (`email_mailbox_read_only`, `email_mailbox_cannot_send`)
+
+Symptom:
+- A flow's `mail_mark`, `mail_label`, `mail_move`, `mail_delete`, `mail_send`, `mail_reply` or `mail_forward` step
+  fails with one of these codes, before any connection to the mailbox.
+
+Cause and fix:
+- `email_mailbox_read_only`: the person keeps that mailbox **Read only** (AbstractCore's `EmailAccount.access`).
+  Turn on Read and write for it in the host (the gateway: My email), or use a read verb (`mail_search`, `mail_get`,
+  `mail_attachment`).
+- `email_mailbox_cannot_send`: the mailbox is Read and write but has no outgoing server. Add its SMTP server in the
+  host; mark, label, move and delete keep working meanwhile.
+
+See [email.md, Mail verbs for flows](email.md#mail-verbs-for-flows).
+
+## A feed connection reports `feed_unreadable`
+
+Symptom:
+- The connection's `last_error` names a document that is not a feed.
+
+Cause and fix:
+- `parse_feed` reads RSS 2.0, RSS 1.0 (RDF with the `http://purl.org/rss/1.0/` channel) and Atom 1.0. An RDF
+  document without an RSS 1.0 channel, an HTML page, or a document above 5 MB is refused. Point the connection at
+  the site's feed address; the next poll clears the error.
+
+See [automations.md, `feed.item@1`](automations.md#feeditem1).
 
 ## MCP worker command is not found
 
@@ -2924,6 +3019,7 @@ except core.HostActionRefused as refused:
 - Changing the default text model (`set_default_provider_model`, which the gateway calls when the console default changes) unloads the previous in-process model, unless the pool still uses it or it is locked. The previous model is freed before the new default is loaded, so the two are never in memory together. If the previous model is still generating, the switch does not cancel that call; the model is unloaded when the call ends.
 - A model is unloaded only when nothing else in the process still uses it: other services and users, entity runtimes and the AbstractCore server's runtimes register the models they pool, override, lock, are loading or use as their default, and the unload skips a model any of them uses. Multi-local clients (the client `create_local_runtime(...)` builds) register these claims; a standalone `LocalAbstractCoreLLMClient` does not, so a host that shares a process between several runtimes should build them with `create_local_runtime(...)`.
 - The switch unload and the failed-load cleanup need an AbstractCore release with the process residency claim registry (`abstractcore.providers.process_residency.eject_unclaimed`). With an older AbstractCore the previous model stays loaded and `last_switch_ejects` reports `skipped` with the reason; unload it explicitly or upgrade AbstractCore. `list_model_residency` diagnostics list `pending_ejects` (waiting for a running call to end) and `last_switch_ejects` (unloaded, kept because it is still in use, or failed, with the reason).
+- A process that never generates (for example an HTTP front end beside a separate runner process) can skip loading the default model: call `set_default_model_warmup(False)` (`abstractruntime.integrations.abstractcore.llm_client`, process-wide, no environment variable) once before building its runtimes. A `MultiLocalAbstractCoreLLMClient` then builds its default client at the first call instead of at construction and on a default switch. Default on; `default_model_warmup()` reads it.
 - Chat compaction summarizes a run with the model the run uses. Only a run with no model of its own is summarized with the current default model; the summarizer does not keep the model that was the default at startup.
 - A load with `ttl_s` or `keep_alive` for an in-process model, or for a model that is already loaded, lists them under `unsupported_options` with a warning. A load that fails part-way unloads what it loaded.
 - Changing a capability default (image, voice, music) unloads the models the old capability routes had loaded before the new routes take effect.
@@ -4297,6 +4393,7 @@ A flow tells applications that something happened with the "Publish to channel" 
   body?}`) to the user's stream and returns `{event_id, sequence, alerted}`, which is the node's result. A payload the
   host refuses fails the step with the host's sentence; without a handler the step fails.
 
+## Commands
 
 `apply_automation_command(runtime, *, automation_id, command_id, type, payload=None, actor=None,
 expected_revision=None, now=None)` is the only way to change an automation. It returns `{status: "applied" |
@@ -4526,7 +4623,11 @@ See [tool-approval.md](tool-approval.md) for how `auto_approve_tools` combines w
 ## Waits on a person
 
 `pending_waits(run_store, automation_id, *, limit=20)` lists the runs of the automation's occurrence trees that are
-waiting on a person. Each item is typed from the wait record's structure, never from its text:
+waiting on a person, read from the run index's WAITING rows attributed to the automation (an occurrence and every
+sub-run carry `_meta.occurrence`), so its cost follows the runs waiting now, not the automation's history.
+`pending_waits_by_automation(run_store, *, limit=20)` answers `{automation_id: [...]}` for every automation with such a
+wait from one read of that index (a host listing many automations). Each item is typed from the wait record's
+structure, never from its text:
 
 ```text
 {run_id, wait_key, kind: "ask_user" | "tool_approval" | "event", reason, index, prompt?, choices?, details?}
@@ -4559,9 +4660,11 @@ The output is read by structure. An agent-style target ends with `response` / `s
 with its end-node values or `{success, result}`. An output with `success: false` counts as a failure. A workflow that
 must flag a result adds `notify` next to its answer.
 
-Each notify or final failure creates exactly one attention item per occurrence. The item is carried by the The item's `channels` repeats the definition's `notify.channels`; a host that delivers notifications by email
-emails every completed result when `email` is listed. `notify.recipients` selects delivery addresses (default `["self"]`); the full answer is retained for email while console previews stay bounded.
-occurrence's `automation.completed` record with a per-automation sequence number.
+Each notify or final failure creates exactly one attention item per occurrence. The item is carried by the
+occurrence's `automation.completed` record with a per-automation sequence number. The item's `channels` repeats the
+definition's `notify.channels`; a host that delivers notifications by email emails every completed result when
+`email` is listed. `notify.recipients` selects delivery addresses (default `["self"]`); the full answer is retained
+for email while console previews stay bounded.
 
 `list_attention(ledger_store, automation_id, *, after_seq=0, cursor=None, limit=50)` returns
 `{items, next_cursor}`, oldest first. Each item is `{kind: "notify" | "failure", automation_id, run_id, index, at,
@@ -4588,6 +4691,9 @@ Retries do not make external effects exactly-once: a target that sends an email 
 | `automation_queries.list_automations(run_store, *, status=None, cursor=None, limit=50)` | a `Page(items, next_cursor)` of automation summaries, newest first, with a cursor that survives restarts; archived automations stay listed; `status` filters on a value, a comma-separated string or a list |
 | `automation_queries.automation_summary(controller_run)` | one summary: `{automation_id, title, status, revision, trigger, context_mode, target, session_id, workspace_root, next_fire_at, retry_at, current_occurrence, occurrence_count, pending_occurrence, last_outcome, archived_at, created_at, updated_at}` |
 | `automation_queries.latest_occurrence(run_store, automation_id)` | the index row of the highest-numbered occurrence (its newest attempt), or `None` |
+| `latest_occurrence(runtime, automation_id, *, user_turn=True)` | the newest occurrence, the same row as `list_occurrences(limit=1)["items"][0]`, or `None`; reads the controller ledger from its end and stops at the newest admission, so its cost does not grow with the history; `user_turn=False` skips resolving the prompt |
+| `automation_queries.list_automations(..., index_rows=rows)` | the same page, built from controller index rows the caller already holds (`list_run_index(role="controller")`), for a host that caches them |
+| `automation_generation(runtime_or_run_store)` | a counter that moves whenever the set of automations or their status may have changed (creation, an applied command, a decision that changes the definition, `paused` or `exhausted`); a host keys its cached listings on it |
 | `adopt_legacy_schedule_projection(run)` | a read-only summary of a legacy `scheduled:*` gateway root, marked `legacy: true` with capabilities `pause`, `resume` and `cancel`; legacy roots are never migrated |
 
 Status is, in order of precedence: `archived` (the definition has `archived_at`, whatever state the controller
@@ -6435,8 +6541,8 @@ In this repo, the AbstractCore wiring lives under `src/abstractruntime/integrati
 - `../README.md` — install + quick start
 - `getting-started.md` — first steps (recommended)
 - `api.md` — public API surface (imports + pointers)
-- `architecture.md` — how the runtime is structured (with diagrams)
-- `troubleshooting.md` — symptom-oriented setup, runtime, and integration fixes
+- `architecture.md` — how the runtime is structured (with diagrams), including how a JSON run store reads a large folder without scanning it (run index, change tokens, cross-process refresh)
+- `troubleshooting.md` — symptom-oriented setup, runtime, and integration fixes (waits, automations, webhooks, mail steps, feeds, workspaces)
 - `proposal.md` — design goals and scope boundaries
 
 ## Guides
@@ -6446,7 +6552,7 @@ In this repo, the AbstractCore wiring lives under `src/abstractruntime/integrati
 - `artifacts.md` — Runtime artifact identity, descriptors, provenance, catalog search, and access stats
 - `integrations/abstractcore.md` — wiring `LLM_CALL` / `TOOL_CALLS`, the `config_facade` models/engines/host-jobs passthroughs for hosts, the `structured_facade` response_format check for hosts, cached sessions with per-session prompt-cache listing/clearing, host memory snapshots, model-residency listings, locks and model switching, live token streaming, workspace-scoped tools, durable bloc prompt-cache control, media inputs, generated media outputs, video progress events, and tool approval waits via AbstractCore
 - `tools-comms.md` — enabling the optional comms toolset (email/WhatsApp/Telegram)
-- `email.md` — email for each user: run-scoped account binding and the host resolver, sending without asking (self and pre-authorised recipients), the durable event inbox and mail feeder, the `email.received@1` trigger on the primary or any other mailbox of the user, and the send-email action
+- `email.md` — email for each user: run-scoped account binding and the host resolver, sending without asking (self and pre-authorised recipients), the durable event inbox and mail feeder, the `email.received@1` trigger on the primary or any other mailbox of the user, mail verbs for flows (changes and sends only on a Read and write mailbox: `email_mailbox_read_only`, `email_mailbox_cannot_send`), and the send-email action
 - `tool-approval.md` — tool risk tiers, the run-policy rank ceiling, and per-call refiners (the `send_email` recipient rule: self and pre-authorised recipients)
 - `api.md#workflowbundles-flow-and-visualflow-distribution` — VisualFlow compiler APIs, media nodes, and document nodes (`read_pdf` / `write_pdf` / `write_docx`)
 - `api.md#sessions-and-history` — session history replay: one window, the most recent 50,000 tokens of whole turns (`HISTORY_REPLAY_MAX_TOKENS`), returned as a `ReplayedHistory` whose `.report` records what was replayed and dropped
@@ -6454,7 +6560,7 @@ In this repo, the AbstractCore wiring lives under `src/abstractruntime/integrati
 
 ## Features (reference)
 
-- `automations.md` — automations: a workflow run on a schedule, on an event or on request as a durable controller run; triggers (`schedule@1`, `schedule@2` calendar rules in a time zone, `manual@1`, `email.received@1`, `feed.item@1` RSS/Atom, `webhook.received@1` Standard Webhooks, entry-point sources), per-user trigger connections, the CloudEvents envelope (`input_data.event`), run origin (`_meta.origin`), wakes (`SCHEDULE_RUN`: work later in the same session, with at most the caller's tools), commands, independent or growing context, discussions forked at any occurrence (own writable workspace, the automation's workspace mounted read-only), tool approval, typed waits, notifications and retries, and the storage guarantees (create-if-absent, per-run lock, turn roots, session kinds, one writer process per store)
+- `automations.md` — automations: a workflow run on a schedule, on an event or on request as a durable controller run; triggers (`schedule@1`, `schedule@2` calendar rules in a time zone, `manual@1`, `email.received@1`, `feed.item@1` RSS 2.0 / RSS 1.0 / Atom, `webhook.received@1` Standard Webhooks, entry-point sources), per-user trigger connections, the CloudEvents envelope (`input_data.event`), run origin (`_meta.origin`), wakes (`SCHEDULE_RUN`: work later in the same session, with at most the caller's tools), Publish to channel (`PUBLISH_EVENT`, alerts with `recipient` and `channels`), commands, independent or growing context, discussions forked at any occurrence (own writable workspace, the automation's workspace mounted read-only), tool approval, typed waits, notifications and retries, and the storage guarantees (create-if-absent, per-run lock, turn roots, session kinds, one writer process per store)
 - `entity-runtime.md` — per-entity runtimes for summoned entities: homes, the one-writer lease, act-only diary privacy (`$act_only` refs), durable visit waits with deadlines
 - `evidence.md` — artifact-backed evidence capture for external-boundary tools
 - `mcp-worker.md` — MCP worker CLI (`abstractruntime-mcp-worker`)

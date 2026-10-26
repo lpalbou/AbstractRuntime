@@ -588,6 +588,7 @@ A flow tells applications that something happened with the "Publish to channel" 
   body?}`) to the user's stream and returns `{event_id, sequence, alerted}`, which is the node's result. A payload the
   host refuses fails the step with the host's sentence; without a handler the step fails.
 
+## Commands
 
 `apply_automation_command(runtime, *, automation_id, command_id, type, payload=None, actor=None,
 expected_revision=None, now=None)` is the only way to change an automation. It returns `{status: "applied" |
@@ -817,7 +818,11 @@ See [tool-approval.md](tool-approval.md) for how `auto_approve_tools` combines w
 ## Waits on a person
 
 `pending_waits(run_store, automation_id, *, limit=20)` lists the runs of the automation's occurrence trees that are
-waiting on a person. Each item is typed from the wait record's structure, never from its text:
+waiting on a person, read from the run index's WAITING rows attributed to the automation (an occurrence and every
+sub-run carry `_meta.occurrence`), so its cost follows the runs waiting now, not the automation's history.
+`pending_waits_by_automation(run_store, *, limit=20)` answers `{automation_id: [...]}` for every automation with such a
+wait from one read of that index (a host listing many automations). Each item is typed from the wait record's
+structure, never from its text:
 
 ```text
 {run_id, wait_key, kind: "ask_user" | "tool_approval" | "event", reason, index, prompt?, choices?, details?}
@@ -850,9 +855,11 @@ The output is read by structure. An agent-style target ends with `response` / `s
 with its end-node values or `{success, result}`. An output with `success: false` counts as a failure. A workflow that
 must flag a result adds `notify` next to its answer.
 
-Each notify or final failure creates exactly one attention item per occurrence. The item is carried by the The item's `channels` repeats the definition's `notify.channels`; a host that delivers notifications by email
-emails every completed result when `email` is listed. `notify.recipients` selects delivery addresses (default `["self"]`); the full answer is retained for email while console previews stay bounded.
-occurrence's `automation.completed` record with a per-automation sequence number.
+Each notify or final failure creates exactly one attention item per occurrence. The item is carried by the
+occurrence's `automation.completed` record with a per-automation sequence number. The item's `channels` repeats the
+definition's `notify.channels`; a host that delivers notifications by email emails every completed result when
+`email` is listed. `notify.recipients` selects delivery addresses (default `["self"]`); the full answer is retained
+for email while console previews stay bounded.
 
 `list_attention(ledger_store, automation_id, *, after_seq=0, cursor=None, limit=50)` returns
 `{items, next_cursor}`, oldest first. Each item is `{kind: "notify" | "failure", automation_id, run_id, index, at,
@@ -879,6 +886,9 @@ Retries do not make external effects exactly-once: a target that sends an email 
 | `automation_queries.list_automations(run_store, *, status=None, cursor=None, limit=50)` | a `Page(items, next_cursor)` of automation summaries, newest first, with a cursor that survives restarts; archived automations stay listed; `status` filters on a value, a comma-separated string or a list |
 | `automation_queries.automation_summary(controller_run)` | one summary: `{automation_id, title, status, revision, trigger, context_mode, target, session_id, workspace_root, next_fire_at, retry_at, current_occurrence, occurrence_count, pending_occurrence, last_outcome, archived_at, created_at, updated_at}` |
 | `automation_queries.latest_occurrence(run_store, automation_id)` | the index row of the highest-numbered occurrence (its newest attempt), or `None` |
+| `latest_occurrence(runtime, automation_id, *, user_turn=True)` | the newest occurrence, the same row as `list_occurrences(limit=1)["items"][0]`, or `None`; reads the controller ledger from its end and stops at the newest admission, so its cost does not grow with the history; `user_turn=False` skips resolving the prompt |
+| `automation_queries.list_automations(..., index_rows=rows)` | the same page, built from controller index rows the caller already holds (`list_run_index(role="controller")`), for a host that caches them |
+| `automation_generation(runtime_or_run_store)` | a counter that moves whenever the set of automations or their status may have changed (creation, an applied command, a decision that changes the definition, `paused` or `exhausted`); a host keys its cached listings on it |
 | `adopt_legacy_schedule_projection(run)` | a read-only summary of a legacy `scheduled:*` gateway root, marked `legacy: true` with capabilities `pause`, `resume` and `cancel`; legacy roots are never migrated |
 
 Status is, in order of precedence: `archived` (the definition has `archived_at`, whatever state the controller

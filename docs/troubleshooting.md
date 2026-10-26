@@ -48,6 +48,11 @@ state = rt.get_state(run_id)
 print(state.status, state.waiting.wait_key if state.waiting else None)
 ```
 
+Two processes on one run folder (a host's API process delivers an event, its runner process parked the
+run): a `JsonFileRunStore` sees the other process's parked runs before each event lookup, at the latest
+2 s after the change ([api.md, Storage layer](api.md#storage-layer-durability-backends)). Check that both
+processes use the same folder and the same AbstractRuntime version.
+
 ## Generated media is missing or too large for run state
 
 Symptom:
@@ -321,6 +326,33 @@ Fix:
 
 Docs:
 - `automations.md#read-only-mounts`, `automations.md#read-only-workspaces`
+
+## A mail step is refused (`email_mailbox_read_only`, `email_mailbox_cannot_send`)
+
+Symptom:
+- A flow's `mail_mark`, `mail_label`, `mail_move`, `mail_delete`, `mail_send`, `mail_reply` or `mail_forward` step
+  fails with one of these codes, before any connection to the mailbox.
+
+Cause and fix:
+- `email_mailbox_read_only`: the person keeps that mailbox **Read only** (AbstractCore's `EmailAccount.access`).
+  Turn on Read and write for it in the host (the gateway: My email), or use a read verb (`mail_search`, `mail_get`,
+  `mail_attachment`).
+- `email_mailbox_cannot_send`: the mailbox is Read and write but has no outgoing server. Add its SMTP server in the
+  host; mark, label, move and delete keep working meanwhile.
+
+See [email.md, Mail verbs for flows](email.md#mail-verbs-for-flows).
+
+## A feed connection reports `feed_unreadable`
+
+Symptom:
+- The connection's `last_error` names a document that is not a feed.
+
+Cause and fix:
+- `parse_feed` reads RSS 2.0, RSS 1.0 (RDF with the `http://purl.org/rss/1.0/` channel) and Atom 1.0. An RDF
+  document without an RSS 1.0 channel, an HTML page, or a document above 5 MB is refused. Point the connection at
+  the site's feed address; the next poll clears the error.
+
+See [automations.md, `feed.item@1`](automations.md#feeditem1).
 
 ## MCP worker command is not found
 

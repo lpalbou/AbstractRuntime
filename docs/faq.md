@@ -132,8 +132,12 @@ Docs: `automations.md#discussions`, `automations.md#read-only-mounts`.
 ## Can several processes share one run store?
 
 v1 supports one writer process per store: one process ticks, resumes and commands runs. `run_mutation_lock` serializes
-writers inside that process only. Several store objects or read-only processes on one JSON run folder stay
-consistent through the creation journal (`.runs_created.log`).
+writers inside that process only. Several store objects or other processes on one JSON run folder stay consistent
+through the creation journal (`.runs_created.log`): a host split in two (an API process that creates runs and
+delivers events, a runner process that ticks them) works on one folder, and an event the API process delivers
+reaches a run the runner process parked (the event-wait and mailbox indexes refresh at the latest 2 s after the
+other process's change). A process that never generates can skip loading the default model with
+`set_default_model_warmup(False)` ([integrations/abstractcore.md](integrations/abstractcore.md#unloading-and-switching-models)).
 
 Docs: `automations.md#storage-guarantees`.
 

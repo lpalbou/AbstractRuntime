@@ -314,6 +314,63 @@ Decorators/helpers:
 - `MailboxQueryableRunStore` (`list_mailbox_runs`, `next_wait_deadline`) on every built-in run store, for event fan-out and wake scheduling without a recency window
 - snapshots/bookmarks (`src/abstractruntime/storage/snapshots.py`)
 
+### Reading a large run folder without scanning it
+
+A JSON run folder can hold tens of thousands of run files. `JsonFileRunStore` keeps in memory what
+listings and lookups need, so a host polling it never globs or stats every file:
+
+```mermaid
+flowchart LR
+  subgraph Writers["Writers on one run folder"]
+    Own["This store object<br/>(save / create / delete)"]
+    Other["Another process<br/>(a split host's other half)"]
+  end
+  Folder[("Run files<br/>&lt;run_id&gt;.json")]
+  Log[(".runs_created.log<br/>+ - ~ = lines")]
+  subgraph Store["JsonFileRunStore (in memory)"]
+    Active["Active index<br/>RUNNING / WAITING"]
+    Trusted["Trusted run index<br/>every run's listing fields"]
+    Waits["Event-wait and<br/>mailbox indexes"]
+    Token["change_token()<br/>(log size, counter)"]
+  end
+  Recon["Reconciliation<br/>(background, ≤ 60 s when moved, ≥ every 10 min)"]
+  Own --> Folder
+  Own --> Log
+  Own --> Active
+  Own --> Trusted
+  Own --> Token
+  Other --> Folder
+  Other --> Log
+  Log -->|"next lookup"| Active
+  Log -->|"next lookup"| Trusted
+  Log -->|"size moved, or every 2 s"| Waits
+  Folder -.->|"mtime moved"| Waits
+  Folder -.->|"mtime moved: re-read RUNNING / WAITING entries"| Trusted
+  Recon -->|repairs, logs a warning| Trusted
+  Folder -.-> Recon
+```
+
+- **Active index**: `list_runs` / `list_run_index` for RUNNING or WAITING and the scheduler's due-wait
+  poll, re-verified against each file at listing time.
+- **Trusted run index** (`trust_index=True`, the default): every other listing without a session
+  scope is answered from memory; `trust_index=False` (verify) answers with the scan and counts
+  differences (`run_index_stats()`). The background reconciliation repairs what a writer that
+  bypassed the creation journal left out; `load()` always reads disk.
+- **Event-wait and mailbox indexes** see runs another process parked (refreshed before each
+  lookup when the journal or the folder moved, at least every 2 s).
+- **Change tokens**: `JsonFileRunStore.change_token()` and `ObservableLedgerStore.change_token()`
+  (with `changed_run_ids(token)`) let a periodic reader skip a pass when nothing changed and read
+  only what did.
+- **Active-consumers index** (`abstractruntime.automations.consumers`): one snapshot per runtime of
+  which ACTIVE automation reads which trigger, rebuilt on the store's automation generation, so
+  "who listens to this connection or mailbox?" reads no run file.
+- **Artifacts**: `ArtifactStore.list_session_candidates(session_id, owner_run_id=)` answers a
+  session's artifacts through catalog indexes instead of reading the catalog.
+
+Details and the exact counters: [api.md, Storage layer](api.md#storage-layer-durability-backends)
+and [artifacts.md](artifacts.md). One process ticks a folder; see
+[automations.md, Storage guarantees](automations.md#storage-guarantees).
+
 ## Drivers: scheduler
 
 The scheduler is an in-process driver loop that resumes due waits and can deliver external events:

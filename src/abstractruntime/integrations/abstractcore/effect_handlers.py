@@ -228,56 +228,28 @@ def _observability_params(params: Dict[str, Any]) -> Dict[str, Any]:
 _MISSING = object()
 
 
-def _first_output_provider(value: Any) -> Optional[str]:
-    if isinstance(value, dict):
-        provider = value.get("provider")
-        if isinstance(provider, str) and provider.strip():
-            return provider.strip()
-        specs = value.get("specs")
-        if isinstance(specs, list):
-            for item in specs:
-                found = _first_output_provider(item)
-                if found:
-                    return found
-    elif isinstance(value, list):
-        for item in value:
-            found = _first_output_provider(item)
-            if found:
-                return found
-    return None
-
-
-def _replace_output_provider(value: Any, *, old_provider: str, new_provider: str) -> Any:
-    old_norm = str(old_provider or "").strip().lower()
-    if not old_norm or not isinstance(new_provider, str) or not new_provider.strip():
-        return value
-    if isinstance(value, dict):
-        out = dict(value)
-        provider = out.get("provider")
-        if isinstance(provider, str) and provider.strip().lower() == old_norm:
-            out["provider"] = new_provider.strip()
-        if isinstance(out.get("specs"), list):
-            out["specs"] = [_replace_output_provider(item, old_provider=old_provider, new_provider=new_provider) for item in out["specs"]]
-        return out
-    if isinstance(value, list):
-        return [_replace_output_provider(item, old_provider=old_provider, new_provider=new_provider) for item in value]
-    return value
-
-
 def _apply_provider_endpoint_profile_resolution(*, llm: AbstractCoreLLMClient, params: Dict[str, Any]) -> None:
-    """Resolve a host-provided virtual provider profile into Core routing params.
+    """Resolve the call's own `endpoint:<id>` text provider into Core routing params.
 
     Hosts can attach `resolve_provider_endpoint_profile(provider_id)` to the LLM
     client. Runtime keeps this as a generic optional hook so it does not import
     Gateway, and only the transient `params` dict receives the raw provider key.
+
+    Only `_provider` (the text route of THIS call) is resolved here. An output
+    spec that names an `endpoint:<id>` provider (an image, video or voice
+    generation through a named endpoint connection) keeps it: the media
+    plugins resolve the profile themselves through the resolver the host
+    attached to the client, and the runtime keeps such a spec in process
+    (`_is_subprocess_safe_image_specs`). Rewriting it to the bare provider
+    family used to lose the endpoint -- the spec reached the media backend as
+    a keyless `openai-compatible` request with no base URL, while the URL and
+    key sat in text-client kwargs the media path never reads.
     """
 
     resolver = getattr(llm, "resolve_provider_endpoint_profile", None)
     if not callable(resolver):
         return
     provider = params.get("_provider")
-    if not (isinstance(provider, str) and provider.strip()):
-        provider = _first_output_provider(params.get("output"))
     if not (isinstance(provider, str) and provider.strip()):
         return
     try:
@@ -292,8 +264,6 @@ def _apply_provider_endpoint_profile_resolution(*, llm: AbstractCoreLLMClient, p
         raise RuntimeError(f"Provider endpoint profile {provider!r} did not resolve to a provider family.")
 
     params["_provider"] = provider_family
-    if "output" in params:
-        params["output"] = _replace_output_provider(params.get("output"), old_provider=provider, new_provider=provider_family)
 
     base_url = resolved.get("base_url")
     if isinstance(base_url, str) and base_url.strip() and not str(params.get("base_url") or "").strip():

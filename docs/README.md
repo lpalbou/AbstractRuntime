@@ -32,6 +32,7 @@ In this repo, the AbstractCore wiring lives under `src/abstractruntime/integrati
 - `tool-approval.md` — tool risk tiers, the run-policy rank ceiling, and per-call refiners (the `send_email` recipient rule: self and pre-authorised recipients)
 - `api.md#workflowbundles-flow-and-visualflow-distribution` — VisualFlow compiler APIs, media nodes, and document nodes (`read_pdf` / `write_pdf` / `write_docx`)
 - `api.md#sessions-and-history` — session history replay: one window, the most recent 50,000 tokens of whole turns (`HISTORY_REPLAY_MAX_TOKENS`), returned as a `ReplayedHistory` whose `.report` records what was replayed and dropped
+- `api.md#conversation-search` — keyword search over a plane's conversations (`ConversationSearch`): questions, answers and the turn's artifacts, one SQLite FTS5 trigram index per plane, incremental `sync` with a time budget, exact then fuzzy matching
 - `api.md#run-history-bundle-export-portable-replay-artifact` — run history bundles, including `resolved_actions` summaries for cross-client capability replay
 
 ## Features (reference)

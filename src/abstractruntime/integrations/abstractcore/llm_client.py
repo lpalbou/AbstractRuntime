@@ -2142,7 +2142,16 @@ def _decode_subprocess_media_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _spec_routes_to_endpoint_profile(spec: Any) -> bool:
-    """Named HTTP endpoints need the in-process host resolver, not a worker."""
+    """True when a media spec names an `endpoint:<id>` provider.
+
+    Such a spec is an HTTP call to a named endpoint connection, not a local
+    pipeline: the one-shot media subprocess has nothing to isolate for it, and
+    it cannot resolve the profile -- the host's endpoint-profile resolver
+    (`set_provider_endpoint_profile_resolver`) lives on THIS process's
+    clients, and a per-user gateway profile has no AbstractCore config row
+    the subprocess could read. So it runs in process, where AbstractVision
+    resolves the profile through the owning provider's resolver.
+    """
     return isinstance(spec, dict) and str(spec.get("provider") or "").strip().lower().startswith("endpoint:")
 
 
@@ -2207,6 +2216,8 @@ def _is_subprocess_safe_video_specs(specs: List[Dict[str, Any]], media: Optional
     if len(specs) != 1 or not isinstance(specs[0], dict):
         return False
     spec = specs[0]
+    if _spec_routes_to_endpoint_profile(spec):
+        return False
     modality = str(spec.get("modality") or "").strip().lower()
     task = str(spec.get("task") or "").strip().lower()
     if modality != "video":
@@ -10651,15 +10662,29 @@ class MultiLocalAbstractCoreLLMClient:
             if last_exc is not None:
                 raise last_exc
             raise TypeError("Failed to construct LocalAbstractCoreLLMClient")
-        # Media generation on the pooled client finds the models explicitly
-        # loaded into THIS pool's residency core (`_resident_capability_core_for`).
+        return self._adopt_client(client)
+
+    def _adopt_client(self, client: LocalAbstractCoreLLMClient) -> LocalAbstractCoreLLMClient:
+        """Wire a client this pool just built -- the ONE place for everything a
+        client inherits from its pool, so a client built on a new path cannot
+        miss part of it (the media host missed the resolver in 0.10.3):
+
+        - the residency core: media generation on the client finds the models
+          explicitly loaded into THIS pool (`_resident_capability_core_for`);
+        - the Core execution context (config store, capability defaults);
+        - the host's endpoint-profile resolver: the media plugins resolve an
+          `endpoint:<id>` spec through the resolver on their owner, this client;
+        - the pool-wide token callback.
+
+        A setting that arrives after construction reaches every client the
+        pool owns through its setter (`_owned_clients`)."""
         client._capability_residency_parent = weakref.ref(self)
-        if self._core_config_file or getattr(self, "_capability_defaults_explicit", bool(self._capability_defaults)):
+        explicit = getattr(self, "_capability_defaults_explicit", bool(self._capability_defaults))
+        if self._core_config_file or explicit:
             _attach_core_execution_context_to_client(
                 client,
                 core_config_file=self._core_config_file,
-                capability_defaults=self._capability_defaults
-                if getattr(self, "_capability_defaults_explicit", bool(self._capability_defaults)) else None,
+                capability_defaults=self._capability_defaults if explicit else None,
             )
         resolver = getattr(self, "_provider_endpoint_profile_resolver", None)
         if callable(resolver):
@@ -10669,19 +10694,21 @@ class MultiLocalAbstractCoreLLMClient:
             client.set_on_token(pool_on_token)
         return client
 
+    def _owned_clients(self) -> List[Any]:
+        """Every client this pool built and still serves: the pooled text
+        clients (`_pooled_clients`) and the media host. A pool-wide setting
+        applied after construction goes to all of them."""
+        media_host = self.__dict__.get("_media_host")
+        return [*self._pooled_clients(), *([media_host] if media_host is not None else [])]
+
     def set_on_token(self, callback: Optional[Any]) -> None:
         """Pool-wide token callback (code seat c1009 ask 3): registers on every
         pooled client — existing AND future (per-request provider/model
         overrides create clients lazily; without the fan-out they would
         silently not stream). Same contract as the per-client setter."""
         self._pool_on_token = callback if callable(callback) else None
-        for client in list(getattr(self, "_clients", {}).values()):
+        for client in self._owned_clients():
             client.set_on_token(self._pool_on_token)
-        for client in list(getattr(self, "_override_clients", {}).values()):
-            client.set_on_token(self._pool_on_token)
-        default_client = getattr(self, "_default_client", None)
-        if default_client is not None:
-            default_client.set_on_token(self._pool_on_token)
 
     def _get_client(
         self,
@@ -10778,21 +10805,8 @@ class MultiLocalAbstractCoreLLMClient:
                 capability_defaults=self._capability_defaults if explicit else None,
                 llm_factory=create_capability_host,
             )
-            client._capability_residency_parent = weakref.ref(self)
-            if self._core_config_file or explicit:
-                _attach_core_execution_context_to_client(
-                    client,
-                    core_config_file=self._core_config_file,
-                    capability_defaults=self._capability_defaults if explicit else None,
-                )
-            # Capability plugins resolve endpoint:<id> after merging media
-            # defaults. Their owner needs the same host-scoped resolver as text
-            # clients; the profile may not exist in the Core config file.
-            resolver = getattr(self, "_provider_endpoint_profile_resolver", None)
-            if callable(resolver):
-                _attach_provider_endpoint_profile_resolver_to_client(client, resolver)
-            self._media_host = client
-            return client
+            self._media_host = self._adopt_client(client)
+            return self._media_host
 
     @contextmanager
     def _building_claim(self, key: Tuple[str, str]):
@@ -10859,17 +10873,9 @@ class MultiLocalAbstractCoreLLMClient:
     def set_provider_endpoint_profile_resolver(self, resolver: Any) -> None:
         self._provider_endpoint_profile_resolver = resolver
         _attach_provider_endpoint_profile_resolver_to_client(self, resolver)
-        for client in list(getattr(self, "_clients", {}).values()):
+        for client in self._owned_clients():
             _attach_provider_endpoint_profile_resolver_to_client(client, resolver)
-        for client in list(getattr(self, "_override_clients", {}).values()):
-            _attach_provider_endpoint_profile_resolver_to_client(client, resolver)
-        default_client = getattr(self, "_default_client", None)
-        if default_client is not None:
-            _attach_provider_endpoint_profile_resolver_to_client(default_client, resolver)
-        media_client = getattr(self, "_media_host", None)
-        if media_client is not None:
-            _attach_provider_endpoint_profile_resolver_to_client(media_client, resolver)
-        self._llm = getattr(default_client, "_llm", None)
+        self._llm = getattr(getattr(self, "_default_client", None), "_llm", None)
 
     def get_provider_instance(self, *, provider: str, model: str) -> Any:
         """Return the underlying AbstractCore provider instance for (provider, model)."""

@@ -106,9 +106,55 @@ Requires AbstractCore 2.27.0 or newer (`EmailClient.session()` / `get_many()`).
 
 - **Trigger connections** (framework backlog 1040): per-user instances of a trigger source, registered once and reused by any automation. `TriggerConnectionStore(plane_dir)` keeps one JSON file per connection (`<plane>/triggers/connections/<id>.json`, atomic writes), listed and changed per principal (`"<tenant>:<user>"`; another principal's connection reads like an unknown one), with secret fields and generated secrets sealed by AbstractCore's `SecretVault` (the mailbox credentials' sealing). Descriptors gain `needs_connection`, `connection_schema` and `connection_provider` (`schedule@1/2`, `manual@1`: none; `email.received@1`: a mailbox of the mail accounts). Each connection has one inbox stream `trigger:<connection_id>`; `test_fire` appends a synthetic `{data: {test: true}}` event to it and `wake_connection_automations` wakes the bound automations. `create_automation` and `automation.revise` refuse a binding whose `config.connection_id` is unknown, another principal's, of another source or disabled (`Runtime.set_trigger_connection_store`). `ConnectionEventAdapter` is the shared adapter of connection-bound sources (one coalesced admission per batch of stream events). See [Trigger connections](docs/automations.md#trigger-connections).
 
+## [0.10.6] - 2026-10-18
+
+### Added
+
 - `abstractruntime.conversation_search.ConversationSearch`: keyword search over a plane's conversations: each turn's question and answer (as the session replay builds them) and its media, the artifacts it generated (kind and generation prompt, attributed to the turn whose run made them) and the attachments it was sent with (kind and file name); read-aloud audio and internal artifacts are not media. A hit on an artifact names it (`artifact`: id, owning run, kind, content type), so a client can show it. Its own SQLite file per plane, an FTS5 `trigram` index over text lowercased and without accents: words and parts of words, every word required, words of one or two letters as whole words, and a fuzzy pass that keeps a turn holding at least 60% of each word's trigrams (a typo still finds it). One hit per session (its best turn, a snippet, the match positions, where it matched: question, artifact or answer). Tool usage, tool outputs and intermediate thinking are not indexed: [backlog 0849](docs/backlog/proposed/0849_conversation_search_tool_usage_outputs_and_thinking.md). `sync(budget_s=…)` indexes what changed since the last call, newest sessions first, and reports what is left. Works with the file and the SQLite run stores; without the `trigram` tokenizer (SQLite < 3.34) it indexes whole words with prefixes.
 
 - Automation definitions accept a named `policy.tool_policy` snapshot for per-tool Auto and Approve choices. The target tool ceiling remains authoritative; unspecified tools ask for approval. Messaging and untrusted-input restrictions remain enforced. See [Tool approval](docs/automations.md#tool-approval).
+- Streamed read-aloud recordings (`_finalize_tts_stream_artifact`, the streamed-voice path of the AbstractCore integration) are stored under the voice namespace: their artifact tags carry `purpose=voice_playback`, `artifact_space=voice`, a `filename` and a logical `path` of `voice/tts-<id>.wav`, so a host can list a user's generated documents and attachments without the playback audio while playback and replay keep the same artifact ref and provenance. Test: `tests/test_streamed_voice_namespace.py`.
+
+## [0.10.5] - 2026-10-18
+
+### Changed
+
+- The pooled client wires every client it builds in one place (`_adopt_client`): the residency core, the
+  Core execution context, the host's endpoint-profile resolver and the pool-wide token callback reach the
+  text clients, the per-call override clients and the media host through the same path, and a setting
+  applied later reaches all of them through `_owned_clients`. No behaviour change. Tests:
+  `tests/test_endpoint_profile_media_end_to_end.py` (an image spec on an `endpoint:<id>` profile reaches
+  that endpoint through the `LLM_CALL` handler, the pooled client and AbstractCore's capability host, with
+  and without a text provider on the call).
+
+## [0.10.4] - 2026-10-18
+
+### Fixed
+
+- An image, video or voice spec whose provider is an endpoint profile (`endpoint:<id>`) keeps that provider
+  all the way to the media plugin. The `LLM_CALL` handler resolved the first output spec's endpoint as if it
+  were the call's text provider: it rewrote the spec to the bare provider family and put the endpoint's URL
+  and key into text-client routing params that the media path never reads, so an image generation routed to
+  a gateway endpoint profile (the web console's sandbox, an image route set to an OpenAI-compatible relay
+  serving `gpt-image-2`) reached AbstractVision as a keyless `openai-compatible` request with no base URL
+  and failed with "Missing vision_base_url / OPENAI_BASE_URL" -- in the one-shot media subprocess, since
+  the spec no longer said `endpoint:`. Only the call's own `provider` (`_provider`) is resolved now; the
+  spec's endpoint is resolved by the media plugin through the host's resolver, in process. The pooled
+  client's media host (the client every media-only call runs on) now carries the host's endpoint-profile
+  resolver, whether it is built before or after `set_provider_endpoint_profile_resolver`. Affects every
+  host that attaches an endpoint-profile resolver (AbstractGateway). Tests:
+  `tests/test_endpoint_profile_media_specs_keep_provider.py`.
+
+## [0.10.3] - 2026-10-18
+
+### Fixed
+
+- Image and video specs whose provider is an endpoint profile (`endpoint:<id>`) run in process instead of in
+  the one-shot local media subprocess. The subprocess isolates local pipelines and has no host
+  endpoint-profile resolver, so a gateway profile (for example an OpenAI-compatible relay serving
+  `gpt-image-2` selected on the gateway's image route) could not be resolved there; in process,
+  AbstractVision resolves it through the resolver the host attached to the client. Tests:
+  `tests/test_endpoint_profile_media_in_process.py`.
 
 ## [0.10.2] - 2026-10-16
 

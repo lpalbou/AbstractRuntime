@@ -17,6 +17,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **"Did any run change?" is one stat.** New `JsonFileRunStore.change_token()` (creation-log size + active-index counter,
+  moved by every save, create and delete) and `changed_run_ids(token)` (the runs behind the last 8,192 changes, or
+  `None` when unknown). The gateway runner compared a glob + stat of every run file every 0.5 s instead (32 ms on a
+  warm 11,500-run copy, 0.18 s on the operator's folder): the token costs about 1 µs and reads no file.
 - **A session's artifacts without reading the whole catalog.** New `ArtifactStore.list_session_candidates(session_id, owner_run_id=)`:
   the artifacts a session may see (owned by its memory run, tagged `session_id`, or tagged `shared`), newest first.
   `FileArtifactStore` answers from three catalog indexes (two new expression indexes over the tags, built by the first

@@ -73,6 +73,30 @@ class _ActiveEntry:
     publishing: int = 0
 
 
+class _ChangeRing:
+    """The run ids behind the last `maxlen` bumps of the active-index counter (`change_token`).
+
+    `since(seq)` answers "which runs changed after counter value `seq`?", or None when entries
+    after it were evicted (the caller then falls back to whatever it did before). Callers hold
+    the store's `_active_lock`."""
+
+    def __init__(self, maxlen: int = 8192) -> None:
+        from collections import deque
+
+        self._ring: Any = deque(maxlen=int(maxlen))
+        self._floor = 0  # the highest evicted seq: answers are complete only after it
+
+    def note(self, seq: int, rid: str) -> None:
+        if len(self._ring) == self._ring.maxlen:
+            self._floor = int(self._ring[0][0])
+        self._ring.append((int(seq), rid))
+
+    def since(self, seq: int) -> Optional[set]:
+        if int(seq) < self._floor:
+            return None
+        return {rid for s, rid in self._ring if s > int(seq)}
+
+
 class JsonFileRunStore(RunStore):
     """File-based run store with query support.
 
@@ -139,6 +163,9 @@ class JsonFileRunStore(RunStore):
         self._journal_path = self._base / ".runs_created.log"
         self._journal_lock = threading.Lock()
         self._journal_offset: Optional[int] = None
+        from collections import deque as _deque
+
+        self._journal_own_appends: Any = _deque(maxlen=8192)
         # Entries whose file change is not visible yet (review 53 J53-1): the
         # journal line is written BEFORE the run file is published (or
         # unlinked), so a reader can see `+id` with no file yet. They are
@@ -206,6 +233,13 @@ class JsonFileRunStore(RunStore):
         # at every rescan.
         self._active: Dict[str, _ActiveEntry] = {}
         self._active_seq = 0
+        # CHANGE SIGNAL (2026-10-26, the gateway's idle core): `change_token()` is this counter
+        # plus the creation log's size. Every save, create, verified status change and journal
+        # entry (another process's create / delete / "became active") moves one of them, so
+        # "did anything change?" is one stat instead of a glob + stat of every run file (0.18 s
+        # at 11,500 runs, every 0.5 s, from the gateway runner). `_change_ring` names the runs
+        # behind the counter's last bumps (`changed_run_ids`).
+        self._change_ring = _ChangeRing()
         self._active_built = False
         self._active_building = False
         self._active_built_at: float = 0.0
@@ -561,6 +595,9 @@ class JsonFileRunStore(RunStore):
                     end = f.tell()
                 if self._journal_offset is not None and self._journal_offset == end - len(data):
                     self._journal_offset = end
+                # (start, end) of this store's own lines: `changed_run_ids` tells its own
+                # appends from another process's.
+                self._journal_own_appends.append((end - len(data), end))
         except OSError:
             # Other store objects would miss this run until they rebuild:
             # loud, because a missed discussion run weakens read-only anchoring.
@@ -978,11 +1015,54 @@ class JsonFileRunStore(RunStore):
             self._active_seq += 1
             e.gen = self._active_seq
             e.active = self._is_active_status(status)
+            self._change_ring.note(self._active_seq, rid)
 
     def _forget_active(self, rid: str) -> None:
         """The run is gone (deleted here, or a `-id` line): drop its record."""
         with self._active_lock:
             self._active.pop(rid, None)
+            self._active_seq += 1
+            self._change_ring.note(self._active_seq, rid)
+
+    # --- change signal ---------------------------------------------------
+
+    def change_token(self) -> Tuple[int, int]:
+        """`(creation-log size, active-index counter)`: equal tokens mean no run of this folder
+        was saved, created or deleted in between, by this store (the counter) or by another
+        process's create / delete / became-active line (the log). One stat, no file read.
+
+        Not seen: another PROCESS re-saving a run that stays active, or ending one, without a
+        log line (the single-writer contract above: one ticking process per folder)."""
+        size = self._journal_size()
+        with self._active_lock:
+            seq = self._active_seq
+        return (int(size if size is not None else -1), int(seq))
+
+    def changed_run_ids(self, since: Any) -> Optional[set]:
+        """The run ids this store saved, created, deleted or re-read with a new status after the
+        token `since`; None when that is unknown (the creation log moved, which may be another
+        process, or the record of changes no longer reaches back to `since`)."""
+        try:
+            size0, seq0 = int(since[0]), int(since[1])
+        except Exception:
+            return None
+        if self._journal_size() != size0 and not self._journal_moved_only_by_me(size0):
+            return None
+        with self._active_lock:
+            return self._change_ring.since(seq0)
+
+    def _journal_moved_only_by_me(self, size0: int) -> bool:
+        """Whether the creation log grew from `size0` only by this store's own appends."""
+        with self._journal_lock:
+            own = list(self._journal_own_appends)
+        size = self._journal_size()
+        if size is None:
+            return False
+        cur = size0
+        for start, end in own:
+            if start == cur:
+                cur = end
+        return cur == size
 
     def _drop_active_if_unchanged(self, rid: str, gen0: int) -> None:
         """A verified read said "not active": drop the member unless something
@@ -994,6 +1074,7 @@ class JsonFileRunStore(RunStore):
             self._active_seq += 1
             e.gen = self._active_seq
             e.active = False
+            self._change_ring.note(self._active_seq, rid)
 
     def _scan_active_ids(self) -> set[str]:
         """ONE directory scan: the ids whose memo/scan fields say RUNNING or
@@ -1160,6 +1241,7 @@ class JsonFileRunStore(RunStore):
                 e.gen = self._active_seq
                 e.active = self._is_active_status(status)
                 e.saved_token = token if e.active else None
+                self._change_ring.note(self._active_seq, rid)
 
     def save(self, run: RunState) -> None:
         p = self._path(run.run_id)

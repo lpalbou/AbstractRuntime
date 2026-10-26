@@ -573,6 +573,15 @@ A flow tells applications that something happened with the "Publish to channel" 
 - `type` is the event's CloudEvents type (no spaces; the host defaults it to `<channel>.message`); `title` is
   required; `body`, `subject` and `data` (a JSON object, at most 64 KB) are optional.
 - `alert: true` also raises an attention item, so the tray, the Assistant and the watch show it.
+- `recipient` (default `"me"`, the run's owner) is whom the alert reaches; the shape is a name so another account can
+  be named later (a host that cannot reach it refuses the payload).
+- `channels` is where the alert reaches the recipient: a non-empty list from `tray`, `watch`, `phone`, `email`,
+  `console` (deduplicated, kept in that order); absent (or `"all"`) = every channel; it needs `alert: true`. Notify me
+  saves its choice in the node's `effectConfig.channels` (and `recipient`); a pin of the same name wins.
+- Defaults are left out of the payload the host receives (`recipient` "me", no `channels`, `alert` false), so a host
+  written before these fields accepts every payload that does not use them. The visual compiler's envelope
+  (`resume_to_node`, the effect type under `type`) is stripped before validation (`strip_visual_envelope`); a node's
+  own `type` pin travels as `event_type` and comes back as `type`.
 - The runtime validates the payload and hands it to the host: `Runtime.set_publish_event_handler(handler)`, called
   as `handler(run, payload, step_id)`. `step_id` is the effect's idempotency key, the same on a replayed step, so the
   event is appended once. The host appends a CloudEvents event (extension `channel`, `data = {...data, title,

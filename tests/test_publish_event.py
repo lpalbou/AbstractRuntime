@@ -9,7 +9,7 @@ import pytest
 
 from abstractruntime import Effect, EffectType, Runtime, StepPlan, WorkflowSpec
 from abstractruntime.core.models import RunStatus
-from abstractruntime.core.publish import PublishError, validate_publish
+from abstractruntime.core.publish import PublishError, strip_visual_envelope, validate_publish
 from abstractruntime.scheduler.registry import WorkflowRegistry
 from abstractruntime.storage.in_memory import InMemoryLedgerStore, InMemoryRunStore
 
@@ -110,3 +110,95 @@ def test_publish_node_bakes_the_effect():
     plan = handler(_Run(), None)
     assert plan.effect.type == EffectType.PUBLISH_EVENT
     assert plan.effect.payload == {"channel": "kitchen", "type": "kitchen.order.ready", "alert": True, "title": "Ready"}
+
+
+def test_recipient_and_channels_are_validated_and_defaults_omitted():
+    base = {"channel": "me", "title": "t", "alert": True}
+    # Defaults: recipient "me" and every channel are left out (a host written before them accepts it).
+    assert validate_publish({**base, "recipient": "me"}) == base
+    assert validate_publish({**base, "channels": None}) == base
+    assert validate_publish({**base, "channels": "all"}) == base
+    # Deduplicated, case-folded, in the canonical order (tray, watch, phone, email, console).
+    assert validate_publish({**base, "channels": ["Phone", "watch", "phone"]})["channels"] == ["watch", "phone"]
+    assert validate_publish({**base, "channels": ("email", "tray")})["channels"] == ["tray", "email"]
+    # Another account: the shape is a name; the host decides whether it can reach it.
+    assert validate_publish({**base, "recipient": "alice"})["recipient"] == "alice"
+    for bad, field in (({**base, "channels": []}, "channels"), ({**base, "channels": ["sms"]}, "channels"),
+                       ({**base, "channels": "tray"}, "channels"), ({**base, "channels": [1]}, "channels"),
+                       ({"channel": "me", "title": "t", "channels": ["tray"]}, "channels"),
+                       ({**base, "recipient": "two words"}, "recipient"), ({**base, "recipient": 3}, "recipient")):
+        with pytest.raises(PublishError) as err:
+            validate_publish(bad)
+        assert err.value.field == field, bad
+
+
+def test_the_host_receives_the_channel_set_and_the_signature_is_unchanged():
+    host = Host()
+    rt = _runtime(host)
+    _, state = _publish(rt, {"channel": "me", "title": "Suspicious mail", "alert": True, "channels": ["phone", "watch"]})
+    assert state.status == RunStatus.COMPLETED
+    ((_rid, payload, _step),) = host.calls
+    assert payload == {"channel": "me", "title": "Suspicious mail", "alert": True, "channels": ["watch", "phone"]}
+    _, refused = _publish(rt, {"channel": "me", "title": "t", "alert": True, "channels": ["fax"]})
+    assert refused.status == RunStatus.FAILED and "unknown channel" in str(refused.error)
+
+
+def _notify_me_flow(effect_config, pin_defaults=None, inputs=None):
+    return {
+        "id": "flow-notify", "name": "notify", "entryNode": "n1", "edges": [],
+        "nodes": [{"id": "n1", "type": "publish_event", "data": {
+            "nodeType": "publish_event",
+            "inputs": [{"id": "exec-in", "type": "execution"}, {"id": "title", "type": "string"}, *(inputs or [])],
+            "outputs": [{"id": "exec-out", "type": "execution"}, {"id": "result", "type": "object"}, {"id": "success", "type": "boolean"}],
+            "pinDefaults": {"channel": "me", "alert": True, "title": "Ready", **(pin_defaults or {})},
+            **({"effectConfig": effect_config} if effect_config is not None else {}),
+        }}],
+    }
+
+
+def _compiled_payload(flow):
+    from abstractruntime.core.models import RunState
+    from abstractruntime.visualflow_compiler.compiler import compile_visualflow
+
+    spec = compile_visualflow(flow)
+    run = RunState.new(workflow_id=spec.workflow_id, entry_node="n1", vars={})
+    plan = spec.nodes["n1"](run, None)
+    assert plan.effect.type == EffectType.PUBLISH_EVENT
+    return plan.effect.payload
+
+
+def test_notify_me_saved_where_is_passed_by_the_compiled_workflow():
+    # Notify me saves Who / Where in its effectConfig; the compiled step's payload carries them.
+    payload = _compiled_payload(_notify_me_flow({"channels": ["watch", "phone"], "recipient": "me"}))
+    assert payload["channels"] == ["watch", "phone"] and payload["recipient"] == "me"
+    assert validate_publish(strip_visual_envelope(payload)) == {"channel": "me", "title": "Ready", "alert": True, "channels": ["watch", "phone"]}
+    # An older flow (no effectConfig, or none of the keys): no channels = every channel.
+    assert "channels" not in _compiled_payload(_notify_me_flow(None))
+    assert "channels" not in _compiled_payload(_notify_me_flow({"continueOnError": False}))
+    # A pin wins over the saved choice; a JSON-string pin default parses.
+    wired = _compiled_payload(_notify_me_flow({"channels": ["tray"]}, {"channels": '["email"]'}, [{"id": "channels", "type": "array"}]))
+    assert wired["channels"] == ["email"]
+
+
+def test_a_compiled_notify_me_runs_end_to_end_with_its_channels_and_its_event_type():
+    """The visual compiler wraps the payload (`type: publish_event`, `resume_to_node`): the runtime
+    hands the host the publish fields only (before 2026-10-26 every compiled Publish node failed
+    with "unknown publish field(s): ['resume_to_node']", and a `type` pin replaced the effect type)."""
+    from abstractruntime.visualflow_compiler.compiler import compile_visualflow
+
+    for effect_config, pins, expected in (
+        ({"channels": ["phone", "watch"]}, {}, {"channel": "me", "title": "Ready", "alert": True, "channels": ["watch", "phone"]}),
+        (None, {"type": "kitchen.order.ready"}, {"channel": "me", "type": "kitchen.order.ready", "title": "Ready", "alert": True}),
+    ):
+        flow = _notify_me_flow(effect_config, pins, [{"id": "type", "type": "string"}] if pins else None)
+        spec = compile_visualflow(flow)
+        registry = WorkflowRegistry()
+        registry.register(spec)
+        rt = Runtime(run_store=InMemoryRunStore(), ledger_store=InMemoryLedgerStore(), workflow_registry=registry)
+        host = Host()
+        rt.set_publish_event_handler(host)
+        run_id = rt.start(workflow=spec, vars={})
+        state = rt.tick(workflow=spec, run_id=run_id)
+        assert state.status == RunStatus.COMPLETED, state.error
+        assert [c[1] for c in host.calls] == [expected]
+    assert strip_visual_envelope({"channel": "k", "title": "t"}) == {"channel": "k", "title": "t"}

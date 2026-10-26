@@ -35,6 +35,7 @@ from .visual.executor import (
     CAMERA_TOOL_INVOKE_ARG_PINS,
     CAMERA_TOOL_INVOKE_VERBS,
     ENTITY_MEMORY_EFFECT_PINS,
+    publish_config_defaults,
 )
 
 if TYPE_CHECKING:
@@ -305,6 +306,7 @@ def _create_entity_memory_base_handler(
     next_node: Optional[str],
     input_key: Optional[str],
     output_key: Optional[str],
+    effect_config: Optional[Dict[str, Any]] = None,
 ) -> Callable:
     """Base (fallback) handler for entity-memory brain nodes.
 
@@ -318,6 +320,8 @@ def _create_entity_memory_base_handler(
 
     effect_type_str, arg_pins = ENTITY_MEMORY_EFFECT_PINS[node_type]
     eff_type = EffectType(effect_type_str)
+    # Publish to channel only: Notify me's Who / Where from the node's effectConfig.
+    config_defaults = publish_config_defaults(node_type, effect_config)
 
     def handler(run: Any, ctx: Any) -> "StepPlan":
         del ctx
@@ -336,6 +340,8 @@ def _create_entity_memory_base_handler(
                     # Empty string = "not provided": omit so handler defaults apply.
                     continue
                 payload[pin] = value
+        for key, value in config_defaults.items():
+            payload.setdefault(key, value)
 
         return StepPlan(
             node_id=node_id,
@@ -535,6 +541,7 @@ def _create_effect_node_handler(
             next_node=next_node,
             input_key=input_key,
             output_key=output_key,
+            effect_config=effect_config if isinstance(effect_config, dict) else None,
         )
     elif effect_type == "start_subworkflow":
         base_handler = create_start_subworkflow_handler(

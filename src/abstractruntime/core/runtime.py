@@ -1357,7 +1357,8 @@ class Runtime:
     def set_publish_event_handler(self, handler: Optional[Callable[..., Any]]) -> None:
         """Host hook for `EffectType.PUBLISH_EVENT` ("Publish to channel", `core/publish.py`):
         `handler(run, payload, step_id) -> {"event_id", "sequence", "alerted"}` appends the event to the
-        user's stream (and the attention item when `payload["alert"]`). `step_id` is the effect's
+        user's stream (and the attention item when `payload["alert"]`, for `payload["recipient"]`
+        (absent = "me") on `payload["channels"]` (absent = every channel)). `step_id` is the effect's
         idempotency key: the same on a replayed step. A refused payload raises ValueError. Without a
         handler the effect fails loudly."""
         if handler is not None and not callable(handler):
@@ -4187,13 +4188,13 @@ class Runtime:
 
     def _handle_publish_event(self, run: RunState, effect: Effect, default_next_node: Optional[str]) -> EffectOutcome:
         """Handle PUBLISH_EVENT ("Publish to channel"; see `core/publish.py`)."""
-        from .publish import PublishError, validate_publish
+        from .publish import PublishError, strip_visual_envelope, validate_publish
 
         handler = self._publish_event_handler
         if handler is None:
             return EffectOutcome.failed("publish_event is not available on this host (no publish_event handler is registered)", retryable=False)
         try:
-            payload = validate_publish(dict(effect.payload or {}))
+            payload = validate_publish(strip_visual_envelope(effect.payload or {}))
         except PublishError as exc:
             return EffectOutcome.failed(f"invalid publish request: {exc}", retryable=False)
         try:

@@ -249,9 +249,30 @@ ENTITY_MEMORY_EFFECT_PINS: Dict[str, tuple[str, tuple[str, ...]]] = {
         ("tool_calls", "phase", "max_calls"),
     ),
     # Publish to channel (`core/publish.py`): not an entity effect, but the same fixed-type
-    # mechanism (the EffectType is baked from the node type; pins mirror the payload).
-    "publish_event": ("publish_event", ("channel", "type", "title", "body", "subject", "data", "alert")),
+    # mechanism (the EffectType is baked from the node type; pins mirror the payload). Notify me
+    # saves its Who / Where in the node's effectConfig (`recipient`, `channels`): a pin value
+    # wins, else the config's (`PUBLISH_CONFIG_KEYS`); neither = "me" on every channel.
+    "publish_event": ("publish_event", ("channel", "type", "title", "body", "subject", "data", "alert", "recipient", "channels")),
 }
+
+# Publish to channel: the payload fields a node may carry in its effectConfig (Notify me's
+# "Who" and "Where"), used when the pin of the same name gives nothing.
+PUBLISH_CONFIG_KEYS = ("recipient", "channels")
+
+
+def publish_config_defaults(node_type: str, config: Any) -> Dict[str, Any]:
+    """`{recipient?, channels?}` from a publish_event node's effectConfig (copies), else {}."""
+    if node_type != "publish_event" or not isinstance(config, dict):
+        return {}
+    import copy
+
+    out: Dict[str, Any] = {}
+    for key in PUBLISH_CONFIG_KEYS:
+        value = config.get(key)
+        if value is None or (isinstance(value, str) and not value.strip()):
+            continue
+        out[key] = copy.deepcopy(value)
+    return out
 
 # Pins whose values are structured (arrays/objects). Authors often supply
 # these as JSON strings in pin defaults; parse those so the seam handler
@@ -269,6 +290,7 @@ ENTITY_MEMORY_JSON_PINS = {
     "target_ids",
     "receipts",
     "tool_calls",
+    "channels",
 }
 
 
@@ -2667,8 +2689,10 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
         loudly — that asymmetry IS the deposit gate: the channel carries the
         authority, the payload never does.
         """
-        del data, config  # No authoring knobs: the effect is baked by node type.
+        del data  # No authoring knobs: the effect is baked by node type.
         effect_type_str, arg_pins = ENTITY_MEMORY_EFFECT_PINS[node_type]
+        # Publish to channel only: Who / Where saved in effectConfig (never the effect type).
+        config_defaults = publish_config_defaults(node_type, config)
 
         # Scalar pin coercion (the 2026-02-20 string-truthiness class):
         # pin defaults arrive as strings; "false" must not journal and "2"
@@ -2726,7 +2750,14 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
                     # Empty string = "not provided": omit so the handler's own
                     # default applies (omit-None discipline).
                     continue
-                pending[pin] = _maybe_parse_json(pin, value)
+                # Publish to channel's `type` pin is the EVENT's type; `pending["type"]` is the
+                # effect type the compiler reads, so the pin travels as `event_type`
+                # (`core/publish.strip_visual_envelope` restores it).
+                slot = "event_type" if (node_type == "publish_event" and pin == "type") else pin
+                pending[slot] = _maybe_parse_json(pin, value)
+            for key, value in config_defaults.items():
+                if key not in pending:
+                    pending[key] = _maybe_parse_json(key, value)
 
             return {
                 "result": None,

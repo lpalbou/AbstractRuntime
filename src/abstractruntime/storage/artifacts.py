@@ -955,6 +955,29 @@ class ArtifactStore(ABC):
         """
         ...
 
+    def list_session_candidates(
+        self,
+        session_id: str,
+        *,
+        owner_run_id: Optional[str] = None,
+    ) -> List[ArtifactMetadata]:
+        """Artifacts a session MAY see, newest first: owned by `owner_run_id` (the session's
+        memory run, where its uploads live), tagged `session_id`, or carrying a `shared` tag.
+
+        Candidates, not the visibility rule: the caller applies its own rule (the gateway's
+        `artifact_scope`) to the tagged rows. Stores with an index answer this without reading
+        every artifact (`FileArtifactStore`); this default filters `list_all`.
+        """
+        sid = str(session_id or "").strip()
+        owner = str(owner_run_id or "").strip()
+        out: List[ArtifactMetadata] = []
+        for meta in self.list_all(limit=0) or []:
+            tags = meta.tags or {}
+            if (owner and meta.run_id == owner) or (sid and tags.get("session_id") == sid) or tags.get("shared") is not None:
+                out.append(meta)
+        out.sort(key=lambda m: (str(m.created_at or ""), str(m.artifact_id or "")), reverse=True)
+        return out
+
     def delete_by_run(self, run_id: str) -> int:
         """Delete all artifacts associated with a run.
 
@@ -1280,6 +1303,12 @@ class InMemoryArtifactStore(ArtifactStore):
         return results[:limit]
 
 
+# The catalog's tag expressions (`list_session_candidates`). A query uses an expression index
+# only when it spells the indexed expression exactly: one definition for both.
+_TAG_SESSION_SQL = "json_extract(tags_json, '$.session_id')"
+_TAG_SHARED_SQL = "json_extract(tags_json, '$.shared')"
+
+
 class FileArtifactStore(ArtifactStore):
     """File-based artifact store.
 
@@ -1303,6 +1332,8 @@ class FileArtifactStore(ArtifactStore):
         self._refs_dir = self._artifacts_dir / "refs"
         self._catalog_path = self._artifacts_dir / "artifact_catalog.sqlite3"
         self._lock = threading.RLock()
+        self._session_indexes_lock = threading.Lock()
+        self._session_indexes_ready = False
         self._blobs_dir.mkdir(parents=True, exist_ok=True)
         self._refs_dir.mkdir(parents=True, exist_ok=True)
         self._init_catalog()
@@ -1346,6 +1377,31 @@ class FileArtifactStore(ArtifactStore):
             conn.execute("CREATE INDEX IF NOT EXISTS idx_artifact_catalog_semantic ON artifact_catalog(semantic_kind, created_at DESC, artifact_id)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_artifact_catalog_render ON artifact_catalog(render_kind, created_at DESC, artifact_id)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_artifact_catalog_workflow ON artifact_catalog(workflow_id, created_at DESC, artifact_id)")
+
+    def _ensure_session_indexes(self) -> None:
+        """The session-visibility indexes (`list_session_candidates`): the `session_id` and
+        `shared` TAGS as expression indexes over `tags_json` (no column, no backfill).
+
+        Built by the first lookup that needs them, in the CALLER's thread, never when the store
+        opens: an open can happen on a gateway's event loop (a plane's first request), and the
+        build reads every row once (0.14-0.28 s at 106k artifacts, measured 2026-10-26). Later
+        calls cost one flag check. Before them, a session's artifact list read the whole
+        catalog (106k rows, 140 MB of JSON, 2-3 s) to filter two tags in Python, on the
+        gateway's event loop: both watchdog restarts of 2026-10-26."""
+        if self._session_indexes_ready:
+            return
+        with self._session_indexes_lock:
+            if self._session_indexes_ready:
+                return
+            with self._connect_catalog() as conn:
+                conn.execute(f"CREATE INDEX IF NOT EXISTS idx_artifact_catalog_tag_session ON artifact_catalog({_TAG_SESSION_SQL})")
+                # Partial: only the (few) shared rows are in it, so "every shared row" walks
+                # the index, not the catalog.
+                conn.execute(
+                    f"CREATE INDEX IF NOT EXISTS idx_artifact_catalog_tag_shared ON artifact_catalog({_TAG_SHARED_SQL}) "
+                    f"WHERE {_TAG_SHARED_SQL} IS NOT NULL"
+                )
+            self._session_indexes_ready = True
 
     def _catalog_count(self) -> int:
         try:
@@ -1692,6 +1748,42 @@ class FileArtifactStore(ArtifactStore):
 
     def list_all(self, *, limit: int = 1000) -> List[ArtifactMetadata]:
         return self.search(limit=limit)
+
+    def list_session_candidates(
+        self,
+        session_id: str,
+        *,
+        owner_run_id: Optional[str] = None,
+    ) -> List[ArtifactMetadata]:
+        """Indexed: three lookups (owner run, `session_id` tag, `shared` tag), each through its
+        catalog index, so the cost follows the session's own artifacts, never the catalog size.
+
+        A catalog error RAISES. There is deliberately no fallback to reading every artifact:
+        that read is the path that stalled the gateway's event loop past its watchdog."""
+        self._ensure_session_indexes()
+        sid = str(session_id or "").strip()
+        owner = str(owner_run_id or "").strip()
+        queries: List[tuple[str, tuple]] = []
+        if owner:
+            queries.append(("SELECT raw_json FROM artifact_catalog WHERE run_id = ?", (owner,)))
+        if sid:
+            queries.append((f"SELECT raw_json FROM artifact_catalog WHERE {_TAG_SESSION_SQL} = ?", (sid,)))
+        queries.append((f"SELECT raw_json FROM artifact_catalog WHERE {_TAG_SHARED_SQL} IS NOT NULL", ()))
+        with self._connect_catalog() as conn:
+            raw_rows = [row["raw_json"] for sql, params in queries for row in conn.execute(sql, params).fetchall()]
+        seen: set[str] = set()
+        out: List[ArtifactMetadata] = []
+        for raw in raw_rows:
+            try:
+                meta = ArtifactMetadata.from_dict(json.loads(str(raw)))
+            except Exception:
+                continue
+            if meta.artifact_id in seen:
+                continue
+            seen.add(meta.artifact_id)
+            out.append(meta)
+        out.sort(key=lambda m: (str(m.created_at or ""), str(m.artifact_id or "")), reverse=True)
+        return out
 
     def _catalog_filter_parts(
         self,

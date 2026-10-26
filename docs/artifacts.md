@@ -136,11 +136,20 @@ or user; the runtime never drops output silently.
   filter chips;
 - `record_access(...)` for explicit metadata/content/preview/download/export
   counters.
+- `list_session_candidates(session_id, owner_run_id=...)` for the artifacts a
+  session may see (owned by its memory run, tagged `session_id`, or tagged
+  `shared`), newest first; the caller applies its visibility rule to them.
 
 `FileArtifactStore` maintains a repairable SQLite catalog for descriptor fields,
 time filters, exact counts, byte totals, and facets. The catalog is an index of
 Runtime-owned artifact metadata; the payload bytes and metadata files remain the
 source of truth.
+
+`list_session_candidates` reads the catalog through three indexes (owner run,
+`session_id` tag, `shared` tag), so its cost follows the session, not the
+catalog size. The two tag indexes are built by the first such lookup, in the
+caller's thread, never when the store opens. A catalog error raises: the lookup
+never falls back to reading every artifact.
 
 Plain `load(...)` and `get_metadata(...)` are side-effect free. UI and HTTP
 layers that want access statistics must call `record_access(...)` or use Gateway

@@ -115,6 +115,10 @@ class JsonFileRunStore(RunStore):
     # still in flight (its log line or its own memo update not landed yet): repaired, not
     # counted as a miss.
     RUN_INDEX_IN_FLIGHT_S = 5.0
+    # Event-wait and mailbox indexes: a lookup re-reads the active runs another process changed
+    # when the folder or the creation log moved, and at least this often regardless (a folder
+    # mtime that did not move: a coarse-mtime filesystem, an in-place edit).
+    EVENT_INDEX_REFRESH_S = 2.0
     _ACTIVE_STATUSES = frozenset({"running", "waiting"})
 
     def __init__(
@@ -175,13 +179,10 @@ class JsonFileRunStore(RunStore):
         # maintained on save/delete, exactly like `_children_index`; a lookup
         # re-loads and re-verifies every candidate against disk, so a stale
         # entry costs one load and self-heals, never a wrong resume.
-        # SCOPE, stated plainly: like `_children_index`, this index sees the
-        # saves made through THIS store object. A second PROCESS parking a run
-        # in WAITING(EVENT) is not seen until this process rebuilds — the same
-        # single-writer assumption `save()`'s by-reference serialization and
-        # the ownership contract above already rest on (emit_event RESUMES the
-        # waiters it finds, i.e. it writes them, so the two processes would be
-        # racing the same run file either way).
+        # SCOPE: maintained by the saves made through THIS store object, and
+        # refreshed from the store's change signal before every lookup, so a
+        # run another PROCESS parked in WAITING(EVENT) is found (the
+        # cross-process refresh below, 2026-10-26).
         self._event_index_lock = threading.Lock()
         self._event_wait_index: Optional[Dict[str, set[str]]] = None
         self._run_event_wait_key: Dict[str, str] = {}
@@ -190,11 +191,29 @@ class JsonFileRunStore(RunStore):
         # Durable emit_event used to find its mailboxes in the newest
         # `run_scan_limit` (200) active runs only: past that, a parked
         # automation's mailbox silently missed events. Same lifecycle and
-        # single-writer scope as the event-wait index above: built lazily from
-        # one scan of the active ids, maintained on save/delete, every lookup
-        # re-verified against disk.
+        # scope as the event-wait index above: built lazily from one scan of
+        # the active ids, maintained on save/delete, refreshed across
+        # processes before every lookup, every candidate re-verified on disk.
         self._mailbox_index: Optional[Dict[str, set[str]]] = None
         self._run_mailboxes: Dict[str, frozenset] = {}
+        # CROSS-PROCESS REFRESH of the two indexes above (2026-10-26, split mode: `serve
+        # --no-runner` + `abstractgateway runner` on one folder). The runner process parks a run
+        # in WAITING(EVENT) by re-saving a run that stays active: no creation-log line, so the
+        # API process's indexes never heard of it and an event it delivered missed the waiter.
+        # Every lookup now reads the store's change signal first: when the creation log or the
+        # folder's mtime moved since the last refresh (every save moves the folder: tmp +
+        # replace), or EVENT_INDEX_REFRESH_S passed, each ACTIVE run (the active index, kept
+        # current by the creation log) is stat()ed and the ones whose file changed since this
+        # store last filed them are re-read and re-filed. Unchanged folder: two stats. Changed
+        # folder: one stat per active run, one parse per run another process changed (the
+        # parse the scan memo makes anyway). This store's own saves record their token, so its
+        # own writes are never re-read.
+        self._xproc_lock = threading.Lock()
+        self._xproc_mark: Optional[tuple] = None
+        self._xproc_at: float = 0.0
+        self._xproc_tokens: Dict[str, tuple] = {}
+        self._xproc_refreshes = 0
+        self._xproc_refiled = 0
         # ACTIVE INDEX (2026-10-16, operator's "the observer is extremely slow to
         # load"): the ids of every run whose status is RUNNING or WAITING — the
         # question both listings are asked on every poll by the gateway runner
@@ -938,6 +957,7 @@ class JsonFileRunStore(RunStore):
         any in-memory drift at the cost of one scan on the first emit."""
         if self._event_wait_index is not None:
             return
+        mark = self._xproc_change_mark()
         with self._event_index_lock:
             if self._event_wait_index is not None:
                 return
@@ -966,6 +986,7 @@ class JsonFileRunStore(RunStore):
                 by_run[rid] = wait_key
             self._event_wait_index = index
             self._run_event_wait_key = by_run
+        self._xproc_note_built(mark)
         self._maybe_persist_scan_memo()
 
     def _drop_from_event_wait_index(self, run_id: str) -> None:
@@ -1016,6 +1037,7 @@ class JsonFileRunStore(RunStore):
     def _ensure_mailbox_index(self) -> None:
         if self._mailbox_index is not None:
             return
+        mark = self._xproc_change_mark()
         with self._event_index_lock:
             if self._mailbox_index is not None:
                 return
@@ -1043,6 +1065,7 @@ class JsonFileRunStore(RunStore):
                     index.setdefault(n, set()).add(key)
             self._mailbox_index = index
             self._run_mailboxes = by_run
+        self._xproc_note_built(mark)
 
     def _drop_from_mailbox_index(self, run_id: str) -> None:
         with self._event_index_lock:
@@ -1072,6 +1095,101 @@ class JsonFileRunStore(RunStore):
                 for n in new:
                     self._mailbox_index.setdefault(n, set()).add(run_id)
                 self._run_mailboxes[run_id] = new
+
+    # --- cross-process refresh of the event-wait and mailbox indexes ----------
+
+    def _xproc_change_mark(self) -> tuple:
+        return (self._journal_size(), self._dir_mtime())
+
+    def _xproc_note_own(self, rid: str, token: Optional[tuple], active: bool) -> None:
+        """This store wrote `rid` (its indexes were updated by the write itself)."""
+        with self._xproc_lock:
+            if active and token is not None and token[0] > 0:
+                self._xproc_tokens[rid] = tuple(token)
+            else:
+                self._xproc_tokens.pop(rid, None)
+
+    def _xproc_note_built(self, mark: tuple) -> None:
+        """An index was just built from disk: what it read is filed (the mark is the change
+        signal read BEFORE the build, so a write during the build is re-read next time)."""
+        with self._scan_memo_lock:
+            memo = {rid: tuple(v[0]) for rid, v in self._scan_memo.items() if self._is_active_status(v[1].get("status"))}
+        with self._xproc_lock:
+            for rid, tok in memo.items():
+                self._xproc_tokens.setdefault(rid, tok)
+            if self._xproc_mark is None:
+                self._xproc_mark = mark
+                self._xproc_at = time.monotonic()
+
+    def _refresh_event_indexes(self) -> None:
+        """File what OTHER processes changed among the active runs (see `__init__`)."""
+        if self._event_wait_index is None and self._mailbox_index is None:
+            return
+        mark = self._xproc_change_mark()
+        now = time.monotonic()
+        with self._xproc_lock:
+            fresh = (
+                mark == self._xproc_mark
+                and None not in mark
+                and now - self._xproc_at < float(self.EVENT_INDEX_REFRESH_S)
+            )
+            if fresh:
+                return
+            self._xproc_mark = mark
+            self._xproc_at = now
+            self._xproc_refreshes += 1
+        ids = self._active_candidate_ids()  # applies other processes' creation-log lines first
+        if ids is None:
+            ids = [rid for rid in (self._run_id_from_path(p) for p in self._base.glob("run_*.json")) if rid]
+        keep: Dict[str, tuple] = {}
+        with self._xproc_lock:
+            before = dict(self._xproc_tokens)
+        refiled = 0
+        for rid in ids:
+            p = self._path(rid)
+            try:
+                tok = self._stat_token(p.stat())
+            except OSError:
+                continue  # gone: the lookup drops its entries when it re-verifies them
+            if before.get(rid) == tok:
+                keep[rid] = tok
+                continue
+            fields = self._scan_fields(p)  # memo hit, or the one parse (the run is cached by it)
+            if fields is not None:
+                event_waiter = (
+                    fields.get("status") == RunStatus.WAITING.value
+                    and fields.get("wait_reason") == WaitReason.EVENT.value
+                )
+                need_event = self._event_wait_index is not None and (event_waiter or rid in self._run_event_wait_key)
+                need_mailbox = self._mailbox_index is not None and (
+                    self._is_active_status(fields.get("status")) or rid in self._run_mailboxes
+                )
+                if need_event or need_mailbox:
+                    run = self._load_from_path(p)
+                    if run is not None:
+                        if need_event:
+                            self._update_event_wait_index_on_save(run)
+                        if need_mailbox:
+                            self._update_mailbox_index_on_save(run)
+                        refiled += 1
+            keep[rid] = tok
+        with self._xproc_lock:
+            # A token noted by this store's own save while the pass ran is newer than the one
+            # the pass read: it wins. Runs no longer active are forgotten (bounded table).
+            for rid, tok in self._xproc_tokens.items():
+                if rid in keep and before.get(rid) != tok:
+                    keep[rid] = tok
+            self._xproc_tokens = keep
+            self._xproc_refiled += refiled
+
+    def event_index_stats(self) -> Dict[str, Any]:
+        """Counters of the cross-process refresh (refresh passes run, runs re-filed)."""
+        with self._xproc_lock:
+            return {
+                "refreshes": int(self._xproc_refreshes),
+                "refiled": int(self._xproc_refiled),
+                "tracked": len(self._xproc_tokens),
+            }
 
     # --- active index --------------------------------------------------------
 
@@ -1489,6 +1607,7 @@ class JsonFileRunStore(RunStore):
                 e = self._active.get(rid)
                 if e is not None:
                     e.saved_token = None
+        self._xproc_note_own(rid, token, now_active)
         if token[0] > 0:
             self._cache_put(str(run.run_id), token, run, own=True)
 
@@ -1548,6 +1667,7 @@ class JsonFileRunStore(RunStore):
                 self._active_publish_end(rid, status=run.status, token=token)
             else:
                 self._note_active_status(rid, run.status)
+            self._xproc_note_own(rid, token, now_active)
             if token[0] > 0:
                 self._cache_put(str(run.run_id), token, run, own=True)
             return run, True
@@ -1586,6 +1706,7 @@ class JsonFileRunStore(RunStore):
             self._drop_from_mailbox_index(rid)
             self._drop_from_session_index(rid)
             self._forget_active(rid)
+            self._xproc_note_own(rid, None, False)
             with self._run_cache_lock:
                 self._run_cache.pop(rid, None)
             self._memo_pop(rid)
@@ -2181,6 +2302,7 @@ class JsonFileRunStore(RunStore):
             return []
         wanted = set(keys)
         self._ensure_event_wait_index()
+        self._refresh_event_indexes()
         with self._event_index_lock:
             index = self._event_wait_index or {}
             candidate_ids: List[str] = []
@@ -2221,6 +2343,7 @@ class JsonFileRunStore(RunStore):
         if not pre:
             return []
         self._ensure_event_wait_index()
+        self._refresh_event_indexes()
         with self._event_index_lock:
             index = self._event_wait_index or {}
             candidate_ids: List[str] = []
@@ -2258,6 +2381,7 @@ class JsonFileRunStore(RunStore):
         if not wanted:
             return []
         self._ensure_mailbox_index()
+        self._refresh_event_indexes()
         with self._event_index_lock:
             index = self._mailbox_index or {}
             candidate_ids = sorted({rid for n in wanted for rid in index.get(n, set())})

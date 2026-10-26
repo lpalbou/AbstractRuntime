@@ -10190,6 +10190,26 @@ class LocalAbstractCoreLLMClient:
         )
 
 
+# Whether a new MultiLocalAbstractCoreLLMClient builds (= loads) its default model at construction
+# (the warm-up below). A process that serves NO model turns it off for itself: the gateway's split API
+# process (`serve --no-runner`), whose runner process holds the model; built there, a local default
+# (15 GB for a 27B MLX model) would be a second copy. Process-wide, set once at boot, never an env var.
+_WARM_DEFAULT_MODEL = True
+
+
+def set_default_model_warmup(enabled: bool) -> None:
+    """Turn the default-model warm-up at client construction on or off for this process.
+
+    Off: the default client is built at its first call instead (the same deferred path a
+    not-yet-downloaded default takes), so a process that never generates never loads a model."""
+    global _WARM_DEFAULT_MODEL
+    _WARM_DEFAULT_MODEL = bool(enabled)
+
+
+def default_model_warmup() -> bool:
+    return bool(_WARM_DEFAULT_MODEL)
+
+
 class MultiLocalAbstractCoreLLMClient:
     """Local AbstractCore client with per-request provider/model routing.
 
@@ -10248,7 +10268,14 @@ class MultiLocalAbstractCoreLLMClient:
         # calls that arrive WITH a provider (payload override, run vars)
         # work immediately, and calls with none fail at call time with a
         # message that says what to configure.
-        if self._default_provider or self._default_model:
+        if (self._default_provider or self._default_model) and not _WARM_DEFAULT_MODEL:
+            # This process serves no model (set_default_model_warmup(False)): built at first call.
+            self._default_client = None
+            logger.info(
+                f"default model {self._default_provider}/{self._default_model} not loaded at startup: "
+                "this process serves no model (built at first call)"
+            )
+        elif self._default_provider or self._default_model:
             try:
                 self._default_client = self._get_client(self._default_provider, self._default_model)
             except Exception as exc:
@@ -10425,7 +10452,7 @@ class MultiLocalAbstractCoreLLMClient:
         del previous_clients, previous_overrides
         self._eject_models_dropped_by_switch(dropped)
         del dropped
-        if provider_s or model_s:
+        if (provider_s or model_s) and _WARM_DEFAULT_MODEL:
             self._default_client = self._get_client(provider_s, model_s)
         else:
             self._default_client = None

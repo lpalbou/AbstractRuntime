@@ -85,3 +85,21 @@ def test_change_ring_reports_unknown_once_entries_are_evicted() -> None:
     assert ring.since(4) == {"e"}
     assert ring.since(2) == {"c", "d", "e"}
     assert ring.since(1) is None
+
+
+def test_ledger_change_signal_names_the_ledgers_that_grew(tmp_path: Path) -> None:
+    from abstractruntime.core.models import StepRecord, StepStatus
+    from abstractruntime.storage.json_files import JsonlLedgerStore
+    from abstractruntime.storage.observable import ObservableLedgerStore
+
+    ledger = ObservableLedgerStore(JsonlLedgerStore(tmp_path))
+    t0 = ledger.change_token()
+    assert ledger.changed_run_ids(t0) == set()
+    ledger.list("a")  # reads move nothing
+    assert ledger.change_token() == t0
+    ledger.append(StepRecord(run_id="a", step_id="s1", node_id="n", status=StepStatus.COMPLETED))
+    ledger.append(StepRecord(run_id="b", step_id="s1", node_id="n", status=StepStatus.COMPLETED))
+    t1 = ledger.change_token()
+    assert t1 != t0 and ledger.changed_run_ids(t0) == {"a", "b"}
+    ledger.append(StepRecord(run_id="b", step_id="s2", node_id="n", status=StepStatus.COMPLETED))
+    assert ledger.changed_run_ids(t1) == {"b"}

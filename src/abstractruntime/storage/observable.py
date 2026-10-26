@@ -18,6 +18,7 @@ import threading
 from typing import Any, Callable, Dict, List, Optional, Protocol, runtime_checkable
 
 from .base import LedgerStore
+from .change_ring import ChangeRing
 from ..core.models import StepRecord
 
 
@@ -54,9 +55,34 @@ class ObservableLedgerStore(LedgerStore):
         self._inner = inner
         self._lock = threading.Lock()
         self._subscribers: list[tuple[Optional[str], LedgerSubscriber]] = []
+        # CHANGE SIGNAL (2026-10-26): a counter every append through this store bumps, and the
+        # run ids behind its last bumps, so a periodic reader (the gateway's mail notification
+        # check) learns which ledgers grew without re-reading them. Process-local, like the
+        # subscriptions.
+        self._change_lock = threading.Lock()
+        self._change_seq = 0
+        self._change_ring = ChangeRing()
+
+    def change_token(self) -> int:
+        """A counter every append through this store moves (process-local)."""
+        with self._change_lock:
+            return self._change_seq
+
+    def changed_run_ids(self, since: Any) -> Optional[set]:
+        """The run ids whose ledger this store appended to after token `since`; None when the
+        record no longer reaches back that far."""
+        try:
+            seq0 = int(since)
+        except Exception:
+            return None
+        with self._change_lock:
+            return self._change_ring.since(seq0)
 
     def append(self, record: StepRecord) -> None:
         self._inner.append(record)
+        with self._change_lock:
+            self._change_seq += 1
+            self._change_ring.note(self._change_seq, str(record.run_id))
 
         payload: LedgerRecordDict = asdict(record)
         with self._lock:

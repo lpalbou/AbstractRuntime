@@ -22,6 +22,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from .base import IDEMPOTENCY_TAIL_WINDOW, LedgerStore, RunStore, mailbox_names_of
 from .serialize import dumps_compact, runstate_to_dict, steprecord_to_dict
+from .change_ring import ChangeRing as _ChangeRing
 from ..core.models import RunState, StepRecord, RunStatus, StepStatus, WaitState, WaitReason
 from ..core.run_attribution import workspace_index_fields
 from ..core.run_attribution import automation_index_fields, is_turn_root, latest_occurrence_of, row_matches
@@ -71,30 +72,6 @@ class _ActiveEntry:
     # This store's writes of an active file in flight: the id is a candidate
     # before the note lands and is never dropped for a failed stat meanwhile.
     publishing: int = 0
-
-
-class _ChangeRing:
-    """The run ids behind the last `maxlen` bumps of the active-index counter (`change_token`).
-
-    `since(seq)` answers "which runs changed after counter value `seq`?", or None when entries
-    after it were evicted (the caller then falls back to whatever it did before). Callers hold
-    the store's `_active_lock`."""
-
-    def __init__(self, maxlen: int = 8192) -> None:
-        from collections import deque
-
-        self._ring: Any = deque(maxlen=int(maxlen))
-        self._floor = 0  # the highest evicted seq: answers are complete only after it
-
-    def note(self, seq: int, rid: str) -> None:
-        if len(self._ring) == self._ring.maxlen:
-            self._floor = int(self._ring[0][0])
-        self._ring.append((int(seq), rid))
-
-    def since(self, seq: int) -> Optional[set]:
-        if int(seq) < self._floor:
-            return None
-        return {rid for s, rid in self._ring if s > int(seq)}
 
 
 class JsonFileRunStore(RunStore):

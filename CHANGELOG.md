@@ -17,6 +17,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Ledger change signal.** `ObservableLedgerStore.change_token()` (a counter every append moves) and
+  `changed_run_ids(token)` (the runs whose ledger grew since, from the last 8,192 appends; `None` beyond), so a periodic
+  reader learns which ledgers grew without re-reading them. Process-local, like the subscriptions. The bounded record
+  behind both stores' `changed_run_ids` is `abstractruntime.storage.change_ring.ChangeRing`.
 - **"Did any run change?" is one stat.** New `JsonFileRunStore.change_token()` (creation-log size + active-index counter,
   moved by every save, create and delete) and `changed_run_ids(token)` (the runs behind the last 8,192 changes, or
   `None` when unknown). The gateway runner compared a glob + stat of every run file every 0.5 s instead (32 ms on a

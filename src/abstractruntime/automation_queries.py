@@ -156,18 +156,25 @@ def list_automations(
     cursor: Optional[str] = None,
     limit: int = 50,
     changed_since: Optional[str] = None,
+    index_rows: Optional[List[Dict[str, Any]]] = None,
 ) -> Page:
     """Automation summaries, newest first, paged with an opaque restart-stable
     keyset cursor (`(created_at, run_id)` of the last item). Archived
     automations stay listable. `status` filters on the summary status (a value,
-    comma-separated values or a list)."""
+    comma-separated values or a list).
+
+    `index_rows`: the controller index rows (`list_run_index(role="controller")`)
+    when the caller already holds them (a host caching them on the automation
+    generation, `automations.consumers.automation_generation`); a JSON-file store
+    answers that listing with one stat per run file, so a host listing often
+    should not ask it each time. Each listed controller is still loaded."""
     if changed_since is not None:
         raise ChangedSinceUnsupported()
     from .core.run_attribution import filter_values
 
     wanted = filter_values(status)
     lim = max(1, int(limit or 50))
-    rows = _list_index(run_store, role="controller")
+    rows = list(index_rows) if index_rows is not None else _list_index(run_store, role="controller")
     rows.sort(key=lambda r: (str(r.get("created_at") or ""), str(r.get("run_id") or "")), reverse=True)
     if cursor:
         after = _decode_cursor(cursor)

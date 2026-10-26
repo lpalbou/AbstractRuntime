@@ -5,7 +5,7 @@
   through create-if-absent: the same request replays to the same automation,
   a different request with the same `request_id` is an `identity_conflict`.
   The request's target must be concrete (the host resolves `@default`).
-- `get_automation`, `list_occurrences`: projections of the controller run and
+- `get_automation`, `list_occurrences`, `latest_occurrence`: projections of the controller run and
   its ledger.
 - `start_discussion(...)`: a NEW root run in its own session, seeded once from
   the automation's conversation through a chosen occurrence, on the
@@ -38,6 +38,7 @@ from .controller import AUTOMATION_GRANT_SOURCE, apply_context_mode
 from .ledger import (
     append_observation,
     automation_records,
+    automation_records_newest_first,
     definition_of,
     find_by_idempotency_key,
     record_key,
@@ -216,6 +217,71 @@ def _cursor_index(cursor: Optional[str]) -> Optional[int]:
         raise AutomationError(f"invalid occurrence cursor {cursor!r}", reason_code="invalid_request", field="cursor") from exc
 
 
+_OCCURRENCE_RECORDS = (
+    "automation.admitted",
+    "automation.dispatched",
+    "automation.retry_scheduled",
+    "automation.completed",
+)
+
+
+def _fold_occurrence_record(rows: Dict[int, Dict[str, Any]], rec: Mapping[str, Any]) -> None:
+    """Apply one occurrence ledger record (append order) to `{index: row}`. The admitted
+    record's prompt stays RAW here (`_prompt`): `_finish_occurrence_row` resolves it, only for
+    the rows a caller returns."""
+    p = rec["payload"]
+    index = int(p["index"])
+    if rec["name"] == "automation.admitted":
+        envelope = p.get("trigger_envelope") or {}
+        rows[index] = {
+            "index": index,
+            "run_id": p["run_id"],
+            "run_ids": [],
+            "attempts": 1,
+            "revision": p.get("revision"),
+            "event_id": p.get("event_id"),
+            "fired_at": envelope.get("fired_at"),
+            "trigger": {"source_id": envelope.get("source_id"), "source_version": envelope.get("source_version")},
+            "_prompt": ((p.get("prepared") or {}).get("input_data") or {}).get("prompt"),
+            "status": "admitted",
+            "finished_at": None,
+            "notify": None,
+            "attention": None,
+        }
+        return
+    row = rows.get(index)
+    if row is None:
+        return
+    if rec["name"] == "automation.dispatched":
+        row.update(run_id=p["run_id"], attempts=int(p["attempt"]), status="running")
+        if p["run_id"] not in row["run_ids"]:
+            row["run_ids"].append(p["run_id"])
+    elif rec["name"] == "automation.retry_scheduled":
+        row["status"] = "backoff"
+    else:
+        row.update(
+            status=p["status"],
+            attempts=int(p["attempts"]),
+            finished_at=p.get("finished_at"),
+            notify=p.get("notify"),
+            attention=p.get("attention"),
+        )
+
+
+def _finish_occurrence_row(runtime: Any, row: Dict[str, Any]) -> Dict[str, Any]:
+    """The public row: `user_turn` from the admitted prompt (an email occurrence's framed prompt
+    is an artifact, bodies stay out of the ledger: resolved here, one row at a time)."""
+    out = {k: v for k, v in row.items() if k != "_prompt"}
+    prompt = row.get("_prompt")
+    if is_artifact_ref(prompt):
+        try:
+            prompt = resolve_strict(prompt, artifact_store=runtime.artifact_store)
+        except Exception:  # noqa: BLE001 - a pruned artifact: the row simply has no user turn
+            prompt = None
+    out["user_turn"] = prompt if isinstance(prompt, str) else None
+    return out
+
+
 def list_occurrences(
     runtime: Any, automation_id: str, *, cursor: Optional[str] = None, limit: int = 50
 ) -> Dict[str, Any]:
@@ -224,68 +290,46 @@ def list_occurrences(
     Item: `{index, run_id, run_ids, attempts, revision, event_id, fired_at,
     trigger: {source_id, source_version}, user_turn, status, finished_at,
     notify, attention}`; `status` is `admitted | running | backoff | completed
-    | failed | cancelled`.
+    | failed | cancelled`. Prompt artifacts are resolved for the returned page only.
+    For the newest occurrence alone, `latest_occurrence` reads only the ledger's tail.
     """
     _load_automation(runtime.run_store, automation_id)
     before = _cursor_index(cursor)
     limit = max(1, min(int(limit), 500))
     rows: Dict[int, Dict[str, Any]] = {}
-    for rec in automation_records(
-        runtime.ledger_store,
-        automation_id,
-        "automation.admitted",
-        "automation.dispatched",
-        "automation.retry_scheduled",
-        "automation.completed",
-    ):
-        p = rec["payload"]
-        index = int(p["index"])
-        if rec["name"] == "automation.admitted":
-            envelope = p.get("trigger_envelope") or {}
-            prompt = ((p.get("prepared") or {}).get("input_data") or {}).get("prompt")
-            if is_artifact_ref(prompt):
-                # An email occurrence's framed prompt is an artifact (bodies stay out of the ledger).
-                try:
-                    prompt = resolve_strict(prompt, artifact_store=runtime.artifact_store)
-                except Exception:  # noqa: BLE001 - a pruned artifact: the row simply has no user turn
-                    prompt = None
-            rows[index] = {
-                "index": index,
-                "run_id": p["run_id"],
-                "run_ids": [],
-                "attempts": 1,
-                "revision": p.get("revision"),
-                "event_id": p.get("event_id"),
-                "fired_at": envelope.get("fired_at"),
-                "trigger": {"source_id": envelope.get("source_id"), "source_version": envelope.get("source_version")},
-                "user_turn": prompt if isinstance(prompt, str) else None,
-                "status": "admitted",
-                "finished_at": None,
-                "notify": None,
-                "attention": None,
-            }
-            continue
-        row = rows.get(index)
-        if row is None:
-            continue
-        if rec["name"] == "automation.dispatched":
-            row.update(run_id=p["run_id"], attempts=int(p["attempt"]), status="running")
-            if p["run_id"] not in row["run_ids"]:
-                row["run_ids"].append(p["run_id"])
-        elif rec["name"] == "automation.retry_scheduled":
-            row["status"] = "backoff"
-        else:
-            row.update(
-                status=p["status"],
-                attempts=int(p["attempts"]),
-                finished_at=p.get("finished_at"),
-                notify=p.get("notify"),
-                attention=p.get("attention"),
-            )
+    for rec in automation_records(runtime.ledger_store, automation_id, *_OCCURRENCE_RECORDS):
+        _fold_occurrence_record(rows, rec)
     ordered = sorted((r for i, r in rows.items() if before is None or i < before), key=lambda r: -r["index"])
-    page = ordered[:limit]
+    page = [_finish_occurrence_row(runtime, r) for r in ordered[:limit]]
     next_cursor = f"{OCCURRENCE_CURSOR_PREFIX}{page[-1]['index']}" if len(ordered) > limit else None
     return {"items": page, "next_cursor": next_cursor}
+
+
+def latest_occurrence(runtime: Any, automation_id: str, *, user_turn: bool = True) -> Optional[Dict[str, Any]]:
+    """The newest occurrence (`list_occurrences(limit=1)["items"][0]`, same row), or None.
+
+    Reads the automation's ledger NEWEST first and stops at the newest `automation.admitted`
+    record (indexes are admitted in append order, so it is the highest one; that occurrence's
+    later records follow it): a JSONL ledger is read from its tail, a few records, whatever
+    the automation's history (2026-10-26: `list_occurrences(limit=1)` read every record of
+    the ledger and resolved every past prompt artifact per summary row). `user_turn=False`
+    skips resolving the prompt (a summary does not show it; the row's `user_turn` is None).
+    """
+    _load_automation(runtime.run_store, automation_id)
+    tail: List[Dict[str, Any]] = []
+    for rec in automation_records_newest_first(runtime.ledger_store, automation_id, *_OCCURRENCE_RECORDS):
+        tail.append(rec)
+        if rec["name"] == "automation.admitted":
+            break
+    else:
+        return None
+    rows: Dict[int, Dict[str, Any]] = {}
+    for rec in reversed(tail):
+        _fold_occurrence_record(rows, rec)
+    row = rows[max(rows)]
+    if not user_turn:
+        row = {**row, "_prompt": None}
+    return _finish_occurrence_row(runtime, row)
 
 
 # --- discussion --------------------------------------------------------------------------
@@ -585,6 +629,7 @@ __all__ = [
     "create_automation",
     "drive_automation",
     "get_automation",
+    "latest_occurrence",
     "list_occurrences",
     "automation_timeline_messages",
     "start_discussion",

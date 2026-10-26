@@ -27,7 +27,8 @@ Records are ordinary StepRecords: `effect.type = "emit_event"`,
 from __future__ import annotations
 
 import copy
-from typing import Any, Dict, List, Mapping, Optional
+import json
+from typing import Any, Dict, Iterator, List, Mapping, Optional, Tuple
 
 from ..core.models import RunState, StepRecord, StepStatus
 from .consumers import delta_changes_consumers, invalidate_active_consumers
@@ -108,6 +109,99 @@ def automation_records(ledger_store: Any, automation_id: str, *names: str) -> Li
             continue
         out.append({"name": name, "payload": record_payload(record), "key": record.get("idempotency_key")})
     return out
+
+
+def _ledger_records_newest_first(ledger_store: Any, run_id: str, *, contains: Tuple[bytes, ...] = ()) -> Iterator[Dict[str, Any]]:
+    """The run's ledger records, NEWEST first, lazily.
+
+    A JSONL ledger (the file store, under any of the plain-delegating wrappers:
+    offloading, hash chain, observable) is read BACKWARDS in blocks, so a caller
+    that stops early reads only the tail of the file, never the whole history.
+    Any other store is listed and reversed (SQLite and in-memory list cheaply).
+    `contains`: a JSONL line holding none of these byte strings is skipped unparsed
+    (a fast reject only: callers still check the parsed record).
+    The records are the ones `list()` returns: the wrappers' `list()` delegates
+    unchanged to the backend, so the backend file IS the read surface.
+    """
+    from ..storage.json_files import JsonlLedgerStore
+
+    inner = _innermost(ledger_store)
+    if not isinstance(inner, JsonlLedgerStore):
+        yield from reversed(ledger_store.list(run_id))
+        return
+    path = inner._path(str(run_id))
+    if not path.exists():
+        return
+    decoder = json.JSONDecoder()
+    for raw in _reverse_lines(path):
+        if contains and not any(c in raw for c in contains):
+            continue
+        line = raw.decode("utf-8", errors="replace").strip()
+        if not line:
+            continue
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError:
+            # Concatenated objects on one line (a crashed writer): the same
+            # best-effort recovery as `JsonlLedgerStore.list`, newest first.
+            recovered: List[Dict[str, Any]] = []
+            i = 0
+            while i < len(line):
+                while i < len(line) and line[i].isspace():
+                    i += 1
+                if i >= len(line):
+                    break
+                try:
+                    obj, i = decoder.raw_decode(line, idx=i)
+                except json.JSONDecodeError:
+                    break
+                if isinstance(obj, dict):
+                    recovered.append(obj)
+            yield from reversed(recovered)
+            continue
+        if isinstance(record, dict):
+            yield record
+
+
+def _reverse_lines(path: Any, *, block: int = 65536) -> Iterator[bytes]:
+    """The file's lines (split on b"\\n" only, the writer's discipline), last first.
+
+    A line longer than a block is gathered from its chunks once (no repeated
+    concatenation)."""
+    with open(path, "rb") as f:
+        f.seek(0, 2)
+        pos = f.tell()
+        pending: List[bytes] = []  # pieces of the line being gathered, newest piece first
+        while pos > 0:
+            size = min(block, pos)
+            pos -= size
+            f.seek(pos)
+            chunk = f.read(size)
+            cut = chunk.rfind(b"\n")
+            if cut < 0:
+                pending.append(chunk)
+                continue
+            pending.append(chunk[cut + 1 :])
+            yield b"".join(reversed(pending))
+            parts = chunk[:cut].split(b"\n")
+            for line in reversed(parts[1:]):
+                yield line
+            pending = [parts[0]]
+        if pending:
+            yield b"".join(reversed(pending))
+
+
+def automation_records_newest_first(ledger_store: Any, automation_id: str, *names: str) -> Iterator[Dict[str, Any]]:
+    """`automation_records`, NEWEST first and lazy: stop iterating and the rest of the
+    ledger is never read (a JSONL ledger is read backwards from its end)."""
+    wanted = set(names)
+    # Record names are plain ASCII: they appear verbatim in the serialized line.
+    contains = tuple(n.encode("ascii") for n in wanted) if wanted else (RECORD_PREFIX.encode("ascii"),)
+    for record in _ledger_records_newest_first(ledger_store, automation_id, contains=contains):
+        name = record_name(record)
+        if name is None or (wanted and name not in wanted):
+            continue
+        yield {"name": name, "payload": record_payload(record), "key": record.get("idempotency_key")}
 
 
 # --- run-state accessors ----------------------------------------------------------
@@ -256,6 +350,7 @@ def append_observation(
 __all__ = [
     "append_observation",
     "automation_records",
+    "automation_records_newest_first",
     "commit_decision",
     "definition_of",
     "find_by_idempotency_key",

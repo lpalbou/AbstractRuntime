@@ -100,6 +100,18 @@ def invalidate_active_consumers(target: Any) -> None:
         _generations[key] = _generations.get(key, 0) + 1
 
 
+def automation_generation(target: Any) -> int:
+    """The current automation generation of this run store (pass a runtime or a run store): a
+    counter that moves whenever `invalidate_active_consumers` is called for it. Readers that
+    cache something derived from the set of automations or their status (the gateway's
+    automations listing) key it on this value."""
+    run_store = getattr(target, "run_store", target)
+    if run_store is None:
+        return 0
+    with _generation_lock:
+        return _generation(store_key(run_store))
+
+
 def delta_changes_consumers(delta: Optional[Mapping[str, Any]]) -> bool:
     """Whether a decision delta can change the index: a new definition (trigger, archive
     mark) or the `paused` / `exhausted` state."""
@@ -297,6 +309,7 @@ __all__ = [
     "ConsumersSnapshot",
     "DEFAULT_TTL_S",
     "active_consumers_index",
+    "automation_generation",
     "consumer_index_fields",
     "consumers_snapshot",
     "delta_changes_consumers",

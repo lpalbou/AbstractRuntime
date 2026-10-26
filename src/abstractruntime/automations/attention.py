@@ -24,7 +24,7 @@ from typing import Any, Dict, List, Mapping, Optional
 from ..core.models import RunState, RunStatus, WaitReason
 from ..core.vars import is_paused_vars
 from ..storage.artifacts import get_artifact_id, is_artifact_ref
-from .ledger import automation_records
+from .ledger import automation_records_newest_first
 from .models import NOTIFY_BODY_MAX, NOTIFY_DEFAULT_BODY_MAX, NOTIFY_TITLE_MAX
 
 ATTENTION_CURSOR_PREFIX = "att1:"
@@ -56,23 +56,55 @@ def resolve_strict(value: Any, *, artifact_store: Any, _depth: int = 0) -> Any:
     return value
 
 
-def normalize_occurrence_output(child: RunState, *, artifact_store: Any = None) -> Dict[str, Any]:
+def _resolve_ref_once(value: Any, *, artifact_store: Any) -> Any:
+    """`value` with ONE artifact ref at its top replaced by the artifact's content (no recursion)."""
+    if not is_artifact_ref(value):
+        return value
+    artifact_id = get_artifact_id(value)
+    if artifact_store is None:
+        raise UnresolvableReference(f"offloaded value {artifact_id} needs an artifact store")
+    artifact = artifact_store.load(artifact_id)
+    if artifact is None:
+        raise UnresolvableReference(f"offloaded value {artifact_id} is missing from the artifact store")
+    content_type = str(getattr(getattr(artifact, "metadata", None), "content_type", "") or "")
+    return artifact.as_text() if content_type.startswith("text/") else artifact.as_json()
+
+
+def normalize_occurrence_output(child: RunState, *, artifact_store: Any = None, lazy: bool = False) -> Dict[str, Any]:
     """`{answer, success, notify, error}` from an occurrence root's terminal state.
 
     Structure only (no text heuristics): an agent-interface target ends with
     `response`/`success`/`meta` pins; a plain flow ends with its end-node pins
     or `{success, result}`. `notify` is read from the same object as the answer.
+
+    `lazy=True` (readers: a summary's excerpt) resolves only the values this
+    function reads (`response`/`answer`/`result`/`notify`/`success`/`error`), never
+    the rest of the output: an agent's output can hold thousands of offloaded
+    values (its scratchpad, tool results) that a one-line excerpt never shows.
+    A missing artifact among the values READ still raises
+    `UnresolvableReference`; the default (`lazy=False`) resolves everything
+    strictly, as the controller needs.
     """
-    output = resolve_strict(child.output, artifact_store=artifact_store) if child.output is not None else None
+    if lazy:
+        def get(obj: Dict[str, Any], key: str) -> Any:
+            value = obj.get(key)
+            return resolve_strict(value, artifact_store=artifact_store) if value is not None else None
+
+        output = _resolve_ref_once(child.output, artifact_store=artifact_store) if child.output is not None else None
+    else:
+        def get(obj: Dict[str, Any], key: str) -> Any:
+            return obj.get(key)
+
+        output = resolve_strict(child.output, artifact_store=artifact_store) if child.output is not None else None
     out: Dict[str, Any] = output if isinstance(output, dict) else {}
     payload: Dict[str, Any] = out
-    result = out.get("result")
+    result = _resolve_ref_once(out.get("result"), artifact_store=artifact_store) if lazy else out.get("result")
     if isinstance(result, dict) and not any(k in out for k in ("response", "answer", "notify")):
         payload = result
 
     answer = ""
     for key in ("response", "answer"):
-        value = payload.get(key)
+        value = get(payload, key)
         if isinstance(value, str):
             answer = value
             break
@@ -82,13 +114,14 @@ def normalize_occurrence_output(child: RunState, *, artifact_store: Any = None) 
 
     success = (
         child.status == RunStatus.COMPLETED
-        and out.get("success") is not False
-        and payload.get("success") is not False
+        and get(out, "success") is not False
+        and get(payload, "success") is not False
     )
     error = None
     if not success:
-        error = str(child.error or payload.get("error") or out.get("error") or child.status.value)
-    return {"answer": answer, "success": success, "notify": payload.get("notify", out.get("notify")), "error": error}
+        error = str(child.error or get(payload, "error") or get(out, "error") or child.status.value)
+    notify = get(payload, "notify") if "notify" in payload else get(out, "notify")
+    return {"answer": answer, "success": success, "notify": notify, "error": error}
 
 
 def notify_payload(raw: Any, *, title: str, answer: str) -> Optional[Dict[str, str]]:
@@ -213,28 +246,73 @@ def _event_scope_name(run: RunState) -> Optional[Dict[str, str]]:
     return None
 
 
+# Upper bound of one WAITING-index read (rows are column-only; a bound keeps a runaway store
+# from turning a listing into an unbounded walk).
+_WAITING_SCAN_LIMIT = 100_000
+_TREE_ROLES = ("occurrence", "descendant")
+
+
+def _waiting_tree_rows(run_store: Any, automation_id: Optional[str] = None) -> List[Dict[str, Any]]:
+    """WAITING index rows of occurrence trees (`role` occurrence or descendant), oldest
+    occurrence first. Served by the store's active index (a JSON-file store ranks only its
+    live runs, SQLite seeks its status index): O(waiting runs), never O(history)."""
+    filters: Dict[str, Any] = {"role": _TREE_ROLES}
+    if automation_id is not None:
+        filters["automation_id"] = str(automation_id)
+    rows = run_store.list_run_index(status=RunStatus.WAITING, limit=_WAITING_SCAN_LIMIT, **filters)
+    rows = [r for r in rows if r.get("automation_id")]
+
+    def order(row: Dict[str, Any]) -> tuple:
+        index = row.get("occurrence_index")
+        return (index if isinstance(index, int) else -1, str(row.get("created_at") or ""), str(row.get("run_id") or ""))
+
+    rows.sort(key=order)
+    return rows
+
+
+def _typed_waits(run_store: Any, rows: List[Dict[str, Any]], *, limit: int) -> List[Dict[str, Any]]:
+    out: List[Dict[str, Any]] = []
+    for row in rows:
+        if len(out) >= limit:
+            break
+        run = run_store.load(str(row["run_id"]))
+        if run is None:
+            continue
+        item = typed_wait(run)
+        if item is not None:
+            meta = ((run.vars or {}).get("_meta") or {}).get("occurrence") or {}
+            item["index"] = meta.get("occurrence_index")
+            out.append(item)
+    return out
+
+
 def pending_waits(run_store: Any, automation_id: str, *, limit: int = 20) -> List[Dict[str, Any]]:
     """Waits on a person in the automation's occurrence trees, typed by `kind`.
 
     Item: `{run_id, wait_key, kind: "ask_user"|"tool_approval"|"event", reason,
     index, prompt?, choices?, details?}` (see `typed_wait`). Answer with the kind's payload
     (`ANSWER_PAYLOADS`).
+
+    Read from the run index's WAITING rows attributed to the automation (every run of an
+    occurrence tree carries `_meta.occurrence`: the occurrence itself and, set by the
+    runtime at each subworkflow hop, every descendant), loading only those runs: the cost
+    follows the runs waiting now, never the automation's history (2026-10-26: the old walk
+    of every occurrence tree re-read 942 runs, 192 MB, per automation per listing).
     """
-    out: List[Dict[str, Any]] = []
-    stack = [str(automation_id)]
-    seen = set()
-    while stack and len(out) < limit:
-        parent = stack.pop()
-        for child in run_store.list_children(parent_run_id=parent):
-            if child.run_id in seen:
-                continue
-            seen.add(child.run_id)
-            stack.append(child.run_id)
-            item = typed_wait(child)
-            if item is not None:
-                meta = (child.vars.get("_meta") or {}).get("occurrence") or {}
-                item["index"] = meta.get("occurrence_index")
-                out.append(item)
+    return _typed_waits(run_store, _waiting_tree_rows(run_store, automation_id), limit=limit)
+
+
+def pending_waits_by_automation(run_store: Any, *, limit: int = 20) -> Dict[str, List[Dict[str, Any]]]:
+    """`{automation_id: pending_waits(...)}` for every automation with a run waiting on a
+    person, from ONE read of the WAITING index (a listing of N automations reads it once)."""
+    grouped: Dict[str, List[Dict[str, Any]]] = {}
+    for row in _waiting_tree_rows(run_store):
+        grouped.setdefault(str(row["automation_id"]), []).append(row)
+    out: Dict[str, List[Dict[str, Any]]] = {}
+    for aid, rows in grouped.items():
+        waits = _typed_waits(run_store, rows, limit=limit)
+        if waits:
+            out[aid] = waits
     return out
 
 
@@ -270,11 +348,16 @@ def list_attention(
     floor = max(int(after_seq or 0), _cursor_seq(cursor))
     limit = max(1, min(int(limit), 500))
     items: List[Dict[str, Any]] = []
-    for rec in automation_records(ledger_store, automation_id, "automation.completed"):
+    # Newest first, stopping at the first item at or below the floor: attention seqs grow in
+    # append order (one serial controller allocates them), so everything older is seen. The
+    # read covers the unseen part of the ledger only, never the whole history.
+    for rec in automation_records_newest_first(ledger_store, automation_id, "automation.completed"):
         p = rec["payload"]
         att = p.get("attention")
-        if not isinstance(att, dict) or int(att.get("seq") or 0) <= floor:
+        if not isinstance(att, dict) or not int(att.get("seq") or 0):
             continue
+        if int(att["seq"]) <= floor:
+            break
         item = {
             "kind": att.get("kind"),
             "automation_id": automation_id,
@@ -309,6 +392,7 @@ __all__ = [
     "normalize_occurrence_output",
     "notify_payload",
     "pending_waits",
+    "pending_waits_by_automation",
     "resolve_strict",
     "typed_wait",
     "wait_kind",

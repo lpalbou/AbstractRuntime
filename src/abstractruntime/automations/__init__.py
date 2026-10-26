@@ -21,6 +21,7 @@ from .attention import (
     normalize_occurrence_output,
     notify_payload,
     pending_waits,
+    pending_waits_by_automation,
     typed_wait,
     wait_kind,
 )
@@ -30,7 +31,7 @@ from .bundle import (
     controller_workflow_spec,
     register_controller_bundle,
 )
-from .consumers import ActiveConsumersIndex, active_consumers_index, invalidate_active_consumers
+from .consumers import ActiveConsumersIndex, active_consumers_index, automation_generation, invalidate_active_consumers
 from .commands import AUTOMATION_COMMAND_TYPES, apply_automation_command, record_automation_command_result
 from .ledger import find_by_idempotency_key
 from .models import (
@@ -48,6 +49,7 @@ from .service import (
     create_automation,
     drive_automation,
     get_automation,
+    latest_occurrence,
     list_occurrences,
     start_discussion,
 )
@@ -65,6 +67,7 @@ __all__ = [
     "ControllerBundleError",
     "active_consumers_index",
     "adopt_legacy_schedule_projection",
+    "automation_generation",
     "apply_automation_command",
     "automation_status",
     "controller_bundle_path",
@@ -75,12 +78,14 @@ __all__ = [
     "get_automation",
     "invalidate_active_consumers",
     "is_interactive_wait",
+    "latest_occurrence",
     "list_attention",
     "list_occurrences",
     "normalize_occurrence_output",
     "notify_payload",
     "occurrence_run_id",
     "pending_waits",
+    "pending_waits_by_automation",
     "record_automation_command_result",
     "register_controller_bundle",
     "start_discussion",

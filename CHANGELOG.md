@@ -17,6 +17,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Automation listings read the present, not the history.** `pending_waits` reads the run index's WAITING rows
+  attributed to the automation (occurrences and descendants) instead of walking every occurrence tree, and the new
+  `pending_waits_by_automation` answers a whole page from one read. The new `latest_occurrence(runtime, id)` (the
+  row of `list_occurrences(limit=1)`) reads the controller ledger backwards from its end and stops at the newest
+  admission (`automation_records_newest_first`, a lazy newest-first reader of JSONL ledgers);
+  `list_occurrences` resolves prompt artifacts for the returned page only; `list_attention` reads back to the seen
+  floor only. `normalize_occurrence_output(..., lazy=True)` resolves just the values it reads (an agent's output can
+  hold thousands of offloaded values). `list_automations(..., index_rows=...)` takes controller rows a host already
+  holds, and `automation_generation(run_store)` exposes the change counter to key them on. Measured on a copy of the
+  operator's plane (11,500 run files): the gateway's automations list went from 2.4 s to 0.22 s cold.
 - **Ledger change signal.** `ObservableLedgerStore.change_token()` (a counter every append moves) and
   `changed_run_ids(token)` (the runs whose ledger grew since, from the last 8,192 appends; `None` beyond), so a periodic
   reader learns which ledgers grew without re-reading them. Process-local, like the subscriptions. The bounded record

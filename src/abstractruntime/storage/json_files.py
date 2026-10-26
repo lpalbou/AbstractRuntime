@@ -107,9 +107,24 @@ class JsonFileRunStore(RunStore):
     STALE_TEMP_AGE_S = 600.0
     # Background reconciliation of the active index (foreign writers that bypass the journal).
     ACTIVE_INDEX_RESCAN_S = 60.0
+    # Trusted run index: with the folder and the creation log unchanged since the last
+    # reconciliation, the next full pass waits at most this long (a foreign in-place edit
+    # keeps the folder's mtime; nothing in this system writes run files in place).
+    RUN_INDEX_FULL_RECONCILE_S = 600.0
+    # A reconciliation difference on a file changed less than this long ago may be a write
+    # still in flight (its log line or its own memo update not landed yet): repaired, not
+    # counted as a miss.
+    RUN_INDEX_IN_FLIGHT_S = 5.0
     _ACTIVE_STATUSES = frozenset({"running", "waiting"})
 
-    def __init__(self, base_dir: str | Path, *, run_cache_max: int = 512, use_active_index: bool = True):
+    def __init__(
+        self,
+        base_dir: str | Path,
+        *,
+        run_cache_max: int = 512,
+        use_active_index: bool = True,
+        trust_index: bool = True,
+    ):
         self._base = Path(base_dir)
         self._base.mkdir(parents=True, exist_ok=True)
         self._sweep_stale_temp_files()
@@ -272,6 +287,51 @@ class JsonFileRunStore(RunStore):
         # the save() hot path.
         self._scan_dirty = 0
         self._scan_last_persist = time.monotonic()
+        # TRUSTED RUN INDEX (2026-10-26, the gateway's idle core, backlog 1054): every
+        # listing that is not RUNNING/WAITING or session-scoped globbed + stat()ed the whole
+        # folder (11,500 files) to re-check the memo above, and under contention each stat
+        # waits for the interpreter lock (0.25 s alone, minutes beside a busy thread). Once
+        # ONE complete pass has filled the memo (`_memo_complete`, set by the active-index
+        # build, which reads every file), the memo IS the listing: ranked by the memo's
+        # mtime, no glob, no stat of a run file. It stays current through this store's own
+        # save/create/delete, the creation log (`+` create, `-` delete, `~` became active,
+        # `=` a finished run's file changed — written after publication by every save of a
+        # run that is not active), a stat of the memo's ACTIVE entries when the folder's
+        # mtime moved (another process ticking a run writes no log line), and a background
+        # RECONCILIATION (the active-index rescan: a full stat pass in a daemon thread, at
+        # most every ACTIVE_INDEX_RESCAN_S when the folder or the log moved, at least every
+        # RUN_INDEX_FULL_RECONCILE_S) that repairs and logs any difference. Risk: a stale
+        # row, never a lost run (`load()` reads disk). `trust_index=False` ("verify") keeps
+        # the directory scan for every listing and compares it with the in-memory answer
+        # (SHADOW mode: `run_index_stats()["shadow_mismatches"]`). Needs the active index
+        # (`use_active_index=False` is the plain scan, with no shadow).
+        self._trust_index = bool(trust_index)
+        self._memo_complete = False
+        # Bumped by every memo put/pop: the ranked listing is cached on it, and a read that
+        # began before this store's own save of a run never overwrites that save's entry.
+        self._memo_version = 0
+        self._memo_own_seq: Dict[str, int] = {}
+        self._memo_active: set[str] = set()
+        self._ranked_cache: Optional[tuple[int, list]] = None
+        self._memo_active_checked_dir: Optional[int] = None
+        self._journal_last_size: Optional[int] = None
+        self._reconcile_marks: Optional[tuple] = None
+        self._reconcile_last_full = time.monotonic()
+        # Writes through this store in flight or done (begin and end both bump it): a shadow
+        # comparison that overlapped one is not a verdict.
+        self._own_writes = 0
+        self._index_stats_lock = threading.Lock()
+        self._index_stats: Dict[str, Any] = {
+            "trusted_listings": 0,
+            "scanned_listings": 0,
+            "shadow_compared": 0,
+            "shadow_mismatches": 0,
+            "shadow_unstable": 0,
+            "last_mismatch": None,
+            "reconciles": 0,
+            "reconcile_repairs": 0,
+            "last_reconcile": None,
+        }
 
     def _sweep_stale_temp_files(self) -> None:
         """Delete `run_<id>.json.<hex>.tmp` orphans left by a crash between a
@@ -315,6 +375,8 @@ class JsonFileRunStore(RunStore):
         run: RunState,
         *,
         memo_rid: Optional[str] = None,
+        seq0: Optional[int] = None,
+        own: bool = False,
     ) -> None:
         """Insert/refresh under the lock, evicting least-recently-used.
 
@@ -330,7 +392,7 @@ class JsonFileRunStore(RunStore):
             self._run_cache.move_to_end(rid)
             while len(self._run_cache) > self._run_cache_max:
                 self._run_cache.popitem(last=False)
-        self._scan_memo_put(memo_rid or rid, token, self._index_fields_of(run))
+        self._scan_memo_put(memo_rid or rid, token, self._index_fields_of(run), seq0=seq0, own=own)
 
     @staticmethod
     def _index_fields_of(run: RunState) -> Dict[str, Any]:
@@ -358,10 +420,30 @@ class JsonFileRunStore(RunStore):
             **_consumer_fields(run),
         }
 
-    def _scan_memo_put(self, rid: str, token: tuple[int, int, int], fields: Dict[str, Any]) -> None:
+    def _scan_memo_put(
+        self,
+        rid: str,
+        token: tuple[int, int, int],
+        fields: Dict[str, Any],
+        *,
+        seq0: Optional[int] = None,
+        own: bool = False,
+    ) -> None:
+        """`seq0`: the memo version when the read behind this entry began; the entry is dropped
+        when this store saved the run after that (its save's entry is fresher). `own`: the entry
+        of this store's own save."""
         if not rid or token[0] <= 0:
             return
         with self._scan_memo_lock:
+            if seq0 is not None and not own and self._memo_own_seq.get(rid, -1) > seq0:
+                return
+            self._memo_version += 1
+            if own:
+                self._memo_own_seq[rid] = self._memo_version
+            if self._is_active_status(fields.get("status")):
+                self._memo_active.add(rid)
+            else:
+                self._memo_active.discard(rid)
             # Only NEW rids count as persist-worthy dirt (adversarial
             # review 2026-08-19, F3): an active run's row goes token-
             # stale by the next restart regardless, so re-persisting on
@@ -381,15 +463,35 @@ class JsonFileRunStore(RunStore):
 
             invalidate_active_consumers(self)
 
-    def _scan_memo_prune(self, seen_rids: set) -> None:
+    def _scan_memo_prune(self, seen_rids: set) -> List[str]:
         """Drop memo entries whose files vanished (scan-memo adversary P2-4:
         externally pruned runs — the class's own recommended maintenance —
         held ~1.6KB/entry forever). Callers pass the ids the glob just saw;
-        the set difference is cheap on a walk we already paid for."""
+        the set difference is cheap on a walk we already paid for. A file
+        that exists now (created after the glob listed the folder) keeps its
+        entry: the trusted index lists from the memo. Returns the ids dropped."""
         with self._scan_memo_lock:
-            for rid in set(self._scan_memo) - seen_rids:
-                self._scan_memo.pop(rid, None)
-                self._scan_dirty += 1
+            gone = [rid for rid in self._scan_memo if rid not in seen_rids]
+        dropped: List[str] = []
+        for rid in gone:
+            if self._path(rid).exists():
+                continue
+            if self._memo_pop(rid):
+                dropped.append(rid)
+        return dropped
+
+    def _memo_pop(self, rid: str, *, token: Optional[tuple] = None) -> bool:
+        """Forget a run file's memo entry (only when it still holds `token`, if given)."""
+        with self._scan_memo_lock:
+            cur = self._scan_memo.get(rid)
+            if cur is None or (token is not None and tuple(cur[0]) != tuple(token)):
+                return False
+            self._scan_memo.pop(rid, None)
+            self._memo_active.discard(rid)
+            self._memo_own_seq.pop(rid, None)
+            self._memo_version += 1
+            self._scan_dirty += 1
+            return True
 
     def _load_scan_sidecar_once(self) -> None:
         """Seed the scan memo from the persisted sidecar, once per process.
@@ -423,6 +525,9 @@ class JsonFileRunStore(RunStore):
                     continue
                 if rid and isinstance(fields, dict) and token[0] > 0 and rid not in self._scan_memo:
                     self._scan_memo[rid] = (token, fields)
+                    if self._is_active_status(fields.get("status")):
+                        self._memo_active.add(rid)
+            self._memo_version += 1
 
     def _maybe_persist_scan_memo(self) -> None:
         """Persist the memo when enough new knowledge accumulated.
@@ -470,6 +575,8 @@ class JsonFileRunStore(RunStore):
         matches, else one parse. None = unreadable file (tombstoned by
         token so a torn file is not re-parsed every poll)."""
         rid = self._run_id_from_path(p)
+        with self._scan_memo_lock:
+            seq0 = self._memo_version
         try:
             token = self._stat_token(p.stat())
         except Exception:
@@ -486,21 +593,20 @@ class JsonFileRunStore(RunStore):
         # call). Direct load() stays loud — polls must survive, repairs must
         # see the real error.
         try:
-            run = self._load_from_path(p)
+            run = self._load_from_path(p)  # its own read-start version guards the memo put
         except Exception as e:  # noqa: BLE001 - poll lanes survive bad files
             logger.warning("#FALLBACK run file %s unreadable for scans (%s); tombstoned", p.name, e)
             run = None
         if run is None:
-            self._scan_memo_put(rid, token, {"__unparseable": True})
+            self._scan_memo_put(rid, token, {"__unparseable": True}, seq0=seq0)
             return None
-        fields = self._index_fields_of(run)
-        # Memoize under the FILENAME-derived id (adversary P2-1): a
-        # glob-matching copy (run_<id>_backup.json) has an internal run_id
-        # that differs from its filename — _load_from_path's cache put keys
-        # on the internal id, so the copy never memoized and every warm scan
-        # re-parsed it (and its put poisoned the original's entry pre-token).
-        self._scan_memo_put(rid, token, fields)
-        return fields
+        # `_load_from_path` memoized these fields under the FILENAME-derived
+        # id (adversary P2-1: a glob-matching copy run_<id>_backup.json has an
+        # internal run_id that differs from its filename) with the token of
+        # the file it actually read (fstat of the open file, so a replace
+        # between the stat above and the read can never pair new fields with
+        # the old token).
+        return self._index_fields_of(run)
 
     def _path(self, run_id: str) -> Path:
         return self._base / f"run_{run_id}.json"
@@ -603,6 +709,7 @@ class JsonFileRunStore(RunStore):
         if self._journal_offset is None:
             return
         size = self._journal_size()
+        self._journal_last_size = size
         with self._journal_lock:
             offset = self._journal_offset
             if offset is None or size == offset:
@@ -624,6 +731,7 @@ class JsonFileRunStore(RunStore):
                     self._session_index = None
                 with self._active_lock:
                     self._active_built = False
+                    self._memo_complete = False
                 self._journal_offset = None
                 return
             try:
@@ -637,6 +745,7 @@ class JsonFileRunStore(RunStore):
                     self._session_index = None
                 with self._active_lock:
                     self._active_built = False
+                    self._memo_complete = False
                 self._journal_offset = None
                 return
             complete = chunk.rfind(b"\n") + 1  # a line still being written waits for the next sync
@@ -646,7 +755,7 @@ class JsonFileRunStore(RunStore):
         now = time.time()
         for raw in chunk[:complete].decode("utf-8", "replace").splitlines():
             op, rid = raw[:1], raw[1:].strip()
-            if op in ("+", "-", "~") and rid:
+            if op in ("+", "-", "~", "=") and rid:
                 entries.append((rid, (op, now)))
         self._apply_journal_entries(entries)
 
@@ -655,18 +764,22 @@ class JsonFileRunStore(RunStore):
         for rid, (op, since) in entries:
             p = self._path(rid)
             exists = p.exists()
-            if op in ("+", "~") and exists:
+            if op in ("+", "~", "=") and exists:
                 fields = self._scan_fields(p)
                 if fields is not None:
                     self._index_fields_into_indexes(rid, fields)
                 # `~` announces a flip TO active: until the file says so it is
                 # not resolved (the writer's replace may land after its line).
-                resolved = op == "+" or (fields is not None and self._is_active_status(fields.get("status"))) or since < cutoff
+                # `=` is written AFTER its file was published: one read resolves it.
+                resolved = op in ("+", "=") or (fields is not None and self._is_active_status(fields.get("status"))) or since < cutoff
             elif op == "-" and not exists:
                 self._drop_from_children_index(rid)
                 self._drop_from_session_index(rid)
                 self._forget_active(rid)
+                self._memo_pop(rid)
                 resolved = True
+            elif op == "=":
+                resolved = True  # the file is gone: its `-` line (or the reconciliation) says so
             else:
                 resolved = since < cutoff  # the announced change never happened: drop it
             with self._journal_lock:
@@ -1008,8 +1121,9 @@ class JsonFileRunStore(RunStore):
         was saved, created or deleted in between, by this store (the counter) or by another
         process's create / delete / became-active line (the log). One stat, no file read.
 
-        Not seen: another PROCESS re-saving a run that stays active, or ending one, without a
-        log line (the single-writer contract above: one ticking process per folder)."""
+        Not seen: another PROCESS re-saving a run that stays active (no log line: the
+        single-writer contract above, one ticking process per folder). A run that ends, or a
+        finished run re-saved, writes `=id` (a store of this version)."""
         size = self._journal_size()
         with self._active_lock:
             seq = self._active_seq
@@ -1055,21 +1169,67 @@ class JsonFileRunStore(RunStore):
 
     def _scan_active_ids(self) -> set[str]:
         """ONE directory scan: the ids whose memo/scan fields say RUNNING or
-        WAITING (memo-first: unchanged files cost one stat, never a parse)."""
+        WAITING (memo-first: unchanged files cost one stat, never a parse).
+
+        Once the memo is complete this pass is the trusted index's
+        RECONCILIATION: every file whose memo entry it had to change (new,
+        changed, or gone without a log line), changed more than
+        RUN_INDEX_IN_FLIGHT_S ago, is a difference the index missed: repaired
+        here, counted (`run_index_stats()["reconcile_repairs"]`) and logged."""
         self._load_scan_sidecar_once()
+        complete = self._memo_complete
+        t0 = time.monotonic()
+        settled_ns = time.time_ns() - int(float(self.RUN_INDEX_IN_FLIGHT_S) * 1e9)
+        repaired: List[str] = []
         found: set[str] = set()
         seen: set[str] = set()
         for p in self._base.glob("run_*.json"):
             rid = self._run_id_from_path(p)
             if rid:
                 seen.add(rid)
+            if complete:
+                with self._scan_memo_lock:
+                    prev = self._scan_memo.get(rid)
+                prev_tok = tuple(prev[0]) if prev is not None else None
             fields = self._scan_fields(p)
+            if complete:
+                with self._scan_memo_lock:
+                    cur = self._scan_memo.get(rid)
+                cur_tok = tuple(cur[0]) if cur is not None else None
+                if cur_tok is not None and cur_tok != prev_tok and cur_tok[0] < settled_ns:
+                    repaired.append(rid)
             if fields is None:
                 continue
             if self._is_active_status(fields.get("status")):
                 found.add(rid)
-        self._scan_memo_prune(seen)
+        # Deletions announced by the log while the pass ran are not misses.
+        self._sync_indexes()
+        dropped = self._scan_memo_prune(seen)
+        if complete:
+            repaired.extend(dropped)
+            self._note_reconcile(repaired, files=len(seen), seconds=time.monotonic() - t0)
         return found
+
+    def _note_reconcile(self, repaired: List[str], *, files: int, seconds: float) -> None:
+        with self._index_stats_lock:
+            st = self._index_stats
+            st["reconciles"] += 1
+            st["reconcile_repairs"] += len(repaired)
+            st["last_reconcile"] = {
+                "at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+                "files": int(files),
+                "seconds": round(float(seconds), 3),
+                "repairs": len(repaired),
+                "sample": sorted(repaired)[:5],
+            }
+        if repaired:
+            logger.warning(
+                "JsonFileRunStore: run index reconciliation repaired %d entr%s the index had missed "
+                "(a writer that bypassed the creation log?): %s",
+                len(repaired),
+                "y" if len(repaired) == 1 else "ies",
+                ", ".join(sorted(repaired)[:5]),
+            )
 
     def _build_active_index(self) -> bool:
         """Reconcile the records with ONE directory scan, taken OUTSIDE the
@@ -1082,6 +1242,9 @@ class JsonFileRunStore(RunStore):
                 return False
             self._active_building = True
             start = self._active_seq
+        # What the folder and the log looked like when this pass began: the next
+        # reconciliation is due only when one of them moved (trusted mode).
+        marks = (self._journal_size(), self._dir_mtime())
         try:
             found = self._scan_active_ids()
         except Exception:
@@ -1098,8 +1261,12 @@ class JsonFileRunStore(RunStore):
                     e.active = False
                 if not e.active and e.publishing == 0 and e.saved_token is None and e.gen <= start:
                     self._active.pop(rid, None)
-            self._active_built = True
+            # A log rewritten while the pass ran (offset reset): rebuild on the next call.
+            self._active_built = self._journal_offset is not None
+            self._memo_complete = self._active_built
             self._active_built_at = time.monotonic()
+            self._reconcile_marks = marks
+            self._reconcile_last_full = self._active_built_at
             self._active_building = False
         self._maybe_persist_scan_memo()
         return True
@@ -1130,14 +1297,31 @@ class JsonFileRunStore(RunStore):
         self._mark_journal_start()
         self._build_active_index()
 
-    def _maybe_rescan_active_index(self) -> None:
+    def _maybe_rescan_active_index(self, *, dir_mtime: Any = False) -> None:
         """Reconcile with disk in a daemon thread at most every
         ACTIVE_INDEX_RESCAN_S: catches a writer that touched a file without a
-        journal line. Never blocks a caller."""
+        journal line. Never blocks a caller.
+
+        Trusted mode: only when the folder's mtime or the creation log moved
+        since the last pass began (a create, replace or delete moves the
+        folder), and at least every RUN_INDEX_FULL_RECONCILE_S regardless, so
+        an idle store stats no run file. `dir_mtime`: the caller's fresh stat
+        of the folder (False: stat it here when due)."""
         with self._active_lock:
             if self._active_rescan_inflight or self._active_building:
                 return
-            if time.monotonic() - self._active_built_at < float(self.ACTIVE_INDEX_RESCAN_S):
+            now = time.monotonic()
+            if now - self._active_built_at < float(self.ACTIVE_INDEX_RESCAN_S):
+                return
+            marks0 = self._reconcile_marks
+            full_due = now - self._reconcile_last_full >= float(self.RUN_INDEX_FULL_RECONCILE_S)
+        if self._trust_index and not full_due and marks0 is not None:
+            size = self._journal_last_size if dir_mtime is not False else self._journal_size()
+            dm = self._dir_mtime() if dir_mtime is False else dir_mtime
+            if (size, dm) == tuple(marks0) and size is not None and dm is not None:
+                return
+        with self._active_lock:
+            if self._active_rescan_inflight or self._active_building:
                 return
             self._active_rescan_inflight = True
 
@@ -1220,7 +1404,18 @@ class JsonFileRunStore(RunStore):
                 e.saved_token = token if e.active else None
                 self._change_ring.note(self._active_seq, rid)
 
+    def _own_write_mark(self) -> None:
+        with self._index_stats_lock:
+            self._own_writes += 1
+
     def save(self, run: RunState) -> None:
+        self._own_write_mark()
+        try:
+            self._save(run)
+        finally:
+            self._own_write_mark()
+
+    def _save(self, run: RunState) -> None:
         p = self._path(run.run_id)
         rid = str(run.run_id)
         try:
@@ -1263,6 +1458,12 @@ class JsonFileRunStore(RunStore):
                 f.write(dumps_compact(runstate_to_dict(run)))
             tmp.replace(p)
             published = True
+            if not is_new and not now_active:
+                # A run that is not active changed its file (it finished, or a finished
+                # run was re-saved: archive mark, title): `=id` AFTER publication, so a
+                # reader that applies it reads the new file. The trusted index of every
+                # other store object learns it from this line (nothing else announces it).
+                self._journal_append(f"={rid}")
         finally:
             # Best-effort cleanup if replace() failed.
             try:
@@ -1289,7 +1490,7 @@ class JsonFileRunStore(RunStore):
                 if e is not None:
                     e.saved_token = None
         if token[0] > 0:
-            self._cache_put(str(run.run_id), token, run)
+            self._cache_put(str(run.run_id), token, run, own=True)
 
     def create_if_absent(self, run: RunState) -> Tuple[RunState, bool]:
         """Create the run file only if absent: a fully written temp file in the
@@ -1305,6 +1506,13 @@ class JsonFileRunStore(RunStore):
         a crash between publication and index update. Process-crash recovery
         only: no fsync, so power-loss durability is not claimed.
         """
+        self._own_write_mark()
+        try:
+            return self._create_if_absent(run)
+        finally:
+            self._own_write_mark()
+
+    def _create_if_absent(self, run: RunState) -> Tuple[RunState, bool]:
         p = self._path(run.run_id)
         tmp = p.with_name(f"{p.name}.{uuid.uuid4().hex}.tmp")
         created = False
@@ -1341,7 +1549,7 @@ class JsonFileRunStore(RunStore):
             else:
                 self._note_active_status(rid, run.status)
             if token[0] > 0:
-                self._cache_put(str(run.run_id), token, run)
+                self._cache_put(str(run.run_id), token, run, own=True)
             return run, True
         existing = self._load_from_path(p)
         if existing is None:
@@ -1366,11 +1574,13 @@ class JsonFileRunStore(RunStore):
             return False
         p = self._path(rid)
         existed = p.exists()
+        self._own_write_mark()
         try:
             if existed:
                 self._journal_append(f"-{rid}")  # before the unlink (J53-1)
                 p.unlink()
         finally:
+            self._own_write_mark()
             self._drop_from_children_index(rid)
             self._drop_from_event_wait_index(rid)
             self._drop_from_mailbox_index(rid)
@@ -1378,14 +1588,15 @@ class JsonFileRunStore(RunStore):
             self._forget_active(rid)
             with self._run_cache_lock:
                 self._run_cache.pop(rid, None)
-            with self._scan_memo_lock:
-                if self._scan_memo.pop(rid, None) is not None:
-                    self._scan_dirty += 1
+            self._memo_pop(rid)
         return bool(existed)
 
-    def _load_from_path(self, p: Path) -> Optional[RunState]:
+    def _load_from_path(self, p: Path, *, seq0: Optional[int] = None) -> Optional[RunState]:
         """Load a RunState from a file path."""
         rid_hint = self._run_id_from_path(p)
+        if seq0 is None:
+            with self._scan_memo_lock:
+                seq0 = self._memo_version
         try:
             token = self._stat_token(p.stat())
         except Exception:
@@ -1398,6 +1609,10 @@ class JsonFileRunStore(RunStore):
                     return cached[1]
         try:
             with p.open("r", encoding="utf-8") as f:
+                # The token of the file actually read (a replace after the stat
+                # above must not pair the new content with the old token).
+                with contextlib.suppress(Exception):
+                    token = self._stat_token(os.fstat(f.fileno()))
                 data = json.load(f)
         except (json.JSONDecodeError, IOError):
             return None
@@ -1445,7 +1660,7 @@ class JsonFileRunStore(RunStore):
             # Memo under the FILENAME id: the memo indexes FILES (scans walk
             # the glob), the LRU indexes RUNS — for a copy the two diverge
             # and the copy's token must never overwrite the original's memo.
-            self._cache_put(rid, token, run, memo_rid=rid_hint or rid)
+            self._cache_put(rid, token, run, memo_rid=rid_hint or rid, seq0=seq0)
         return run
 
     # `_iter_all_runs` was removed 2026-08-19 (operator's session-reload
@@ -1454,6 +1669,231 @@ class JsonFileRunStore(RunStore):
     # build) now reads the memoized scan fields instead. A whole-store
     # RunState walk has no sub-O(store) implementation; anything that
     # thinks it needs one should go through `_scan_fields`.
+
+    # --- trusted run index ---------------------------------------------------
+
+    @property
+    def trust_index(self) -> bool:
+        """True: listings answer from the in-memory run index ("trusted"); False: from the
+        directory scan, compared with the index ("verify", shadow mode)."""
+        return self._trust_index
+
+    def _dir_mtime(self) -> Optional[int]:
+        try:
+            return int(self._base.stat().st_mtime_ns)
+        except OSError:
+            return None
+
+    def _trusted_ready(self) -> Optional[int]:
+        """Prepare the in-memory index for one listing: built (one pass, in the caller's
+        thread, only the very first time), the creation log applied, a reconciliation
+        kicked when due, the ACTIVE entries re-read when the folder moved. Returns the
+        folder's mtime (the listing's stability mark), or None when the index cannot
+        answer (not complete yet, being built by another thread, or no active index)."""
+        if not self._use_active_index:
+            return None
+        with self._active_lock:
+            built, building = self._active_built, self._active_building
+        if not built:
+            if building:
+                return None  # the boot build is running: this call scans, as before
+            self._mark_journal_start()
+            if not self._build_active_index():
+                return None
+        else:
+            self._sync_indexes()
+        if not (self._active_built and self._memo_complete):
+            return None
+        dm = self._dir_mtime()
+        self._maybe_rescan_active_index(dir_mtime=dm)
+        self._refresh_active_memo(dm)
+        return dm if dm is not None else 0
+
+    def _refresh_active_memo(self, dir_mtime: Optional[int]) -> None:
+        """Re-read the memo's ACTIVE entries (one stat each) when the folder's mtime moved
+        since the last check: another process ticking a run re-saves it with no log line,
+        and every save (tmp + replace) moves the folder. Finished runs never change without
+        a log line (`=id`), so they cost nothing."""
+        if dir_mtime is not None:
+            with self._scan_memo_lock:
+                if self._memo_active_checked_dir == dir_mtime:
+                    return
+                self._memo_active_checked_dir = dir_mtime
+        with self._scan_memo_lock:
+            rids = list(self._memo_active)
+            tokens = {rid: self._scan_memo[rid][0] for rid in rids if rid in self._scan_memo}
+        for rid in rids:
+            p = self._path(rid)
+            try:
+                tok = self._stat_token(p.stat())
+            except FileNotFoundError:
+                old = tokens.get(rid)
+                if old is not None:
+                    self._memo_pop(rid, token=old)
+                continue
+            except OSError:
+                continue
+            if tokens.get(rid) is not None and tuple(tokens[rid]) == tok:
+                continue
+            self._scan_fields(p)
+
+    def _trusted_ranked(self) -> list:
+        """Every listable memo entry `(mtime_ns, file name, run id, fields, token)`, newest first
+        (the scan's ranking: mtime, then the file name), cached on the memo version."""
+        with self._scan_memo_lock:
+            version = self._memo_version
+            cached = self._ranked_cache
+            if cached is not None and cached[0] == version:
+                return cached[1]
+            items = [
+                (tok[0], f"run_{rid}.json", rid, fields, tok)
+                for rid, (tok, fields) in self._scan_memo.items()
+                if not fields.get("__unparseable")
+            ]
+        items.sort(key=lambda x: (x[0], x[1]), reverse=True)
+        with self._scan_memo_lock:
+            if self._memo_version == version:
+                self._ranked_cache = (version, items)
+        return items
+
+    def _trusted_matches(
+        self,
+        *,
+        status: Any = None,
+        wait_reason: Any = None,
+        workflow_id: Optional[str] = None,
+        root_only: bool = False,
+        automation_id: Any = None,
+        role: Any = None,
+        session_kind: Any = None,
+        oldest_first: bool = False,
+    ):
+        """`(token, run id, fields)` of the memo entries passing a listing's filters, in the
+        scan's rank order (lazy)."""
+        ranked = self._trusted_ranked()
+        want_status = str(getattr(status, "value", status)) if status is not None else None
+        want_wait = str(getattr(wait_reason, "value", wait_reason)) if wait_reason is not None else None
+        want_wf = str(workflow_id) if workflow_id is not None else None
+        attributed = automation_id is not None or role is not None or session_kind is not None
+        for _mtime_ns, _name, rid, fields, token in (reversed(ranked) if oldest_first else ranked):
+            if want_status is not None and fields.get("status") != want_status:
+                continue
+            if want_wf is not None and fields.get("workflow_id") != want_wf:
+                continue
+            if want_wait is not None and fields.get("wait_reason") != want_wait:
+                continue
+            if root_only and not is_turn_root(parent_run_id=fields.get("parent_run_id"), role=fields.get("role")):
+                continue
+            if attributed and not row_matches(fields, automation_id=automation_id, role=role, session_kind=session_kind):
+                continue
+            yield token, rid, fields
+
+    @staticmethod
+    def _index_row(rid: str, fields: Dict[str, Any]) -> Dict[str, Any]:
+        # Copy dict values one level deep (adversary P2-2): rows alias the
+        # memo's nested run_lifecycle dict — a consumer mutating
+        # row["run_lifecycle"] would poison every future index call until
+        # the file's identity changes.
+        return {
+            "run_id": rid,
+            **{k: (dict(v) if isinstance(v, dict) else v) for k, v in fields.items() if not k.startswith("__")},
+        }
+
+    def _trusted_index_rows(self, *, limit: int, oldest_first: bool = False, **filters: Any) -> List[Dict[str, Any]]:
+        out: List[Dict[str, Any]] = []
+        for _m, rid, fields in self._trusted_matches(oldest_first=oldest_first, **filters):
+            out.append(self._index_row(rid, fields))
+            if len(out) >= limit:
+                break
+        out.sort(key=lambda r: str(r.get("updated_at") or ""), reverse=not oldest_first)
+        return out[:limit]
+
+    def _trusted_run_ids(self, *, limit: int, **filters: Any) -> List[str]:
+        """What a trusted `list_runs` would return, as ids (for the shadow comparison)."""
+        picked: List[tuple[str, str]] = []
+        for _m, rid, fields in self._trusted_matches(**filters):
+            picked.append((str(fields.get("updated_at") or ""), str(fields.get("__run_id") or rid)))
+            if len(picked) >= limit:
+                break
+        picked.sort(key=lambda x: x[0], reverse=True)
+        return [rid for _u, rid in picked[:limit]]
+
+    def _load_trusted(self, rid: str, token: Any) -> Optional[RunState]:
+        """A listed run: the cached RunState when it is the file the memo describes (no
+        stat), else a load from disk."""
+        with self._run_cache_lock:
+            cached = self._run_cache.get(rid)
+            if cached is not None and token is not None and tuple(cached[0]) == tuple(token):
+                self._run_cache.move_to_end(rid)
+                return cached[1]
+        return self._load_from_path(self._path(rid))
+
+    def _shadow_mark(self) -> tuple:
+        with self._index_stats_lock:
+            own = self._own_writes
+        return (self._journal_size(), self._dir_mtime(), own)
+
+    def _shadow_compare(self, kind: str, mark0: tuple, trusted: Any, scanned: Any) -> None:
+        """Verify mode: compare the in-memory answer with the scan's. A comparison that
+        overlapped a write (the log, the folder or this store's own writes moved) is
+        counted as unstable, never as a mismatch."""
+        stable = self._shadow_mark() == mark0
+        with self._index_stats_lock:
+            st = self._index_stats
+            if not stable:
+                st["shadow_unstable"] += 1
+                return
+            st["shadow_compared"] += 1
+            if trusted == scanned:
+                return
+            st["shadow_mismatches"] += 1
+            t_ids = [r.get("run_id") if isinstance(r, dict) else r for r in trusted]
+            s_ids = [r.get("run_id") if isinstance(r, dict) else r for r in scanned]
+            sample = {
+                "at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+                "listing": kind,
+                "only_in_index": [x for x in t_ids if x not in set(s_ids)][:5],
+                "only_in_scan": [x for x in s_ids if x not in set(t_ids)][:5],
+                "same_ids": set(t_ids) == set(s_ids),
+            }
+            st["last_mismatch"] = sample
+        logger.warning("JsonFileRunStore: run index (verify mode) differs from the directory scan: %s", sample)
+
+    def _count_listing(self, trusted: bool) -> None:
+        with self._index_stats_lock:
+            self._index_stats["trusted_listings" if trusted else "scanned_listings"] += 1
+
+    def run_index_stats(self) -> Dict[str, Any]:
+        """The trusted run index at a glance (a copy). `mode`: "trusted" or "verify";
+        `complete`: one full pass done (the index can answer); `entries` / `active_entries`:
+        run files known / of them RUNNING or WAITING; `trusted_listings` / `scanned_listings`:
+        listings answered from memory / by the directory scan; verify mode only:
+        `shadow_compared` (stable comparisons of the two answers), `shadow_mismatches` (of
+        them, different: the number to watch, 0 = the index would have answered the same),
+        `shadow_unstable` (overlapped a write, not a verdict), `last_mismatch`; both modes:
+        `reconciles`, `reconcile_repairs` (differences the background reconciliation found
+        and repaired: 0 = nothing bypassed the creation log) and `last_reconcile`."""
+        with self._scan_memo_lock:
+            entries = len(self._scan_memo)
+            active = len(self._memo_active)
+        with self._index_stats_lock:
+            st = dict(self._index_stats)
+            for k in ("last_mismatch", "last_reconcile"):
+                if isinstance(st.get(k), dict):
+                    st[k] = dict(st[k])
+        return {
+            "mode": "trusted" if self._trust_index else "verify",
+            "complete": bool(self._memo_complete and self._active_built),
+            "entries": entries,
+            "active_entries": active,
+            **st,
+        }
+
+    def reconcile_run_index(self) -> Dict[str, Any]:
+        """Run the reconciliation NOW in the caller's thread (tests, a host that wants disk
+        truth before a decision) and return `run_index_stats()`."""
+        self.rescan_active_index()
+        return self.run_index_stats()
 
     # --- QueryableRunStore methods ---
 
@@ -1498,8 +1938,29 @@ class JsonFileRunStore(RunStore):
         lim = max(1, int(limit or 100))
         self._load_scan_sidecar_once()
         # ACTIVE INDEX: a RUNNING/WAITING listing ranks only the index's
-        # candidates (each re-verified below); any other listing scans.
+        # candidates (each re-verified below); any other listing is answered
+        # by the TRUSTED RUN INDEX (memory, no stat), or scans in verify mode.
         candidates = self._active_candidates(status)
+        shadow: Optional[tuple] = None
+        if candidates is None:
+            mark0 = self._shadow_mark() if not self._trust_index else None
+            if self._trusted_ready() is not None:
+                filters = dict(status=status, wait_reason=wait_reason, workflow_id=workflow_id)
+                if self._trust_index:
+                    self._count_listing(True)
+                    results0: List[RunState] = []
+                    for token, rid, _fields in self._trusted_matches(**filters):
+                        run = self._load_trusted(rid, token)
+                        if run is None:
+                            continue
+                        results0.append(run)
+                        if len(results0) >= lim:
+                            break
+                    results0.sort(key=lambda r: r.updated_at or "", reverse=True)
+                    self._maybe_persist_scan_memo()
+                    return results0[:lim]
+                shadow = (mark0, self._trusted_run_ids(limit=lim, **filters))
+            self._count_listing(False)
         ranked: list[tuple[int, Path]] = []
         for p in candidates if candidates is not None else self._base.glob("run_*.json"):
             try:
@@ -1543,6 +2004,8 @@ class JsonFileRunStore(RunStore):
 
         results.sort(key=lambda r: r.updated_at or "", reverse=True)
         self._maybe_persist_scan_memo()
+        if shadow is not None:
+            self._shadow_compare("list_runs", shadow[0], shadow[1], [str(r.run_id) for r in results[:lim]])
         return results[:lim]
 
     def list_run_index(
@@ -1565,6 +2028,7 @@ class JsonFileRunStore(RunStore):
         self._load_scan_sidecar_once()
         sid = str(session_id or "").strip() if session_id is not None else None
         candidates: Optional[List[Path]] = None
+        shadow: Optional[tuple] = None
         if sid is not None:
             # Session-scoped: candidates from the session index, O(session).
             self._ensure_session_index()
@@ -1575,6 +2039,22 @@ class JsonFileRunStore(RunStore):
             # ACTIVE INDEX: a RUNNING/WAITING page ranks the index's candidates
             # (each re-verified below) instead of the whole directory.
             candidates = self._active_candidates(status)
+            if candidates is None:
+                # TRUSTED RUN INDEX: any other page comes from memory (no glob, no
+                # stat); verify mode scans and compares (shadow).
+                mark0 = self._shadow_mark() if not self._trust_index else None
+                if self._trusted_ready() is not None:
+                    filters = dict(
+                        status=status, workflow_id=workflow_id, root_only=bool(root_only),
+                        automation_id=automation_id, role=role, session_kind=session_kind,
+                    )
+                    trusted_rows = self._trusted_index_rows(limit=lim, oldest_first=bool(oldest_first), **filters)
+                    if self._trust_index:
+                        self._count_listing(True)
+                        self._maybe_persist_scan_memo()
+                        return trusted_rows
+                    shadow = (mark0, trusted_rows)
+                self._count_listing(False)
             paths = candidates if candidates is not None else list(self._base.glob("run_*.json"))
         indexed = sid is None and candidates is not None
         ranked: list[tuple[int, Path]] = []
@@ -1613,24 +2093,14 @@ class JsonFileRunStore(RunStore):
             if not row_matches(fields, automation_id=automation_id, role=role, session_kind=session_kind):
                 continue
 
-            rid = self._run_id_from_path(p)
-            # Copy dict values one level deep (adversary P2-2): rows alias
-            # the memo's nested run_lifecycle dict — a consumer mutating
-            # row["run_lifecycle"] would poison every future index call
-            # until the file's identity changes.
-            out.append({
-                "run_id": rid,
-                **{
-                    k: (dict(v) if isinstance(v, dict) else v)
-                    for k, v in fields.items()
-                    if not k.startswith("__")
-                },
-            })
+            out.append(self._index_row(self._run_id_from_path(p), fields))
             if len(out) >= lim:
                 break
 
         out.sort(key=lambda r: str(r.get("updated_at") or ""), reverse=not oldest_first)
         self._maybe_persist_scan_memo()
+        if shadow is not None:
+            self._shadow_compare("list_run_index", shadow[0], shadow[1], out[:lim])
         return out[:lim]
 
     def latest_occurrence_row(self, automation_id: str) -> Optional[Dict[str, Any]]:

@@ -140,7 +140,7 @@ Payload (a Revision WITHOUT the runtime-owned part of its provenance):
 | `scope` | no | memory scope, default `"run"` |
 | `owner_id` | no | default: resolved from `scope` like the KG lane (`run` / `session` / `global`). When given it must be one of the run's own partitions (its run id, its session's owner, the global owner); anything else fails the effect (`MEMORY_KG_ASSERT` applies the same rule to its payload and per-assertion `owner_id`) |
 | `cause` | no | `ingest` (default), `reinterpret`, `merge`, `unmerge`, `ripple`, `person`, `maintenance`, `import`, `migration` |
-| `revision_id` | no | default `rev_<sha256(run_id, node, scope, owner, cause, ops, provenance.sources, provenance.derived_from, artifact_ids, occurred_at)[:32]>`: a retried attempt is a no-op; the same ops from a new source are a new revision |
+| `revision_id` | no | default `rev_<sha256(node, scope, owner, cause, ops, provenance.sources, provenance.derived_from, artifact_ids, occurred_at)[:32]>`: a retried attempt, or the same workflow run again with the same ops, re-observes the same revision (no duplicate memory); the same ops from a new source are a new revision |
 | `occurred_at` | no | observation time (ISO UTC), default now |
 | `summary` | no | free text |
 | `artifact_ids` | no | artifacts the revision came from (stamped as `artifact` refs) |

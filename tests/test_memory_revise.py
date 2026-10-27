@@ -302,3 +302,30 @@ def test_a_run_writes_only_its_own_owner_partitions(tmp_path: Path) -> None:
     ok_kg = assert_(run, Effect(type=EffectType.MEMORY_KG_ASSERT, payload={"assertions": [claim], "scope": "global"}),
                     None)
     assert ok_kg.status == "completed"
+
+
+def _revise_steps(home: "_Home", run_id: str) -> list:
+    return [r for r in home.ledger.list(run_id) if r["status"] == "started" and r["effect"]["type"] == "memory_revise"]
+
+
+def test_the_same_ops_run_twice_are_one_memory(tmp_path: Path) -> None:
+    """Architect E1: the run id is not in the default revision_id, so the same workflow run twice with the same ops
+    is one revision (no duplicate triples). Mutant: put run_id back -> two revisions, two copies of each claim."""
+    home = _Home(tmp_path)
+    _, s1 = home.run_flow({"ops": OPS, "scope": "global"})
+    _, s2 = home.run_flow({"ops": OPS, "scope": "global"})
+    o1, o2 = _effect_result(s1), _effect_result(s2)
+    assert o1["revision_id"] == o2["revision_id"] and o1["applied"] is True and o2["applied"] is False
+    assert len(home.store.query(__import__("abstractmemory").TripleQuery(subject="ex:alice", limit=0))) == 2
+
+
+@pytest.mark.xfail(strict=True, reason="needs AbstractMemory's re-observation rule (a re-applied revision records the "
+                                       "new run's step ref on the memory); not on the graph worktree yet")
+def test_a_re_run_is_recorded_as_a_re_observation(tmp_path: Path) -> None:
+    home = _Home(tmp_path)
+    _, s1 = home.run_flow({"ops": OPS, "scope": "global"})
+    r2, _ = home.run_flow({"ops": OPS, "scope": "global"})
+    (step2,) = _revise_steps(home, r2)
+    ids = _effect_result(s1)["assertion_ids"]
+    assert sorted(home.facade.derived_from_source({"kind": "step", "run_id": r2, "seq": step2["seq"]})) == sorted(ids)
+

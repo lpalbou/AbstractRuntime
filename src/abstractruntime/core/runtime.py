@@ -1040,6 +1040,7 @@ class Runtime:
         config: Optional[RuntimeConfig] = None,
         chat_summarizer: Optional[Any] = None,
         steer_store: Optional[Any] = None,
+        session_tool_policy_store: Optional[Any] = None,
     ):
         self._run_store = run_store
         self._ledger_store = ledger_store
@@ -1067,6 +1068,10 @@ class Runtime:
         # only the tick loop DRAINS them into `_runtime.inbox` (single-writer),
         # acking each delivery with a `steer_seen` ledger record.
         self._steer_store = steer_store
+        # Session tool policy (contract v1, `storage/session_tool_policy.py`): a person's standing
+        # "approve / deny without asking" for one conversation. Hosts write it; the TOOL_CALLS
+        # handler reads the run's session row before deciding whether a batch must wait.
+        self._session_tool_policy_store = session_tool_policy_store
         # Best-effort callbacks invoked once per run when it reaches a terminal status
         # (COMPLETED/FAILED/CANCELLED). Used by integrations to release run-scoped,
         # process-local resources (e.g. persistent shell sessions). Never affects
@@ -1268,6 +1273,23 @@ class Runtime:
         self._tool_executor_for_resume = tool_executor
 
     # --- email (framework backlog 0992 WP2) -------------------------------------------
+
+    def set_session_tool_policy_store(self, store: Optional[Any]) -> None:
+        """Install the host's session tool policy store for THIS runtime (None removes it).
+
+        The TOOL_CALLS handler consults `store.get(run.session_id)` BEFORE it decides whether a
+        tool batch must wait for approval (`storage/session_tool_policy.py`): a covered call runs
+        with no wait, a denied call is refused with no wait, and each such decision is recorded
+        in the run's ledger (`abstract.tool_policy_decision`). Runs without a session id,
+        automation occurrences and untrusted-input runs never consult it.
+        """
+        if store is not None and not callable(getattr(store, "get", None)):
+            raise TypeError("set_session_tool_policy_store expects a store with get(session_id)")
+        self._session_tool_policy_store = store
+
+    @property
+    def session_tool_policy_store(self) -> Optional[Any]:
+        return self._session_tool_policy_store
 
     def set_email_context_resolver(self, resolver: Optional[Callable[[Any], Any]]) -> None:
         """Install the host's account resolver for THIS runtime (None removes it).
@@ -2676,6 +2698,7 @@ class Runtime:
                 # run's account through this runtime's resolver; the
                 # automation controller reads the inbox and the binding.
                 setattr(run, "_runtime_email_resolver", self._email_context_resolver)
+                setattr(run, "_runtime_session_tool_policy_store", self._session_tool_policy_store)
                 # Who sends: "action" only for the runtime's own send-email action
                 # (node-function identity), else "agent_tool" (the host applies the
                 # user's "Agent email tools" choice to those).

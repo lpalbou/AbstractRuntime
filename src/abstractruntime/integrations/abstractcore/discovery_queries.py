@@ -1074,6 +1074,7 @@ def local_get_voice_catalog(
     provider: Optional[str] = None,
     model: Optional[str] = None,
     providers_only: bool = False,
+    language: Optional[str] = None,
 ) -> Dict[str, Any]:
     try:
         voice = _runtime_capability_registry(
@@ -1081,8 +1082,13 @@ def local_get_voice_catalog(
             voice_api_key=provider_api_key,
             voice_openai_api_key=voice_openai_api_key,
         ).voice
+        # `language` (AbstractCore 2.30.0+) keeps the voices that speak it, natives first; it is
+        # passed only when asked, and AbstractCore raises if its backend cannot filter.
+        lang = str(language or "").strip() or None
         catalog = (
-            voice.voice_catalog(provider=provider, model=model, providers_only=providers_only)
+            voice.voice_catalog(
+                provider=provider, model=model, providers_only=providers_only, **({"language": lang} if lang else {})
+            )
             if hasattr(voice, "voice_catalog")
             else {}
         )

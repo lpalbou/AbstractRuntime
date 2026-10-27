@@ -9337,6 +9337,7 @@ class LocalAbstractCoreLLMClient:
         model: Optional[str] = None,
         providers_only: bool = False,
         voice_openai_api_key: Optional[str] = None,
+        language: Optional[str] = None,
         **kwargs: Any,
     ) -> Dict[str, Any]:
         call_kwargs = dict(kwargs)
@@ -9350,7 +9351,15 @@ class LocalAbstractCoreLLMClient:
             provider=provider,
             model=model,
             providers_only=providers_only,
+            language=language,
         )
+
+    def voice_library(self, op: str, *, voice_openai_api_key: Optional[str] = None, **kwargs: Any) -> Any:
+        """Voice library operation in this process (see `voice_facade.AbstractCoreVoiceFacade`)."""
+        from .voice_library import local_voice_library
+
+        _pop_provider_api_key(kwargs)
+        return local_voice_library(op, kwargs, voice_openai_api_key=voice_openai_api_key)
 
     def list_tts_models(
         self,
@@ -11772,6 +11781,7 @@ class MultiLocalAbstractCoreLLMClient:
         model: Optional[str] = None,
         providers_only: bool = False,
         voice_openai_api_key: Optional[str] = None,
+        language: Optional[str] = None,
         **kwargs: Any,
     ) -> Dict[str, Any]:
         call_kwargs = dict(kwargs)
@@ -11785,7 +11795,15 @@ class MultiLocalAbstractCoreLLMClient:
             provider=provider,
             model=model,
             providers_only=providers_only,
+            language=language,
         )
+
+    def voice_library(self, op: str, *, voice_openai_api_key: Optional[str] = None, **kwargs: Any) -> Any:
+        """Voice library operation in this process (see `voice_facade.AbstractCoreVoiceFacade`)."""
+        from .voice_library import local_voice_library
+
+        _pop_provider_api_key(kwargs)
+        return local_voice_library(op, kwargs, voice_openai_api_key=voice_openai_api_key)
 
     def list_tts_models(
         self,
@@ -12717,6 +12735,20 @@ class HttpxRequestSender:
             resp = self._post_cancellable(url, headers=headers, json=json, timeout=timeout, cancel_event=cancel_event)
         else:
             resp = self._httpx.post(url, headers=headers, json=json, timeout=timeout)
+        resp.raise_for_status()
+        return HttpResponse(body=resp.json(), headers=dict(resp.headers))
+
+    def request(
+        self,
+        method: str,
+        url: str,
+        *,
+        headers: Dict[str, str],
+        json: Optional[Dict[str, Any]] = None,
+        timeout: float,
+    ) -> HttpResponse:
+        """Any other JSON request (PATCH, DELETE: the voice library's changes)."""
+        resp = self._httpx.request(method, url, headers=headers, json=json, timeout=timeout)
         resp.raise_for_status()
         return HttpResponse(body=resp.json(), headers=dict(resp.headers))
 
@@ -13709,6 +13741,7 @@ class RemoteAbstractCoreLLMClient:
         model: Optional[str] = None,
         providers_only: bool = False,
         voice_openai_api_key: Optional[str] = None,
+        language: Optional[str] = None,
         **kwargs: Any,
     ) -> Dict[str, Any]:
         from .discovery_queries import _filter_voice_catalog_response
@@ -13727,11 +13760,22 @@ class RemoteAbstractCoreLLMClient:
                 "provider": provider,
                 "model": model,
                 "providers_only": providers_only,
+                "language": language,
             },
             provider_api_key=provider_api_key,
             timeout_s=call_kwargs.get("timeout_s"),
         )
         return _filter_voice_catalog_response(payload, provider=provider, model=model, providers_only=providers_only)
+
+    def voice_library(self, op: str, *, voice_openai_api_key: Optional[str] = None, **kwargs: Any) -> Any:
+        """Voice library operation on the remote AbstractCore server's `/v1` voice routes (see
+        `voice_facade.AbstractCoreVoiceFacade`). `voice_openai_api_key` is a local plugin setting
+        and is never sent; the server uses its own voice configuration."""
+        from .voice_library import remote_voice_library
+
+        del voice_openai_api_key
+        provider_api_key = _pop_provider_api_key(kwargs)
+        return remote_voice_library(self, op, kwargs, provider_api_key=provider_api_key)
 
     def list_tts_models(
         self,
@@ -15721,7 +15765,7 @@ class RemoteAbstractCoreLLMClient:
         if endpoint_model:
             body["model"] = endpoint_model
         endpoint_provider = str(spec.get("provider") or "").strip().lower().replace("_", "-")
-        for key in ("speed", "instructions", "provider", "profile", "quality_preset"):
+        for key in ("speed", "one_shot", "instructions", "provider", "profile", "quality_preset"):
             if key in spec and spec.get(key) is not None:
                 body[key] = spec.get(key)
         if "quality" in spec and "quality_preset" not in body and spec.get("quality") is not None:

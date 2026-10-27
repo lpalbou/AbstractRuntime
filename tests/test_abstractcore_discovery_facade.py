@@ -679,7 +679,7 @@ def test_multilocal_discovery_methods_use_runtime_helpers(monkeypatch) -> None:
     )
     monkeypatch.setattr(
         "abstractruntime.integrations.abstractcore.discovery_queries.local_get_voice_catalog",
-        lambda *, base_url=None, provider_api_key=None, voice_openai_api_key=None, provider=None, model=None, providers_only=False: {
+        lambda *, base_url=None, provider_api_key=None, voice_openai_api_key=None, provider=None, model=None, providers_only=False, language=None: {
             "provider": provider,
             "model": model,
             "providers_only": providers_only,

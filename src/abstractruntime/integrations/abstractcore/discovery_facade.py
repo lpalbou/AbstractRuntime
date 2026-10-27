@@ -7,7 +7,7 @@ Scope:
 - provider discovery
 - provider model discovery
 - model capability lookup
-- audio/voice/TTS/STT catalogs
+- audio/voice/TTS/STT catalogs (voice library changes: `voice_facade.AbstractCoreVoiceFacade`)
 - music provider/model catalogs
 - vision provider catalogs
 - vision adapter catalogs
@@ -287,10 +287,14 @@ class AbstractCoreDiscoveryFacade:
         model: Optional[str] = None,
         providers_only: bool = False,
         voice_openai_api_key: Optional[str] = None,
+        language: Optional[str] = None,
         **kwargs: Any,
     ) -> Dict[str, Any]:
         """Voice catalog. `voice_openai_api_key` is the host's OpenAI credential for
-        AbstractVoice's `openai` engines (plugin setting of the same name)."""
+        AbstractVoice's `openai` engines (plugin setting of the same name). `language` keeps
+        the voices that can speak it, native speakers first (AbstractCore 2.30.0+)."""
+        if language is not None:
+            kwargs["language"] = language
         return self._client.get_voice_catalog(
             base_url=base_url,
             provider_api_key=provider_api_key,

@@ -1307,12 +1307,13 @@ Entry points:
 - `create_local_runtime(...)`, `create_remote_runtime(...)`, `create_hybrid_runtime(...)` (`src/abstractruntime/integrations/abstractcore/factory.py`)
 - public discovery facade: `AbstractCoreDiscoveryFacade`, `get_abstractcore_discovery_facade(...)` (`src/abstractruntime/integrations/abstractcore/discovery_facade.py`)
 - public host facade: `AbstractCoreHostFacade`, `get_abstractcore_host_facade(...)` (`src/abstractruntime/integrations/abstractcore/host_facade.py`)
+- public voice library facade: `AbstractCoreVoiceFacade`, `get_abstractcore_voice_facade(...)`, `VoiceLibraryError` (`src/abstractruntime/integrations/abstractcore/voice_facade.py`): languages, cloned voices (list by language, read, rename or replace the transcript, delete), cloning from a recording, voice design, the capability catalog; local in process, remote over the AbstractCore server's `/v1` voice routes (see [Voice library](integrations/abstractcore.md#voice-library))
 - email facade: `email_facade` (AbstractCore's mail library for hosts; see [Email](#email))
 - public Telegram host wrappers: `TelegramTdlibNotAvailable`, `bootstrap_telegram_auth_from_env(...)`, `get_global_telegram_client(...)`, `stop_global_telegram_client()`, `send_telegram_message(...)` (`src/abstractruntime/integrations/abstractcore/telegram_facade.py`)
 - public durable run facade: `AbstractCoreRunFacade`, `get_abstractcore_run_facade(...)` (`src/abstractruntime/integrations/abstractcore/run_facade.py`); `inline_run_active(run_id)` is true while the facade executes a child run in this process (its workflow exists only inside that call), so a host runner that scans `RUNNING` runs skips it
 - effect handler wiring: `build_effect_handlers(...)` (`src/abstractruntime/integrations/abstractcore/effect_handlers.py`)
 - tool executors: `MappingToolExecutor`, `AbstractCoreToolExecutor`, `PassthroughToolExecutor`, `ApprovalToolExecutor`, `ToolApprovalPolicy` (`src/abstractruntime/integrations/abstractcore/tool_executor.py`)
-- discovery-facade delegation is implemented by the configured AbstractCore LLM clients in `src/abstractruntime/integrations/abstractcore/llm_client.py` (`list_providers`, `list_provider_models`, `get_voice_catalog`, `list_tts_models`, `list_stt_models`, `list_music_providers`, `list_music_models`, `list_vision_provider_models`, `list_cached_vision_models`, `list_vision_adapters`)
+- discovery-facade delegation is implemented by the configured AbstractCore LLM clients in `src/abstractruntime/integrations/abstractcore/llm_client.py` (`list_providers`, `list_provider_models`, `get_voice_catalog` (with `language=`), `list_tts_models`, `list_stt_models`, `list_music_providers`, `list_music_models`, `list_vision_provider_models`, `list_cached_vision_models`, `list_vision_adapters`)
 - the host's OpenAI credential for AbstractVoice's `openai` engines, `voice_openai_api_key`, travels two ways. For discovery, pass it to `get_voice_catalog`, `list_tts_models` or `list_stt_models`; the local clients hand it to the voice plugin's config, and a remote client never sends it (a remote AbstractCore server uses its own voice configuration). For execution, put it in `create_local_runtime(llm_kwargs={"voice_openai_api_key": ...})`. Constructor kwargs become the provider's `config`, which is also the capability-plugin config. Providers read only the keys they name, so a `voice_*` key changes no text request (tests `tests/test_voice_openai_api_key_path.py`)
 - host-facade client delegation is implemented by the configured AbstractCore LLM clients in `src/abstractruntime/integrations/abstractcore/llm_client.py` (`get_prompt_cache_capabilities`, `get_prompt_cache_stats`, `prompt_cache_set`, `prompt_cache_update`, `prompt_cache_fork`, `prompt_cache_clear`, `prompt_cache_prepare_modules`, `upsert_text_bloc`, `get_bloc_record`, `list_blocs`, `get_bloc_kv_manifest`, `ensure_bloc_kv_artifact`, `load_bloc_kv_artifact`, `list_bloc_kv_artifacts`, `delete_bloc_kv_artifact`, `prune_bloc_kv_artifacts`, `delete_bloc`, `get_model_residency_capabilities`, `list_model_residency`, `load_model_residency`, `unload_model_residency`, `get_memory_snapshot`, `list_session_prompt_caches`, `clear_session_prompt_caches`, `lock_model_residency`, `unlock_model_residency`, `get_context_estimate`); the last six are optional in the client contract, and the facade returns `{"ok": false, "supported": false, ...}` when the configured client does not implement one
 - `integrations.abstractcore.llm_client.set_default_model_warmup(enabled)` (process-wide, no environment variable): whether a new `MultiLocalAbstractCoreLLMClient` builds (for a local model: loads) its default model at construction and on a default switch. Default on. A process that serves no model turns it off once at boot (the gateway's `serve --no-runner`); the default client is then built at its first call. `default_model_warmup()` reads the setting (see `integrations/abstractcore.md#unloading-and-switching-models`)
@@ -3230,6 +3231,52 @@ adapters = facade.list_vision_adapters(
     task="text_to_video",
     model="AbstractFramework/wan2.2-t2v-a14b-diffusers-8bit",
 )
+```
+
+## Voice library
+
+`get_abstractcore_voice_facade(runtime)` (`AbstractCoreVoiceFacade`) manages the voices AbstractCore can speak with:
+
+- `list_languages(kind=None, provider=None)`: `{"languages": {kind: {provider: {provider, languages, open, declared}}}}`
+  for `tts`, `stt` and `cloning`, read without loading a model;
+- `list_cloned_voices(provider=None, model=None, language=None)`: `{"voices": [...], "count": n}`, designed and
+  built-in voices included (`tags.designed`, `tags.builtin`); `language` keeps the voices that can speak it, native
+  speakers first;
+- `get_cloned_voice(voice_id)`, `update_cloned_voice(voice_id, name=None, reference_text=None)` (both fields checked
+  before either is applied) and `delete_cloned_voice(voice_id)`; built-in voices are read-only;
+- `clone_voice(audio_bytes, filename=None, content_type=None, name=None, reference_text=None, provider=None, model=None)`:
+  a voice from a reference recording (`provider` = the cloning engine, e.g. `qwen3-tts`, `omnivoice`);
+- `design_voice(description, name=None, language=None, text=None)`: a voice from a written description, stored as a
+  cloned voice (needs `abstractvoice[qwen3-tts]` and `abstractvoice[stt]` where the voice capability runs);
+- `compatibility_catalog()`: per kind, provider, model and surface, the support level of each feature (`native`,
+  `emulated`, `conditional`, `unsupported`), e.g. which engines honour `speed` or `one_shot`.
+
+Local clients run these in process through AbstractCore's voice capability (AbstractCore 2.30.0+, AbstractVoice
+0.18.2+). The remote client calls the AbstractCore server's `/v1/audio/languages`, `/v1/voice/clones[/{id}]`
+(`GET`, `PATCH`, `DELETE`), `/v1/voice/clone` and `/v1/voice/design`, and reads the capability catalog from
+`/v1/audio/voices`; the server's changes need its operator token in the runtime's headers. Every refusal is a
+`VoiceLibraryError` with `status_code` (404 unknown voice, 422 refused input, 401 server token missing, 501 capability
+or engine runtime missing, 502 remote failure) and `detail`, so a host maps it to its own answer.
+
+Cloned voices live in AbstractVoice's store, one per machine user: the voices a host lists are the voices synthesis
+reads, for every account the host serves.
+
+The voice catalog takes the same language filter: `get_abstractcore_discovery_facade(rt).get_voice_catalog(language="fr")`.
+A remote run's buffered TTS forwards `one_shot` (the whole text as one take, refused beyond an engine's limit); the
+streamed lane never sends it, as AbstractCore refuses `one_shot` on a stream.
+
+```python
+from abstractruntime.integrations.abstractcore import VoiceLibraryError, get_abstractcore_voice_facade
+
+voices = get_abstractcore_voice_facade(rt)
+french = voices.list_cloned_voices(language="fr")["voices"]
+designed = voices.design_voice("A calm, warm low female voice", name="Calm", language="en")
+voices.update_cloned_voice(designed["voice_id"], name="Calm narrator")
+voices.delete_cloned_voice(designed["voice_id"])
+try:
+    voices.get_cloned_voice(designed["voice_id"])
+except VoiceLibraryError as err:
+    print(err.status_code, err.detail)  # 404: the voice is gone
 ```
 
 ## Durable run-scoped media and comms execution

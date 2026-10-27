@@ -8,6 +8,7 @@ Provides:
 - Effect handlers wiring
 - Convenience runtime factories for local/remote/hybrid modes
 - Public discovery facade for provider/media/catalog snapshot queries
+- Public voice library facade (`voice_facade`): languages, cloned voices, voice design and cloning, the capability catalog
 - Public host facade for prompt-cache, durable bloc/KV, and model-residency control operations
 - Public config facade for AbstractCore capability-default routes and config API keys
 - Public structured-output facade (`structured_facade`): `parse_response_format` / `ResponseFormatError` for hosts
@@ -44,6 +45,11 @@ from .structured_facade import parse_response_format
 from .discovery_facade import (
     AbstractCoreDiscoveryFacade,
     get_abstractcore_discovery_facade,
+)
+from .voice_facade import (
+    AbstractCoreVoiceFacade,
+    VoiceLibraryError,
+    get_abstractcore_voice_facade,
 )
 from .run_facade import (
     LEGACY_VOICE_STREAM_WAIT_KEY_PREFIX,
@@ -82,6 +88,8 @@ __all__ = [
     "AbstractCoreDiscoveryFacade",
     "AbstractCoreHostFacade",
     "AbstractCoreRunFacade",
+    "AbstractCoreVoiceFacade",
+    "VoiceLibraryError",
     "LocalAbstractCoreLLMClient",
     "MultiLocalAbstractCoreLLMClient",
     "RemoteAbstractCoreLLMClient",
@@ -100,6 +108,7 @@ __all__ = [
     "bootstrap_telegram_auth_from_env",
     "get_abstractcore_discovery_facade",
     "get_abstractcore_host_facade",
+    "get_abstractcore_voice_facade",
     "capability_default_config_file",
     "capability_default_specs",
     "clear_capability_default",

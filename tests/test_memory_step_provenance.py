@@ -81,6 +81,16 @@ class _Env:
         return rows[0]
 
 
+def _assert_parity(prov: Dict[str, Any]) -> None:
+    """Review 3a R8: the runtime's stamped dict (legacy flat keys + `sources`) must read back through AbstractMemory's
+    own parser with exactly the refs the runtime stamped (no ref lifted twice from a flat key, none lost).
+    Needs AbstractMemory 4c821b2 (`from_legacy` reads the mixed shape)."""
+    from abstractmemory.graph import Provenance
+
+    parsed = Provenance.from_legacy(prov)
+    assert [s.to_dict() for s in parsed.sources] == prov["sources"], (prov, parsed)
+
+
 def _step_refs(prov: Dict[str, Any]) -> List[Dict[str, Any]]:
     return [s for s in prov.get("sources") or [] if s["kind"] == "step"]
 
@@ -121,6 +131,7 @@ def test_memory_form_in_a_real_run_names_its_step_and_verbatim(tmp_path: Path) -
     for prov in provs:
         assert prov["run_id"] == run_id and prov["turn_id"] == "t-0001"  # legacy keys stay
         assert prov["source"] == "entity-visit-run-v0"
+        _assert_parity(prov)
         row = _assert_step_ref_is_the_writer(env, prov, run_id, "memory_form")
         assert row["effect"]["payload"]["records"][0]["verbatim"] == VERBATIM
         arts = [s for s in prov["sources"] if s["kind"] == "artifact"]
@@ -141,6 +152,7 @@ def test_memory_form_on_the_synthetic_chat_path_names_the_artifact_only(tmp_path
     record_id = outcome.result["record_ids"][0]
     for prov in env.provenances(subject=record_id, scope="run", owner_id="chat-s1"):
         assert prov["run_id"] == "chat-s1"
+        _assert_parity(prov)
         assert [s["kind"] for s in prov["sources"]] == ["artifact"]
         assert "run_id" not in prov["sources"][0]  # the synthetic run is not even attached to the artifact ref
         assert env.facade.reconstruct_source(prov["sources"][0])["content"] == VERBATIM
@@ -172,6 +184,7 @@ def test_memory_kg_assert_in_a_real_run_names_its_step_and_span(tmp_path: Path) 
     assert out["count"] == 1
     (prov,) = env.provenances(subject="ex:alice", scope="run", owner_id=run_id)
     assert prov["writer_run_id"] == run_id and prov["span_id"] == span.artifact_id  # legacy keys stay
+    _assert_parity(prov)
     _assert_step_ref_is_the_writer(env, prov, run_id, "memory_kg_assert")
     (art,) = [s for s in prov["sources"] if s["kind"] == "artifact"]
     assert art["artifact_id"] == span.artifact_id
@@ -200,6 +213,7 @@ def test_diary_projection_names_the_entry_and_the_writing_step(tmp_path: Path, v
     entry_ref = {"kind": "diary_entry", "entry_id": out["entry_id"], "run_id": "diary:ent"}
     for prov in env.provenances(subject=record_id, scope="diary", owner_id="ent"):
         assert prov["entry_id"] == out["entry_id"] and prov["source"] == "diary-projection"
+        _assert_parity(prov)
         assert entry_ref in prov["sources"]
         entry = env.facade.reconstruct_source(entry_ref)
         assert entry["status"] == "ok" and entry["content"]["text"] == payload["text"]
@@ -218,4 +232,5 @@ def test_diary_projection_on_the_chat_path_names_the_entry_only(tmp_path: Path) 
     assert outcome.status == "completed", outcome.error
     for prov in env.provenances(subject=outcome.result["projected_record_id"], scope="diary", owner_id="ent"):
         assert prov["run_id"] == "chat-s9"  # the legacy origin stays
+        _assert_parity(prov)
         assert prov["sources"] == [{"kind": "diary_entry", "entry_id": outcome.result["entry_id"], "run_id": "diary:ent"}]

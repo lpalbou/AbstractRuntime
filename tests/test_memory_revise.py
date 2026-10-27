@@ -168,6 +168,20 @@ def test_run_and_step_refs_are_refused_whatever_their_spelling(tmp_path: Path, k
     assert home.facade.graph.revisions()[0] == []
 
 
+def test_a_caller_ref_cannot_name_another_run(tmp_path: Path) -> None:
+    """Review 3a R2. Mutant: drop the run_id check -> the flow's memories answer `derived_from_source` for the
+    victim run."""
+    home = _Home(tmp_path)
+    span = home.artifacts.store_text("a real span")
+    _, state = home.run_flow({"ops": OPS, "scope": "global", "provenance": {"sources": [
+        {"kind": "artifact", "artifact_id": span.artifact_id, "run_id": "victim-run"}]}})
+    assert state.status == RunStatus.FAILED and "must be this run" in str(state.error)
+    assert home.facade.derived_from_source({"kind": "run", "run_id": "victim-run"}) == []
+    run_id, ok = home.run_flow({"ops": OPS[:1], "scope": "global", "provenance": {"sources": [
+        {"kind": "artifact", "artifact_id": span.artifact_id}]}})
+    assert ok.status == RunStatus.COMPLETED, ok.error  # absent run_id: fine
+
+
 def test_unknown_payload_keys_are_refused(tmp_path: Path) -> None:
     home = _Home(tmp_path)
     run = RunState.new(workflow_id="wf", entry_node="n1")

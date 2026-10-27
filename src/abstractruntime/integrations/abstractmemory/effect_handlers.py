@@ -1032,6 +1032,15 @@ def build_memory_kg_effect_handlers(
                 f"MEMORY_REVISE: {owned} refs are runtime-owned (the runtime stamps the executing step); "
                 "name artifacts with payload.artifact_ids"
             )
+        # A caller ref may only attach this revision to the run executing it: a foreign `run_id` would index the
+        # memory under another run (`derived_from_source({"kind": "run", ...})` answers by run id).
+        this_run = str(getattr(run, "run_id", "") or "")
+        foreign = sorted({r.run_id for r in parsed_sources if r.run_id and r.run_id != this_run})
+        if foreign:
+            return EffectOutcome.failed(
+                f"MEMORY_REVISE: provenance.sources name run(s) {foreign}; a caller ref's run_id must be this run "
+                f"({this_run!r}) or absent"
+            )
         artifact_ids = payload.get("artifact_ids") or []
         if isinstance(artifact_ids, str):
             artifact_ids = [artifact_ids]

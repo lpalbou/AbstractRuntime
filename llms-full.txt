@@ -5102,9 +5102,13 @@ Decision order for each call:
 
 1. The run's tool ceiling (`allowed_tools`): a call outside it is blocked first; a session policy
    never widens what a run may call.
-2. Not consulted for untrusted-input runs, automation occurrences and their descendants, runs
-   without a `session_id`, or a runtime without a store.
-3. `deny` → refused with no wait (`"Denied by this conversation's tool policy"`).
+2. The row is the one of the run tree's ROOT session (a child started with another `session_id`
+   does not borrow that session's grant). No row: nothing changes.
+3. `deny` → refused with no wait (`"Denied by this conversation's tool policy"`), in every run of
+   the session, automation occurrences and untrusted-input runs included (narrowing is always
+   safe). A deny set while an approval is shown also wins over that approval when it is answered.
+   `approve` (5) never applies to untrusted-input runs or automation occurrences and their
+   descendants.
 4. Names the run policy lists in `withheld_tools` are never session-approved.
 5. `approve` (minus `ask`, minus `deny`) counts as auto for the batch, over the start-time
    `require_approval_tools`, the gateway's default grant and the executor's default caution list.

@@ -2981,48 +2981,26 @@ def _effect_idempotency_key_from_tool_calls(tool_calls: Any) -> Optional[str]:
     return None
 
 
-# Session tool policy (contract v1, `storage/session_tool_policy.py`): the ledger record every
-# decision the policy makes writes (an activity, never an interaction).
-TOOL_POLICY_DECISION_EVENT = "abstract.tool_policy_decision"
-SESSION_POLICY_DENIED_ERROR = "Denied by this conversation's tool policy"
+# Session tool policy (contract v1, `storage/session_tool_policy.py`).
+from ...storage.session_tool_policy import (  # noqa: E402
+    SESSION_POLICY_DENIED_ERROR,
+    TOOL_POLICY_DECISION_EVENT,
+    append_tool_policy_record,
+    resolve_session_tool_policy,
+)
 
 
-def _session_tool_policy_for_run(run: "RunState") -> Optional[Dict[str, Any]]:
-    """The session tool policy that applies to `run`, or None.
-
-    None when the runtime has no store, the run has no session, or the run is outside the
-    policy's scope: an untrusted-input run (it reads text other people wrote; its own policy is
-    the only one), an automation occurrence or one of its descendants (unattended; the
-    automation's grant is the only one). A store read failure is logged and yields None, which
-    keeps the normal decision (ask where the defaults ask), never a wider one.
-    """
+def _session_tool_policy_for_run(run: "RunState") -> Tuple[Optional[Dict[str, Any]], bool]:
+    """(policy, approve_applies) of the run tree's root session; see
+    `resolve_session_tool_policy`. A store read failure is logged and keeps the normal decision."""
     store = getattr(run, "_runtime_session_tool_policy_store", None)
     if store is None:
-        return None
-    sid = str(getattr(run, "session_id", "") or "").strip()
-    if not sid:
-        return None
-    vars_ = run.vars if isinstance(getattr(run, "vars", None), dict) else {}
-    rt = vars_.get("_runtime") if isinstance(vars_.get("_runtime"), dict) else {}
-    pol = rt.get("tool_policy") if isinstance(rt.get("tool_policy"), dict) else {}
-    if rt.get("untrusted_input") is True or pol.get("untrusted_input") is True:
-        return None
-    meta = vars_.get("_meta") if isinstance(vars_.get("_meta"), dict) else {}
-    if isinstance(meta.get("occurrence"), dict) or isinstance(meta.get("automation"), dict):
-        return None
+        return None, False
     try:
-        from ...automations.controller import AUTOMATION_GRANT_SOURCE
-
-        if pol.get("source") == AUTOMATION_GRANT_SOURCE:
-            return None
-    except Exception:  # noqa: BLE001 - the automations package is part of the runtime
-        pass
-    try:
-        policy = store.get(sid)
+        return resolve_session_tool_policy(run, store=store, run_store=getattr(run, "_runtime_run_store", None))
     except Exception as e:  # noqa: BLE001 - a broken store keeps the normal decision
-        logger.warning("session tool policy read failed; normal approval applies", session_id=sid, error=str(e))
-        return None
-    return policy if isinstance(policy, dict) else None
+        logger.warning("session tool policy read failed; normal approval applies", run_id=run.run_id, error=str(e))
+        return None, False
 
 
 def _append_tool_policy_record(
@@ -3033,52 +3011,17 @@ def _append_tool_policy_record(
     matched: Dict[str, str],
     policy: Dict[str, Any],
 ) -> bool:
-    """Write one `abstract.tool_policy_decision` record to the run's ledger.
-
-    Shaped like `abstract.steer_seen` (an EMIT_EVENT record with a namespaced name, status
-    completed) so every ledger reader classifies it as an activity. Returns False when it could
-    not be written: the caller then does NOT auto-approve (no approval without its audit).
-    """
+    """Write one `abstract.tool_policy_decision` record to the run's ledger. Returns False when it
+    could not be written: the caller then does NOT auto-approve (no approval without its audit)."""
     ledger = getattr(run, "_runtime_ledger_store", None)
     if ledger is None or not callable(getattr(ledger, "append", None)):
         logger.warning("session tool policy: no ledger store on the run; decision not recorded", run_id=run.run_id)
         return False
     try:
-        from ...core.models import StepRecord, StepStatus
-
-        set_by = policy.get("set_by") if isinstance(policy.get("set_by"), dict) else None
-        rows = [
-            {
-                "call_id": str((c or {}).get("call_id") or ""),
-                "name": str((c or {}).get("name") or ""),
-                "matched": matched.get(str((c or {}).get("name") or "").strip(), "tool"),
-            }
-            for c in calls
-        ]
-        body = {
-            "decision": decision,
-            "source": "session_policy",
-            "session_id": str(getattr(run, "session_id", "") or ""),
-            "node_id": run.current_node,
-            "tool_calls": rows,
-            "policy": {
-                "revision": policy.get("revision"),
-                "set_by": dict(set_by) if set_by else None,
-                "set_at": policy.get("set_at"),
-            },
-        }
-        eff = Effect(type=EffectType.EMIT_EVENT, payload={"name": TOOL_POLICY_DECISION_EVENT, "scope": "run", "payload": body})
         ident = _effect_idempotency_key_from_tool_calls(calls) or str(_run_effect_seq(run))
-        rec = StepRecord.start(
-            run=run,
-            node_id=run.current_node,
-            effect=eff,
-            idempotency_key=f"system:tool_policy_decision:{run.run_id}:{ident}:{decision}",
+        append_tool_policy_record(
+            ledger, run, decision=decision, calls=calls, matched=matched, policy=policy, idempotency_suffix=ident
         )
-        rec.status = StepStatus.COMPLETED
-        rec.result = {"emitted": True, "tool_policy_decision": {"decision": decision, "count": len(rows)}}
-        rec.ended_at = datetime.datetime.now(datetime.timezone.utc).isoformat()
-        ledger.append(rec)
         return True
     except Exception as e:  # noqa: BLE001
         logger.warning("session tool policy record failed", run_id=run.run_id, error=str(e))
@@ -3414,8 +3357,12 @@ def make_tool_calls_handler(
         # Session tool policy (contract v1): read ONCE per batch, before anything can wait.
         from ...storage.session_tool_policy import session_policy_names
 
-        session_policy = _session_tool_policy_for_run(run)
+        session_policy, session_approve_applies = _session_tool_policy_for_run(run)
         session_approved, session_denied = session_policy_names(session_policy)
+        if not session_approve_applies:
+            # Deny narrows every run of the session; approve never reaches an untrusted-input
+            # run or an automation occurrence.
+            session_approved = {}
         session_denied_calls: list[Dict[str, Any]] = []
 
         def _session_recorder(batch: List[Dict[str, Any]]):

@@ -1274,6 +1274,37 @@ class Runtime:
 
     # --- email (framework backlog 0992 WP2) -------------------------------------------
 
+    def _session_denied_for_resume(self, run: RunState, calls: List[Dict[str, Any]]) -> set:
+        """Names of `calls` the run's session policy denies now (an approved wait is re-checked:
+        a deny set after the wait was shown wins). Writes the `denied` record; a store failure
+        denies nothing (the person's explicit approval of this batch stands)."""
+        store = self._session_tool_policy_store
+        if store is None:
+            return set()
+        try:
+            from ..storage.session_tool_policy import (
+                append_tool_policy_record,
+                resolve_session_tool_policy,
+                session_policy_names,
+            )
+
+            policy, _approve_applies = resolve_session_tool_policy(run, store=store, run_store=self._run_store)
+            _approved, deny_map = session_policy_names(policy)
+            hit = [tc for tc in calls if str(tc.get("name") or "").strip() in deny_map]
+            if not hit or policy is None:
+                return set()
+            try:
+                append_tool_policy_record(
+                    self._ledger_store, run, decision="denied", calls=hit, matched=deny_map, policy=policy,
+                    idempotency_suffix=f"resume:{run.waiting.wait_key if run.waiting else ''}",
+                )
+            except Exception as e:  # noqa: BLE001 - the deny stands without its record
+                logger.warning("session tool policy denied record failed for run %s: %s", run.run_id, e)
+            return {str(tc.get("name") or "").strip() for tc in hit}
+        except Exception as e:  # noqa: BLE001
+            logger.warning("session tool policy read failed on resume for run %s: %s", run.run_id, e)
+            return set()
+
     def set_session_tool_policy_store(self, store: Optional[Any]) -> None:
         """Install the host's session tool policy store for THIS runtime (None removes it).
 
@@ -3236,9 +3267,13 @@ class Runtime:
                                         # ceiling. Re-read ancestors: the grant may have narrowed
                                         # since this wait was persisted (including legacy waits).
                                         ceiling = resolve_tool_scope(run, run_store=self._run_store)
+                                        # Nor past a deny the conversation set after the wait
+                                        # was shown (session tool policy, contract v1).
+                                        denied = self._session_denied_for_resume(run, calls)
                                         allowed_calls = [
                                             tc for tc in calls
-                                            if ceiling is None or str(tc.get("name") or "").strip() in ceiling
+                                            if (ceiling is None or str(tc.get("name") or "").strip() in ceiling)
+                                            and str(tc.get("name") or "").strip() not in denied
                                         ]
                                         exec_approved = getattr(tools, "execute_approved", None)
                                         # The approved batch runs as THIS run: its email
@@ -3267,10 +3302,14 @@ class Runtime:
                                         if not isinstance(executed_results, list) or len(executed_results) != len(allowed_calls):
                                             raise ValueError("ToolExecutor returned a mismatched result count")
                                         executed_iter = iter(executed_results)
+                                        from ..storage.session_tool_policy import SESSION_POLICY_DENIED_ERROR
+
                                         merged_payload["results"] = [
-                                            next(executed_iter)
-                                            if ceiling is None or str(tc.get("name") or "").strip() in ceiling
-                                            else _err(tc, f"Tool '{tc.get('name', '')}' is not allowed for this run")
+                                            _err(tc, f"Tool '{tc.get('name', '')}' is not allowed for this run")
+                                            if ceiling is not None and str(tc.get("name") or "").strip() not in ceiling
+                                            else _err(tc, SESSION_POLICY_DENIED_ERROR)
+                                            if str(tc.get("name") or "").strip() in denied
+                                            else next(executed_iter)
                                             for tc in calls
                                         ]
                                     except Exception as e:

@@ -15,8 +15,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `Runtime.set_session_tool_policy_store()`. The TOOL_CALLS handler reads the run's session row once per batch: an
   approved call runs with no wait, a denied call is refused with no wait, and each decision writes an
   `abstract.tool_policy_decision` ledger record (who set the policy, when, which selector matched). It applies to
-  every run of the session (delegated children, resumes, restarts); never to untrusted-input runs, automation
-  occurrences or sessionless runs; never beyond the run's `allowed_tools`. Before this, "approve all" lived in each
+  every run of the session (the run tree's root session: delegated children, resumes, restarts); approvals never
+  reach untrusted-input runs or automation occurrences (a deny does, and also wins over an approval that was shown
+  before it); never beyond the run's `allowed_tools`. Before this, "approve all" lived in each
   client, which answered the wait after it arrived: the gate flashed in every app and in the ledger. See
   [tool-approval.md](docs/tool-approval.md#session-tool-policy-a-conversations-standing-word).
 

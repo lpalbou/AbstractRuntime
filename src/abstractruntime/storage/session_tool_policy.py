@@ -317,3 +317,110 @@ class SqliteSessionToolPolicyStore:
                 }
             )
         return out
+
+
+# --- the runtime side: which policy a run uses, and its audit record ------------------------
+
+TOOL_POLICY_DECISION_EVENT = "abstract.tool_policy_decision"
+SESSION_POLICY_DENIED_ERROR = "Denied by this conversation's tool policy"
+_AUTOMATION_GRANT_SOURCE = "automation-policy"  # automations.controller.AUTOMATION_GRANT_SOURCE
+
+
+def _root_session_id(run: Any, run_store: Any) -> str:
+    """The session of the run tree's ROOT (the conversation), not a child's own: a flow that
+    starts a child with another `session_id` must not borrow that session's grant. Falls back to
+    the run's own session when the ancestry cannot be read (no store, a missing parent)."""
+    own = str(getattr(run, "session_id", "") or "").strip()
+    if run_store is None or not callable(getattr(run_store, "load", None)):
+        return own
+    current, seen = run, set()
+    for _ in range(256):
+        pid = str(getattr(current, "parent_run_id", "") or "").strip()
+        if not pid or pid in seen:
+            break
+        seen.add(pid)
+        try:
+            parent = run_store.load(pid)
+        except Exception:  # noqa: BLE001
+            parent = None
+        if parent is None:
+            break
+        current = parent
+    return str(getattr(current, "session_id", "") or "").strip() or own
+
+
+def resolve_session_tool_policy(run: Any, *, store: Any, run_store: Any = None) -> Tuple[Optional[Dict[str, Any]], bool]:
+    """(policy, approve_applies) for `run`.
+
+    The policy is the row of the run tree's root session (None without a store, a session or a
+    row). `deny` applies to every run of the session (narrowing is always safe); `approve`
+    (approve_applies) never to an untrusted-input run (it reads text other people wrote) or an
+    automation occurrence and its descendants (unattended; the automation's grant is the only
+    grant). A store read failure is logged by the caller's logger and yields (None, False): the
+    normal decision (ask where the defaults ask), never a wider one.
+    """
+    if store is None:
+        return None, False
+    sid = _root_session_id(run, run_store)
+    if not sid:
+        return None, False
+    policy = store.get(sid)
+    if not isinstance(policy, dict):
+        return None, False
+    vars_ = run.vars if isinstance(getattr(run, "vars", None), dict) else {}
+    rt = vars_.get("_runtime") if isinstance(vars_.get("_runtime"), dict) else {}
+    pol = rt.get("tool_policy") if isinstance(rt.get("tool_policy"), dict) else {}
+    meta = vars_.get("_meta") if isinstance(vars_.get("_meta"), dict) else {}
+    out_of_scope = (
+        rt.get("untrusted_input") is True
+        or pol.get("untrusted_input") is True
+        or isinstance(meta.get("occurrence"), dict)
+        or isinstance(meta.get("automation"), dict)
+        or pol.get("source") == _AUTOMATION_GRANT_SOURCE
+    )
+    return policy, not out_of_scope
+
+
+def append_tool_policy_record(
+    ledger: Any,
+    run: Any,
+    *,
+    decision: str,
+    calls: List[Dict[str, Any]],
+    matched: Mapping[str, str],
+    policy: Mapping[str, Any],
+    idempotency_suffix: str,
+) -> None:
+    """Append one `abstract.tool_policy_decision` record (an EMIT_EVENT record with a namespaced
+    name, status completed: the `abstract.steer_seen` shape every ledger reader classifies as an
+    activity). Raises on failure: the caller decides what a missing audit means."""
+    from ..core.models import Effect, EffectType, StepRecord, StepStatus
+
+    set_by = policy.get("set_by") if isinstance(policy.get("set_by"), Mapping) else None
+    rows = []
+    for c in calls:
+        name = str((c or {}).get("name") or "").strip()
+        rows.append({"call_id": str((c or {}).get("call_id") or ""), "name": name, "matched": matched.get(name, "tool")})
+    body = {
+        "decision": decision,
+        "source": "session_policy",
+        "session_id": str(policy.get("session_id") or getattr(run, "session_id", "") or ""),
+        "node_id": getattr(run, "current_node", None),
+        "tool_calls": rows,
+        "policy": {
+            "revision": policy.get("revision"),
+            "set_by": dict(set_by) if set_by else None,
+            "set_at": policy.get("set_at"),
+        },
+    }
+    eff = Effect(type=EffectType.EMIT_EVENT, payload={"name": TOOL_POLICY_DECISION_EVENT, "scope": "run", "payload": body})
+    rec = StepRecord.start(
+        run=run,
+        node_id=getattr(run, "current_node", None),
+        effect=eff,
+        idempotency_key=f"system:tool_policy_decision:{run.run_id}:{idempotency_suffix}:{decision}",
+    )
+    rec.status = StepStatus.COMPLETED
+    rec.result = {"emitted": True, "tool_policy_decision": {"decision": decision, "count": len(rows)}}
+    rec.ended_at = _now()
+    ledger.append(rec)

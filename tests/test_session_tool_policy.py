@@ -71,11 +71,14 @@ TOOLS = WorkflowSpec(
 
 
 def _delegate(run, ctx):
+    payload = {"workflow_id": "tools", "vars": {"first": run.vars.get("first"), "second": run.vars.get("second")}}
+    if run.vars.get("child_session_id"):
+        payload["session_id"] = run.vars["child_session_id"]
     return StepPlan(
         node_id="delegate",
         effect=Effect(
             type=EffectType.START_SUBWORKFLOW,
-            payload={"workflow_id": "tools", "vars": {"first": run.vars.get("first"), "second": run.vars.get("second")}},
+            payload=payload,
             result_key="child",
         ),
         next_node="end",
@@ -262,6 +265,49 @@ def test_out_of_scope_runs_and_names_keep_asking(tmp_path, case):
     run_id, state = _start(rt, first=FETCH, session_id=None if case == "sessionless" else "s1", extra_vars=extra)
     assert state.status == RunStatus.WAITING, case
     assert EXECUTED == [] and _decisions(rt, run_id) == []
+
+
+@pytest.mark.parametrize("case", ["untrusted", "automation"])
+def test_deny_reaches_runs_that_approve_never_reaches(tmp_path, case):
+    store = InMemorySessionToolPolicyStore()
+    store.put("s1", _policy(approve={"fetch_url": "all"}, deny={"write_file": "tool"}))
+    rt = _runtime(tmp_path, store=store)
+    extra = {
+        "untrusted": {"_runtime": {"untrusted_input": True}},
+        # An automation grant that would auto-run write_file: the conversation's deny still wins.
+        "automation": {"_meta": {"occurrence": {"automation_id": "a1"}},
+                       "_runtime": {"tool_policy": {"auto_approve_tools": ["write_file"], "source": "automation-policy"}}},
+    }[case]
+    run_id, state = _start(rt, first=WRITE, extra_vars=extra)
+    assert state.status == RunStatus.COMPLETED, state.waiting
+    assert state.output["first"]["results"][0]["error"] == SESSION_POLICY_DENIED_ERROR
+    assert EXECUTED == [] and [d["decision"] for d in _decisions(rt, run_id)] == ["denied"]
+
+
+def test_a_child_with_its_own_session_id_uses_the_conversations_policy(tmp_path):
+    store = InMemorySessionToolPolicyStore()
+    store.put("other", _policy(approve={"fetch_url": "all"}))  # another conversation's grant
+    rt = _runtime(tmp_path, store=store)
+    run_id, state = _start(rt, first=FETCH, workflow=PARENT, extra_vars={"child_session_id": "other"})
+    [child] = rt.run_store.list_children(parent_run_id=run_id)
+    assert child.session_id == "other"
+    assert rt.get_state(child.run_id).status == RunStatus.WAITING  # s1 granted nothing
+    assert EXECUTED == []
+
+
+def test_a_deny_set_while_a_wait_is_shown_wins_over_its_approval(tmp_path):
+    store = InMemorySessionToolPolicyStore()
+    rt = _runtime(tmp_path, store=store)
+    run_id, state = _start(rt, first=FETCH)
+    assert state.status == RunStatus.WAITING
+    store.put("s1", _policy(deny={"fetch_url": "kind:web"}))
+    state = rt.resume(workflow=TOOLS, run_id=run_id, wait_key=state.waiting.wait_key, payload={"approved": True})
+    if state.status != RunStatus.COMPLETED:
+        state = rt.tick(workflow=TOOLS, run_id=run_id)
+    assert state.status == RunStatus.COMPLETED
+    assert state.output["first"]["results"][0]["error"] == SESSION_POLICY_DENIED_ERROR
+    assert EXECUTED == []
+    assert [d["decision"] for d in _decisions(rt, run_id)] == ["denied"]
 
 
 def test_a_reset_policy_asks_again(tmp_path):

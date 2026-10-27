@@ -263,3 +263,42 @@ def test_the_node_builds_the_payload_from_its_pins_only() -> None:
     assert plan.effect.type == EffectType.MEMORY_REVISE
     assert {k: v for k, v in plan.effect.payload.items() if k not in {"type", "resume_to_node"}} == {
         "ops": OPS, "scope": "session"}
+
+
+def test_a_run_writes_only_its_own_owner_partitions(tmp_path: Path) -> None:
+    """Architect B1: a run in session `attacker-session` must not write into `session_memory_victim-session`, through
+    MEMORY_REVISE or MEMORY_KG_ASSERT (payload owner_id or a per-assertion owner_id). Its own run / session / global
+    owners stay writable. Mutant: drop the owner check -> the victim's partition holds the attacker's memory."""
+    from abstractmemory import TripleQuery
+
+    from abstractruntime.integrations.abstractmemory.effect_handlers import derived_owner_ids, resolve_scope_owner_id
+
+    home = _Home(tmp_path)
+    run = RunState.new(workflow_id="wf", entry_node="n1", session_id="attacker-session")
+    home.run_store.save(run)
+    victim = resolve_scope_owner_id(RunState.new(workflow_id="wf", entry_node="n1", session_id="victim-session"),
+                                    scope="session", run_store=home.run_store)
+    mine = resolve_scope_owner_id(run, scope="session", run_store=home.run_store)
+    assert victim != mine and victim not in derived_owner_ids(run, run_store=home.run_store)
+    revise = home.handlers[EffectType.MEMORY_REVISE]
+    assert_ = home.handlers[EffectType.MEMORY_KG_ASSERT]
+    span = home.artifacts.store_text("evidence")
+
+    bad = revise(run, Effect(type=EffectType.MEMORY_REVISE, payload={
+        "ops": OPS, "scope": "session", "owner_id": victim, "artifact_ids": [span.artifact_id]}), None)
+    assert bad.status == "failed" and "not a partition this run may write" in bad.error
+    claim = {"subject": "ex:x", "predicate": "schema:description", "object": "y"}
+    bad_kg = assert_(run, Effect(type=EffectType.MEMORY_KG_ASSERT, payload={
+        "assertions": [claim], "scope": "session", "owner_id": victim}), None)
+    assert bad_kg.status == "failed" and victim in bad_kg.error
+    bad_row = assert_(run, Effect(type=EffectType.MEMORY_KG_ASSERT, payload={
+        "assertions": [{**claim, "owner_id": victim}], "scope": "session"}), None)
+    assert bad_row.status == "failed"
+    assert home.store.query(TripleQuery(owner_id=victim, limit=0)) == []
+
+    ok = revise(run, Effect(type=EffectType.MEMORY_REVISE, payload={
+        "ops": OPS[:1], "scope": "session", "owner_id": mine, "artifact_ids": [span.artifact_id]}), None)
+    assert ok.status == "completed" and ok.result["owner_id"] == mine
+    ok_kg = assert_(run, Effect(type=EffectType.MEMORY_KG_ASSERT, payload={"assertions": [claim], "scope": "global"}),
+                    None)
+    assert ok_kg.status == "completed"

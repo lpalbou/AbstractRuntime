@@ -165,6 +165,22 @@ def resolve_scope_owner_id(run: RunState, *, scope: str, run_store: RunStore) ->
     raise ValueError(f"Unknown memory scope: {scope}")
 
 
+def derived_owner_ids(run: RunState, *, run_store: RunStore) -> set[str]:
+    """The owner partitions a run may write: its own (`run`), its session's (`session`), the plane's (`global`).
+    A payload `owner_id` outside this set is another partition (another session, another run) and is refused: a
+    workflow names WHICH of its own partitions, never whose (architect B1; the full fix, owner = the principal, is
+    an operator decision, ADR 0009)."""
+    out: set[str] = set()
+    for scope in ("run", "session", "global"):
+        try:
+            owner = resolve_scope_owner_id(run, scope=scope, run_store=run_store)
+        except Exception:  # noqa: BLE001 - an unresolvable partition is simply not one this run may write
+            continue
+        if owner:
+            out.add(owner)
+    return out
+
+
 def _import_abstractmemory():
     try:
         from abstractmemory import TripleAssertion, TripleQuery  # type: ignore
@@ -356,6 +372,13 @@ def build_memory_kg_effect_handlers(
                 out_rows.append(TripleAssertion.from_dict(merged))
             except Exception as e:
                 parse_errors.append(str(e))
+
+        foreign_owners = sorted({str(a.owner_id) for a in out_rows} - derived_owner_ids(run, run_store=run_store))
+        if foreign_owners:
+            return EffectOutcome.failed(
+                f"MEMORY_KG_ASSERT: owner_id {foreign_owners} is not a partition this run may write "
+                f"(its run, its session, or the global owner); nothing was written"
+            )
 
         if parse_errors:
             preview = " | ".join([e for e in parse_errors[:5] if str(e).strip()])
@@ -1086,6 +1109,11 @@ def build_memory_kg_effect_handlers(
         owner_raw = payload.get("owner_id")
         if isinstance(owner_raw, str) and owner_raw.strip():
             owner_id = owner_raw.strip()
+            if owner_id not in derived_owner_ids(run, run_store=run_store):
+                return EffectOutcome.failed(
+                    f"MEMORY_REVISE: owner_id {owner_id!r} is not a partition this run may write (its run, its "
+                    "session, or the global owner)"
+                )
         else:
             try:
                 owner_id = resolve_scope_owner_id(run, scope=scope, run_store=run_store)

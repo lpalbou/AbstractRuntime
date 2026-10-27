@@ -89,9 +89,9 @@ records (gateway backlog 0082).
 
 ## Validation
 
-- `tests/test_replay_conformance.py`: the conformance fixtures under `tests/fixtures/replay/`
-  (redacted real ledgers and synthetic cases), each with its expected view and hand-written
-  semantic checks.
+- `tests/test_replay_conformance.py`: the conformance cases shipped in
+  `abstractruntime.replay.conformance` (redacted real ledgers and synthetic cases), each with its
+  expected view and hand-written semantic checks.
 - `tests/test_replay_invariants.py`: replay equals fold over any chunking and interleaving,
   idempotence, delta round trips, and header-safe cursor tokens.
 - `tests/test_ledger_cursor_invariants.py` and `tests/test_jsonl_ledger_seq_cross_process.py`:

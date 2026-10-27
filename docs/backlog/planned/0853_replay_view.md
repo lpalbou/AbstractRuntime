@@ -4,8 +4,8 @@
 **Package**: abstractruntime (reducer, durable cursor, conformance fixtures, ADR) · **Slices**: abstractgateway (routes, cache), every client that renders runs (migration)
 **Master item**: framework root backlog 0993, `abstractframework/docs/backlog/planned/0993_one_ledger_replay_many_views.md`
 **Release wave**: framework root backlog 1055, `abstractframework/docs/backlog/planned/1055_release_wave_2026_10_27_voice_library_replay_memory.md` (abstractruntime 0.14.0 carries this item; abstractgateway 0.16.0 waits for it)
-**Cross-package**: AbstractGateway backlog 0082 (`abstractgateway/docs/backlog/proposed/0082_ledger_replay_integrity_and_durable_cursor.md`), 0075 (`abstractgateway/docs/backlog/proposed/0075_event_driven_ledger_streaming.md`), 0943 (`abstractgateway/docs/backlog/planned/0943_replay_view_routes_cache_and_client_migration.md`, being written), 0939 (sessions index, out of scope here); AbstractAssistant backlog 0008 (`abstractassistant/docs/backlog/planned/0008_v2_runtime_replayer_adr_compliance_hardening.md`)
-**ADR**: [ADR 0009 — One replay, many views](../../adr/0009_one_replay_many_views.md) (being written)
+**Cross-package**: AbstractGateway backlog 0082 (`abstractgateway/docs/backlog/proposed/0082_ledger_replay_integrity_and_durable_cursor.md`), 0075 (`abstractgateway/docs/backlog/proposed/0075_event_driven_ledger_streaming.md`), 0943 (`abstractgateway/docs/backlog/planned/0943_replay_view_routes_cache_and_client_migration.md`), 0939 (sessions index, out of scope here); AbstractAssistant backlog 0008 (`abstractassistant/docs/backlog/planned/0008_v2_runtime_replayer_adr_compliance_hardening.md`)
+**ADR**: [ADR 0009 — One replay, many views](../../adr/0009_one_replay_many_views.md)
 
 ## Summary
 
@@ -388,20 +388,35 @@ Top level (`ReplayView.to_json`):
 - `session_id` (from the root snapshot).
 - `status` (`running | waiting | completed | failed | cancelled | unknown`) and `display_status`
   (the latest `abstract.status` text, never a terminal word).
-- `cursor`: `{token, records, runs}`: `token` is header-safe (`<run id prefix>:<seq>` per run, root
-  first, joined by `.`; an ETag and an SSE id), `records` the number of folded records, `runs`
-  run id to last folded `seq`.
-- `runs[]`: the tree, root first, each child after its parent in discovery order: `run_id`,
+- `cursor`: `{token, records, runs}`:
+  - `token` is header-safe: `<run name>:<seq>` per run, joined by `.`. A run's name is the
+    shortest run-id prefix (8 characters at least, letters, digits, `_` and `-`) that no other run
+    of the tree shares, and `resolve_cursor_token` maps it back. The token serves as an ETag and
+    as an SSE id.
+  - `records` is the number of folded records.
+  - `runs` maps each run id to its last folded `seq`.
+- `runs[]`: the tree in path order (`order` is the path from the root; a child follows its
+  parent, and siblings appear in the order they were started): `run_id`,
   `parent_run_id`, `workflow_id`, `workflow` (as above, without `entrypoint`), `status`,
   `display_status`, `depth`, `order`, `waiting` (`{kind, wait_key, child_run_id}` or null),
   `holds_interaction`, `records`, `first_seq`, `last_seq`.
-- `interaction`: the one person-facing wait, or null: `kind` (`tool_approval | ask_user`),
-  `run_id`, `wait_key`, `step_id`, `seq`, `prompt`, `choices`, `allow_free_text`, `details`
-  (without `tool_calls`), `tool_calls` (resolved, never a `$slim` pointer), `activity_id`, and
-  `command` = `{type: "resume", run_id, payload: {wait_key}}`.
-- `open_waits[]`: every open wait in the tree: `run_id`, `kind` (`tool_approval | ask_user |
-  delegation | timer | event | job`), `wait_key`, `step_id`, `seq`, `until`, `child_run_id`,
-  `person_facing`.
+- `interaction`: the one person-facing wait, or null. Its fields:
+  - `kind` (`tool_approval | ask_user | event`), `run_id`, `wait_key`, `step_id`, `seq`;
+  - `prompt`, `choices`, `allow_free_text`;
+  - `details` (without `tool_calls`), and `tool_calls` (resolved, never a `$slim` pointer);
+  - `activity_id`;
+  - `answer_payload` (the resume payload's shape, from `automations.attention.ANSWER_PAYLOADS`);
+  - `command` = `{type: "resume", run_id, payload: {wait_key}}`.
+- `open_waits[]`: every open wait in the tree. Its fields: `run_id`, `kind`, `wait_key`,
+  `step_id`, `seq`, `until`, `child_run_id`, `person_facing`. The kinds are `tool_approval`,
+  `ask_user`, `event` (person-facing), and `delegation`, `timer`, `job`, `pause`,
+  `automation_wake`, `signal` (not person-facing).
+- Each delta (not the view) also carries `changes[]`, the typed changes for push dispatch (root
+  1058):
+  - every change has `{kind, id, run_id, seq}`;
+  - `status` changes add `status` and `previous`;
+  - `interaction` changes add `change: opened|closed`, `interaction_kind` and `wait_key`;
+  - `run`, `message`, `activity` and `artifact` changes have no extra fields.
 - `messages[]`: verbatim text with provenance: `id`, `role`, `kind` (`prompt | answer | question |
   final | event`), `text`, `run_id`, `step_ids`, `seqs`, `artifact_ids`, `source` (`run_input |
   answer_user | wait | resume | emit_event | ledger | run_output`), `order`, and per kind `final`,
@@ -426,15 +441,18 @@ Rules (module docstring and code of `replay/view.py`):
 2. **Wait end.** A wait is over when its run records a `resume` for its key or any later step of
    the same run; `abstract.status` and `abstract.progress` events are not steps. A terminal record
    also closes it. `activities[].wait.ended_by` records which.
-3. **Interaction.** The newest open `tool_approval` or `ask_user` wait anywhere in the tree, ordered
-   by (record time, seq, run id); a delegation or timer wait never is one; none once the root is
+3. **Interaction.** The newest open person-facing wait (`tool_approval`, `ask_user`, or an `event`
+   wait carrying a prompt or choices; `wait_kind` agrees with `automations/attention.py`, pinned
+   by a test) anywhere in the tree, ordered by (record time, seq, run id). A delegation, timer,
+   job, pause, automation wake or prompt-less event (`signal`) never is one; none once the root is
    terminal. A snapshot's wait is adopted only when the run's ledger never mentioned its key (a
    windowed or empty ledger).
 4. **Status.** A terminal snapshot wins; then the ledger's terminal record
    (`system:terminal_status:<status>`, `system:completion:*`, a run-level failure); then an open
    wait; then running. A snapshot that still says "waiting" for a key the ledger resolved reads as
    running (the resume-before-save window).
-5. **`$slim`.** Resolved against the STARTED record of the same step, only for the payload fields
+5. **`$slim`.** Resolved against the STARTED record of the step the pointer names (an approved
+   tool call completes under a new step id pointing back at the waiting step), only for the payload fields
    the view reads (`tool_calls`, `prompt`, `message`, `text`, `content`, `provider`, `model`,
    `workflow_id`); an unresolvable pointer is dropped and named in `warnings`.
 6. **Executions.** `replay/executions.py`: same step; a resume joins the execution whose wait it
@@ -443,20 +461,23 @@ Rules (module docstring and code of `replay/view.py`):
    progress ticks join the step they report on and never start one.
 7. **Messages.** The root's input prompt from its snapshot; `answer_user` text; ask-user questions
    and their answers; `abstract.message` events; the final answer from the root's
-   `system:completion:*` record, else from a completed snapshot's output; a final answer equal to
-   an earlier answer of the same run is one message carrying both records.
+   `system:completion:*` record, else from a completed snapshot's output, always as
+   `<root>:final`. A final answer equal to an earlier answer names it in `repeats`, and clients
+   show the text once.
 8. **Idempotence and order.** Records carry their `seq`; a record at or below a run's folded seq is
    ignored. Records of different runs may arrive in any order. `apply_delta(old, diff_views(old,
    new)) == new`; list items are never removed from a view, only changed.
 
 Open points the conformance suite must settle before 0.14.0 (found by this inventory):
 
-- Event waits with a prompt or choices: the reducer lists them in `open_waits` only; panel-chat
-  offers "Send event", the gateway's attention stream and `automations/attention.py:168` call them
-  questions. Decide whether an `event` wait with a prompt is person-facing, and make the three
-  classifiers one (`replay.wait_kind`).
-- The gateway's SSE `id:` is "records consumed"; the view stream uses `seq` tokens. The ledger
-  stream keeps its index cursor for existing clients until they move to the view.
+- Settled (2026-10-27): an `event` wait with a prompt or choices is person-facing. The reducer's
+  `wait_kind` agrees with `automations/attention.py` (`pause`, `automation_wake` and `signal` are
+  not person-facing), and `tests/test_replay_conformance.py` compares the two on every wait of
+  every fixture. Still open: the gateway's attention stream keeps its own copy
+  (`events_stream.py:848-852`) and should call the runtime's classifier.
+- Settled: the raw ledger stream's `id:` ("records consumed") equals the record's `seq`, because
+  every store now numbers records densely from 1 (a pre-seq JSONL line is numbered by its
+  position). The view stream uses cursor tokens.
 
 ## Scope
 
@@ -507,20 +528,25 @@ keeps only what it decides to show and how it forwards a person's or an entity's
 
 ## Acceptance criteria
 
-- [ ] `abstractruntime.replay` exported; `replay(all) == apply` record by record on every
+- [x] `abstractruntime.replay` exported; `replay(all) == apply` record by record on every
       conformance fixture; `apply_delta(old, diff_views(old, new)) == new`.
-- [ ] Every store returns records with their per-run `seq`; `list_after(after=seq)` returns exactly
+- [x] Every store returns records with their per-run `seq`; `list_after(after=seq)` returns exactly
       the records after it on JSONL, SQLite and in-memory; a JSONL ledger migrated to SQLite keeps
       every `seq`, so a cursor held before the migration resumes at the same record.
-- [ ] Conformance fixtures with expected views for: the 2026-09-29 delegated approval
+- [ ] Conformance fixtures with expected views. Fourteen cases ship in
+      `abstractruntime.replay.conformance`: a, a2, b-h, i-l. Still missing: a question in a
+      child, a snapshot read between resume and save, a reconnect at a cursor (covered by the
+      gateway tests, not by a fixture), and records of a child arriving before its parent's link
+      (covered by the invariants' interleavings). The cases this item asks for are: the 2026-09-29 delegated approval
       (`run_approval_subrun.json`), a question in a child, a parallel tool batch, an approved
       batch (new step id, same idempotency key), a denied batch, a timer wait without a resume
       record (2026-10-04), an Agent node with its structured output (2026-10-11), a cancellation,
       a windowed history with an unresolvable `$slim`, a snapshot read between resume and save,
       a reconnect at a cursor, records of a child arriving before its parent's link.
 - [ ] One wait classifier in the runtime; the gateway attention stream uses it.
-- [ ] ADR 0009 accepted; `docs/` describes the view and the cursor.
-- [ ] Gateway 0943 done: `/view`, `/view/stream`, cache, benchmark; `migrate.py` keeps `seq`.
+- [x] ADR 0009 accepted; `docs/` describes the view and the cursor (`docs/replay.md`, `docs/api.md`).
+- [ ] Gateway 0943 done: `/view`, `/view/stream`, cache, benchmark; `migrate.py` keeps `seq`
+      (implemented on `feat/replay-view`, merged with the gateway's 0.16.0 line).
 - [ ] panel-chat and AbstractCode web render the view and pass the fixtures; their private folds
       are deleted (the other clients follow in their own releases; each is tracked in its repo).
 - [ ] Two clients on different machines show the same interaction for the 2026-09-29 scenario

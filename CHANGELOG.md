@@ -28,8 +28,18 @@ Planned as 0.14.0.
   - A wait is over when a resume OR a later step of the same run exists.
   - `ReplayView.apply` folds newer records and returns a delta. `apply_delta` and `diff_views`
     are the client side. `replay(all)` equals the fold of any chunking.
-  - Conformance fixtures are in `tests/fixtures/replay/`. Guide: `docs/replay.md`.
-- **Durable ledger cursor** (gateway backlog 0082):
+  - Wait kinds agree with `automations.attention`. The person-facing kinds are tool_approval,
+    ask_user, and an event that carries a prompt. The non-person-facing kinds are delegation,
+    timer, job, pause, automation_wake and signal. The interaction carries `answer_payload`.
+  - Every delta carries typed `changes` (status, interaction opened or closed, run, message,
+    activity, artifact, each with its run and seq), for push dispatch.
+  - Cursor tokens name each run by a collision-free prefix that is safe in a header.
+    `resolve_cursor_token` maps a token back.
+  - The conformance cases ship with the package (`abstractruntime.replay.conformance`), so a host
+    or a client port can run them. Guide: `docs/replay.md`.
+- **Durable ledger cursor** (gateway backlog 0082). A JSONL append after a torn last line (a
+  crash mid-write) now starts a new line; before, the fragment and the whole new record were
+  dropped together:
   - Every ledger store numbers a run's records (`seq`). `JsonlLedgerStore` persists the number
     on each line, allocated under an advisory file lock, so two processes never take the same
     seq. Lines written before the field existed read as their position.

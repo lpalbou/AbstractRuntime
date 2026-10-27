@@ -15,14 +15,21 @@ Decisions this module owns (framework backlog 0993; each was a divergence betwee
   same run exists (a timer wait often has no resume record; the runtime also appends the
   resume before it saves the run without its wait, so a snapshot read in between still says
   "waiting"). Observability events (`abstract.status`, `abstract.progress`) are not steps.
-- The person-facing interaction is the newest open tool approval or question anywhere in the
-  tree; a delegation wait (`subworkflow:`) or a timer is never one. A snapshot's wait is
-  adopted only when the run's ledger never mentioned that wait key (a windowed history).
+- The person-facing interaction is the newest open tool approval, question or prompted event
+  wait anywhere in the tree (`wait_kind`, which agrees with `automations.attention`); a
+  delegation (`subworkflow:`), a timer, a pause, an automation's wake or a machine signal is
+  never one. A snapshot's wait is adopted only when the run's ledger never mentioned that wait
+  key (a windowed history).
 - Status: a terminal snapshot wins; then the ledger's terminal record (`system:completion:*`,
   `system:terminal_status:<status>`, a run-level failure); then an open wait; then running.
-- `$slim` dedup pointers are resolved here against the STARTED record of the same step, so a
-  client never sees one; a pointer that cannot be resolved is dropped and named in
+- `$slim` dedup pointers are resolved here against the STARTED record of the step they name
+  (an approved tool call completes under a new step id pointing back at the waiting step), so
+  a client never sees one; a pointer that cannot be resolved is dropped and named in
   `warnings`.
+- Run rows are ordered by their path from the root (a child after its parent, siblings in the
+  order they were started), so every reader sorts them the same way.
+- Each delta names its typed `changes` (status, interaction opened/closed, run, message,
+  activity, artifact, each with its run and seq): what a push dispatcher subscribes to.
 - Executions (one activity per node execution) follow `executions.ExecutionTracker`.
 
 The view is JSON (`to_json()`), versioned `replay_view_v1`. Records carry their per-run `seq`

@@ -29,7 +29,15 @@ client_copy = apply_delta(doc, delta)      # == view.to_json()
 - **Idempotent.** A record whose `seq` is at or below the run's folded seq is ignored.
 - **Incremental.** `ReplayView.apply(records, runs_by_id=)` folds newer records (and newer
   snapshots) and returns the **delta**. The scalars come whole; the changed items of `runs`,
-  `messages`, `activities` and `artifacts` come keyed by id. Items are never removed.
+  `messages`, `activities` and `artifacts` come keyed by id. Items are never removed. A delta
+  also lists its typed `changes`. Each change is `{kind, id, run_id, seq}`, where `kind` is
+  one of:
+  - `status`, which adds `status` and `previous`;
+  - `interaction`, which adds `change: opened|closed`, `interaction_kind` and `wait_key`;
+  - `run`, `message`, `activity` or `artifact`.
+
+  A push dispatcher or a cross-run index subscribes to these changes. `apply_delta` ignores
+  them.
   `apply_delta(view, delta)` is the client side (about 40 lines to port), and
   `diff_views(old, new)` is the delta between two views (a reconnect).
 - **Versioned.** `version: "replay_view_v1"`. A change in the meaning of a field is a new
@@ -43,9 +51,10 @@ Each rule below was once a divergence between clients:
 |---|---|
 | Which runs belong to the view? | The root, plus every run it delegated to: `subworkflow:<id>` wait keys, `sub_run_id` in a wait's details or a `start_subworkflow` result, and the snapshots' `parent_run_id`. A ledger link outranks a snapshot's. |
 | When is a wait over? | When its run records a `resume` for its key, OR any later step of the same run exists (a timer often has no resume record; the runtime also appends the resume before it saves the run without its wait). Observability events (`abstract.status`, `abstract.progress`) are not steps. A terminal record ends it too. |
-| What is the person asked? | The newest open person-facing wait anywhere in the tree: a tool approval, a question, or an event wait that carries a prompt or choices. A delegation, a timer, a pause or an automation's own wake never is. A snapshot's wait counts only when the ledger never mentioned its key (a windowed history). |
+| What is the person asked? | The newest open person-facing wait anywhere in the tree. `wait_kind` gives the kinds and agrees with `automations.attention`, which the gateway's attention stream uses. A tool approval is `tool_approval` (`details.mode == "approval_required"`). A USER wait is `ask_user`. An EVENT wait with a prompt or choices is `event`. None of these are person-facing: a delegation (`delegation`), a timer (`timer`), a job, a pause (`pause:<run>` or `details.kind == "pause"`), an automation's own wake (`automation_wake`) and an EVENT wait without a prompt (`signal`). The interaction carries `answer_payload`, the shape the resume payload takes. A snapshot's wait counts only when the ledger never mentioned its key (a windowed history). |
 | What is the status? | A terminal snapshot, then the ledger's terminal record (`system:completion:*`, `system:terminal_status:<s>`, a run-level failure), then an open wait (`waiting`), then `running`. |
-| What about `$slim` pointers? | They are resolved against the STARTED record of the same step. One that cannot be resolved (a window) is dropped and named in `warnings`. A client never sees one. |
+| What about `$slim` pointers? | They are resolved against the STARTED record of the step they name. An approved tool call completes under a new step id that points back at the waiting step. A pointer that cannot be resolved (a window) is dropped and named in `warnings`. A client never sees one. |
+| What is the final answer? | One message, `<root>:final`, from the root's terminal record (or the snapshot's output when the ledger has none). When it repeats an answer the run already gave, it names that message in `repeats`, and a client shows the text once. |
 | How many steps did a node take? | One activity per node execution, following AbstractFlow's `executionIdFor` rules (`replay/executions.py`): the same step; a resume joins the execution whose wait it answers; a repeated idempotency key; an Agent's structured-output call and the run's terminal record join the node's latest execution; a progress tick reports on its step. |
 | What does the run execute? | `workflow_ref(workflow_id)`: `bundle_id@version:flow_id` gives `{bundle_id, bundle_version, flow_id}`. The root's flow is its `entrypoint`. A workflow outside a bundle has `bundle_id: null`. |
 
@@ -57,8 +66,8 @@ Each rule below was once a divergence between clients:
 | `workflow` | `{id, bundle_id, bundle_version, flow_id, entrypoint}` of the root run |
 | `status`, `display_status` | the derived status; the run's own status line |
 | `cursor` | `{token, records, runs}`. `runs` maps each run id to its last folded `seq`. `token` (`<run id prefix>:<seq>.…`, header-safe) is the host's ETag and SSE id; `parse_cursor_token` reads it |
-| `runs[]` | the tree, root first, children in the order they were started: `parent_run_id`, `depth`, `workflow`, `status`, `waiting`, `holds_interaction`, `records`, `first_seq`, `last_seq`, `order` |
-| `interaction` | the person-facing wait, or `null`: `kind`, `run_id`, `wait_key`, `step_id`, `seq`, `prompt`, `choices`, `allow_free_text`, `details`, `tool_calls` (resolved), `activity_id`, and `command` (the resume a client sends to answer it) |
+| `runs[]` | the tree in path order (a child after its parent, siblings in the order they were started): `parent_run_id`, `depth`, `workflow`, `status`, `waiting`, `holds_interaction`, `records`, `first_seq`, `last_seq`, `order` (the path from the root) |
+| `interaction` | the person-facing wait, or `null`: `kind` (`tool_approval`, `ask_user`, `event`), `run_id`, `wait_key`, `step_id`, `seq`, `prompt`, `choices`, `allow_free_text`, `details`, `tool_calls` (resolved), `activity_id`, `answer_payload`, and `command` (the resume a client sends to answer it) |
 | `open_waits[]` | every open wait of the tree, with `person_facing` |
 | `messages[]` | verbatim turns: `role`, `kind` (`prompt`, `answer`, `question`, `final`, `event`), `text`, provenance (`run_id`, `step_ids`, `seqs`, `artifact_ids`, `source`) |
 | `activities[]` | one per execution: `kind`, `name`, `status`, `node_id`, `execution_id`, `seqs`, `step_ids`, `tool_calls[]` (each call's status, output, error), `wait` (`kind`, `wait_key`, `ended_by`: `resume`, `later_step`, `terminal`), `usage`, `child_run_id`, `progress` |
@@ -87,14 +96,17 @@ values (a file-to-SQLite migration), so a cursor a client holds stays valid.
 
 ## Conformance
 
-`tests/fixtures/replay/<case>/` holds the cases: redacted real ledgers and synthetic ones. Each
+`abstractruntime.replay.conformance` holds the cases, and they ship with the package
+(`case_names()`, `load_case(name)`). The cases are redacted real ledgers and synthetic ones. Each
 has its records, its snapshots and the expected view. The cases cover a delegated child
 approval, a timer wait without a resume, a parallel tool batch, a cancellation, Agent
 structured-output steps, a windowed history with `$slim`, a question and its answer, and a
-denied approval.
+denied approval, plus every wait kind, an event answered then a pause, nested delegation, and an
+answer repeated by the completion.
 
 `tests/test_replay_conformance.py` checks each expected view plus hand-written semantic
 assertions. `tests/test_replay_invariants.py` checks that replay equals fold under any chunking
 and interleaving, idempotence, delta round trips and cursor tokens. A client that renders runs
-runs the same fixtures through its host in CI. `tests/fixtures/replay/regen.py` rewrites the
-expected views after a reviewed reducer change.
+runs the same fixtures through its host in CI (AbstractGateway serves every case through `/view`
+in its tests). `scripts/regen_replay_conformance.py` reports which expected views a reducer
+change alters, and `--write` rewrites them after review.

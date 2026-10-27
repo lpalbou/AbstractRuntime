@@ -12,7 +12,7 @@ If you are new to the project, start with `../README.md` and `../architecture.md
 
 ## Counts
 
-- Planned: 29
+- Planned: 31
 - Proposed: 14
 - Completed: 35
 - Deprecated: 13
@@ -134,6 +134,8 @@ mtime). The anticipated ADR ("an automation is its controller root run") is not 
 | ID | Item |
 |----|------|
 | 008 | `planned/008_signatures_and_keys.md` |
+| 0851 | `planned/0851_per_account_voice_stores.md` (personal voice stores per account; AbstractVoice 0065, AbstractGateway 0942) |
+| 0852 | `planned/0852_capability_refusals_are_not_retried.md` (a refused request, e.g. one_shot over the limit, is not retried and maps to 422) |
 | 014 | `planned/014_remote_tool_worker_executor.md` |
 | 017 | `planned/017_limit_warnings_and_observability.md` |
 | 018 | `planned/018_workspace_access_policy_for_media_and_tools.md` |

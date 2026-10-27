@@ -460,7 +460,9 @@ class MemoryFacade:
 
     def reconstruct_source(self, ref: Any, *, limit: int = DEFAULT_RUN_LEDGER_LIMIT) -> Dict[str, Any]:
         """The verbatim a SourceRef points at (ADR 0009 decision 5). Never raises for a missing source:
-        `{"status": "ok", "ref", "kind", "content", "metadata"}`, `{"status": "source_gone", "ref", "reason"}`, or
+        `{"status": "ok", "ref", "kind", "content", "metadata"}`, `{"status": "partial", ..., "unresolved": [paths]}`
+        (a step row with a `$slim` marker or an `{"$artifact": id}` leaf whose bytes are not here: content is
+        returned with the holes in place), `{"status": "source_gone", "ref", "reason"}`, or
         `{"status": "unsupported", "ref", "reason"}` (no store for that kind here, an invalid ref, a ref of another
         runtime, or `message`, which has no indexed path today).
 
@@ -515,9 +517,7 @@ class MemoryFacade:
                 f"{_status(record.get('status')) or 'unknown'}): the ledger was rewritten",
             )
         effect = record.get("effect") if isinstance(record.get("effect"), dict) else {}
-        unresolved = _slim_marker_paths(record)
-        return _ok(ref, "step", record, {
-            "unresolved_markers": unresolved,
+        metadata = {
             "run_id": run_id,
             "seq": seq,
             "step_id": record.get("step_id"),
@@ -526,7 +526,24 @@ class MemoryFacade:
             "effect_type": _status(effect.get("type")) or None,
             "started_at": record.get("started_at"),
             "ended_at": record.get("ended_at"),
-        })
+        }
+        # Never `ok` with a hole: a `$slim` marker left in place, or an `{"$artifact": id}` leaf whose artifact is gone
+        # (an offloaded leaf purged by retention, `delete_by_run`, gc) or cannot be checked (no artifact store here).
+        unresolved = self._holes(record)
+        if unresolved:
+            return {"status": "partial", "ref": ref, "kind": "step", "content": record, "metadata": metadata,
+                    "unresolved": unresolved}
+        return _ok(ref, "step", record, metadata)
+
+    def _holes(self, record: Any) -> List[str]:
+        from ...storage.artifacts import get_artifact_id
+
+        holes = list(_slim_marker_paths(record))
+        for path, ref in _artifact_ref_paths(record):
+            aid = str(get_artifact_id(ref) or "")
+            if self.artifact_store is None or not aid or not self.artifact_store.exists(aid):
+                holes.append(path)
+        return holes
 
     def _reconstruct_run(self, ref: Dict[str, Any], limit: int) -> Dict[str, Any]:
         if self.run_store is None:
@@ -623,6 +640,24 @@ def _slim_marker_paths(value: Any, path: str = "", depth: int = 0) -> List[str]:
     elif isinstance(value, list):
         for i, v in enumerate(value):
             out.extend(_slim_marker_paths(v, f"{path}[{i}]", depth + 1))
+    return out
+
+
+def _artifact_ref_paths(value: Any, path: str = "", depth: int = 0) -> List[Tuple[str, Dict[str, Any]]]:
+    """(dotted path, ref) of every `{"$artifact": id}` leaf left in a record."""
+    from ...storage.artifacts import is_artifact_ref
+
+    if depth > 16:
+        return []
+    if is_artifact_ref(value):
+        return [(path or "$", value)]
+    out: List[Tuple[str, Dict[str, Any]]] = []
+    if isinstance(value, dict):
+        for k, v in value.items():
+            out.extend(_artifact_ref_paths(v, f"{path}.{k}" if path else str(k), depth + 1))
+    elif isinstance(value, list):
+        for i, v in enumerate(value):
+            out.extend(_artifact_ref_paths(v, f"{path}[{i}]", depth + 1))
     return out
 
 

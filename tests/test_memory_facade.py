@@ -472,3 +472,29 @@ def test_a_rewritten_jsonl_ledger_never_resolves_a_step_ref_to_another_row(tmp_p
     fresh = MemoryFacade(ledger_store=JsonlLedgerStore(tmp_path / "runs"))  # a new process
     shifted = fresh.reconstruct_source(ref)
     assert shifted["status"] == "source_gone" and "not the STARTED row" in shifted["reason"], shifted
+
+
+def test_an_offloaded_leaf_whose_artifact_was_purged_is_partial_never_ok(tmp_path: Path) -> None:
+    """Architect A1: the STARTED row's oversized leaf is offloaded to the artifact store; a retention purge
+    (`delete_by_run`) removes it. Reconstruction must answer `partial` with the hole's path, never `ok` with a
+    `{"$artifact": ...}` hole. Mutants: report only `$slim` paths -> `ok`; skip the existence check -> `ok`."""
+    from abstractruntime.storage.offloading import OffloadingLedgerStore
+
+    run_store = SqliteRunStore(SqliteDatabase(tmp_path / "runtime.sqlite3"))
+    artifacts = FileArtifactStore(tmp_path / "artifacts")
+    ledger = OffloadingLedgerStore(SqliteLedgerStore(SqliteDatabase(tmp_path / "runtime.sqlite3")),
+                                   artifact_store=artifacts, max_inline_bytes=256)
+    run_id = _run_slimmed_step(run_store, ledger)
+    started = next(r for r in ledger.list(run_id) if r["status"] == "started")
+    ref = {"kind": "step", "run_id": run_id, "seq": started["seq"]}
+    facade = MemoryFacade(ledger_store=ledger, artifact_store=artifacts)
+    whole = facade.reconstruct_source(ref)
+    assert whole["status"] == "ok", whole.get("unresolved")
+    assert whole["content"]["effect"]["payload"]["tool_calls"][0]["arguments"] == BIG_CALLS[0]["arguments"]
+    assert artifacts.delete_by_run(run_id) > 0
+    holed = facade.reconstruct_source(ref)
+    assert holed["status"] == "partial" and holed["unresolved"], holed["status"]
+    assert all(p.startswith("effect.payload") for p in holed["unresolved"]), holed["unresolved"]
+    unchecked = MemoryFacade(ledger_store=ledger).reconstruct_source(ref)  # no artifact store: cannot vouch
+    assert unchecked["status"] == "partial"
+

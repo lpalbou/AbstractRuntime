@@ -97,14 +97,20 @@ the stores a host has; every one is optional.
 
 | `ref.kind` | Reads | `status: "ok"` content |
 |---|---|---|
-| `step` | `ledger_store.get_record(run_id, seq)` (a `step_id` in the ref must match) | the record, payload verbatim; `metadata.unresolved_markers` lists the paths of `$slim` markers that could not be resolved (the STARTED row is gone), `[]` normally |
+| `step` | `ledger_store.get_record(run_id, seq)`: the row must be the STARTED row (of the ref's `step_id` when given) | the STARTED record, payload verbatim |
 | `run` | `run_store.load` (+ `ledger_store.list`) | `{"run": ..., "ledger": [the first `limit` records]}`; `metadata.ledger_records` / `ledger_returned` / `ledger_left_out` / `truncated` |
 | `artifact` | `artifact_store.load` | text (utf-8) or base64 (`metadata.encoding`) |
 | `diary_entry` | `diary_store.get_record` | the entry; `metadata.record_hash` / `prev_hash` |
 | `event` | `event_inbox.get` | the event payload |
 | `message` | none | `unsupported` (a message id is not a ledger key today) |
 
-`{"status": "source_gone", "reason"}` when the run, row, artifact, entry or event no longer exists (or a pruned event);
+`{"status": "partial", ..., "unresolved": [paths]}` when a step row still holds a `$slim` marker or an
+`{"$artifact": id}` leaf whose artifact is gone (an offloaded leaf purged by retention, `delete_by_run`, gc) or
+cannot be checked (the facade has no `artifact_store`): the content comes back with the holes in place, never as `ok`.
+`{"status": "source_gone", "reason"}` when the run, row, artifact, entry or event no longer exists (or a pruned event),
+or when the row at a step ref's seq is not that step's STARTED row (a rewritten JSON-file ledger);
+a `run` source's `ledger` is the listing as stored (`$slim` markers and offloaded leaves unresolved by design: read a
+row verbatim through its step ref);
 `{"status": "unsupported", "reason"}` for a kind with no store here, an invalid ref or limit, or a ref of another
 runtime: give the facade the `runtime_id` of the ledger it reads (`MemoryFacade(runtime_id=)`,
 `open_mind(path, runtime_id=)`, the plane's or the home's) and a ref naming another one answers

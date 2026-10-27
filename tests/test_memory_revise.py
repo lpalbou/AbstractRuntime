@@ -65,7 +65,7 @@ class _Home:
             warnings.simplefilter("ignore", RuntimeWarning)
             self.store = SQLiteTripleStore(self.mind)
         self.handlers = build_memory_kg_effect_handlers(store=self.store, run_store=self.run_store,
-                                                        now_iso=lambda: NOW)
+                                                        now_iso=lambda: NOW, artifact_store=self.artifacts)
         # A second connection on the same home: what a host reading the mind sees.
         self.facade = MemoryFacade.open_mind(self.mind, ledger_store=self.ledger, run_store=self.run_store,
                                              artifact_store=self.artifacts)
@@ -180,6 +180,28 @@ def test_a_caller_ref_cannot_name_another_run(tmp_path: Path) -> None:
     run_id, ok = home.run_flow({"ops": OPS[:1], "scope": "global", "provenance": {"sources": [
         {"kind": "artifact", "artifact_id": span.artifact_id}]}})
     assert ok.status == RunStatus.COMPLETED, ok.error  # absent run_id: fine
+
+
+def test_named_artifacts_must_exist_and_be_checkable(tmp_path: Path) -> None:
+    """Review 3a R3. Mutants: skip the existence check -> a revision grounded only in a made-up artifact is applied;
+    skip the no-store refusal -> the store-less handler accepts an unchecked name."""
+    home = _Home(tmp_path)
+    loose = RunState.new(workflow_id="wf", entry_node="n1")
+    made_up = home.handlers[EffectType.MEMORY_REVISE](loose, Effect(type=EffectType.MEMORY_REVISE, payload={
+        "ops": OPS, "scope": "global", "artifact_ids": ["does-not-exist"]}), None)
+    assert made_up.status == "failed" and "do not exist" in made_up.error
+    as_ref = home.handlers[EffectType.MEMORY_REVISE](loose, Effect(type=EffectType.MEMORY_REVISE, payload={
+        "ops": OPS, "scope": "global", "provenance": {"sources": [{"kind": "artifact", "artifact_id": "nope"}]}}), None)
+    assert as_ref.status == "failed" and "nope" in as_ref.error
+    blind = build_memory_kg_effect_handlers(store=home.store, run_store=home.run_store, now_iso=lambda: NOW)
+    span = home.artifacts.store_text("real")
+    unchecked = blind[EffectType.MEMORY_REVISE](loose, Effect(type=EffectType.MEMORY_REVISE, payload={
+        "ops": OPS, "scope": "global", "artifact_ids": [span.artifact_id]}), None)
+    assert unchecked.status == "failed" and "artifact_store" in unchecked.error
+    assert home.facade.graph.revisions()[0] == []
+    real = home.handlers[EffectType.MEMORY_REVISE](loose, Effect(type=EffectType.MEMORY_REVISE, payload={
+        "ops": OPS, "scope": "global", "artifact_ids": [span.artifact_id]}), None)
+    assert real.status == "completed" and real.result["sources"] == [{"kind": "artifact", "artifact_id": span.artifact_id}]
 
 
 def test_unknown_payload_keys_are_refused(tmp_path: Path) -> None:

@@ -210,6 +210,7 @@ def build_memory_kg_effect_handlers(
     now_iso: Callable[[], str],
     journal: Any = None,
     runtime_id: Optional[str] = None,
+    artifact_store: Any = None,
 ) -> Dict[EffectType, EffectHandler]:
     """Build effect handlers for `memory_kg_*` effects and `MEMORY_REVISE`.
 
@@ -218,7 +219,9 @@ def build_memory_kg_effect_handlers(
     SQLiteTripleStore / InMemoryTripleStore; any other store gets a failed outcome naming AbstractMemory backlog
     0057). `journal` receives the `ClosureRecord` of each `close` op (None: the revision and the history row still
     carry the close; ranked retrieval folds closures only from a journal). `runtime_id` (the plane's or the home's)
-    is written on every SourceRef the handlers stamp.
+    is written on every SourceRef the handlers stamp. `artifact_store` (the plane's) lets `MEMORY_REVISE` check that
+    the artifacts a revision names exist; without one, a revision naming artifacts is refused (it could not be
+    grounded honestly).
     """
     TripleAssertion, TripleQuery = _import_abstractmemory()
     memory_graph, graph_unavailable = _memory_graph_for(store, journal)
@@ -1046,6 +1049,18 @@ def build_memory_kg_effect_handlers(
             artifact_ids = [artifact_ids]
         if not isinstance(artifact_ids, list) or not all(isinstance(a, str) and a.strip() for a in artifact_ids):
             return EffectOutcome.failed("MEMORY_REVISE payload.artifact_ids is a list of artifact id strings")
+        named_artifacts = sorted({a.strip() for a in artifact_ids} | {
+            str(r.artifact_id) for r in parsed_sources if r.kind == "artifact"})
+        if named_artifacts:
+            # An artifact grounds a revision only if it exists: never accept a name we cannot check.
+            if artifact_store is None:
+                return EffectOutcome.failed(
+                    "MEMORY_REVISE names artifacts but this host gave the handler no artifact_store to check them "
+                    "(build_memory_kg_effect_handlers(..., artifact_store=)); nothing was written"
+                )
+            missing = [a for a in named_artifacts if not artifact_store.exists(a)]
+            if missing:
+                return EffectOutcome.failed(f"MEMORY_REVISE names artifacts that do not exist: {missing}")
 
         scope = str(payload.get("scope") or "run").strip().lower() or "run"
         owner_raw = payload.get("owner_id")

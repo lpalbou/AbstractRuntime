@@ -224,6 +224,16 @@ def test_the_default_revision_id_covers_the_callers_sources(tmp_path: Path) -> N
     assert later.result["applied"] is True
 
 
+def test_record_time_cannot_be_set_by_a_workflow(tmp_path: Path) -> None:
+    """Architect A3: a backdated `recorded_at` would rewrite when this mind learned the memory. Mutant: accept the key
+    -> the revision is applied with the caller's 2020 record time."""
+    home = _Home(tmp_path)
+    _, state = home.run_flow({"ops": OPS, "scope": "global", "recorded_at": "2020-01-01T00:00:00+00:00",
+                              "occurred_at": "2019-06-01T00:00:00+00:00"})
+    assert state.status == RunStatus.FAILED and "recorded_at" in str(state.error)
+    assert home.facade.graph.revisions()[0] == []
+
+
 def test_unknown_payload_keys_are_refused(tmp_path: Path) -> None:
     home = _Home(tmp_path)
     run = RunState.new(workflow_id="wf", entry_node="n1")

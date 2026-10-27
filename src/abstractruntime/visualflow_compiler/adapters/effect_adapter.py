@@ -529,7 +529,7 @@ MEMORY_REVISE_PINS = (
     "cause",
     "revision_id",
     "occurred_at",
-    "recorded_at",
+    "recorded_at",  # forwarded so the handler REFUSES it loudly (record time is the store's), never dropped silently
     "summary",
     "artifact_ids",
     "provenance",

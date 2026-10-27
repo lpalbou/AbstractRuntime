@@ -142,12 +142,12 @@ Payload (a Revision WITHOUT the runtime-owned part of its provenance):
 | `cause` | no | `ingest` (default), `reinterpret`, `merge`, `unmerge`, `ripple`, `person`, `maintenance`, `import`, `migration` |
 | `revision_id` | no | default `rev_<sha256(run_id, node, scope, owner, cause, ops, provenance.sources, provenance.derived_from, artifact_ids, occurred_at)[:32]>`: a retried attempt is a no-op; the same ops from a new source are a new revision |
 | `occurred_at` | no | observation time (ISO UTC), default now |
-| `recorded_at` | no | record time, default now |
 | `summary` | no | free text |
 | `artifact_ids` | no | artifacts the revision came from (stamped as `artifact` refs) |
 | `provenance` | no | `{derived_from, actor (default "runtime"), reader, reason, extra, sources}`; `sources` may name artifact / message / event / diary_entry refs, never `run` / `step` (runtime-owned) |
 
-Unknown payload or provenance keys fail the effect. Result (completed):
+Unknown payload or provenance keys fail the effect, and so does `recorded_at`: record time is the store's (when
+this mind learned it), never a workflow's claim. Result (completed):
 
 ```json
 {"ok": true, "revision_id": "...", "applied": true, "assertion_ids": ["..."], "closed": [], "narrowed": [],
@@ -163,8 +163,8 @@ no ref is invented to pass it.
 
 Node type `memory_revise` (compiled by `abstractruntime.visualflow_compiler`) produces `MEMORY_REVISE`. Input pins,
 forwarded verbatim (an unset pin is dropped so the handler default applies):
-`ops`, `scope`, `owner_id`, `cause`, `revision_id`, `occurred_at`, `recorded_at`, `summary`, `artifact_ids`,
-`provenance` (`visualflow_compiler.adapters.effect_adapter.MEMORY_REVISE_PINS`). Output pins: `assertion_ids` (the
+`ops`, `scope`, `owner_id`, `cause`, `revision_id`, `occurred_at`, `summary`, `artifact_ids`, `provenance` (a
+`recorded_at` pin is forwarded too, and fails the effect) (`visualflow_compiler.adapters.effect_adapter.MEMORY_REVISE_PINS`). Output pins: `assertion_ids` (the
 node's mapped value), `closed`, `narrowed`, `skipped`, `sources`, `revision_id`, `applied`, `ok`, `raw`. An editor
 palette (AbstractFlow) adds the node with exactly these pins.
 

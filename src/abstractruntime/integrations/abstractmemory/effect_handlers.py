@@ -179,8 +179,7 @@ def _import_abstractmemory():
 # MEMORY_REVISE payload keys (docs/integrations/abstractmemory.md). `type` / `resume_to_node` are VisualFlow
 # transport keys the compiler adds to every pending effect; anything else is refused, never silently dropped.
 _REVISE_KEYS = frozenset({
-    "ops", "scope", "owner_id", "cause", "revision_id", "occurred_at", "recorded_at", "summary", "artifact_ids",
-    "provenance",
+    "ops", "scope", "owner_id", "cause", "revision_id", "occurred_at", "summary", "artifact_ids", "provenance",
 })
 _REVISE_TRANSPORT_KEYS = frozenset({"type", "resume_to_node"})
 # The caller's part of a revision's provenance; `run`/`step` refs are runtime-owned (stamped from the step context).
@@ -1011,6 +1010,13 @@ def build_memory_kg_effect_handlers(
         if memory_graph is None:
             return EffectOutcome.failed(str(graph_unavailable))
         payload = dict(effect.payload or {})
+        if "recorded_at" in payload:
+            # Record time is when THIS mind learned it: the store's clock, never a caller's claim (a backdated
+            # recorded_at would rewrite the revision log's history). Observation time is `occurred_at`.
+            return EffectOutcome.failed(
+                "MEMORY_REVISE: recorded_at is the store's record time and cannot be set by a workflow; "
+                "pass the observation time as occurred_at"
+            )
         unknown = sorted(set(payload) - _REVISE_KEYS - _REVISE_TRANSPORT_KEYS)
         if unknown:
             return EffectOutcome.failed(
@@ -1127,8 +1133,6 @@ def build_memory_kg_effect_handlers(
                 "provenance": stamped,
                 "summary": payload.get("summary"),
             }
-            if isinstance(payload.get("recorded_at"), str) and payload["recorded_at"].strip():
-                rev["recorded_at"] = payload["recorded_at"].strip()
             result = facade.apply_revision(Revision.from_dict(rev))
         except ValueError as e:  # ProvenanceRequired, InvalidSourceRef and malformed ops are all ValueErrors
             return EffectOutcome.failed(f"MEMORY_REVISE refused ({type(e).__name__}): {e}")

@@ -97,7 +97,7 @@ the stores a host has; every one is optional.
 
 | `ref.kind` | Reads | `status: "ok"` content |
 |---|---|---|
-| `step` | `ledger_store.get_record(run_id, seq)` (a `step_id` in the ref must match) | the record, payload verbatim |
+| `step` | `ledger_store.get_record(run_id, seq)` (a `step_id` in the ref must match) | the record, payload verbatim; `metadata.unresolved_markers` lists the paths of `$slim` markers that could not be resolved (the STARTED row is gone), `[]` normally |
 | `run` | `run_store.load` (+ `ledger_store.list`) | `{"run": ..., "ledger": [the first `limit` records]}`; `metadata.ledger_records` / `ledger_returned` / `ledger_left_out` / `truncated` |
 | `artifact` | `artifact_store.load` | text (utf-8) or base64 (`metadata.encoding`) |
 | `diary_entry` | `diary_store.get_record` | the entry; `metadata.record_hash` / `prev_hash` |

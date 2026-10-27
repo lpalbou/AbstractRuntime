@@ -506,7 +506,11 @@ class MemoryFacade:
                 "(the ledger was rewritten)",
             )
         effect = record.get("effect") if isinstance(record.get("effect"), dict) else {}
+        # A `$slim` marker get_record could not verify against the STARTED row (that row is gone) stays in place:
+        # the answer is still `ok` (the row exists) but names the paths whose bytes are not here.
+        unresolved = _slim_marker_paths(record)
         return _ok(ref, "step", record, {
+            "unresolved_markers": unresolved,
             "run_id": run_id,
             "seq": seq,
             "step_id": record.get("step_id"),
@@ -595,6 +599,24 @@ class MemoryFacade:
         return _unsupported(
             ref, "message refs have no indexed path today (a message id is not a ledger key); name its step or run"
         )
+
+
+def _slim_marker_paths(value: Any, path: str = "", depth: int = 0) -> List[str]:
+    """Dotted paths of the `$slim` markers left in a record (`effect.payload.messages`, `result.items[2]`...)."""
+    from ...storage.ledger_slim import is_slim_marker
+
+    if depth > 12:
+        return []
+    if is_slim_marker(value):
+        return [path or "$"]
+    out: List[str] = []
+    if isinstance(value, dict):
+        for k, v in value.items():
+            out.extend(_slim_marker_paths(v, f"{path}.{k}" if path else str(k), depth + 1))
+    elif isinstance(value, list):
+        for i, v in enumerate(value):
+            out.extend(_slim_marker_paths(v, f"{path}[{i}]", depth + 1))
+    return out
 
 
 def _ok(ref: Dict[str, Any], kind: str, content: Any, metadata: Dict[str, Any]) -> Dict[str, Any]:

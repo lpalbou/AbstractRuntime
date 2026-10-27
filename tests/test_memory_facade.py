@@ -451,3 +451,25 @@ def test_a_seq_is_never_truncated_or_guessed() -> None:
     assert f.source_refs(run_id="real-run-1", seq=3.9) == [{"kind": "run", "run_id": "real-run-1"}]
     assert f.source_refs(run_id="real-run-1", seq="4")[0]["seq"] == 4
 
+
+def test_a_step_whose_started_row_is_gone_names_its_unresolved_markers(tmp_path: Path) -> None:
+    """Review 3a R14: the terminal row of a slimmed step reads back `ok`, but when its STARTED row is gone the markers
+    cannot be verified and stay in place; `metadata.unresolved_markers` lists their paths ([] when everything
+    resolved). Mutant: drop the field -> the reader cannot tell the payload bytes are missing."""
+    import sqlite3
+
+    run_store, ledger = _stores(tmp_path)
+    run_id = _run_slimmed_step(run_store, ledger)
+    rows = ledger.list(run_id)
+    started = next(r for r in rows if r["status"] == "started")
+    terminal = next(r for r in rows if r["status"] == "completed" and r["step_id"] == started["step_id"])
+    facade = MemoryFacade(ledger_store=ledger)
+    ref = {"kind": "step", "run_id": run_id, "seq": terminal["seq"]}
+    intact = facade.reconstruct_source(ref)
+    assert intact["status"] == "ok" and intact["metadata"]["unresolved_markers"] == []
+    with sqlite3.connect(tmp_path / "runtime.sqlite3") as conn:  # the STARTED row is lost (pruning, partial restore)
+        conn.execute("DELETE FROM ledger WHERE run_id = ? AND seq = ?", (run_id, started["seq"]))
+    partial = facade.reconstruct_source(ref)
+    assert partial["status"] == "ok"
+    assert "effect.payload.tool_calls" in partial["metadata"]["unresolved_markers"], partial["metadata"]
+

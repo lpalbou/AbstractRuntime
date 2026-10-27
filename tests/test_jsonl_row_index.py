@@ -136,8 +136,26 @@ def test_a_torn_trailing_line_is_read_like_list(tmp_path: Path) -> None:
         f.write(json.dumps({"run_id": RID, "step_id": "torn", "node_id": "t", "status": "started"}))  # no newline
     assert store.get_record_unresolved(RID, 2)["node_id"] == "t"  # list() reads it; so does the point read
     other = JsonlLedgerStore(tmp_path)
-    assert other.append(_step(3)) == 3  # glued onto the torn line: list() recovers both, seq counts both
+    assert other.append(_step(3)) == 3  # the torn line is ended first, so both stay records
     names: List[str] = [r["node_id"] for r in other.list(RID)]
     assert names == ["n1", "t", "n3"]
     _assert_matches_list(other)
     _assert_matches_list(store)
+
+
+def test_a_crash_torn_half_line_never_swallows_the_next_append(tmp_path: Path) -> None:
+    """Review 3a R9: a crashed writer leaves half a record without a newline; the next append ends that line first,
+    so its record is listed and its seq resolves. Mutant: write without the leading newline -> the record is glued
+    onto the fragment, disappears from list(), and get_record(seq) answers None or another row."""
+    store = JsonlLedgerStore(tmp_path)
+    for i in range(1, 4):
+        store.append(_step(i))
+    with (tmp_path / f"ledger_{RID}.jsonl").open("a", encoding="utf-8") as f:
+        f.write('{"run_id": "run-index", "step_id": "half')  # crash mid-write
+    for writer in (store, JsonlLedgerStore(tmp_path)):
+        seq = writer.append(_step(99 if writer is store else 100))
+        got = writer.get_record(RID, seq)
+        assert got is not None and got["node_id"] == ("n99" if writer is store else "n100"), (seq, got)
+    assert [r["node_id"] for r in store.list(RID)] == ["n1", "n2", "n3", "n99", "n100"]
+    _assert_matches_list(store)
+

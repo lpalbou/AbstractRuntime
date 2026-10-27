@@ -2545,11 +2545,18 @@ class JsonlLedgerStore(LedgerStore):
             with p.open("a", encoding="utf-8") as f:
                 size_before = os.fstat(f.fileno()).st_size
                 cached = self._seq_cache.get(run_id)
+                torn = False
                 if cached is not None and cached[0] == size_before:
-                    count_before = cached[1]
+                    count_before = cached[1]  # our own last write ended with its newline
                 elif size_before == 0:
                     count_before = 0
                 else:
+                    # A crashed writer may have left a torn last line (no newline): our record must not be glued
+                    # onto it (it would vanish into an unparseable line and our seq would dangle). Like the run
+                    # journal (`_journal_append`), end the torn line first.
+                    with p.open("rb") as tail:
+                        tail.seek(size_before - 1)
+                        torn = tail.read(1) != b"\n"
                     # Another writer appended (or a cold process): the row index reads only the new bytes. A
                     # trailing line without its newline (a torn write) is counted the way `list()` counts it.
                     idx = self._row_index_current(run_id)
@@ -2559,7 +2566,7 @@ class JsonlLedgerStore(LedgerStore):
                         count_before = len(self.list(run_id))
                 # Write as a single append operation to reduce the chance of
                 # concurrent writers producing concatenated JSON objects on one line.
-                f.write(line + "\n")
+                f.write(("\n" if torn else "") + line + "\n")
                 f.flush()
                 st_after = os.fstat(f.fileno())
                 size_after = st_after.st_size

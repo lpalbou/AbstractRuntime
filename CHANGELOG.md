@@ -7,6 +7,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.0] - unreleased
+
+Requires AbstractMemory 0.4.0 or newer (`abstractmemory.graph`). This release waits for AbstractMemory 0.4.0 on
+PyPI: a release never ships above an unpublished floor (root ADR 0034). ADR 0009, backlog 0853.
+
+### Added
+
+- **Ledger row address**: `LedgerStore.get_record(run_id, seq)` returns one record ready to read (a terminal row's
+  `$slim` markers resolved against its STARTED row, offloaded leaves rehydrated); `list()` records carry `"seq"`;
+  `append()` returns the seq it wrote. `seq` is read-side only (never persisted in the record, excluded from the hash
+  chain). SQLite reads by primary key; the JSON-file backend keeps a per-run line-offset index, so a point read is a
+  seek and one line parse (0.05 ms at 10,000 rows instead of a 58 ms full parse).
+- **Step context**: an effect handler reads its own step with
+  `abstractruntime.core.step_context.current_step_context(run.run_id)`: `run_id`, `step_id`, `seq` of the attempt's
+  STARTED row, `node_id`, `attempt`, `effect_type`. Out of band like the progress callback; `None` outside a runtime
+  step; a nested runtime shadows it.
+- **Memory facade** (`abstractruntime.integrations.abstractmemory.memory_facade`): `MemoryFacade` (`open_mind`, `stamp`,
+  `stamp_current_step`, `reconstruct_source`, `history`, `sources_of`, `derived_from_source`, `apply_revision`),
+  `is_real_run`, and the AbstractMemory names hosts use re-exported unchanged (`GATEWAY_NAMES`). Hosts no longer import
+  `abstractmemory`. `reconstruct_source` answers `ok`, `source_gone` or `unsupported`, never raises for a missing
+  source. See [AbstractMemory integration](docs/integrations/abstractmemory.md).
+- **Provenance stamping**: `MEMORY_FORM`, `MEMORY_KG_ASSERT` and the `DIARY_WRITE` graph projection add a `sources`
+  list to the provenance they write: the `step` ref `(run_id, seq, step_id)` of the writing effect, an `artifact` ref
+  for the verbatim / `span_id`, a `diary_entry` ref for a projection. The legacy flat keys stay. A synthetic run id
+  (`chat-<session_id>`, `diary:<entity_id>`, ...) is never a `run`/`step` ref: the home-direct chat path carries
+  artifact or diary-entry refs only.
+- **`MEMORY_REVISE`** (`EffectType.MEMORY_REVISE`, VisualFlow node `memory_revise`): one revision of a mind (assert /
+  close / narrow ops) applied atomically through `MemoryGraph.apply_revision` as a workflow step, its provenance
+  stamped with the step that applied it. Handler from `build_memory_kg_effect_handlers` (new optional `journal=`); a
+  store that is not a graph home answers a failed outcome naming AbstractMemory backlog 0057; an ungrounded revision
+  fails with `ProvenanceRequired`.
+
+### Changed
+
+- `AbstractMemory>=0.4.0` (was `>=0.3.2`).
+- SQLite `find_started_record` reads newest-first with `LIMIT 1` (0.01 ms at 10,000 rows instead of 3.5 ms).
+
 ## [0.13.1] - 2026-10-27
 
 ### Added

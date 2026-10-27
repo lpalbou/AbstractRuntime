@@ -175,6 +175,9 @@ def test_a_tool_run_by_an_approval_resume_sees_the_waiting_steps_started_row(kin
     row = ledger.get_record(run_id, ctx.seq)
     assert row["status"] == "started" and row["step_id"] == ctx.step_id and row["seq"] < waiting_row["seq"]
     assert row["effect"]["payload"]["tool_calls"][0]["arguments"] == {"text": "Met Dana"}
+    from abstractruntime.storage.serialize import record_digest
+
+    assert ctx.digest and ctx.digest == record_digest(row)  # the resumed step vouches for the same bytes (A4)
     assert current_step_context() is None
 
 

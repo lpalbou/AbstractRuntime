@@ -26,6 +26,7 @@ VOICE_LIBRARY_OPS = (
     "design_voice",
     "clone_voice",
     "compatibility_catalog",
+    "deploy_voice_to_library",
 )
 
 
@@ -86,10 +87,19 @@ def _local_error(exc: Exception, *, action: str) -> VoiceLibraryError:
     return VoiceLibraryError(500, f"{action} failed: {message}")
 
 
-def _local_voice(voice_openai_api_key: Optional[str]) -> Any:
+def _local_registry(voice_openai_api_key: Optional[str], voice_stores: Optional[Dict[str, Any]] = None) -> Any:
     from .discovery_queries import _runtime_capability_registry
 
-    return _runtime_capability_registry(voice_openai_api_key=voice_openai_api_key).voice
+    stores = dict(voice_stores or {})
+    return _runtime_capability_registry(
+        voice_openai_api_key=voice_openai_api_key,
+        voice_store_dir=stores.get("voice_store_dir"),
+        voice_library_dirs=stores.get("voice_library_dirs"),
+    )
+
+
+def _local_voice(voice_openai_api_key: Optional[str], voice_stores: Optional[Dict[str, Any]] = None) -> Any:
+    return _local_registry(voice_openai_api_key, voice_stores).voice
 
 
 def _clone_record(voice: Any, out: Any) -> Dict[str, Any]:
@@ -107,11 +117,37 @@ def _clone_record(voice: Any, out: Any) -> Dict[str, Any]:
     return record
 
 
-def local_voice_library(op: str, args: Dict[str, Any], *, voice_openai_api_key: Optional[str] = None) -> Any:
+def voice_store_settings(llm_kwargs: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """The voice-store settings a runtime was built with (`voice_store_dir`, `voice_library_dirs`
+    in its AbstractCore client settings): the stores its synthesis uses, so the voice library
+    lists and changes the same voices (runtime backlog 0851)."""
+    kw = dict(llm_kwargs or {})
+    out: Dict[str, Any] = {}
+    if isinstance(kw.get("voice_store_dir"), str) and kw["voice_store_dir"].strip():
+        out["voice_store_dir"] = kw["voice_store_dir"].strip()
+    libs = kw.get("voice_library_dirs")
+    if isinstance(libs, (list, tuple)) and libs:
+        out["voice_library_dirs"] = [str(d) for d in libs if str(d or "").strip()]
+    return out
+
+
+def local_voice_library(
+    op: str,
+    args: Dict[str, Any],
+    *,
+    voice_openai_api_key: Optional[str] = None,
+    voice_stores: Optional[Dict[str, Any]] = None,
+) -> Any:
     _require_op(op)
     action = op.replace("_", " ").capitalize()
     try:
-        voice = _local_voice(voice_openai_api_key)
+        if op == "deploy_voice_to_library":
+            backend = _local_registry(voice_openai_api_key, voice_stores).get_voice()
+            deploy = getattr(backend, "deploy_voice_to_library", None)
+            if not callable(deploy):
+                raise VoiceLibraryError(501, "Deploying a voice to the library needs AbstractVoice 0.19.0 or later.")
+            return dict(deploy(str(args["voice_id"])))
+        voice = _local_voice(voice_openai_api_key, voice_stores)
         if op == "list_languages":
             return {"languages": voice.list_languages(kind=_text(args.get("kind")), provider=_text(args.get("provider")))}
         if op == "list_cloned_voices":
@@ -231,6 +267,12 @@ def remote_voice_library(client: Any, op: str, args: Dict[str, Any], *, provider
                                    provider_api_key=provider_api_key)
             voices = list(body.get("voices") or [])
             return {"voices": voices, "count": len(voices)}
+        if op == "deploy_voice_to_library":
+            raise VoiceLibraryError(
+                501,
+                "Deploying a voice to a library is not available on a remote AbstractCore server: its voices live in "
+                "the server's own store.",
+            )
         voice_path = f"/voice/clones/{quote(str(args.get('voice_id') or ''), safe='')}"
         if op == "get_cloned_voice":
             return _remote_request(client, "GET", voice_path, provider_api_key=provider_api_key)

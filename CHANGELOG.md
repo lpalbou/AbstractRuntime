@@ -7,11 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-10-27
+
+Requires AbstractCore 2.30.0 or newer. Personal voice stores need AbstractVoice 0.19.0.
+
 ### Added
+
+- **Per-runtime voice stores**: `voice_store_dir` and `voice_library_dirs` in a runtime's AbstractCore client settings give
+  it a personal voice store in front of read-only libraries; its synthesis, voice catalog and voice library use the same
+  stores. `deploy_voice_to_library(voice_id)` on the voice library facade (local runtimes). See
+  [Voice library](docs/integrations/abstractcore.md#voice-library).
 
 - **Voice library facade**: `get_abstractcore_voice_facade(runtime)` (`AbstractCoreVoiceFacade`, `VoiceLibraryError`) lists the languages each voice engine accepts, lists cloned voices (designed and built-in ones included, optionally by language), reads, renames, replaces the reference transcript of and deletes a cloned voice, creates a voice from a recording (`clone_voice`) or from a written description (`design_voice`), and returns the capability catalog (which engine and model supports `speed`, `one_shot`, design... and how). Local runtimes run it in process; remote runtimes call the AbstractCore server's `/v1` voice routes. Refusals carry an HTTP-like `status_code`. See [Voice library](docs/integrations/abstractcore.md#voice-library).
 - **Voice catalog by language**: `get_voice_catalog(..., language=)` keeps the voices that can speak a language, native speakers first (local and remote).
 - **`one_shot` on remote TTS**: a remote runtime forwards `one_shot` on buffered speech, as local runtimes already did.
+
+### Changed
+
+- A capability's refusal of a request (a `ValueError` or `KeyError` from a capability plugin, such as `one_shot` over an
+  engine's length limit or an unknown voice id, and `CapabilityUnavailableError`) fails the `LLM_CALL` effect at once
+  instead of being retried: one engine call, the same message.
 
 ## [0.12.0] - 2026-10-27
 

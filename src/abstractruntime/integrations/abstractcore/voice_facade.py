@@ -129,6 +129,13 @@ class AbstractCoreVoiceFacade:
             **kwargs,
         )
 
+    def deploy_voice_to_library(self, voice_id: str, **kwargs: Any) -> Dict[str, Any]:
+        """Copy one of this runtime's personal voices into its first library, where every runtime
+        sharing that library lists and uses it; returns the library voice's record. Needs a
+        personal store (`voice_store_dir`) and AbstractVoice 0.19.0; local runtimes only (501
+        remote). Who may deploy is the host's decision."""
+        return self._call("deploy_voice_to_library", voice_id=voice_id, **kwargs)
+
     def compatibility_catalog(self, **kwargs: Any) -> Dict[str, Any]:
         """The capability catalog: per kind (tts, stt, cloning), provider, model and surface, the
         support level of each feature (`native`, `emulated`, `conditional`, `unsupported`)."""

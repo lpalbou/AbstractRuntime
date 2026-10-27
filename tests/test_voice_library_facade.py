@@ -156,7 +156,7 @@ def test_local_capability_errors_map_to_501(monkeypatch: pytest.MonkeyPatch) -> 
         def list_languages(self, **k):
             raise RuntimeError("Qwen3-TTS is not installed: install it with pip install abstractvoice[qwen3-tts]")
 
-    monkeypatch.setattr(vl, "_local_voice", lambda key: _NoVoice())
+    monkeypatch.setattr(vl, "_local_voice", lambda key, stores=None: _NoVoice())
     facade = _local_facade()
     for call in (lambda: facade.design_voice("x"), lambda: facade.list_languages()):
         with pytest.raises(VoiceLibraryError) as err:
@@ -363,3 +363,34 @@ def test_facade_from_runtime_requires_a_wired_client() -> None:
     runtime = _Runtime()
     runtime._abstractcore_llm_client = LocalAbstractCoreLLMClient.__new__(LocalAbstractCoreLLMClient)
     assert isinstance(get_abstractcore_voice_facade(runtime), AbstractCoreVoiceFacade)
+
+
+# ---------------------------------------------------------------------------------------
+# Per-runtime voice stores (runtime backlog 0851)
+# ---------------------------------------------------------------------------------------
+
+
+def test_the_voice_library_uses_the_runtimes_voice_stores(fake_voice: _FakeVoice) -> None:
+    client = LocalAbstractCoreLLMClient.__new__(LocalAbstractCoreLLMClient)
+    client._llm_kwargs = {"voice_store_dir": "/data/alice/voices", "voice_library_dirs": ["/data/library"]}
+    AbstractCoreVoiceFacade(client=client).list_cloned_voices()
+    cfg = fake_voice.owner_configs[-1]  # type: ignore[attr-defined]
+    assert cfg["voice_store_dir"] == "/data/alice/voices" and cfg["voice_library_dirs"] == ["/data/library"]
+    plain = LocalAbstractCoreLLMClient.__new__(LocalAbstractCoreLLMClient)
+    plain._llm_kwargs = {}
+    AbstractCoreVoiceFacade(client=plain).list_cloned_voices()
+    assert "voice_store_dir" not in fake_voice.owner_configs[-1]  # type: ignore[attr-defined]
+
+
+def test_the_voice_catalog_uses_the_runtimes_voice_stores(fake_voice: _FakeVoice) -> None:
+    client = LocalAbstractCoreLLMClient.__new__(LocalAbstractCoreLLMClient)
+    client._llm_kwargs = {"voice_store_dir": "/data/bob/voices"}
+    client.get_voice_catalog(provider="qwen3-tts")
+    assert fake_voice.owner_configs[-1]["voice_store_dir"] == "/data/bob/voices"  # type: ignore[attr-defined]
+
+
+def test_deploy_to_library_is_local_only() -> None:
+    facade, _sender = _remote({})
+    with pytest.raises(VoiceLibraryError) as err:
+        facade.deploy_voice_to_library("v1")
+    assert err.value.status_code == 501

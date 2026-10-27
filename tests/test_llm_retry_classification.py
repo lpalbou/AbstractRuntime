@@ -169,3 +169,19 @@ def test_harmony_generation_artifact_is_retryable_despite_400():
     err3 = InvalidRequestError("OpenAI-compatible server API error (400): missing field 'messages'")
     err3.status_code = 400
     assert _llm_error_is_retryable(err3) is False
+
+
+def test_a_capability_refusal_is_not_retried() -> None:
+    """Runtime backlog 0852: a capability plugin refuses input it cannot honour with ValueError
+    (AbstractVoice: one_shot over an engine's limit) or KeyError (an unknown voice id), and a
+    missing capability raises CapabilityUnavailableError; each answers the same on every attempt."""
+    import json
+
+    from abstractcore.capabilities.errors import CapabilityUnavailableError
+
+    assert _llm_error_is_retryable(ValueError("one_shot synthesis takes at most 1000 characters")) is False
+    assert _llm_error_is_retryable(KeyError("Unknown voice_id: x")) is False
+    assert _llm_error_is_retryable(CapabilityUnavailableError(capability="voice", reason="no backend")) is False
+    # A decoding problem in a provider reply is not a refusal of the request: still retried.
+    assert _llm_error_is_retryable(json.JSONDecodeError("bad", "x", 0)) is True
+    assert _llm_error_is_retryable(RuntimeError("connection reset")) is True

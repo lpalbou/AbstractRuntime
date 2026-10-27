@@ -1039,6 +1039,7 @@ adapters = facade.list_vision_adapters(
   a voice from a reference recording (`provider` = the cloning engine, e.g. `qwen3-tts`, `omnivoice`);
 - `design_voice(description, name=None, language=None, text=None)`: a voice from a written description, stored as a
   cloned voice (needs `abstractvoice[qwen3-tts]` and `abstractvoice[stt]` where the voice capability runs);
+- `deploy_voice_to_library(voice_id)`: copies one of the runtime's personal voices into its first library (see below);
 - `compatibility_catalog()`: per kind, provider, model and surface, the support level of each feature (`native`,
   `emulated`, `conditional`, `unsupported`), e.g. which engines honour `speed` or `one_shot`.
 
@@ -1049,8 +1050,15 @@ Local clients run these in process through AbstractCore's voice capability (Abst
 `VoiceLibraryError` with `status_code` (404 unknown voice, 422 refused input, 401 server token missing, 501 capability
 or engine runtime missing, 502 remote failure) and `detail`, so a host maps it to its own answer.
 
-Cloned voices live in AbstractVoice's store, one per machine user: the voices a host lists are the voices synthesis
-reads, for every account the host serves.
+Cloned voices live in AbstractVoice's store. By default that is one store per machine user, shared by every account a
+host serves. A runtime can instead have its own personal voice store in front of read-only libraries: put
+`voice_store_dir` (and optionally `voice_library_dirs`, a list of folders) in its AbstractCore client settings, e.g.
+`create_local_runtime(llm_kwargs={"voice_store_dir": "/data/alice/voices", "voice_library_dirs": ["/data/voice-library"]})`.
+Synthesis, the voice catalog and the voice library facade of that runtime then use the same stores: voices cloned or
+designed go to the personal store, library voices (built-in ones included) are listed and spoken but read-only (422), and
+`deploy_voice_to_library(voice_id)` copies a personal voice into the first library (local runtimes; 501 remote, where the
+AbstractCore server keeps its own store). Who may deploy is the host's decision. Needs AbstractVoice 0.19.0; with an older
+AbstractVoice, these settings are not honoured. Records carry `meta.scope` (`personal` | `library`).
 
 The voice catalog takes the same language filter: `get_abstractcore_discovery_facade(rt).get_voice_catalog(language="fr")`.
 A remote run's buffered TTS forwards `one_shot` (the whole text as one take, refused beyond an engine's limit); the

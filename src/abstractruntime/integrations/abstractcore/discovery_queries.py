@@ -624,8 +624,17 @@ def _runtime_capability_owner_config(
     vision_api_key: Optional[str] = None,
     music_base_url: Optional[str] = None,
     music_api_key: Optional[str] = None,
+    voice_store_dir: Optional[str] = None,
+    voice_library_dirs: Optional[list] = None,
 ) -> Dict[str, Any]:
     cfg: Dict[str, Any] = {}
+    # The runtime's voice stores (AbstractVoice 0.19.0 plugin settings; runtime backlog 0851):
+    # a personal store in front of read-only libraries, so this runtime lists and manages the
+    # voices its own synthesis speaks with.
+    if isinstance(voice_store_dir, str) and voice_store_dir.strip():
+        cfg["voice_store_dir"] = voice_store_dir.strip()
+    if voice_library_dirs:
+        cfg["voice_library_dirs"] = [str(d) for d in voice_library_dirs if str(d or "").strip()]
     if isinstance(voice_base_url, str) and voice_base_url.strip():
         cfg["voice_remote_base_url"] = voice_base_url.strip()
     if isinstance(voice_api_key, str) and voice_api_key.strip():
@@ -715,6 +724,8 @@ def _runtime_capability_registry(
     vision_api_key: Optional[str] = None,
     music_base_url: Optional[str] = None,
     music_api_key: Optional[str] = None,
+    voice_store_dir: Optional[str] = None,
+    voice_library_dirs: Optional[list] = None,
 ) -> Any:
     from abstractcore.capabilities import CapabilityRegistry
 
@@ -735,6 +746,8 @@ def _runtime_capability_registry(
                 vision_api_key=vision_api_key,
                 music_base_url=music_base_url,
                 music_api_key=music_api_key,
+                voice_store_dir=voice_store_dir,
+                voice_library_dirs=voice_library_dirs,
             )
         },
     )()
@@ -1075,12 +1088,16 @@ def local_get_voice_catalog(
     model: Optional[str] = None,
     providers_only: bool = False,
     language: Optional[str] = None,
+    voice_store_dir: Optional[str] = None,
+    voice_library_dirs: Optional[list] = None,
 ) -> Dict[str, Any]:
     try:
         voice = _runtime_capability_registry(
             voice_base_url=base_url,
             voice_api_key=provider_api_key,
             voice_openai_api_key=voice_openai_api_key,
+            voice_store_dir=voice_store_dir,
+            voice_library_dirs=voice_library_dirs,
         ).voice
         # `language` (AbstractCore 2.30.0+) keeps the voices that speak it, natives first; it is
         # passed only when asked, and AbstractCore raises if its backend cannot filter.

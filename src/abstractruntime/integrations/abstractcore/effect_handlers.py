@@ -2625,6 +2625,21 @@ def _llm_error_is_retryable(exc: Exception) -> bool:
             return False
         return True
 
+    # A capability plugin's refusal of the request (AbstractVoice, AbstractVision,
+    # AbstractMusic raise ValueError for input they refuse: `one_shot` over an
+    # engine's limit, an unknown voice id, an unsupported parameter) and a capability
+    # that is not installed (CapabilityUnavailableError) answer the same on every
+    # attempt (runtime backlog 0852): one engine call, never three.
+    if type(exc) is ValueError or isinstance(exc, KeyError):
+        return False
+    try:
+        from abstractcore.capabilities.errors import CapabilityUnavailableError  # type: ignore
+
+        if isinstance(exc, CapabilityUnavailableError):
+            return False
+    except ImportError:
+        pass
+
     try:
         from abstractcore.exceptions import (  # type: ignore
             AuthenticationError,

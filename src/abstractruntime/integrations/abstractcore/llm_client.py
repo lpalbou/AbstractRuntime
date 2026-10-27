@@ -9352,14 +9352,21 @@ class LocalAbstractCoreLLMClient:
             model=model,
             providers_only=providers_only,
             language=language,
+            **voice_store_settings(getattr(self, "_llm_kwargs", None)),
         )
 
     def voice_library(self, op: str, *, voice_openai_api_key: Optional[str] = None, **kwargs: Any) -> Any:
-        """Voice library operation in this process (see `voice_facade.AbstractCoreVoiceFacade`)."""
+        """Voice library operation in this process (see `voice_facade.AbstractCoreVoiceFacade`), on
+        the voice stores this runtime's synthesis uses (`voice_store_dir`, `voice_library_dirs`)."""
         from .voice_library import local_voice_library
 
         _pop_provider_api_key(kwargs)
-        return local_voice_library(op, kwargs, voice_openai_api_key=voice_openai_api_key)
+        return local_voice_library(
+            op,
+            kwargs,
+            voice_openai_api_key=voice_openai_api_key,
+            voice_stores=voice_store_settings(getattr(self, "_llm_kwargs", None)),
+        )
 
     def list_tts_models(
         self,
@@ -11796,14 +11803,21 @@ class MultiLocalAbstractCoreLLMClient:
             model=model,
             providers_only=providers_only,
             language=language,
+            **voice_store_settings(getattr(self, "_llm_kwargs", None)),
         )
 
     def voice_library(self, op: str, *, voice_openai_api_key: Optional[str] = None, **kwargs: Any) -> Any:
-        """Voice library operation in this process (see `voice_facade.AbstractCoreVoiceFacade`)."""
+        """Voice library operation in this process (see `voice_facade.AbstractCoreVoiceFacade`), on
+        the voice stores this runtime's synthesis uses (`voice_store_dir`, `voice_library_dirs`)."""
         from .voice_library import local_voice_library
 
         _pop_provider_api_key(kwargs)
-        return local_voice_library(op, kwargs, voice_openai_api_key=voice_openai_api_key)
+        return local_voice_library(
+            op,
+            kwargs,
+            voice_openai_api_key=voice_openai_api_key,
+            voice_stores=voice_store_settings(getattr(self, "_llm_kwargs", None)),
+        )
 
     def list_tts_models(
         self,
@@ -12823,6 +12837,12 @@ def _http_error_response_body(error: Any) -> Optional[Any]:
             return text.strip()
         return parsed if isinstance(parsed, dict) else text.strip()
     return None
+
+
+def voice_store_settings(llm_kwargs: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    from .voice_library import voice_store_settings as _settings
+
+    return _settings(llm_kwargs)
 
 
 def _unwrap_http_response(value: Any) -> Tuple[Dict[str, Any], Dict[str, str]]:

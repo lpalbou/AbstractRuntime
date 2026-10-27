@@ -1,6 +1,6 @@
 # 0851 — Per-account voice stores: the voice settings of each account's runtime, and the scope in the voice facade
 
-**Status**: planned · **Priority**: P1 · **Created**: 2026-10-27
+**Status**: completed (2026-10-27, 0.13.0) · **Priority**: P1 · **Created**: 2026-10-27
 **Cross-package**: AbstractVoice backlog 0065 (personal stores and a shared library), AbstractGateway backlog 0942 (personal voices per account, admin library, an AI's voice in its profile).
 
 ## Why
@@ -29,3 +29,15 @@ gateway's voice changes are admin-only until this lands.
 ## Validation
 Two runtimes with two store folders: a voice designed in one is spoken by it and not listed by the
 other; both list and speak a library voice; the library refuses changes from a personal runtime.
+
+## Report (completed 2026-10-27, 0.13.0)
+`discovery_queries._runtime_capability_owner_config` / `_runtime_capability_registry` / `local_get_voice_catalog` take
+`voice_store_dir` and `voice_library_dirs`; `voice_library.voice_store_settings(llm_kwargs)` reads them from the local
+clients' `_llm_kwargs` (the settings their synthesis already hands the voice plugin), so the voice catalog and the voice
+library facade use the runtime's own stores. `deploy_voice_to_library` op and facade method (local; 501 remote). Remote
+mode forwards nothing: the AbstractCore server keeps its stores.
+
+Validation: `tests/test_voice_library_facade.py` (settings reach the registry owner config for the library and the
+catalog; absent when unset; deploy 501 remote). Real weights, two local runtimes with personal stores and one library,
+9/9: design through the facade, listed by its runtime only (library and catalog), the other runtime cannot delete it
+(404), deploy, library voice listed by both and read-only (422).

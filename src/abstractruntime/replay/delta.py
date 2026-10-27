@@ -86,7 +86,8 @@ def parse_cursor_token(token: Any) -> Optional[Dict[str, int]]:
     raw = token.strip()
     if raw.startswith("W/"):
         raw = raw[2:]
-    for part in raw.strip('"').split("."):
+    # `~<digest>` names the snapshots' contribution (not a run's seq): not part of the mapping.
+    for part in raw.strip('"').split("~", 1)[0].split("."):
         prefix, sep, seq = part.partition(":")
         if not sep or not prefix.strip():
             return None

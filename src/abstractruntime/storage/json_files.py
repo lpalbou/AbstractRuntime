@@ -35,6 +35,13 @@ except ImportError:  # pragma: no cover - Windows
     _fcntl = None  # type: ignore[assignment]
 
 
+def _inode_of(f: Any) -> int:
+    try:
+        return int(os.fstat(f.fileno()).st_ino)
+    except OSError:
+        return -1
+
+
 def _flock(f: Any) -> None:
     if _fcntl is not None:
         _fcntl.flock(f.fileno(), _fcntl.LOCK_EX)
@@ -2484,10 +2491,14 @@ class JsonlLedgerStore(LedgerStore):
         # run_id -> (file size after our last append, last seq); a size we did not write means
         # another writer appended, and the head is re-read from the file's last line.
         self._seq_lock = threading.Lock()
-        self._seq_heads: "OrderedDict[str, tuple[int, int]]" = OrderedDict()
+        # run_id -> (file size, last seq, file inode): a file deleted and recreated by another
+        # store object (another process) has another inode, so a cached head is never reused for it.
+        self._seq_heads: "OrderedDict[str, tuple[int, int, int]]" = OrderedDict()
         self._seq_heads_max = 4096
         # list_after resume points: run_id -> (seq, byte offset just after that record's line).
-        self._offsets: "OrderedDict[str, tuple[int, int]]" = OrderedDict()
+        # run_id -> (seq, byte offset, file inode); a hint is used only for the same file (inode)
+        # and only when it points just after a newline (a line start).
+        self._offsets: "OrderedDict[str, tuple[int, int, int]]" = OrderedDict()
         self._offsets_max = 4096
 
     def _path(self, run_id: str) -> Path:
@@ -2517,9 +2528,10 @@ class JsonlLedgerStore(LedgerStore):
                     f.write(line + "\n")
                     f.flush()
                     size = f.tell()
+                    ino = _inode_of(f)
                 finally:
                     _funlock(f)
-            self._seq_heads[record.run_id] = (size, seq)
+            self._seq_heads[record.run_id] = (size, seq, ino)
             self._seq_heads.move_to_end(record.run_id)
             while len(self._seq_heads) > self._seq_heads_max:
                 self._seq_heads.popitem(last=False)
@@ -2529,11 +2541,12 @@ class JsonlLedgerStore(LedgerStore):
     def _terminate_torn_line(self, run_id: str, p: Path, f: Any) -> None:
         """Write a newline when the file does not end with one (caller holds the file lock)."""
         try:
-            size = os.fstat(f.fileno()).st_size
+            st = os.fstat(f.fileno())
         except OSError:
             return
+        size = st.st_size
         cached = self._seq_heads.get(run_id)
-        if size == 0 or (cached is not None and cached[0] == size):
+        if size == 0 or (cached is not None and cached[0] == size and cached[2] == st.st_ino):
             return  # empty, or our own last append (which ended with a newline)
         with p.open("rb") as rf:
             rf.seek(size - 1)
@@ -2546,12 +2559,13 @@ class JsonlLedgerStore(LedgerStore):
     def _head_seq(self, run_id: str, p: Path) -> int:
         """The run's last seq (0 when it has no records). Caller holds `_seq_lock`."""
         try:
-            size = p.stat().st_size
+            st = p.stat()
         except FileNotFoundError:
             self._seq_heads.pop(run_id, None)
             return 0
+        size = st.st_size
         cached = self._seq_heads.get(run_id)
-        if cached is not None and cached[0] == size:
+        if cached is not None and cached[0] == size and cached[2] == st.st_ino:
             return cached[1]
         if size == 0:
             return 0
@@ -2803,19 +2817,27 @@ class JsonlLedgerStore(LedgerStore):
             return ([], a)
         p = self._path(rid)
         try:
-            size = p.stat().st_size
+            st = p.stat()
         except FileNotFoundError:
             return ([], a)
+        size, ino = st.st_size, st.st_ino
         start_seq, offset = 0, 0
         with self._seq_lock:
             hint = self._offsets.get(rid)
-        if hint is not None and hint[0] <= a and hint[1] <= size:
-            start_seq, offset = hint
+        if hint is not None and hint[0] <= a and hint[1] <= size and hint[2] == ino:
+            start_seq, offset = hint[0], hint[1]
         out: List[Dict[str, Any]] = []
         prev = start_seq  # the seq of the last record before `pos`
         pos = offset  # byte offset of the next unread line
         resume = (start_seq, offset)  # where the next call can start: (seq before it, its offset)
         with p.open("rb") as f:
+            if offset > 0:
+                f.seek(offset - 1)
+                if f.read(1) != b"\n":
+                    # Not a line start any more (the file was rewritten under the hint): read
+                    # from the start.
+                    start_seq, offset, prev, pos = 0, 0, 0, 0
+                    resume = (0, 0)
             f.seek(offset)
             for raw in f:
                 if not raw.endswith(b"\n"):
@@ -2854,7 +2876,7 @@ class JsonlLedgerStore(LedgerStore):
                     break
         if resume[1] > offset or hint is None:
             with self._seq_lock:
-                self._offsets[rid] = resume
+                self._offsets[rid] = (resume[0], resume[1], ino)
                 self._offsets.move_to_end(rid)
                 while len(self._offsets) > self._offsets_max:
                     self._offsets.popitem(last=False)

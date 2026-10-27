@@ -80,7 +80,7 @@
       "74808832-e6db-5b9f-a68a-02ef826b4509": 10,
       "fd450aa7-f922-5398-b823-7ed8a3f20dfc": 5
     },
-    "token": "fd450aa7:5.74808832:10"
+    "token": "fd450aa7:5.74808832:10~04db0f8265"
   },
   "display_status": null,
   "interaction": {
@@ -279,7 +279,7 @@
   },
   "version": "replay_view_v1",
   "warnings": [
-    "run 74808832-e6db-5b9f-a68a-02ef826b4509 step 5ca91c82-fdac-5ea2-b9f5-8c2c0924c9fa: `tool_calls` points at a STARTED record this view did not fold (windowed history); the field is omitted",
+    "run 74808832-e6db-5b9f-a68a-02ef826b4509 step 5ca91c82-fdac-5ea2-b9f5-8c2c0924c9fa: `tool_calls` points at a STARTED record that could not be resolved (not folded: a windowed history; or its content did not match the pointer); the field is omitted",
     "run 74808832-e6db-5b9f-a68a-02ef826b4509: records before seq 10 were not folded (windowed history)",
     "run fd450aa7-f922-5398-b823-7ed8a3f20dfc: records before seq 4 were not folded (windowed history)"
   ],

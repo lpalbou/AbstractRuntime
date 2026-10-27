@@ -69,3 +69,20 @@ def test_a_second_store_cannot_append_between_the_head_read_and_the_write(tmp_pa
     ta.join(5)
     records = JsonlLedgerStore(tmp_path).list(RUN)
     assert [(r["step_id"], r["seq"]) for r in records] == [("first", 1), ("a", 2), ("b", 3)]
+
+
+def test_a_reader_hint_never_survives_another_store_recreating_the_ledger(tmp_path: Path) -> None:
+    """Another store object (another process) deletes and recreates a run's ledger: a reader's
+    remembered byte offset belongs to the old file and must not be used for the new one."""
+    reader, writer = JsonlLedgerStore(tmp_path), JsonlLedgerStore(tmp_path)
+    for i in range(3):
+        writer.append(StepRecord(run_id=RUN, step_id=f"old-{'x' * 300}-{i}", node_id="n", status=StepStatus.COMPLETED))
+    got, last = reader.list_after(run_id=RUN, after=0)
+    assert len(got) == 3 and last == 3
+    writer.delete(RUN)
+    for i in range(6):
+        writer.append(StepRecord(run_id=RUN, step_id=f"n{i}", node_id="n", status=StepStatus.COMPLETED))
+    got, last = reader.list_after(run_id=RUN, after=3)
+    assert [(r["seq"], r["step_id"]) for r in got] == [(4, "n3"), (5, "n4"), (6, "n5")]
+    # The reader's own appends continue the recreated file's numbering.
+    assert reader.append(StepRecord(run_id=RUN, step_id="mine", node_id="n", status=StepStatus.COMPLETED)) == 7

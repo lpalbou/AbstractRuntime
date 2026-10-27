@@ -53,6 +53,10 @@ Planned as 0.14.0.
 
 ### Changed
 
+- Hash-chained ledgers: `seq` is persisted on each JSONL line and excluded from the hash by this
+  version's `compute_record_hash`. A verifier from an older version includes it, so it reports
+  every line written by this version as tampered. Upgrade every process that verifies a chain
+  (`verify_ledger_chain`) together with the writers.
 - `LedgerStore.list()` records carry `seq`. A consumer that compared records to `asdict(record)`
   sees one more key. The hash chain excludes `seq` (it is the store's position, assigned after
   the hash).

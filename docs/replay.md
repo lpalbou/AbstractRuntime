@@ -66,7 +66,7 @@ Each rule below was once a divergence between clients:
 | `version`, `root_run_id`, `session_id` | the view's version, its root run and the root's session |
 | `workflow` | `{id, bundle_id, bundle_version, flow_id, entrypoint}` of the root run |
 | `status`, `display_status` | the derived status; the run's own status line |
-| `cursor` | `{token, records, runs}`. `runs` maps each run id to its last folded `seq`. `token` (`<run id prefix>:<seq>.…`, header-safe) is the host's ETag and SSE id; `parse_cursor_token` reads it |
+| `cursor` | `{token, records, runs}`. The token ends with `~<digest>` of what the runs' snapshots contribute, so a pause or a terminal snapshot changes it without a record. A tree of more than 32 runs gets a bounded digest token, which cannot be resolved back: a reconnect with it gets the whole view. `runs` maps each run id to its last folded `seq`. `token` (`<run id prefix>:<seq>.…`, header-safe) is the host's ETag and SSE id; `parse_cursor_token` reads it |
 | `runs[]` | the tree in path order (a child after its parent, siblings in the order they were started): `parent_run_id`, `depth`, `workflow`, `status`, `waiting`, `holds_interaction`, `records`, `first_seq`, `last_seq`, `order` (the path from the root) |
 | `interaction` | the person-facing wait, or `null`: `kind` (`tool_approval`, `ask_user`, `event`), `run_id`, `wait_key`, `step_id`, `seq`, `prompt`, `choices`, `allow_free_text`, `details`, `tool_calls` (resolved), `activity_id`, `answer_payload`, and `command` (the resume a client sends to answer it) |
 | `open_waits[]` | every open wait of the tree, with `person_facing` |

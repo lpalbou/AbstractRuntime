@@ -41,15 +41,21 @@ folding is idempotent.
 from __future__ import annotations
 
 import copy
+import hashlib
+import json
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Set, Tuple
 
 from ..automations.attention import ANSWER_PAYLOADS
+from ..core.vars import is_paused_vars
 from ..history_bundle import _extract_usage_from_ledger_record, _extract_user_prompt_from_input
 from ..storage.ledger_slim import is_slim_marker, resolve_slim_value
 from .delta import token_run_names
 from .executions import ExecutionTracker, is_completion_record, is_progress_record
 
 REPLAY_VIEW_VERSION = "replay_view_v1"
+
+# Beyond this many runs a cursor token is a bounded digest (an ETag and an SSE id must stay small).
+MAX_TOKEN_RUNS = 32
 
 TERMINAL_STATUSES = frozenset({"completed", "failed", "cancelled"})
 
@@ -155,7 +161,18 @@ def _snapshot(run: Any) -> Dict[str, Any]:
         "output_artifacts": [a for a, _ in _artifact_refs(out)],
         "created_at": _s(d.get("created_at")),
         "updated_at": _s(d.get("updated_at")),
+        "paused": bool(is_paused_vars(d.get("vars"))),
     }
+
+
+def _snapshot_digest(snap: Dict[str, Any]) -> str:
+    """What a snapshot contributes to the view, hashed (the cursor token carries it, so an ETag
+    changes when a pause, a terminal snapshot or a saved wait changes the view with no record).
+    `updated_at` counts only once the run is terminal (it dates the snapshot's final answer)."""
+    if not snap:
+        return ""
+    body = {k: v for k, v in snap.items() if k != "updated_at" or snap.get("status") in TERMINAL_STATUSES}
+    return hashlib.sha1(json.dumps(body, sort_keys=True, default=str).encode("utf-8")).hexdigest()
 
 
 def _child_from_wait(wait: Dict[str, Any]) -> str:
@@ -283,6 +300,19 @@ def _is_policy_denial(out: Any) -> bool:
     return isinstance(out, dict) and out.get("success") is False and _s(out.get("error")).lower() == _POLICY_DENIAL_ERROR
 
 
+def _resolved_by_index(res: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
+    """A tool-approval wait's calls resolved before the gate, by batch index (as a string):
+    `blocked_by_index` (outside the run's tool ceiling) and `pre_results_by_index` (answered by
+    the runtime or refused by the session policy)."""
+    details = _obj(_obj(res.get("wait")).get("details"))
+    out: Dict[str, Dict[str, Any]] = {}
+    for key in ("blocked_by_index", "pre_results_by_index"):
+        for idx, val in _obj(details.get(key)).items():
+            if isinstance(val, dict):
+                out[str(idx)] = val
+    return out
+
+
 def _is_denial(out: Any) -> bool:
     if not isinstance(out, dict) or out.get("success") is not False:
         return False
@@ -295,7 +325,7 @@ def _is_denial(out: Any) -> bool:
 class _Run:
     __slots__ = ("run_id", "parent_run_id", "workflow_id", "snapshot", "last_seq", "first_seq", "record_count",
                  "ledger_terminal", "open_wait", "seen_wait_keys", "resolved_wait_keys", "display_status",
-                 "discover_key", "first_ts")
+                 "discover_key", "first_ts", "snap_digest")
 
     def __init__(self, run_id: str) -> None:
         self.run_id = run_id
@@ -312,6 +342,7 @@ class _Run:
         self.display_status = ""
         self.discover_key: Tuple[str, str, int] = ("", "", 0)
         self.first_ts = ""
+        self.snap_digest = ""
 
 
 class ReplayView:
@@ -339,6 +370,7 @@ class ReplayView:
         self._relinked = False
         self._tool_rows_by_call: Dict[Tuple[str, str], Tuple[str, str]] = {}  # (run, call id) -> (activity, row)
         self._policy_by_call: Dict[Tuple[str, str], Dict[str, Any]] = {}  # (run, call id) -> its policy decision
+        self._artifact_keys: Dict[str, Tuple[str, str, int, str]] = {}  # artifact id -> its earliest reference
         self._policy_idem: Set[str] = set()  # decision records folded (a crash replay rewrites one)
         self._pending_changes: List[Dict[str, Any]] = []  # interaction opened/closed since the last delta
         self.last_delta: Optional[Dict[str, Any]] = None
@@ -365,8 +397,23 @@ class ReplayView:
         # One header-safe token (an ETag, an SSE id): no comma, no quote, no space. Each run is
         # named by the shortest prefix (8 characters at least) that no other run of the tree
         # shares; `resolve_cursor_token` maps it back.
-        names = token_run_names(order)
-        token = ".".join(f"{names[rid]}:{self._runs[rid].last_seq}" for rid in order)
+        # A `~<digest>` suffix names what the runs' snapshots contribute (a pause, a terminal
+        # snapshot, a saved wait change the view without a record). A tree of more than
+        # MAX_TOKEN_RUNS runs (an automation controller and its occurrences) gets one bounded
+        # token: the root's part plus a digest of every run's seq; it cannot be resolved back,
+        # so a reconnect with it gets the whole view.
+        snap_digest = hashlib.sha1("".join(self._runs[rid].snap_digest for rid in order).encode("ascii")).hexdigest()[:10] \
+            if any(self._runs[rid].snap_digest for rid in order) else ""
+        if len(order) > MAX_TOKEN_RUNS:
+            names = token_run_names([self.root_run_id])
+            seqs = ",".join(f"{rid}:{self._runs[rid].last_seq}" for rid in sorted(order))
+            token = (f"{names[self.root_run_id]}:{self._runs[self.root_run_id].last_seq}.n{len(order)}"
+                     f"~{hashlib.sha1((seqs + snap_digest).encode('utf-8')).hexdigest()[:16]}")
+        else:
+            names = token_run_names(order)
+            token = ".".join(f"{names[rid]}:{self._runs[rid].last_seq}" for rid in order)
+            if snap_digest:
+                token += f"~{snap_digest}"
         return {"token": token, "records": sum(r.record_count for r in self._runs.values()), "runs": runs}
 
     @property
@@ -452,6 +499,7 @@ class ReplayView:
         r = self._run(rid)
         if r.snapshot != snap:
             r.snapshot = snap
+            r.snap_digest = _snapshot_digest(snap)
             self._dirty["runs"].add(rid)
         if snap.get("workflow_id") and r.workflow_id != snap["workflow_id"]:
             r.workflow_id = snap["workflow_id"]
@@ -547,8 +595,9 @@ class ReplayView:
         resolved = resolve_slim_value(value, {target: payload}) if isinstance(payload, dict) else value
         if is_slim_marker(resolved):
             self._warnings[f"slim:{run_id}:{step_id}:{field}"] = (
-                f"run {run_id} step {step_id}: `{field}` points at a STARTED record this view did not fold "
-                "(windowed history); the field is omitted")
+                f"run {run_id} step {step_id}: `{field}` points at a STARTED record that could not be "
+                "resolved (not folded: a windowed history; or its content did not match the pointer); "
+                "the field is omitted")
             return None
         return resolved
 
@@ -622,7 +671,7 @@ class ReplayView:
                     output = res.get("output") if "output" in res else res
                     self._final_message(run_id, step_id, seq, ts, _output_text(output),
                                         [a for a, _ in _artifact_refs(output)], "ledger")
-                self._note_artifacts(run_id, step_id, seq, res)
+                self._note_artifacts(run_id, step_id, seq, res, ts)
             return
         if not eff_type and status == "failed":
             r.ledger_terminal = "failed"
@@ -684,7 +733,7 @@ class ReplayView:
                 self._message(f"{run_id}:{step_id}:answer_user", role="assistant", kind="answer", text=text,
                               run_id=run_id, step_id=step_id, seq=seq, ts=ts, source="answer_user",
                               artifact_ids=[a for a, _ in _artifact_refs(result)])
-        self._note_artifacts(run_id, step_id, seq, result)
+        self._note_artifacts(run_id, step_id, seq, result, ts)
         self._dirty["activities"].add(aid)
 
     def _activity(self, aid: str, run_id: str, node_id: str, eff_type: str, exec_id: str, ts: str, seq: int) -> Dict[str, Any]:
@@ -754,7 +803,21 @@ class ReplayView:
                 if row["status"] == "denied":
                     continue
                 if status == "waiting":
-                    row["status"] = "waiting"
+                    pre = _resolved_by_index(res).get(str(i))
+                    if pre is not None:
+                        # Resolved before the gate (blocked, answered by the runtime, refused by
+                        # the session policy): not part of what the person approves.
+                        denied = _is_policy_denial(pre)
+                        row["status"] = "denied" if denied else ("failed" if pre.get("success") is False else "completed")
+                        if pre.get("error"):
+                            row["error"] = _s(pre.get("error"))
+                        if "output" in pre and pre.get("output") is not None:
+                            row["output"] = pre.get("output")
+                        if denied:
+                            row["decided_by"] = "session_policy"
+                        row["resolved_before_approval"] = True
+                    else:
+                        row["status"] = "waiting"
                 elif status in ("completed", "failed"):
                     out = matched.get(i)
                     if (approval and _is_denial(out)) or _is_policy_denial(out):
@@ -790,9 +853,13 @@ class ReplayView:
         details = wait.get("details") if isinstance(wait.get("details"), dict) else None
         tool_calls = None
         if kind == "tool_approval":
-            calls = payload.get("tool_calls")
+            # The calls a person is asked about are the wait's own `details.tool_calls` (what
+            # `automations.attention.typed_wait` reads): calls already resolved (blocked by the
+            # run's tool ceiling, answered by the runtime, refused by the session policy) are
+            # not in it. The effect payload (every call of the batch) is the fallback.
+            calls = _obj(details).get("tool_calls")
             if not isinstance(calls, list):
-                calls = _obj(details).get("tool_calls")
+                calls = payload.get("tool_calls")
             tool_calls = [c for c in calls if isinstance(c, dict)] if isinstance(calls, list) else []
         w = {
             "run_id": r.run_id, "step_id": step_id, "seq": seq, "ts": ts, "kind": kind, "wait_key": key or None,
@@ -884,7 +951,7 @@ class ReplayView:
             if text:
                 self._message(f"{r.run_id}:{step_id}:answer", role="user", kind="answer", text=text, run_id=r.run_id,
                               step_id=step_id, seq=seq, ts=ts, source="resume", extra={"wait_key": key or None})
-        self._note_artifacts(r.run_id, step_id, seq, answer)
+        self._note_artifacts(r.run_id, step_id, seq, answer, ts)
 
     def _fold_event(self, r: _Run, rec: Dict[str, Any], payload: Dict[str, Any], name: str, ts: str, seq: int,
                     step_id: str) -> None:
@@ -1015,12 +1082,17 @@ class ReplayView:
         self._message(f"{run_id}:final", role="assistant", kind="final", text=text, run_id=run_id, step_id=step_id,
                       seq=seq, ts=ts, source=source, artifact_ids=refs)
 
-    def _note_artifacts(self, run_id: str, step_id: str, seq: int, value: Any) -> None:
+    def _note_artifacts(self, run_id: str, step_id: str, seq: int, value: Any, ts: str = "") -> None:
+        """Every `$artifact` reference; an artifact's provenance is its EARLIEST reference by
+        (time, run, seq, path), so it does not depend on which run is folded first."""
         if not isinstance(value, (dict, list)):
             return
         for art_id, path in _artifact_refs(value):
-            if art_id in self._artifacts:
+            key = (ts or "", run_id, seq, path)
+            known = self._artifact_keys.get(art_id)
+            if known is not None and known <= key:
                 continue
+            self._artifact_keys[art_id] = key
             self._artifacts[art_id] = {"id": art_id, "run_id": run_id, "step_id": step_id or None, "seq": seq,
                                        "path": path, "order": [run_id, seq, art_id]}
             self._dirty["artifacts"].add(art_id)
@@ -1053,9 +1125,15 @@ class ReplayView:
                 else:
                     final.pop("repeats", None)
                 self._dirty["messages"].add(final["id"])
-        # Snapshot waits the ledger never mentioned (a windowed history, an empty ledger).
+        # Snapshot waits the ledger never mentioned (a windowed history, an empty ledger, a pause:
+        # `pause_run` writes no record). Such a wait lives exactly as long as the snapshot says it.
         for r in self._runs.values():
             w = r.snapshot.get("waiting") if r.snapshot.get("status") == "waiting" else None
+            ow = r.open_wait
+            if ow is not None and ow.get("source") == "snapshot" and (
+                    not isinstance(w, dict) or _s(w.get("wait_key")) != ow.get("wait_key") or r.ledger_terminal):
+                r.open_wait = None
+                self._dirty["runs"].add(r.run_id)
             if r.open_wait is None and isinstance(w, dict):
                 key = _s(w.get("wait_key"))
                 if key and key not in r.seen_wait_keys and not r.ledger_terminal:
@@ -1070,7 +1148,6 @@ class ReplayView:
                         if kind == "tool_approval" else None,
                         "activity_id": None, "source": "snapshot",
                     }
-                    r.seen_wait_keys.add(key)
                     child = _child_from_wait(w)
                     if child:
                         r.open_wait["child_run_id"] = child
@@ -1084,6 +1161,8 @@ class ReplayView:
                 w = r.open_wait
                 if w is None or w["kind"] not in PERSON_FACING_KINDS or self._run_status(r) in TERMINAL_STATUSES:
                     continue
+                if r.snapshot.get("paused"):
+                    continue  # a paused run asks nobody (automations.attention.is_interactive_wait)
                 key = (w.get("ts") or "", w.get("seq") or 0, r.run_id)
                 if best is None or key > best[0]:
                     best = (key, w)

@@ -306,8 +306,11 @@ class LedgerStore(ABC):
     def find_started_record(
         self, run_id: str, step_id: str, *, before_seq: Optional[int] = None
     ) -> Optional[Dict[str, Any]]:
-        """The STARTED row of `step_id` (the first one, below `before_seq` when
-        given), carrying `"seq"`; None when absent. Default: a scan of `list()`."""
+        """The STARTED row of `step_id` (below `before_seq` when given),
+        carrying `"seq"`; None when absent. A step has exactly one STARTED row
+        (`StepRecord.start` mints the step id), so backends may search from
+        either end (SQLite and JSON files search backwards from `before_seq`).
+        Default: a scan of `list()`."""
         sid = str(step_id or "")
         if not sid:
             return None

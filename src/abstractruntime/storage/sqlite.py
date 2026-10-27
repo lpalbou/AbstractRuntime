@@ -1418,25 +1418,27 @@ class SqliteLedgerStore(LedgerStore):
         limit = coerce_ledger_seq(before_seq)
         sql = (
             "SELECT seq, record_json FROM ledger WHERE run_id = ? "
-            "AND (step_status = ? OR step_status IS NULL) "
+            "AND (step_status = ? OR (step_status IS NULL AND json_extract(record_json, '$.status') = ?)) "
             "AND json_extract(record_json, '$.step_id') = ?"
         )
-        params: List[Any] = [rid, StepStatus.STARTED.value, sid]
+        params: List[Any] = [rid, StepStatus.STARTED.value, StepStatus.STARTED.value, sid]
         if limit is not None:
             sql += " AND seq < ?"
             params.append(limit)
-        sql += " ORDER BY seq ASC;"
+        # Newest first, ONE row: the STARTED row of a terminal row is normally a few rows above it, so the scan
+        # stops there (a step has exactly one STARTED row). The whole predicate is in SQL so LIMIT 1 is exact
+        # (Python's cursor prefetches the next row, which without a LIMIT would scan the rest of the run).
+        sql += " ORDER BY seq DESC LIMIT 1;"
         conn = self._db.connection()
         try:
-            rows = conn.execute(sql, tuple(params)).fetchall()
+            for row in conn.execute(sql, tuple(params)).fetchall():
+                obj = self._row_record(row)
+                if obj is not None and obj.get("status") == StepStatus.STARTED.value:
+                    return obj
         except sqlite3.OperationalError:
             # json_extract refuses a row it cannot parse as JSON (e.g. a NaN
             # leaf) and aborts the whole query: read the run's rows instead.
             return super().find_started_record(rid, sid, before_seq=limit)
-        for row in rows or []:
-            obj = self._row_record(row)
-            if obj is not None and obj.get("status") == StepStatus.STARTED.value:
-                return obj
         return None
 
     def delete(self, run_id: str) -> int:

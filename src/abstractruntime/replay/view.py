@@ -339,6 +339,7 @@ class ReplayView:
         self._relinked = False
         self._tool_rows_by_call: Dict[Tuple[str, str], Tuple[str, str]] = {}  # (run, call id) -> (activity, row)
         self._policy_by_call: Dict[Tuple[str, str], Dict[str, Any]] = {}  # (run, call id) -> its policy decision
+        self._policy_idem: Set[str] = set()  # decision records folded (a crash replay rewrites one)
         self._pending_changes: List[Dict[str, Any]] = []  # interaction opened/closed since the last delta
         self.last_delta: Optional[Dict[str, Any]] = None
         self._run(self.root_run_id)
@@ -747,6 +748,9 @@ class ReplayView:
                         if decided is not None:
                             row["decided_by"] = "session_policy"
                             row["policy_decision"] = copy.deepcopy(decided)
+                            if decided.get("decision") == "denied":
+                                row["status"] = "denied"
+                                row["error"] = "Denied by this conversation's tool policy"
                 if row["status"] == "denied":
                     continue
                 if status == "waiting":
@@ -768,11 +772,9 @@ class ReplayView:
                             row["error"] = str(out.get("error"))
                 elif status == "cancelled":
                     row["status"] = "cancelled"
-            if rows and all(row.get("status") == "denied" for row in rows) and act["status"] != "denied":
-                # The ledger records a denial as the approval step's results, never as
-                # `approved: false` (see `_is_denial`): every call denied = the batch was denied.
-                act["status"] = "denied"
-                act["denied_reason"] = next((row["error"] for row in rows if row.get("error")), "") or "Denied by user"
+            # The ledger records a denial as the approval step's results, never as
+            # `approved: false` (see `_is_denial`): every call denied = the batch was denied.
+            self._settle_approval(act)
             names = [row["name"] for row in rows if row.get("name")]
             act["name"] = ", ".join(dict.fromkeys(names)) or act.get("name")
         elif eff_type == "start_subworkflow":
@@ -921,6 +923,11 @@ class ReplayView:
         An ACTIVITY, never an interaction: there is no wait and no resume. The tool rows it
         names (same run, same call id) say `decided_by: "session_policy"`, whichever record is
         folded first."""
+        idem = _s(rec.get("idempotency_key"))
+        if idem:
+            if idem in self._policy_idem:
+                return  # the same decision written again (a crash replay): one activity
+            self._policy_idem.add(idem)
         decision = _s(body.get("decision")) or "auto_approved"
         policy = _obj(body.get("policy"))
         calls = [c for c in body.get("tool_calls") or [] if isinstance(c, dict)]
@@ -953,7 +960,30 @@ class ReplayView:
                     if row.get("id") == hit[1]:
                         row["decided_by"] = "session_policy"
                         row["policy_decision"] = copy.deepcopy(info)
+                        if decision == "denied":
+                            # Deny wins, also over a shown wait answered "approved" before it.
+                            row["status"] = "denied"
+                            row["error"] = "Denied by this conversation's tool policy"
+                self._settle_approval(act)
                 self._dirty["activities"].add(act["id"])
+
+    @staticmethod
+    def _settle_approval(act: Dict[str, Any]) -> None:
+        """How a tool batch's approval ended, once no call is pending: `wait.outcome` approved,
+        denied or partly_denied; a denial that came from the conversation's policy (which wins
+        over an "approved" answer) says so in `wait.denied_by`. Every call denied = the batch is."""
+        rows = act.get("tool_calls") or []
+        if not rows or any(row.get("status") in ("waiting", "running") for row in rows):
+            return
+        denied = [row for row in rows if row.get("status") == "denied"]
+        if denied and len(denied) == len(rows) and act["status"] != "denied":
+            act["status"] = "denied"
+            act["denied_reason"] = next((row["error"] for row in denied if row.get("error")), "") or "Denied by user"
+        wait = act.get("wait")
+        if isinstance(wait, dict) and wait.get("kind") == "tool_approval":
+            wait["outcome"] = "approved" if not denied else ("denied" if len(denied) == len(rows) else "partly_denied")
+            if any(row.get("decided_by") == "session_policy" for row in denied):
+                wait["denied_by"] = "session_policy"
 
     # ----------------------------------------------------------------- messages, artifacts
 

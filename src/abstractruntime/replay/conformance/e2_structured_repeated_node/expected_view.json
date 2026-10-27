@@ -233,6 +233,7 @@
       "wait": {
         "ended_by": "later_step",
         "kind": "tool_approval",
+        "outcome": "approved",
         "until": null,
         "wait_key": "tool_approval:44ed2126-ab6d-5bd2-be31-c57132dcb5c7:act:1db1c81ce3f257ae7ddcdcd61e31ffd7"
       }

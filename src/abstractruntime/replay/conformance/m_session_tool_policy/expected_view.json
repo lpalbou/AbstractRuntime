@@ -3,7 +3,7 @@
     {
       "child_run_id": "e1e1e1e1-0000-4000-8000-0000000000e1",
       "effect_type": "start_subworkflow",
-      "ended_at": "2026-10-27T11:00:10.000000+00:00",
+      "ended_at": "2026-10-27T11:00:16.000000+00:00",
       "execution_id": "r-agent",
       "id": "e0e0e0e0-0000-4000-8000-0000000000e0:r-agent",
       "kind": "subworkflow",
@@ -213,16 +213,118 @@
           "status": "denied"
         }
       ]
+    },
+    {
+      "denied_reason": "Denied by this conversation's tool policy",
+      "effect_type": "tool_calls",
+      "ended_at": "2026-10-27T11:00:14.000000+00:00",
+      "execution_id": "c-act-2",
+      "id": "e1e1e1e1-0000-4000-8000-0000000000e1:c-act-2",
+      "kind": "tool",
+      "name": "write_file",
+      "node_id": "act",
+      "order": [
+        "2026-10-27T11:00:10.000000+00:00",
+        "e1e1e1e1-0000-4000-8000-0000000000e1",
+        8
+      ],
+      "run_id": "e1e1e1e1-0000-4000-8000-0000000000e1",
+      "seqs": [
+        8,
+        9,
+        10,
+        12
+      ],
+      "started_at": "2026-10-27T11:00:10.000000+00:00",
+      "status": "denied",
+      "step_ids": [
+        "c-act-2",
+        "c-resume-2",
+        "c-act-2b"
+      ],
+      "tool_calls": [
+        {
+          "arguments": {
+            "content": "x",
+            "file_path": "notes.txt"
+          },
+          "decided_by": "session_policy",
+          "error": "Denied by this conversation's tool policy",
+          "id": "c3",
+          "name": "write_file",
+          "policy_decision": {
+            "decision": "denied",
+            "revision": 6,
+            "set_at": "2026-10-27T10:59:00+00:00",
+            "set_by": {
+              "client": "panel-chat",
+              "tenant_id": "default",
+              "user_id": "person-a"
+            }
+          },
+          "status": "denied"
+        }
+      ],
+      "wait": {
+        "denied_by": "session_policy",
+        "ended_by": "resume",
+        "kind": "tool_approval",
+        "outcome": "denied",
+        "until": null,
+        "wait_key": "tool_approval:e1e1e1e1-0000-4000-8000-0000000000e1:act:idem-act-2"
+      }
+    },
+    {
+      "decision": "denied",
+      "effect_type": "emit_event",
+      "ended_at": "2026-10-27T11:00:13.000000+00:00",
+      "execution_id": null,
+      "id": "e1e1e1e1-0000-4000-8000-0000000000e1:tool_policy:11",
+      "kind": "tool_policy",
+      "name": "Denied by this conversation's policy",
+      "node_id": "act",
+      "order": [
+        "2026-10-27T11:00:13.000000+00:00",
+        "e1e1e1e1-0000-4000-8000-0000000000e1",
+        11
+      ],
+      "policy": {
+        "revision": 6,
+        "set_at": "2026-10-27T10:59:00+00:00",
+        "set_by": {
+          "client": "panel-chat",
+          "tenant_id": "default",
+          "user_id": "person-a"
+        }
+      },
+      "run_id": "e1e1e1e1-0000-4000-8000-0000000000e1",
+      "seqs": [
+        11
+      ],
+      "source": "session_policy",
+      "started_at": "2026-10-27T11:00:13.000000+00:00",
+      "status": "completed",
+      "step_ids": [
+        "c-policy-denied-2"
+      ],
+      "tool_calls": [
+        {
+          "id": "c3",
+          "matched": "tool",
+          "name": "write_file",
+          "status": "denied"
+        }
+      ]
     }
   ],
   "artifacts": [],
   "cursor": {
-    "records": 11,
+    "records": 17,
     "runs": {
       "e0e0e0e0-0000-4000-8000-0000000000e0": 4,
-      "e1e1e1e1-0000-4000-8000-0000000000e1": 7
+      "e1e1e1e1-0000-4000-8000-0000000000e1": 13
     },
-    "token": "e0e0e0e0:4.e1e1e1e1:7"
+    "token": "e0e0e0e0:4.e1e1e1e1:13"
   },
   "display_status": null,
   "interaction": null,
@@ -248,7 +350,7 @@
       "id": "e0e0e0e0-0000-4000-8000-0000000000e0:final",
       "kind": "final",
       "order": [
-        "2026-10-27T11:00:11.000000+00:00",
+        "2026-10-27T11:00:17.000000+00:00",
         "e0e0e0e0-0000-4000-8000-0000000000e0",
         4
       ],
@@ -297,7 +399,7 @@
       "display_status": null,
       "first_seq": 1,
       "holds_interaction": false,
-      "last_seq": 7,
+      "last_seq": 13,
       "order": [
         "",
         "",
@@ -309,7 +411,7 @@
         "e1e1e1e1-0000-4000-8000-0000000000e1"
       ],
       "parent_run_id": "e0e0e0e0-0000-4000-8000-0000000000e0",
-      "records": 7,
+      "records": 13,
       "run_id": "e1e1e1e1-0000-4000-8000-0000000000e1",
       "status": "completed",
       "waiting": null,

@@ -27,19 +27,28 @@ def _is_policy(rec) -> bool:
 def test_decisions_are_activities_and_never_the_interaction_at_any_point() -> None:
     case, root, child = _case()
     child_recs = case["records"][child]
-    # Every prefix of the child's ledger (the run as a client sees it live): never an interaction,
-    # never a person-facing wait.
+    # Every prefix of the child's ledger (the run as a client sees it live): the only interaction
+    # ever shown is the real approval gate the runtime wrote a wait for, never a policy decision.
+    gate_open = False
     for cut in range(1, len(child_recs) + 1):
         records = {root: case["records"][root][:2], child: child_recs[:cut]}
         snaps = {rid: {**s, "status": "running"} for rid, s in case["runs"].items()}
         v = replay(records, snaps, root_run_id=root).to_json()
-        assert v["interaction"] is None, cut
-        assert not [w for w in v["open_waits"] if w["person_facing"]], cut
+        last = child_recs[cut - 1]
+        if last.get("status") == "waiting":
+            gate_open = True
+        elif (last.get("effect") or {}).get("type") == "resume":
+            gate_open = False
+        if gate_open:
+            assert v["interaction"] and v["interaction"]["kind"] == "tool_approval", cut
+        else:
+            assert v["interaction"] is None, cut
     v = replay(case["records"], case["runs"], root_run_id=root).to_json()
     policy = [a for a in v["activities"] if a["kind"] == "tool_policy"]
-    expected = [r for r in child_recs if _is_policy(r)]
-    assert len(policy) == len(expected) == 2
-    by_decision = {a["decision"]: a for a in policy}
+    keys = {r.get("idempotency_key") for r in child_recs if _is_policy(r)}
+    assert len([r for r in child_recs if _is_policy(r)]) == 4  # one decision written twice
+    assert len(policy) == len(keys) == 3
+    by_decision = {a["decision"]: a for a in policy if a["policy"]["revision"] == 5}
     assert by_decision["auto_approved"]["name"] == "Allowed by this conversation's policy"
     assert by_decision["denied"]["name"] == "Denied by this conversation's policy"
     assert by_decision["auto_approved"]["policy"]["revision"] == 5
@@ -66,3 +75,14 @@ def test_a_decision_folded_after_its_tool_row_still_marks_it() -> None:
     tool = next(a for a in v["activities"] if a["kind"] == "tool")
     assert {r["name"]: r.get("decided_by") for r in tool["tool_calls"]} == {
         "fetch_url": "session_policy", "execute_command": "session_policy"}
+
+
+def test_a_deny_set_after_an_approved_gate_wins_and_the_gate_closes_as_denied() -> None:
+    case, root, child = _case()
+    v = replay(case["records"], case["runs"], root_run_id=root).to_json()
+    gated = next(a for a in v["activities"] if a["kind"] == "tool" and (a.get("wait") or {}).get("kind") == "tool_approval")
+    assert gated["status"] == "denied"
+    assert gated["wait"]["ended_by"] == "resume" and gated["wait"]["outcome"] == "denied"
+    assert gated["wait"]["denied_by"] == "session_policy"
+    assert [(r["name"], r["status"]) for r in gated["tool_calls"]] == [("write_file", "denied")]
+    assert v["interaction"] is None and v["status"] == "completed"

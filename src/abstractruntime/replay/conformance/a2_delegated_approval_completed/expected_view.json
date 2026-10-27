@@ -201,6 +201,7 @@
       "wait": {
         "ended_by": "later_step",
         "kind": "tool_approval",
+        "outcome": "approved",
         "until": null,
         "wait_key": "tool_approval:74808832-e6db-5b9f-a68a-02ef826b4509:act:f9c0f06c1bdbb275cb98845fe7bd956e"
       }
@@ -279,6 +280,7 @@
       "wait": {
         "ended_by": "later_step",
         "kind": "tool_approval",
+        "outcome": "approved",
         "until": null,
         "wait_key": "tool_approval:74808832-e6db-5b9f-a68a-02ef826b4509:act:fe21410a76b14a7c1ca671766b46a5c1"
       }
@@ -394,6 +396,7 @@
       "wait": {
         "ended_by": "later_step",
         "kind": "tool_approval",
+        "outcome": "approved",
         "until": null,
         "wait_key": "tool_approval:74808832-e6db-5b9f-a68a-02ef826b4509:act:dbd212833790d9e8ce056c40e16c8bce"
       }
@@ -509,6 +512,7 @@
       "wait": {
         "ended_by": "later_step",
         "kind": "tool_approval",
+        "outcome": "approved",
         "until": null,
         "wait_key": "tool_approval:74808832-e6db-5b9f-a68a-02ef826b4509:act:752c48d9b10244fd948b7b8e41ea8272"
       }

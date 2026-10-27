@@ -12,7 +12,7 @@ If you are new to the project, start with `../README.md` and `../architecture.md
 
 ## Counts
 
-- Planned: 29
+- Planned: 30
 - Proposed: 14
 - Completed: 37
 - Deprecated: 13

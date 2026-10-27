@@ -5077,6 +5077,64 @@ The rules below apply to both versions.
 Until the operator email is configured, `send_email` stays in the
 require-approval set: self and others both ask.
 
+## Session tool policy: a conversation's standing word
+
+A person can approve tools for a whole conversation ("approve all", "approve all web tools",
+"approve `fetch_url`"), deny some, or reset. That decision is a **session tool policy**: one row
+per `session_id` in a store outside run vars
+(`src/abstractruntime/storage/session_tool_policy.py`: `SqliteSessionToolPolicyStore`,
+`InMemorySessionToolPolicyStore`), installed with `Runtime(session_tool_policy_store=...)` or
+`Runtime.set_session_tool_policy_store(store)`. Hosts write it (the gateway's
+`/api/gateway/sessions/{session_id}/tool-policy` routes, which expand and clamp the request to
+the tools the account is authorized for); the TOOL_CALLS handler reads the run's session row once
+per batch, **before** it decides whether the batch must wait.
+
+Store API (both stores): `get(session_id)`, `get_with_revision(session_id) -> (revision, policy)`
+(the base of a host's guarded read-merge-write), `put(session_id, policy, if_revision=None)`,
+`delete(session_id, if_revision=None, actor=None) -> revision`, `revision(session_id)`,
+`history(session_id)`. Revisions only grow (a reset is a revision, `get` then answers `None`); an
+`if_revision` mismatch raises `SessionToolPolicyConflict` (`.expected`, `.actual`), which the
+gateway answers as a 409 carrying the current revision. A store read failure during a tool batch
+is logged and keeps the normal decision (ask where the defaults ask), never a wider one.
+
+Stored shape (the runtime reads only these keys):
+
+```json
+{"version": 1, "session_id": "s-123", "revision": 5,
+ "approve": {"fetch_url": "kind:web"}, "deny": {"execute_command": "tool"}, "ask": ["send_email"],
+ "set_by": {"tenant_id": "default", "user_id": "laurent", "client": "panel-chat"},
+ "set_at": "2026-10-27T10:00:00+00:00"}
+```
+
+Decision order for each call:
+
+1. The run's tool ceiling (`allowed_tools`): a call outside it is blocked first; a session policy
+   never widens what a run may call.
+2. The row is the one of the run tree's ROOT session (a child started with another `session_id`
+   does not borrow that session's grant). No row: nothing changes.
+3. `deny` → refused with no wait (`"Denied by this conversation's tool policy"`), in every run of
+   the session, automation occurrences and untrusted-input runs included (narrowing is always
+   safe). A deny set while an approval is shown also wins over that approval when it is answered.
+   `approve` (5) never applies to untrusted-input runs or automation occurrences and their
+   descendants.
+4. Names the run policy lists in `withheld_tools` are never session-approved.
+5. `approve` (minus `ask`, minus `deny`) counts as auto for the batch, over the start-time
+   `require_approval_tools`, the gateway's default grant and the executor's default caution list.
+6. Everything else as before (run policy, tier ceiling, refiners, static policy).
+
+The approval decision stays per batch: if any call still needs approval, the whole batch waits as
+before. A batch that executes only because of the session policy, and every denial, writes one
+`emit_event` record named `abstract.tool_policy_decision` to the run's ledger
+(`decision: auto_approved | denied`, `source: session_policy`, the calls with the selector that
+matched, and the policy's `revision`, `set_by`, `set_at`). There is no wait, no waiting record and
+no resume for these calls, so every client renders them as activity, never as a question. If the
+record cannot be written, the batch is not auto-approved (it asks).
+
+Every run of the session reads the same row: each turn's root run, delegated child runs (they
+inherit `session_id`), runs resumed after a restart. A change applies from the next batch. A wait
+that already exists is not answered by the policy: a client that offers "approve all" on a shown
+wait writes the policy first, then answers that wait as a one-off approval.
+
 
 ==============================================================================
 # FILE: docs/tools-comms.md

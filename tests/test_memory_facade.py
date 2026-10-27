@@ -437,3 +437,17 @@ def test_stamp_screens_caller_supplied_refs_on_both_shapes() -> None:
     assert [r["ref"]["kind"] for r in legacy["rejected_sources"]] == ["step", "run"]
     vouched = f.stamp({"run_id": "real-run-1"}, run_id="real-run-1")
     assert vouched["sources"] == [{"kind": "run", "run_id": "real-run-1"}] and "rejected_sources" not in vouched
+
+
+def test_a_seq_is_never_truncated_or_guessed() -> None:
+    """Review 3a R10. Mutant: `int(seq)` -> 3.9 becomes row 3 (another row's address)."""
+    from abstractruntime.storage.base import coerce_ledger_seq
+
+    for good, want in ((7, 7), (3.0, 3), ("7", 7), (" 8 ", 8), (1, 1)):
+        assert coerce_ledger_seq(good) == want, good
+    for bad in (3.9, 0, -1, True, False, "3.9", "x", "", "٣", None, [1]):
+        assert coerce_ledger_seq(bad) is None, bad
+    f = MemoryFacade()
+    assert f.source_refs(run_id="real-run-1", seq=3.9) == [{"kind": "run", "run_id": "real-run-1"}]
+    assert f.source_refs(run_id="real-run-1", seq="4")[0]["seq"] == 4
+

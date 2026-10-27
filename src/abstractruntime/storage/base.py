@@ -250,12 +250,25 @@ IDEMPOTENCY_TAIL_WINDOW = 256
 
 
 def coerce_ledger_seq(seq: Any) -> Optional[int]:
-    """A ledger row address component: a positive int, else None (bools refused)."""
+    """A ledger row address component: an integer >= 1 (seq is 1-based), else None.
+
+    Accepted: an int, an integral float (`3.0`), a string of digits (`"7"`, `" 8 "`: a seq read from a URL or a
+    JSON key). Refused (None, never truncated or guessed): a bool, a float with a fraction (`3.9`), any other
+    string, 0 and negatives."""
     if isinstance(seq, bool):
         return None
-    try:
+    if isinstance(seq, int):
+        value = seq
+    elif isinstance(seq, float):
+        if not seq.is_integer():
+            return None
         value = int(seq)
-    except (TypeError, ValueError):
+    elif isinstance(seq, str):
+        text = seq.strip()
+        if not text.isdigit() or not text.isascii():
+            return None
+        value = int(text)
+    else:
         return None
     return value if value >= 1 else None
 

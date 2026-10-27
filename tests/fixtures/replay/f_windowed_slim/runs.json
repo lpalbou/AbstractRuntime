@@ -1,0 +1,131 @@
+{
+ "fd450aa7-f922-5398-b823-7ed8a3f20dfc": {
+  "run_id": "fd450aa7-f922-5398-b823-7ed8a3f20dfc",
+  "workflow_id": "basic-agent@0.0.5:81795ea9",
+  "status": "waiting",
+  "current_node": "end",
+  "parent_run_id": null,
+  "session_id": "afc84659-dd55-52a6-8e73-32354c00d12f",
+  "created_at": "2026-10-11T00:23:17.788735+00:00",
+  "updated_at": "2026-10-11T00:23:17.921277+00:00",
+  "waiting": {
+   "reason": "subworkflow",
+   "wait_key": "subworkflow:74808832-e6db-5b9f-a68a-02ef826b4509",
+   "until": null,
+   "resume_to_node": "node-2",
+   "result_key": "_temp.agent.node-2.sub",
+   "prompt": null,
+   "choices": null,
+   "allow_free_text": true,
+   "details": {
+    "sub_run_id": "74808832-e6db-5b9f-a68a-02ef826b4509",
+    "sub_workflow_id": "txt-88c5065a89d1",
+    "async": true,
+    "include_traces": true
+   }
+  },
+  "output": null,
+  "error": null,
+  "vars": {
+   "prompt": "txt-110abf0ea5c9",
+   "context": {
+    "task": "txt-110abf0ea5c9"
+   }
+  }
+ },
+ "74808832-e6db-5b9f-a68a-02ef826b4509": {
+  "run_id": "74808832-e6db-5b9f-a68a-02ef826b4509",
+  "workflow_id": "visual_react_agent_basic-agent_0_0_5_81795ea9_node-2",
+  "status": "waiting",
+  "current_node": "done",
+  "parent_run_id": "fd450aa7-f922-5398-b823-7ed8a3f20dfc",
+  "session_id": "afc84659-dd55-52a6-8e73-32354c00d12f",
+  "created_at": "2026-10-11T00:23:17.920439+00:00",
+  "updated_at": "2026-10-11T00:23:57.787698+00:00",
+  "waiting": {
+   "reason": "user",
+   "wait_key": "tool_approval:74808832-e6db-5b9f-a68a-02ef826b4509:act:fe21410a76b14a7c1ca671766b46a5c1",
+   "until": null,
+   "resume_to_node": "observe",
+   "result_key": "_temp.tool_results",
+   "prompt": null,
+   "choices": null,
+   "allow_free_text": true,
+   "details": {
+    "mode": "approval_required",
+    "tool_calls": [
+     {
+      "name": "write_file",
+      "arguments": {
+       "file_path": "txt-0103dd11b7b3",
+       "content": "txt-4bc94c8c6bc3",
+       "mode": "w"
+      },
+      "call_id": "call_0bc78da56dbe4ed2b5a6df2ded9a94a7",
+      "runtime_call_id": "rtcall_fe21410a76b14a7c1ca671766b46a5c1_1"
+     }
+    ],
+    "executor": {
+     "kind": "txt-e09af1275852",
+     "policy": {
+      "auto_approve_tools": [],
+      "require_approval_tools": [
+       "txt-fa856f1ac377",
+       "txt-11edda15bcb4",
+       "txt-0aba041e720c",
+       "txt-558f71721b37",
+       "txt-8d1e9ee4fbc7",
+       "txt-48d393bca9c3",
+       "txt-5e83f5a0ee34",
+       "txt-f8e30cc983ea",
+       "txt-fdd019943862",
+       "txt-a57ff8ed8871",
+       "txt-d7281991d00e",
+       "txt-89d3287c19fb",
+       "txt-f0f34124f4b3",
+       "txt-f5102c04ebed",
+       "txt-df8b79e075b0",
+       "txt-7d24782e6ccf",
+       "txt-cc905bf7f4dc",
+       "txt-6b386660ca8a",
+       "txt-615c95f499f4",
+       "txt-7252873f78e3",
+       "txt-610414d150ad",
+       "txt-96d8d36df1d4",
+       "txt-7d5496c473bb",
+       "txt-766d0f8a3848",
+       "txt-184cb49decbe",
+       "txt-71bd76e0b697",
+       "txt-6eb8d45630ef",
+       "txt-55bf5a29da0b",
+       "txt-5b170355de65",
+       "txt-cecb871e410b",
+       "txt-a11e7959e191",
+       "txt-4df21347488c",
+       "txt-47118b9607a1",
+       "txt-cdac54f09dea",
+       "txt-d436a0f681ea",
+       "txt-ba875bc678f9",
+       "txt-9f018ac3e52f",
+       "txt-05aa1c28d9a1"
+      ]
+     },
+     "policy_source": "txt-54c5e38d0c00"
+    }
+   }
+  },
+  "output": null,
+  "error": null,
+  "vars": {
+   "context": {
+    "task": "txt-110abf0ea5c9",
+    "messages": [
+     {
+      "role": "user",
+      "content": "txt-935fea3d8493"
+     }
+    ]
+   }
+  }
+ }
+}

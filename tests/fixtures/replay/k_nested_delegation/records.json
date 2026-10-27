@@ -1,0 +1,404 @@
+{
+ "c0c0c0c0-0000-4000-8000-0000000000c0": [
+  {
+   "run_id": "c0c0c0c0-0000-4000-8000-0000000000c0",
+   "step_id": "r-start-a",
+   "node_id": "spawn_a",
+   "status": "started",
+   "effect": {
+    "type": "start_subworkflow",
+    "payload": {
+     "workflow_id": "nested@1.0.0:a",
+     "async": true
+    },
+    "result_key": "_temp.spawn_a"
+   },
+   "result": null,
+   "error": null,
+   "started_at": "2026-10-27T10:00:01.000000+00:00",
+   "ended_at": null,
+   "actor_id": null,
+   "session_id": "sess-synthetic-0001",
+   "attempt": 1,
+   "idempotency_key": "idem-r-start-a",
+   "prev_hash": null,
+   "record_hash": null,
+   "signature": null,
+   "seq": 1
+  },
+  {
+   "run_id": "c0c0c0c0-0000-4000-8000-0000000000c0",
+   "step_id": "r-start-a",
+   "node_id": "spawn_a",
+   "status": "completed",
+   "effect": {
+    "type": "start_subworkflow",
+    "payload": {
+     "workflow_id": "nested@1.0.0:a",
+     "async": true
+    },
+    "result_key": "_temp.spawn_a"
+   },
+   "result": {
+    "sub_run_id": "c1c1c1c1-0000-4000-8000-0000000000c1"
+   },
+   "error": null,
+   "started_at": "2026-10-27T10:00:02.000000+00:00",
+   "ended_at": "2026-10-27T10:00:02.000000+00:00",
+   "actor_id": null,
+   "session_id": "sess-synthetic-0001",
+   "attempt": 1,
+   "idempotency_key": "idem-r-start-a",
+   "prev_hash": null,
+   "record_hash": null,
+   "signature": null,
+   "seq": 2
+  },
+  {
+   "run_id": "c0c0c0c0-0000-4000-8000-0000000000c0",
+   "step_id": "r-start-b",
+   "node_id": "spawn_b",
+   "status": "started",
+   "effect": {
+    "type": "start_subworkflow",
+    "payload": {
+     "workflow_id": "nested@1.0.0:b",
+     "async": true
+    },
+    "result_key": "_temp.spawn_b"
+   },
+   "result": null,
+   "error": null,
+   "started_at": "2026-10-27T10:00:03.000000+00:00",
+   "ended_at": null,
+   "actor_id": null,
+   "session_id": "sess-synthetic-0001",
+   "attempt": 1,
+   "idempotency_key": "idem-r-start-b",
+   "prev_hash": null,
+   "record_hash": null,
+   "signature": null,
+   "seq": 3
+  },
+  {
+   "run_id": "c0c0c0c0-0000-4000-8000-0000000000c0",
+   "step_id": "r-start-b",
+   "node_id": "spawn_b",
+   "status": "completed",
+   "effect": {
+    "type": "start_subworkflow",
+    "payload": {
+     "workflow_id": "nested@1.0.0:b",
+     "async": true
+    },
+    "result_key": "_temp.spawn_b"
+   },
+   "result": {
+    "sub_run_id": "c2c2c2c2-0000-4000-8000-0000000000c2"
+   },
+   "error": null,
+   "started_at": "2026-10-27T10:00:04.000000+00:00",
+   "ended_at": "2026-10-27T10:00:04.000000+00:00",
+   "actor_id": null,
+   "session_id": "sess-synthetic-0001",
+   "attempt": 1,
+   "idempotency_key": "idem-r-start-b",
+   "prev_hash": null,
+   "record_hash": null,
+   "signature": null,
+   "seq": 4
+  },
+  {
+   "run_id": "c0c0c0c0-0000-4000-8000-0000000000c0",
+   "step_id": "c0c0-done",
+   "node_id": "end",
+   "status": "completed",
+   "effect": null,
+   "result": {
+    "completed": true,
+    "output": {
+     "answer": "all done"
+    }
+   },
+   "error": null,
+   "started_at": "2026-10-27T10:00:13.000000+00:00",
+   "ended_at": "2026-10-27T10:00:13.000000+00:00",
+   "actor_id": null,
+   "session_id": "sess-synthetic-0001",
+   "attempt": 1,
+   "idempotency_key": "system:completion:end",
+   "prev_hash": null,
+   "record_hash": null,
+   "signature": null,
+   "seq": 5
+  },
+  {
+   "run_id": "c0c0c0c0-0000-4000-8000-0000000000c0",
+   "step_id": "c0c0-term",
+   "node_id": "end",
+   "status": "completed",
+   "effect": {
+    "type": "emit_event",
+    "payload": {
+     "name": "abstract.status",
+     "scope": "session",
+     "payload": {
+      "text": "completed"
+     }
+    }
+   },
+   "result": {
+    "emitted": true,
+    "name": "abstract.status",
+    "payload": {
+     "text": "completed"
+    }
+   },
+   "error": null,
+   "started_at": "2026-10-27T10:00:14.000000+00:00",
+   "ended_at": "2026-10-27T10:00:14.000000+00:00",
+   "actor_id": null,
+   "session_id": "sess-synthetic-0001",
+   "attempt": 1,
+   "idempotency_key": "system:terminal_status:completed",
+   "prev_hash": null,
+   "record_hash": null,
+   "signature": null,
+   "seq": 6
+  }
+ ],
+ "c1c1c1c1-0000-4000-8000-0000000000c1": [
+  {
+   "run_id": "c1c1c1c1-0000-4000-8000-0000000000c1",
+   "step_id": "a-start-g",
+   "node_id": "spawn_g",
+   "status": "started",
+   "effect": {
+    "type": "start_subworkflow",
+    "payload": {
+     "workflow_id": "nested@1.0.0:g",
+     "async": true
+    },
+    "result_key": "_temp.spawn_g"
+   },
+   "result": null,
+   "error": null,
+   "started_at": "2026-10-27T10:00:05.000000+00:00",
+   "ended_at": null,
+   "actor_id": null,
+   "session_id": "sess-synthetic-0001",
+   "attempt": 1,
+   "idempotency_key": "idem-a-start-g",
+   "prev_hash": null,
+   "record_hash": null,
+   "signature": null,
+   "seq": 1
+  },
+  {
+   "run_id": "c1c1c1c1-0000-4000-8000-0000000000c1",
+   "step_id": "a-start-g",
+   "node_id": "spawn_g",
+   "status": "completed",
+   "effect": {
+    "type": "start_subworkflow",
+    "payload": {
+     "workflow_id": "nested@1.0.0:g",
+     "async": true
+    },
+    "result_key": "_temp.spawn_g"
+   },
+   "result": {
+    "sub_run_id": "c3c3c3c3-0000-4000-8000-0000000000c3"
+   },
+   "error": null,
+   "started_at": "2026-10-27T10:00:06.000000+00:00",
+   "ended_at": "2026-10-27T10:00:06.000000+00:00",
+   "actor_id": null,
+   "session_id": "sess-synthetic-0001",
+   "attempt": 1,
+   "idempotency_key": "idem-a-start-g",
+   "prev_hash": null,
+   "record_hash": null,
+   "signature": null,
+   "seq": 2
+  },
+  {
+   "run_id": "c1c1c1c1-0000-4000-8000-0000000000c1",
+   "step_id": "c1c1-done",
+   "node_id": "end",
+   "status": "completed",
+   "effect": null,
+   "result": {
+    "completed": true,
+    "output": {
+     "answer": "a done"
+    }
+   },
+   "error": null,
+   "started_at": "2026-10-27T10:00:09.000000+00:00",
+   "ended_at": "2026-10-27T10:00:09.000000+00:00",
+   "actor_id": null,
+   "session_id": "sess-synthetic-0001",
+   "attempt": 1,
+   "idempotency_key": "system:completion:end",
+   "prev_hash": null,
+   "record_hash": null,
+   "signature": null,
+   "seq": 3
+  },
+  {
+   "run_id": "c1c1c1c1-0000-4000-8000-0000000000c1",
+   "step_id": "c1c1-term",
+   "node_id": "end",
+   "status": "completed",
+   "effect": {
+    "type": "emit_event",
+    "payload": {
+     "name": "abstract.status",
+     "scope": "session",
+     "payload": {
+      "text": "completed"
+     }
+    }
+   },
+   "result": {
+    "emitted": true,
+    "name": "abstract.status",
+    "payload": {
+     "text": "completed"
+    }
+   },
+   "error": null,
+   "started_at": "2026-10-27T10:00:10.000000+00:00",
+   "ended_at": "2026-10-27T10:00:10.000000+00:00",
+   "actor_id": null,
+   "session_id": "sess-synthetic-0001",
+   "attempt": 1,
+   "idempotency_key": "system:terminal_status:completed",
+   "prev_hash": null,
+   "record_hash": null,
+   "signature": null,
+   "seq": 4
+  }
+ ],
+ "c2c2c2c2-0000-4000-8000-0000000000c2": [
+  {
+   "run_id": "c2c2c2c2-0000-4000-8000-0000000000c2",
+   "step_id": "c2c2-done",
+   "node_id": "end",
+   "status": "completed",
+   "effect": null,
+   "result": {
+    "completed": true,
+    "output": {
+     "answer": "b done"
+    }
+   },
+   "error": null,
+   "started_at": "2026-10-27T10:00:11.000000+00:00",
+   "ended_at": "2026-10-27T10:00:11.000000+00:00",
+   "actor_id": null,
+   "session_id": "sess-synthetic-0001",
+   "attempt": 1,
+   "idempotency_key": "system:completion:end",
+   "prev_hash": null,
+   "record_hash": null,
+   "signature": null,
+   "seq": 1
+  },
+  {
+   "run_id": "c2c2c2c2-0000-4000-8000-0000000000c2",
+   "step_id": "c2c2-term",
+   "node_id": "end",
+   "status": "completed",
+   "effect": {
+    "type": "emit_event",
+    "payload": {
+     "name": "abstract.status",
+     "scope": "session",
+     "payload": {
+      "text": "completed"
+     }
+    }
+   },
+   "result": {
+    "emitted": true,
+    "name": "abstract.status",
+    "payload": {
+     "text": "completed"
+    }
+   },
+   "error": null,
+   "started_at": "2026-10-27T10:00:12.000000+00:00",
+   "ended_at": "2026-10-27T10:00:12.000000+00:00",
+   "actor_id": null,
+   "session_id": "sess-synthetic-0001",
+   "attempt": 1,
+   "idempotency_key": "system:terminal_status:completed",
+   "prev_hash": null,
+   "record_hash": null,
+   "signature": null,
+   "seq": 2
+  }
+ ],
+ "c3c3c3c3-0000-4000-8000-0000000000c3": [
+  {
+   "run_id": "c3c3c3c3-0000-4000-8000-0000000000c3",
+   "step_id": "c3c3-done",
+   "node_id": "end",
+   "status": "completed",
+   "effect": null,
+   "result": {
+    "completed": true,
+    "output": {
+     "answer": "grandchild done"
+    }
+   },
+   "error": null,
+   "started_at": "2026-10-27T10:00:07.000000+00:00",
+   "ended_at": "2026-10-27T10:00:07.000000+00:00",
+   "actor_id": null,
+   "session_id": "sess-synthetic-0001",
+   "attempt": 1,
+   "idempotency_key": "system:completion:end",
+   "prev_hash": null,
+   "record_hash": null,
+   "signature": null,
+   "seq": 1
+  },
+  {
+   "run_id": "c3c3c3c3-0000-4000-8000-0000000000c3",
+   "step_id": "c3c3-term",
+   "node_id": "end",
+   "status": "completed",
+   "effect": {
+    "type": "emit_event",
+    "payload": {
+     "name": "abstract.status",
+     "scope": "session",
+     "payload": {
+      "text": "completed"
+     }
+    }
+   },
+   "result": {
+    "emitted": true,
+    "name": "abstract.status",
+    "payload": {
+     "text": "completed"
+    }
+   },
+   "error": null,
+   "started_at": "2026-10-27T10:00:08.000000+00:00",
+   "ended_at": "2026-10-27T10:00:08.000000+00:00",
+   "actor_id": null,
+   "session_id": "sess-synthetic-0001",
+   "attempt": 1,
+   "idempotency_key": "system:terminal_status:completed",
+   "prev_hash": null,
+   "record_hash": null,
+   "signature": null,
+   "seq": 2
+  }
+ ]
+}

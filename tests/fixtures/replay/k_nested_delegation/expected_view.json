@@ -1,0 +1,267 @@
+{
+  "activities": [
+    {
+      "child_run_id": "c1c1c1c1-0000-4000-8000-0000000000c1",
+      "effect_type": "start_subworkflow",
+      "ended_at": "2026-10-27T10:00:02.000000+00:00",
+      "execution_id": "r-start-a",
+      "id": "c0c0c0c0-0000-4000-8000-0000000000c0:r-start-a",
+      "kind": "subworkflow",
+      "name": "nested@1.0.0:a",
+      "node_id": "spawn_a",
+      "order": [
+        "2026-10-27T10:00:01.000000+00:00",
+        "c0c0c0c0-0000-4000-8000-0000000000c0",
+        1
+      ],
+      "run_id": "c0c0c0c0-0000-4000-8000-0000000000c0",
+      "seqs": [
+        1,
+        2
+      ],
+      "started_at": "2026-10-27T10:00:01.000000+00:00",
+      "status": "completed",
+      "step_ids": [
+        "r-start-a"
+      ]
+    },
+    {
+      "child_run_id": "c2c2c2c2-0000-4000-8000-0000000000c2",
+      "effect_type": "start_subworkflow",
+      "ended_at": "2026-10-27T10:00:04.000000+00:00",
+      "execution_id": "r-start-b",
+      "id": "c0c0c0c0-0000-4000-8000-0000000000c0:r-start-b",
+      "kind": "subworkflow",
+      "name": "nested@1.0.0:b",
+      "node_id": "spawn_b",
+      "order": [
+        "2026-10-27T10:00:03.000000+00:00",
+        "c0c0c0c0-0000-4000-8000-0000000000c0",
+        3
+      ],
+      "run_id": "c0c0c0c0-0000-4000-8000-0000000000c0",
+      "seqs": [
+        3,
+        4
+      ],
+      "started_at": "2026-10-27T10:00:03.000000+00:00",
+      "status": "completed",
+      "step_ids": [
+        "r-start-b"
+      ]
+    },
+    {
+      "child_run_id": "c3c3c3c3-0000-4000-8000-0000000000c3",
+      "effect_type": "start_subworkflow",
+      "ended_at": "2026-10-27T10:00:06.000000+00:00",
+      "execution_id": "a-start-g",
+      "id": "c1c1c1c1-0000-4000-8000-0000000000c1:a-start-g",
+      "kind": "subworkflow",
+      "name": "nested@1.0.0:g",
+      "node_id": "spawn_g",
+      "order": [
+        "2026-10-27T10:00:05.000000+00:00",
+        "c1c1c1c1-0000-4000-8000-0000000000c1",
+        1
+      ],
+      "run_id": "c1c1c1c1-0000-4000-8000-0000000000c1",
+      "seqs": [
+        1,
+        2
+      ],
+      "started_at": "2026-10-27T10:00:05.000000+00:00",
+      "status": "completed",
+      "step_ids": [
+        "a-start-g"
+      ]
+    }
+  ],
+  "artifacts": [],
+  "cursor": {
+    "records": 14,
+    "runs": {
+      "c0c0c0c0-0000-4000-8000-0000000000c0": 6,
+      "c1c1c1c1-0000-4000-8000-0000000000c1": 4,
+      "c2c2c2c2-0000-4000-8000-0000000000c2": 2,
+      "c3c3c3c3-0000-4000-8000-0000000000c3": 2
+    },
+    "token": "c0c0c0c0:6.c1c1c1c1:4.c3c3c3c3:2.c2c2c2c2:2"
+  },
+  "display_status": null,
+  "interaction": null,
+  "messages": [
+    {
+      "artifact_ids": [],
+      "id": "c0c0c0c0-0000-4000-8000-0000000000c0:input",
+      "kind": "prompt",
+      "order": [
+        "2026-10-27T10:00:00.000000+00:00",
+        "c0c0c0c0-0000-4000-8000-0000000000c0",
+        0
+      ],
+      "role": "user",
+      "run_id": "c0c0c0c0-0000-4000-8000-0000000000c0",
+      "seqs": [],
+      "source": "run_input",
+      "step_ids": [],
+      "text": "Run the nested tree"
+    },
+    {
+      "artifact_ids": [],
+      "id": "c0c0c0c0-0000-4000-8000-0000000000c0:final",
+      "kind": "final",
+      "order": [
+        "2026-10-27T10:00:13.000000+00:00",
+        "c0c0c0c0-0000-4000-8000-0000000000c0",
+        5
+      ],
+      "role": "assistant",
+      "run_id": "c0c0c0c0-0000-4000-8000-0000000000c0",
+      "seqs": [
+        5
+      ],
+      "source": "ledger",
+      "step_ids": [
+        "c0c0-done"
+      ],
+      "text": "all done"
+    }
+  ],
+  "open_waits": [],
+  "root_run_id": "c0c0c0c0-0000-4000-8000-0000000000c0",
+  "runs": [
+    {
+      "depth": 0,
+      "display_status": null,
+      "first_seq": 1,
+      "holds_interaction": false,
+      "last_seq": 6,
+      "order": [
+        "",
+        "",
+        0,
+        "c0c0c0c0-0000-4000-8000-0000000000c0"
+      ],
+      "parent_run_id": null,
+      "records": 6,
+      "run_id": "c0c0c0c0-0000-4000-8000-0000000000c0",
+      "status": "completed",
+      "waiting": null,
+      "workflow": {
+        "bundle_id": "nested",
+        "bundle_version": "1.0.0",
+        "flow_id": "main",
+        "id": "nested@1.0.0:main"
+      },
+      "workflow_id": "nested@1.0.0:main"
+    },
+    {
+      "depth": 1,
+      "display_status": null,
+      "first_seq": 1,
+      "holds_interaction": false,
+      "last_seq": 4,
+      "order": [
+        "",
+        "",
+        0,
+        "c0c0c0c0-0000-4000-8000-0000000000c0",
+        "2026-10-27T10:00:02.000000+00:00",
+        "c1c1c1c1-0000-4000-8000-0000000000c1",
+        2,
+        "c1c1c1c1-0000-4000-8000-0000000000c1"
+      ],
+      "parent_run_id": "c0c0c0c0-0000-4000-8000-0000000000c0",
+      "records": 4,
+      "run_id": "c1c1c1c1-0000-4000-8000-0000000000c1",
+      "status": "completed",
+      "waiting": null,
+      "workflow": {
+        "bundle_id": "nested",
+        "bundle_version": "1.0.0",
+        "flow_id": "a",
+        "id": "nested@1.0.0:a"
+      },
+      "workflow_id": "nested@1.0.0:a"
+    },
+    {
+      "depth": 2,
+      "display_status": null,
+      "first_seq": 1,
+      "holds_interaction": false,
+      "last_seq": 2,
+      "order": [
+        "",
+        "",
+        0,
+        "c0c0c0c0-0000-4000-8000-0000000000c0",
+        "2026-10-27T10:00:02.000000+00:00",
+        "c1c1c1c1-0000-4000-8000-0000000000c1",
+        2,
+        "c1c1c1c1-0000-4000-8000-0000000000c1",
+        "2026-10-27T10:00:06.000000+00:00",
+        "c3c3c3c3-0000-4000-8000-0000000000c3",
+        2,
+        "c3c3c3c3-0000-4000-8000-0000000000c3"
+      ],
+      "parent_run_id": "c1c1c1c1-0000-4000-8000-0000000000c1",
+      "records": 2,
+      "run_id": "c3c3c3c3-0000-4000-8000-0000000000c3",
+      "status": "completed",
+      "waiting": null,
+      "workflow": {
+        "bundle_id": "nested",
+        "bundle_version": "1.0.0",
+        "flow_id": "g",
+        "id": "nested@1.0.0:g"
+      },
+      "workflow_id": "nested@1.0.0:g"
+    },
+    {
+      "depth": 1,
+      "display_status": null,
+      "first_seq": 1,
+      "holds_interaction": false,
+      "last_seq": 2,
+      "order": [
+        "",
+        "",
+        0,
+        "c0c0c0c0-0000-4000-8000-0000000000c0",
+        "2026-10-27T10:00:04.000000+00:00",
+        "c2c2c2c2-0000-4000-8000-0000000000c2",
+        4,
+        "c2c2c2c2-0000-4000-8000-0000000000c2"
+      ],
+      "parent_run_id": "c0c0c0c0-0000-4000-8000-0000000000c0",
+      "records": 2,
+      "run_id": "c2c2c2c2-0000-4000-8000-0000000000c2",
+      "status": "completed",
+      "waiting": null,
+      "workflow": {
+        "bundle_id": "nested",
+        "bundle_version": "1.0.0",
+        "flow_id": "b",
+        "id": "nested@1.0.0:b"
+      },
+      "workflow_id": "nested@1.0.0:b"
+    }
+  ],
+  "session_id": "sess-synthetic-0001",
+  "status": "completed",
+  "usage": {
+    "input_tokens": 0,
+    "llm_calls": 0,
+    "output_tokens": 0,
+    "total_tokens": 0
+  },
+  "version": "replay_view_v1",
+  "warnings": [],
+  "workflow": {
+    "bundle_id": "nested",
+    "bundle_version": "1.0.0",
+    "entrypoint": "main",
+    "flow_id": "main",
+    "id": "nested@1.0.0:main"
+  }
+}

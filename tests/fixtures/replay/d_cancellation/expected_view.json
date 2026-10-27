@@ -1,0 +1,252 @@
+{
+  "activities": [
+    {
+      "child_run_id": "edfc8439-d6c7-5d19-bab3-0fdbe61f8a21",
+      "effect_type": "start_subworkflow",
+      "ended_at": "2026-10-22T19:23:07.332270+00:00",
+      "execution_id": "4aac3fe8-fa2e-58e6-b795-4df95cb887ac",
+      "id": "fdd82bce-4c60-5cb0-9da1-641f8056bf1a:4aac3fe8-fa2e-58e6-b795-4df95cb887ac",
+      "kind": "subworkflow",
+      "name": "basic-agent@0.0.5:15f19f7f",
+      "node_id": "node-4",
+      "order": [
+        "2026-10-22T19:23:00.785454+00:00",
+        "fdd82bce-4c60-5cb0-9da1-641f8056bf1a",
+        1
+      ],
+      "run_id": "fdd82bce-4c60-5cb0-9da1-641f8056bf1a",
+      "seqs": [
+        1,
+        2,
+        3
+      ],
+      "started_at": "2026-10-22T19:23:00.785454+00:00",
+      "status": "completed",
+      "step_ids": [
+        "4aac3fe8-fa2e-58e6-b795-4df95cb887ac",
+        "4d7ae86e-941a-5875-95c0-27ca351ff272"
+      ],
+      "wait": {
+        "ended_by": "resume",
+        "kind": "delegation",
+        "until": null,
+        "wait_key": "subworkflow:edfc8439-d6c7-5d19-bab3-0fdbe61f8a21"
+      }
+    },
+    {
+      "effect_type": "wait_until",
+      "ended_at": "2026-10-22T19:23:07.323625+00:00",
+      "execution_id": "5937cf6e-fa31-5e2c-b4a8-aa7ba3496967",
+      "id": "edfc8439-d6c7-5d19-bab3-0fdbe61f8a21:5937cf6e-fa31-5e2c-b4a8-aa7ba3496967",
+      "kind": "timer",
+      "name": "wait_until",
+      "node_id": "node-9",
+      "order": [
+        "2026-10-22T19:23:07.323116+00:00",
+        "edfc8439-d6c7-5d19-bab3-0fdbe61f8a21",
+        3
+      ],
+      "run_id": "edfc8439-d6c7-5d19-bab3-0fdbe61f8a21",
+      "seqs": [
+        3,
+        4
+      ],
+      "started_at": "2026-10-22T19:23:07.323116+00:00",
+      "status": "completed",
+      "step_ids": [
+        "5937cf6e-fa31-5e2c-b4a8-aa7ba3496967"
+      ]
+    },
+    {
+      "child_run_id": "e14a0f3c-91bc-5219-b92a-53b239e3144d",
+      "effect_type": "start_subworkflow",
+      "ended_at": "2026-10-22T19:23:54.243482+00:00",
+      "execution_id": "63e25e65-97a7-5f63-bb19-ad0b73a4da70",
+      "id": "fdd82bce-4c60-5cb0-9da1-641f8056bf1a:63e25e65-97a7-5f63-bb19-ad0b73a4da70",
+      "kind": "subworkflow",
+      "name": "visual_react_agent_basic-agent_0_0_5_81795ea9_node-2",
+      "node_id": "node-2",
+      "order": [
+        "2026-10-22T19:23:07.855160+00:00",
+        "fdd82bce-4c60-5cb0-9da1-641f8056bf1a",
+        4
+      ],
+      "run_id": "fdd82bce-4c60-5cb0-9da1-641f8056bf1a",
+      "seqs": [
+        4,
+        5
+      ],
+      "started_at": "2026-10-22T19:23:07.855160+00:00",
+      "status": "completed",
+      "step_ids": [
+        "63e25e65-97a7-5f63-bb19-ad0b73a4da70"
+      ],
+      "wait": {
+        "ended_by": "terminal",
+        "kind": "delegation",
+        "until": null,
+        "wait_key": "subworkflow:e14a0f3c-91bc-5219-b92a-53b239e3144d"
+      }
+    },
+    {
+      "effect_type": "llm_call",
+      "ended_at": "2026-10-22T19:24:06.690761+00:00",
+      "execution_id": "353c3e4c-457f-5762-bc67-26bdd77da783",
+      "id": "e14a0f3c-91bc-5219-b92a-53b239e3144d:353c3e4c-457f-5762-bc67-26bdd77da783",
+      "kind": "llm",
+      "model": "mlx-community/Qwen3.6-35B-A3B-4bit",
+      "name": "mlx-community/Qwen3.6-35B-A3B-4bit",
+      "node_id": "reason",
+      "order": [
+        "2026-10-22T19:23:09.084485+00:00",
+        "e14a0f3c-91bc-5219-b92a-53b239e3144d",
+        1
+      ],
+      "provider": "mlx",
+      "run_id": "e14a0f3c-91bc-5219-b92a-53b239e3144d",
+      "seqs": [
+        1,
+        3
+      ],
+      "started_at": "2026-10-22T19:23:09.084485+00:00",
+      "status": "cancelled",
+      "step_ids": [
+        "353c3e4c-457f-5762-bc67-26bdd77da783"
+      ]
+    }
+  ],
+  "artifacts": [],
+  "cursor": {
+    "records": 18,
+    "runs": {
+      "e14a0f3c-91bc-5219-b92a-53b239e3144d": 4,
+      "edfc8439-d6c7-5d19-bab3-0fdbe61f8a21": 7,
+      "fdd82bce-4c60-5cb0-9da1-641f8056bf1a": 7
+    },
+    "token": "fdd82bce:7.edfc8439:7.e14a0f3c:4"
+  },
+  "display_status": "Stop forced at 10 s: inference killed",
+  "interaction": null,
+  "messages": [
+    {
+      "artifact_ids": [],
+      "id": "fdd82bce-4c60-5cb0-9da1-641f8056bf1a:input",
+      "kind": "prompt",
+      "order": [
+        "2026-10-22T19:22:57.293599+00:00",
+        "fdd82bce-4c60-5cb0-9da1-641f8056bf1a",
+        0
+      ],
+      "role": "user",
+      "run_id": "fdd82bce-4c60-5cb0-9da1-641f8056bf1a",
+      "seqs": [],
+      "source": "run_input",
+      "step_ids": [],
+      "text": "txt-6374a2528f96"
+    }
+  ],
+  "open_waits": [],
+  "root_run_id": "fdd82bce-4c60-5cb0-9da1-641f8056bf1a",
+  "runs": [
+    {
+      "depth": 0,
+      "display_status": "Stop forced at 10 s: inference killed",
+      "first_seq": 1,
+      "holds_interaction": false,
+      "last_seq": 7,
+      "order": [
+        "",
+        "",
+        0,
+        "fdd82bce-4c60-5cb0-9da1-641f8056bf1a"
+      ],
+      "parent_run_id": null,
+      "records": 7,
+      "run_id": "fdd82bce-4c60-5cb0-9da1-641f8056bf1a",
+      "status": "cancelled",
+      "waiting": null,
+      "workflow": {
+        "bundle_id": "basic-agent",
+        "bundle_version": "0.0.5",
+        "flow_id": "81795ea9",
+        "id": "basic-agent@0.0.5:81795ea9"
+      },
+      "workflow_id": "basic-agent@0.0.5:81795ea9"
+    },
+    {
+      "depth": 1,
+      "display_status": "Stop forced at 10 s: inference killed",
+      "first_seq": 1,
+      "holds_interaction": false,
+      "last_seq": 7,
+      "order": [
+        "",
+        "",
+        0,
+        "fdd82bce-4c60-5cb0-9da1-641f8056bf1a",
+        "2026-10-22T19:23:00.792868+00:00",
+        "edfc8439-d6c7-5d19-bab3-0fdbe61f8a21",
+        2,
+        "edfc8439-d6c7-5d19-bab3-0fdbe61f8a21"
+      ],
+      "parent_run_id": "fdd82bce-4c60-5cb0-9da1-641f8056bf1a",
+      "records": 7,
+      "run_id": "edfc8439-d6c7-5d19-bab3-0fdbe61f8a21",
+      "status": "completed",
+      "waiting": null,
+      "workflow": {
+        "bundle_id": "basic-agent",
+        "bundle_version": "0.0.5",
+        "flow_id": "15f19f7f",
+        "id": "basic-agent@0.0.5:15f19f7f"
+      },
+      "workflow_id": "basic-agent@0.0.5:15f19f7f"
+    },
+    {
+      "depth": 1,
+      "display_status": "Stop forced at 10 s: inference killed",
+      "first_seq": 1,
+      "holds_interaction": false,
+      "last_seq": 4,
+      "order": [
+        "",
+        "",
+        0,
+        "fdd82bce-4c60-5cb0-9da1-641f8056bf1a",
+        "2026-10-22T19:23:07.862673+00:00",
+        "e14a0f3c-91bc-5219-b92a-53b239e3144d",
+        5,
+        "e14a0f3c-91bc-5219-b92a-53b239e3144d"
+      ],
+      "parent_run_id": "fdd82bce-4c60-5cb0-9da1-641f8056bf1a",
+      "records": 4,
+      "run_id": "e14a0f3c-91bc-5219-b92a-53b239e3144d",
+      "status": "cancelled",
+      "waiting": null,
+      "workflow": {
+        "bundle_id": null,
+        "bundle_version": null,
+        "flow_id": "visual_react_agent_basic-agent_0_0_5_81795ea9_node-2",
+        "id": "visual_react_agent_basic-agent_0_0_5_81795ea9_node-2"
+      },
+      "workflow_id": "visual_react_agent_basic-agent_0_0_5_81795ea9_node-2"
+    }
+  ],
+  "session_id": "0ef5c745-cafd-520e-a5a6-0b18643a0db6",
+  "status": "cancelled",
+  "usage": {
+    "input_tokens": 0,
+    "llm_calls": 0,
+    "output_tokens": 0,
+    "total_tokens": 0
+  },
+  "version": "replay_view_v1",
+  "warnings": [],
+  "workflow": {
+    "bundle_id": "basic-agent",
+    "bundle_version": "0.0.5",
+    "entrypoint": "81795ea9",
+    "flow_id": "81795ea9",
+    "id": "basic-agent@0.0.5:81795ea9"
+  }
+}

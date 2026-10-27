@@ -1,0 +1,151 @@
+{
+  "activities": [
+    {
+      "effect_type": "llm_call",
+      "ended_at": "2026-06-10T03:32:01.647479+00:00",
+      "execution_id": "876bf623-27ae-5567-b04c-fdfd82ec39df",
+      "id": "32831f89-76d0-522e-b305-28c0550088fc:876bf623-27ae-5567-b04c-fdfd82ec39df",
+      "kind": "llm",
+      "model": "gpt-oss-20b",
+      "name": "gpt-oss-20b",
+      "node_id": "node-2",
+      "order": [
+        "2026-06-10T03:32:00.564021+00:00",
+        "32831f89-76d0-522e-b305-28c0550088fc",
+        1
+      ],
+      "run_id": "32831f89-76d0-522e-b305-28c0550088fc",
+      "seqs": [
+        1,
+        2
+      ],
+      "started_at": "2026-06-10T03:32:00.564021+00:00",
+      "status": "completed",
+      "step_ids": [
+        "876bf623-27ae-5567-b04c-fdfd82ec39df"
+      ],
+      "usage": {
+        "input_tokens": 139,
+        "output_tokens": 82,
+        "total_tokens": 221
+      }
+    },
+    {
+      "effect_type": "wait_until",
+      "ended_at": "2026-06-10T03:32:05.775066+00:00",
+      "execution_id": "3eaa2623-fc77-5d79-94e2-411346f6eb20",
+      "id": "32831f89-76d0-522e-b305-28c0550088fc:3eaa2623-fc77-5d79-94e2-411346f6eb20",
+      "kind": "timer",
+      "name": "wait_until",
+      "node_id": "node-5",
+      "order": [
+        "2026-06-10T03:32:01.650495+00:00",
+        "32831f89-76d0-522e-b305-28c0550088fc",
+        3
+      ],
+      "run_id": "32831f89-76d0-522e-b305-28c0550088fc",
+      "seqs": [
+        3,
+        4
+      ],
+      "started_at": "2026-06-10T03:32:01.650495+00:00",
+      "status": "completed",
+      "step_ids": [
+        "3eaa2623-fc77-5d79-94e2-411346f6eb20"
+      ],
+      "wait": {
+        "ended_by": "later_step",
+        "kind": "timer",
+        "until": "2026-06-10T03:32:05.650230+00:00",
+        "wait_key": null
+      }
+    },
+    {
+      "effect_type": "llm_call",
+      "ended_at": "2026-06-10T03:32:07.119063+00:00",
+      "execution_id": "8684574d-d786-5420-b50a-024eaa8070d7",
+      "id": "32831f89-76d0-522e-b305-28c0550088fc:8684574d-d786-5420-b50a-024eaa8070d7",
+      "kind": "llm",
+      "model": "gpt-oss-20b",
+      "name": "gpt-oss-20b",
+      "node_id": "node-3",
+      "order": [
+        "2026-06-10T03:32:05.775066+00:00",
+        "32831f89-76d0-522e-b305-28c0550088fc",
+        5
+      ],
+      "run_id": "32831f89-76d0-522e-b305-28c0550088fc",
+      "seqs": [
+        5,
+        6
+      ],
+      "started_at": "2026-06-10T03:32:05.775066+00:00",
+      "status": "completed",
+      "step_ids": [
+        "8684574d-d786-5420-b50a-024eaa8070d7"
+      ],
+      "usage": {
+        "input_tokens": 139,
+        "output_tokens": 95,
+        "total_tokens": 234
+      }
+    }
+  ],
+  "artifacts": [],
+  "cursor": {
+    "records": 6,
+    "runs": {
+      "32831f89-76d0-522e-b305-28c0550088fc": 6
+    },
+    "token": "32831f89:6"
+  },
+  "display_status": null,
+  "interaction": null,
+  "messages": [],
+  "open_waits": [],
+  "root_run_id": "32831f89-76d0-522e-b305-28c0550088fc",
+  "runs": [
+    {
+      "depth": 0,
+      "display_status": null,
+      "first_seq": 1,
+      "holds_interaction": false,
+      "last_seq": 6,
+      "order": [
+        "",
+        "",
+        0,
+        "32831f89-76d0-522e-b305-28c0550088fc"
+      ],
+      "parent_run_id": null,
+      "records": 6,
+      "run_id": "32831f89-76d0-522e-b305-28c0550088fc",
+      "status": "running",
+      "waiting": null,
+      "workflow": {
+        "bundle_id": "Untitled-Flow",
+        "bundle_version": "draft.dc4b296a-aa06-54f2-a351-a3c7dd7a0cd7",
+        "flow_id": "a47bd4d5",
+        "id": "Untitled-Flow@draft.dc4b296a-aa06-54f2-a351-a3c7dd7a0cd7:a47bd4d5"
+      },
+      "workflow_id": "Untitled-Flow@draft.dc4b296a-aa06-54f2-a351-a3c7dd7a0cd7:a47bd4d5"
+    }
+  ],
+  "session_id": "dc4b296a-aa06-54f2-a351-a3c7dd7a0cd7",
+  "status": "running",
+  "usage": {
+    "input_tokens": 278,
+    "llm_calls": 2,
+    "output_tokens": 177,
+    "total_tokens": 455
+  },
+  "version": "replay_view_v1",
+  "warnings": [],
+  "workflow": {
+    "bundle_id": "Untitled-Flow",
+    "bundle_version": "draft.dc4b296a-aa06-54f2-a351-a3c7dd7a0cd7",
+    "entrypoint": "a47bd4d5",
+    "flow_id": "a47bd4d5",
+    "id": "Untitled-Flow@draft.dc4b296a-aa06-54f2-a351-a3c7dd7a0cd7:a47bd4d5"
+  }
+}

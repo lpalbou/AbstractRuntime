@@ -1,0 +1,38 @@
+{
+ "adjustments": [],
+ "case": "e_structured_output_agents",
+ "pins": "1016 / executionIdFor: an Agent node execution is start_subworkflow started+waiting, a resume, and the `_temp.agent.<node>.structured` llm_call; the view shows ONE activity per execution (three Agent nodes, the last one cancelled while delegated).",
+ "provenance": "redacted from the operator's gateway data 2026-10-27",
+ "redaction": "free text -> salted HMAC placeholders (txt-<hex>); run/session ids -> salted uuid5; conversation-sized fields the view never reads dropped; $slim markers recomputed against the redacted STARTED payload (see the extraction script's docstring)",
+ "root_run_id": "73859e51-b223-5b19-86ac-83b4cbb03b5a",
+ "slim_markers": {
+  "slim_dropped": 0,
+  "slim_fixed": 0
+ },
+ "source_runs": {
+  "41fe165e-a4bb-5e9f-a335-8b811fa596c7": {
+   "cut_after_seq": null,
+   "snapshot": "real",
+   "source_run_id": "sha256:3f3061c008755a74",
+   "window_from_seq": null
+  },
+  "4df7868f-a678-5e17-8768-2e48ea4ad9f1": {
+   "cut_after_seq": null,
+   "snapshot": "real",
+   "source_run_id": "sha256:0adeb248893e0a85",
+   "window_from_seq": null
+  },
+  "73859e51-b223-5b19-86ac-83b4cbb03b5a": {
+   "cut_after_seq": null,
+   "snapshot": "real",
+   "source_run_id": "sha256:38f06e0946f625d7",
+   "window_from_seq": null
+  },
+  "bf502a3e-64ca-56b6-b2b4-7441b52a69e2": {
+   "cut_after_seq": null,
+   "snapshot": "real",
+   "source_run_id": "sha256:ec15c56587dcb844",
+   "window_from_seq": null
+  }
+ }
+}

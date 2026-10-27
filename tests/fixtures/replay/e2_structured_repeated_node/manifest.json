@@ -1,0 +1,28 @@
+{
+ "adjustments": [
+  "root ledger cut after its second Agent execution (seq 16); root snapshot set to running for that moment; the second execution's child ledger is not included (its run row has no records)"
+ ],
+ "case": "e2_structured_repeated_node",
+ "pins": "framework backlog 0993 'Case 2' (flow `assist`): the SAME Agent node (node-8) executed twice in a row; each execution is one activity and the two are never merged.",
+ "provenance": "redacted from the operator's gateway data 2026-10-27",
+ "redaction": "free text -> salted HMAC placeholders (txt-<hex>); run/session ids -> salted uuid5; conversation-sized fields the view never reads dropped; $slim markers recomputed against the redacted STARTED payload (see the extraction script's docstring)",
+ "root_run_id": "67d4a24f-1a23-5390-ba6c-a969a927ce4b",
+ "slim_markers": {
+  "slim_dropped": 0,
+  "slim_fixed": 2
+ },
+ "source_runs": {
+  "44ed2126-ab6d-5bd2-be31-c57132dcb5c7": {
+   "cut_after_seq": null,
+   "snapshot": "real",
+   "source_run_id": "sha256:eb6defcd6b261ad9",
+   "window_from_seq": null
+  },
+  "67d4a24f-1a23-5390-ba6c-a969a927ce4b": {
+   "cut_after_seq": 16,
+   "snapshot": "adjusted: {\"status\": \"running\", \"waiting\": null, \"output\": null}",
+   "source_run_id": "sha256:cea03361f11451b2",
+   "window_from_seq": null
+  }
+ }
+}

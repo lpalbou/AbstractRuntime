@@ -1,0 +1,32 @@
+{
+ "adjustments": [],
+ "case": "d_cancellation",
+ "pins": "a turn cancelled while its agent sub-run was working: the root and the agent run read cancelled, no open wait or interaction remains.",
+ "provenance": "redacted from the operator's gateway data 2026-10-27",
+ "redaction": "free text -> salted HMAC placeholders (txt-<hex>); run/session ids -> salted uuid5; conversation-sized fields the view never reads dropped; $slim markers recomputed against the redacted STARTED payload (see the extraction script's docstring)",
+ "root_run_id": "fdd82bce-4c60-5cb0-9da1-641f8056bf1a",
+ "slim_markers": {
+  "slim_dropped": 0,
+  "slim_fixed": 0
+ },
+ "source_runs": {
+  "e14a0f3c-91bc-5219-b92a-53b239e3144d": {
+   "cut_after_seq": null,
+   "snapshot": "real",
+   "source_run_id": "sha256:4f53a6cef77b0a45",
+   "window_from_seq": null
+  },
+  "edfc8439-d6c7-5d19-bab3-0fdbe61f8a21": {
+   "cut_after_seq": null,
+   "snapshot": "real",
+   "source_run_id": "sha256:97f5f2c880ca9963",
+   "window_from_seq": null
+  },
+  "fdd82bce-4c60-5cb0-9da1-641f8056bf1a": {
+   "cut_after_seq": null,
+   "snapshot": "real",
+   "source_run_id": "sha256:4c16039717f19a76",
+   "window_from_seq": null
+  }
+ }
+}

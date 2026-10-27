@@ -1,0 +1,170 @@
+{
+ "7acdab4a-b0d4-589a-ad71-787e07262839": {
+  "run_id": "7acdab4a-b0d4-589a-ad71-787e07262839",
+  "workflow_id": "basic-agent@0.0.4:81795ea9",
+  "status": "completed",
+  "current_node": "end",
+  "parent_run_id": null,
+  "session_id": "5e369ffc-1d46-5ed2-8db0-6fc29ceba31d",
+  "created_at": "2026-08-03T20:03:53.986038+00:00",
+  "updated_at": "2026-08-03T20:04:58.876187+00:00",
+  "waiting": null,
+  "output": {
+   "response": "txt-c64ce3b0967b",
+   "success": true,
+   "meta": {
+    "schema": "txt-52e4003e2d20",
+    "version": 1,
+    "provider": "endpoint:airelay",
+    "model": "gpt-5.4",
+    "sub_run_id": "324f805f-086d-53f3-beba-a8de0e4e25e7",
+    "iterations": 2,
+    "tool_calls": 2,
+    "tool_results": 2,
+    "output_mode": "txt-540da38828e2"
+   }
+  },
+  "error": null,
+  "vars": {
+   "prompt": "txt-9af110bbe7fc",
+   "context": {
+    "task": "txt-9af110bbe7fc"
+   }
+  }
+ },
+ "75821be6-4fb2-504e-bc61-e9ab74f6e4cd": {
+  "run_id": "75821be6-4fb2-504e-bc61-e9ab74f6e4cd",
+  "workflow_id": "basic-agent@0.0.4:15f19f7f",
+  "status": "completed",
+  "current_node": "end",
+  "parent_run_id": "7acdab4a-b0d4-589a-ad71-787e07262839",
+  "session_id": "5e369ffc-1d46-5ed2-8db0-6fc29ceba31d",
+  "created_at": "2026-08-03T20:04:00.125508+00:00",
+  "updated_at": "2026-08-03T20:04:02.740625+00:00",
+  "waiting": null,
+  "output": {
+   "state": "txt-7702e579893f",
+   "post_delay": 0,
+   "success": true
+  },
+  "error": null,
+  "vars": {}
+ },
+ "324f805f-086d-53f3-beba-a8de0e4e25e7": {
+  "run_id": "324f805f-086d-53f3-beba-a8de0e4e25e7",
+  "workflow_id": "visual_react_agent_basic-agent_0_0_4_81795ea9_node-2",
+  "status": "completed",
+  "current_node": "done",
+  "parent_run_id": "7acdab4a-b0d4-589a-ad71-787e07262839",
+  "session_id": "5e369ffc-1d46-5ed2-8db0-6fc29ceba31d",
+  "created_at": "2026-08-03T20:04:06.452839+00:00",
+  "updated_at": "2026-08-03T20:04:34.844111+00:00",
+  "waiting": null,
+  "output": {
+   "answer": "txt-c64ce3b0967b",
+   "report": "txt-965a35d2393c",
+   "iterations": 2,
+   "messages": [
+    {
+     "role": "txt-39b4b61e5934",
+     "content": "txt-9af110bbe7fc",
+     "timestamp": "txt-0d0954ba5aec",
+     "metadata": {
+      "message_id": "txt-afb75bce4012"
+     }
+    },
+    {
+     "role": "txt-f2007e1175d4",
+     "content": "",
+     "timestamp": "txt-4ddbea3d8034",
+     "metadata": {
+      "kind": "txt-6485390faeaf",
+      "cycle": 1,
+      "message_id": "txt-ad8ee45e1b63"
+     },
+     "tool_calls": [
+      {
+       "type": "txt-fcd5958ff500",
+       "id": "txt-f6c1bda7dcdc",
+       "function": {
+        "name": "txt-05aa1c28d9a1",
+        "arguments": "txt-ed1d29af51ba"
+       }
+      },
+      {
+       "type": "txt-fcd5958ff500",
+       "id": "txt-7af5c6b38532",
+       "function": {
+        "name": "txt-05aa1c28d9a1",
+        "arguments": "txt-e88a7d67c6ac"
+       }
+      }
+     ]
+    },
+    {
+     "role": "txt-544ab3c986ad",
+     "content": "txt-37290040ac45",
+     "timestamp": "txt-98c57786d055",
+     "metadata": {
+      "name": "txt-05aa1c28d9a1",
+      "call_id": "call_6SaFzPpwJqXlb2VZSsloQ4ym",
+      "success": true,
+      "message_id": "txt-f68d19c016b6"
+     }
+    },
+    {
+     "role": "txt-544ab3c986ad",
+     "content": "txt-5234b66356b5",
+     "timestamp": "txt-5c1b5d577b21",
+     "metadata": {
+      "name": "txt-05aa1c28d9a1",
+      "call_id": "call_BIBgg09el5nbCemH4raJXiU4",
+      "success": true,
+      "message_id": "txt-65e1b227dc81"
+     }
+    },
+    {
+     "role": "txt-f2007e1175d4",
+     "content": "txt-c64ce3b0967b",
+     "timestamp": "txt-246d4f9d2b1a",
+     "metadata": {
+      "kind": "txt-1313194b4bc8",
+      "message_id": "txt-1cf0d7c2da92"
+     }
+    }
+   ],
+   "outcome": "txt-1313194b4bc8",
+   "review_skipped": false
+  },
+  "error": null,
+  "vars": {
+   "context": {
+    "task": "txt-9af110bbe7fc",
+    "messages": [
+     {
+      "role": "user",
+      "content": "txt-9af110bbe7fc"
+     }
+    ]
+   }
+  }
+ },
+ "9aa00b16-9758-5719-816c-1b63e3866f10": {
+  "run_id": "9aa00b16-9758-5719-816c-1b63e3866f10",
+  "workflow_id": "basic-agent@0.0.4:15f19f7f",
+  "status": "completed",
+  "current_node": "end",
+  "parent_run_id": "7acdab4a-b0d4-589a-ad71-787e07262839",
+  "session_id": "5e369ffc-1d46-5ed2-8db0-6fc29ceba31d",
+  "created_at": "2026-08-03T20:04:40.597212+00:00",
+  "updated_at": "2026-08-03T20:04:52.873056+00:00",
+  "waiting": null,
+  "output": {
+   "state": "txt-0bfffb0038e0",
+   "post_delay": 3,
+   "success": true
+  },
+  "error": null,
+  "vars": {}
+ }
+}

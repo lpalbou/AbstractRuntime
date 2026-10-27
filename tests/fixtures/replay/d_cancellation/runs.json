@@ -1,0 +1,63 @@
+{
+ "fdd82bce-4c60-5cb0-9da1-641f8056bf1a": {
+  "run_id": "fdd82bce-4c60-5cb0-9da1-641f8056bf1a",
+  "workflow_id": "basic-agent@0.0.5:81795ea9",
+  "status": "cancelled",
+  "current_node": "node-2",
+  "parent_run_id": null,
+  "session_id": "0ef5c745-cafd-520e-a5a6-0b18643a0db6",
+  "created_at": "2026-10-22T19:22:57.293599+00:00",
+  "updated_at": "2026-10-22T19:24:06.736456+00:00",
+  "waiting": null,
+  "output": null,
+  "error": "txt-45d31f06e82c",
+  "vars": {
+   "prompt": "txt-6374a2528f96",
+   "context": {
+    "task": "txt-6374a2528f96"
+   }
+  }
+ },
+ "edfc8439-d6c7-5d19-bab3-0fdbe61f8a21": {
+  "run_id": "edfc8439-d6c7-5d19-bab3-0fdbe61f8a21",
+  "workflow_id": "basic-agent@0.0.5:15f19f7f",
+  "status": "completed",
+  "current_node": "end",
+  "parent_run_id": "fdd82bce-4c60-5cb0-9da1-641f8056bf1a",
+  "session_id": "0ef5c745-cafd-520e-a5a6-0b18643a0db6",
+  "created_at": "2026-10-22T19:23:00.787676+00:00",
+  "updated_at": "2026-10-22T19:23:07.326031+00:00",
+  "waiting": null,
+  "output": {
+   "state": "txt-7702e579893f",
+   "post_delay": 0,
+   "success": true
+  },
+  "error": null,
+  "vars": {}
+ },
+ "e14a0f3c-91bc-5219-b92a-53b239e3144d": {
+  "run_id": "e14a0f3c-91bc-5219-b92a-53b239e3144d",
+  "workflow_id": "visual_react_agent_basic-agent_0_0_5_81795ea9_node-2",
+  "status": "cancelled",
+  "current_node": "reason",
+  "parent_run_id": "fdd82bce-4c60-5cb0-9da1-641f8056bf1a",
+  "session_id": "0ef5c745-cafd-520e-a5a6-0b18643a0db6",
+  "created_at": "2026-10-22T19:23:07.859956+00:00",
+  "updated_at": "2026-10-22T19:24:06.737808+00:00",
+  "waiting": null,
+  "output": null,
+  "error": "txt-45d31f06e82c",
+  "vars": {
+   "context": {
+    "task": "txt-6374a2528f96",
+    "messages": [
+     {
+      "role": "user",
+      "content": "txt-5fed562bdad0"
+     }
+    ]
+   }
+  }
+ }
+}

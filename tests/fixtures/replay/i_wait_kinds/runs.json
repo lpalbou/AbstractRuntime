@@ -1,0 +1,124 @@
+{
+ "a0a0a0a0-0000-4000-8000-0000000000a0": {
+  "run_id": "a0a0a0a0-0000-4000-8000-0000000000a0",
+  "workflow_id": "wait-kinds@1.0.0:main",
+  "status": "running",
+  "current_node": "n",
+  "vars": {
+   "prompt": "Start the four waiters"
+  },
+  "waiting": null,
+  "output": null,
+  "error": null,
+  "created_at": "2026-10-27T10:00:00.000000+00:00",
+  "updated_at": "2026-10-27T10:00:59.000000+00:00",
+  "actor_id": null,
+  "session_id": "sess-synthetic-0001",
+  "parent_run_id": null
+ },
+ "a1a1a1a1-0000-4000-8000-0000000000a1": {
+  "run_id": "a1a1a1a1-0000-4000-8000-0000000000a1",
+  "workflow_id": "wait-kinds@1.0.0:pause",
+  "status": "waiting",
+  "current_node": "n",
+  "vars": {},
+  "waiting": {
+   "reason": "user",
+   "wait_key": "pause:a1a1a1a1-0000-4000-8000-0000000000a1",
+   "until": null,
+   "resume_to_node": null,
+   "result_key": null,
+   "prompt": null,
+   "choices": null,
+   "allow_free_text": true,
+   "details": {
+    "kind": "pause"
+   }
+  },
+  "output": null,
+  "error": null,
+  "created_at": "2026-10-27T10:00:00.000000+00:00",
+  "updated_at": "2026-10-27T10:00:59.000000+00:00",
+  "actor_id": null,
+  "session_id": "sess-synthetic-0001",
+  "parent_run_id": "a0a0a0a0-0000-4000-8000-0000000000a0"
+ },
+ "a2a2a2a2-0000-4000-8000-0000000000a2": {
+  "run_id": "a2a2a2a2-0000-4000-8000-0000000000a2",
+  "workflow_id": "wait-kinds@1.0.0:wake",
+  "status": "waiting",
+  "current_node": "n",
+  "vars": {},
+  "waiting": {
+   "reason": "event",
+   "wait_key": "automation:auto-0001:wake",
+   "until": null,
+   "resume_to_node": null,
+   "result_key": null,
+   "prompt": null,
+   "choices": null,
+   "allow_free_text": true,
+   "details": null
+  },
+  "output": null,
+  "error": null,
+  "created_at": "2026-10-27T10:00:00.000000+00:00",
+  "updated_at": "2026-10-27T10:00:59.000000+00:00",
+  "actor_id": null,
+  "session_id": "sess-synthetic-0001",
+  "parent_run_id": "a0a0a0a0-0000-4000-8000-0000000000a0"
+ },
+ "a3a3a3a3-0000-4000-8000-0000000000a3": {
+  "run_id": "a3a3a3a3-0000-4000-8000-0000000000a3",
+  "workflow_id": "wait-kinds@1.0.0:signal",
+  "status": "waiting",
+  "current_node": "n",
+  "vars": {},
+  "waiting": {
+   "reason": "event",
+   "wait_key": "evt:run:a3a3a3a3-0000-4000-8000-0000000000a3:go",
+   "until": null,
+   "resume_to_node": null,
+   "result_key": null,
+   "prompt": null,
+   "choices": null,
+   "allow_free_text": true,
+   "details": null
+  },
+  "output": null,
+  "error": null,
+  "created_at": "2026-10-27T10:00:00.000000+00:00",
+  "updated_at": "2026-10-27T10:00:59.000000+00:00",
+  "actor_id": null,
+  "session_id": "sess-synthetic-0001",
+  "parent_run_id": "a0a0a0a0-0000-4000-8000-0000000000a0"
+ },
+ "a4a4a4a4-0000-4000-8000-0000000000a4": {
+  "run_id": "a4a4a4a4-0000-4000-8000-0000000000a4",
+  "workflow_id": "wait-kinds@1.0.0:event",
+  "status": "waiting",
+  "current_node": "n",
+  "vars": {},
+  "waiting": {
+   "reason": "event",
+   "wait_key": "evt:run:a4a4a4a4-0000-4000-8000-0000000000a4:color",
+   "until": null,
+   "resume_to_node": null,
+   "result_key": null,
+   "prompt": "Which colour should the chart use?",
+   "choices": [
+    "red",
+    "blue"
+   ],
+   "allow_free_text": true,
+   "details": null
+  },
+  "output": null,
+  "error": null,
+  "created_at": "2026-10-27T10:00:00.000000+00:00",
+  "updated_at": "2026-10-27T10:00:59.000000+00:00",
+  "actor_id": null,
+  "session_id": "sess-synthetic-0001",
+  "parent_run_id": "a0a0a0a0-0000-4000-8000-0000000000a0"
+ }
+}

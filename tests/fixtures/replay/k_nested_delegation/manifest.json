@@ -1,0 +1,7 @@
+{
+ "built_with": "abstractruntime StepRecord/RunState/WaitState appended through InMemoryLedgerStore (scratchpad synth.py)",
+ "case": "k_nested_delegation",
+ "pins": "a two-level tree whose grandchild is discovered after its uncle: run rows are in tree order (root, A, G, B) in the view AND after folding deltas with apply_delta (a row's `order` sorts in tree order).",
+ "provenance": "synthetic",
+ "root_run_id": "c0c0c0c0-0000-4000-8000-0000000000c0"
+}

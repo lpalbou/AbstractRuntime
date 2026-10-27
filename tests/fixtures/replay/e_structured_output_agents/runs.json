@@ -1,0 +1,132 @@
+{
+ "73859e51-b223-5b19-86ac-83b4cbb03b5a": {
+  "run_id": "73859e51-b223-5b19-86ac-83b4cbb03b5a",
+  "workflow_id": "co-scientist@0.1.0:co-scientist",
+  "status": "cancelled",
+  "current_node": "rank",
+  "parent_run_id": null,
+  "session_id": "73859e51-b223-5b19-86ac-83b4cbb03b5a",
+  "created_at": "2026-07-14T11:06:21.283713+00:00",
+  "updated_at": "2026-07-14T11:11:57.448740+00:00",
+  "waiting": null,
+  "output": null,
+  "error": "txt-8106ec715c91",
+  "vars": {}
+ },
+ "4df7868f-a678-5e17-8768-2e48ea4ad9f1": {
+  "run_id": "4df7868f-a678-5e17-8768-2e48ea4ad9f1",
+  "workflow_id": "visual_react_agent_co-scientist_0_1_0_co-scientist_generate",
+  "status": "completed",
+  "current_node": "done",
+  "parent_run_id": "73859e51-b223-5b19-86ac-83b4cbb03b5a",
+  "session_id": "73859e51-b223-5b19-86ac-83b4cbb03b5a",
+  "created_at": "2026-07-14T11:06:25.584723+00:00",
+  "updated_at": "2026-07-14T11:08:21.171885+00:00",
+  "waiting": null,
+  "output": {
+   "answer": "txt-49af5333ae49",
+   "report": "txt-2361012cbf1b",
+   "iterations": 1,
+   "messages": [
+    {
+     "role": "txt-39b4b61e5934",
+     "content": "txt-b6c26c4ed913",
+     "timestamp": "txt-3a685ced87b4",
+     "metadata": {
+      "message_id": "txt-a3b46ad9ddfb"
+     }
+    },
+    {
+     "role": "txt-f2007e1175d4",
+     "content": "txt-49af5333ae49",
+     "timestamp": "txt-e083a4c8e54d",
+     "metadata": {
+      "kind": "txt-1313194b4bc8",
+      "message_id": "txt-1ee8a0d1b549"
+     }
+    }
+   ],
+   "outcome": "txt-1313194b4bc8",
+   "review_skipped": false
+  },
+  "error": null,
+  "vars": {
+   "context": {
+    "task": "txt-b6c26c4ed913",
+    "messages": [
+     {
+      "role": "user",
+      "content": "txt-b6c26c4ed913"
+     }
+    ]
+   }
+  }
+ },
+ "bf502a3e-64ca-56b6-b2b4-7441b52a69e2": {
+  "run_id": "bf502a3e-64ca-56b6-b2b4-7441b52a69e2",
+  "workflow_id": "visual_react_agent_co-scientist_0_1_0_co-scientist_reflect",
+  "status": "completed",
+  "current_node": "done",
+  "parent_run_id": "73859e51-b223-5b19-86ac-83b4cbb03b5a",
+  "session_id": "73859e51-b223-5b19-86ac-83b4cbb03b5a",
+  "created_at": "2026-07-14T11:09:52.457624+00:00",
+  "updated_at": "2026-07-14T11:10:51.652876+00:00",
+  "waiting": null,
+  "output": {
+   "answer": "txt-4f63e79286f4",
+   "report": "txt-001517bf92af",
+   "iterations": 1,
+   "messages": [
+    {
+     "role": "txt-39b4b61e5934",
+     "content": "txt-77e02a9c469e",
+     "timestamp": "txt-d565b11486db",
+     "metadata": {
+      "message_id": "txt-bae17d872c8b"
+     }
+    },
+    {
+     "role": "txt-f2007e1175d4",
+     "content": "txt-4f63e79286f4",
+     "timestamp": "txt-50dcb26478ec",
+     "metadata": {
+      "kind": "txt-1313194b4bc8",
+      "message_id": "txt-c4007aba15ef"
+     }
+    }
+   ],
+   "outcome": "txt-1313194b4bc8",
+   "review_skipped": false
+  },
+  "error": null,
+  "vars": {
+   "context": {
+    "task": "txt-77e02a9c469e",
+    "messages": [
+     {
+      "role": "user",
+      "content": "txt-77e02a9c469e"
+     }
+    ]
+   }
+  }
+ },
+ "41fe165e-a4bb-5e9f-a335-8b811fa596c7": {
+  "run_id": "41fe165e-a4bb-5e9f-a335-8b811fa596c7",
+  "workflow_id": "visual_react_agent_co-scientist_0_1_0_co-scientist_rank",
+  "status": "cancelled",
+  "current_node": "init",
+  "parent_run_id": "73859e51-b223-5b19-86ac-83b4cbb03b5a",
+  "session_id": "73859e51-b223-5b19-86ac-83b4cbb03b5a",
+  "created_at": "2026-07-14T11:11:51.453672+00:00",
+  "updated_at": "2026-07-14T11:11:57.460543+00:00",
+  "waiting": null,
+  "output": null,
+  "error": "txt-8106ec715c91",
+  "vars": {
+   "context": {
+    "task": "txt-f751f9cb5bab"
+   }
+  }
+ }
+}

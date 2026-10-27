@@ -1,0 +1,498 @@
+{
+  "activities": [
+    {
+      "child_run_id": "a1a1a1a1-0000-4000-8000-0000000000a1",
+      "effect_type": "start_subworkflow",
+      "ended_at": "2026-10-27T10:00:02.000000+00:00",
+      "execution_id": "root-start-pause",
+      "id": "a0a0a0a0-0000-4000-8000-0000000000a0:root-start-pause",
+      "kind": "subworkflow",
+      "name": "wait-kinds@1.0.0:pause",
+      "node_id": "start_pause",
+      "order": [
+        "2026-10-27T10:00:01.000000+00:00",
+        "a0a0a0a0-0000-4000-8000-0000000000a0",
+        1
+      ],
+      "run_id": "a0a0a0a0-0000-4000-8000-0000000000a0",
+      "seqs": [
+        1,
+        2
+      ],
+      "started_at": "2026-10-27T10:00:01.000000+00:00",
+      "status": "completed",
+      "step_ids": [
+        "root-start-pause"
+      ]
+    },
+    {
+      "child_run_id": "a2a2a2a2-0000-4000-8000-0000000000a2",
+      "effect_type": "start_subworkflow",
+      "ended_at": "2026-10-27T10:00:04.000000+00:00",
+      "execution_id": "root-start-wake",
+      "id": "a0a0a0a0-0000-4000-8000-0000000000a0:root-start-wake",
+      "kind": "subworkflow",
+      "name": "wait-kinds@1.0.0:wake",
+      "node_id": "start_wake",
+      "order": [
+        "2026-10-27T10:00:03.000000+00:00",
+        "a0a0a0a0-0000-4000-8000-0000000000a0",
+        3
+      ],
+      "run_id": "a0a0a0a0-0000-4000-8000-0000000000a0",
+      "seqs": [
+        3,
+        4
+      ],
+      "started_at": "2026-10-27T10:00:03.000000+00:00",
+      "status": "completed",
+      "step_ids": [
+        "root-start-wake"
+      ]
+    },
+    {
+      "child_run_id": "a3a3a3a3-0000-4000-8000-0000000000a3",
+      "effect_type": "start_subworkflow",
+      "ended_at": "2026-10-27T10:00:06.000000+00:00",
+      "execution_id": "root-start-signal",
+      "id": "a0a0a0a0-0000-4000-8000-0000000000a0:root-start-signal",
+      "kind": "subworkflow",
+      "name": "wait-kinds@1.0.0:signal",
+      "node_id": "start_signal",
+      "order": [
+        "2026-10-27T10:00:05.000000+00:00",
+        "a0a0a0a0-0000-4000-8000-0000000000a0",
+        5
+      ],
+      "run_id": "a0a0a0a0-0000-4000-8000-0000000000a0",
+      "seqs": [
+        5,
+        6
+      ],
+      "started_at": "2026-10-27T10:00:05.000000+00:00",
+      "status": "completed",
+      "step_ids": [
+        "root-start-signal"
+      ]
+    },
+    {
+      "child_run_id": "a4a4a4a4-0000-4000-8000-0000000000a4",
+      "effect_type": "start_subworkflow",
+      "ended_at": "2026-10-27T10:00:08.000000+00:00",
+      "execution_id": "root-start-event",
+      "id": "a0a0a0a0-0000-4000-8000-0000000000a0:root-start-event",
+      "kind": "subworkflow",
+      "name": "wait-kinds@1.0.0:event",
+      "node_id": "start_event",
+      "order": [
+        "2026-10-27T10:00:07.000000+00:00",
+        "a0a0a0a0-0000-4000-8000-0000000000a0",
+        7
+      ],
+      "run_id": "a0a0a0a0-0000-4000-8000-0000000000a0",
+      "seqs": [
+        7,
+        8
+      ],
+      "started_at": "2026-10-27T10:00:07.000000+00:00",
+      "status": "completed",
+      "step_ids": [
+        "root-start-event"
+      ]
+    },
+    {
+      "effect_type": "wait_event",
+      "ended_at": null,
+      "execution_id": "pause-wait",
+      "id": "a1a1a1a1-0000-4000-8000-0000000000a1:pause-wait",
+      "kind": "event_wait",
+      "name": "wait_event",
+      "node_id": "wait_pause",
+      "order": [
+        "2026-10-27T10:00:09.000000+00:00",
+        "a1a1a1a1-0000-4000-8000-0000000000a1",
+        1
+      ],
+      "run_id": "a1a1a1a1-0000-4000-8000-0000000000a1",
+      "seqs": [
+        1,
+        2
+      ],
+      "started_at": "2026-10-27T10:00:09.000000+00:00",
+      "status": "waiting",
+      "step_ids": [
+        "pause-wait"
+      ],
+      "wait": {
+        "ended_by": null,
+        "kind": "pause",
+        "until": null,
+        "wait_key": "pause:a1a1a1a1-0000-4000-8000-0000000000a1"
+      }
+    },
+    {
+      "effect_type": "wait_event",
+      "ended_at": null,
+      "execution_id": "wake-wait",
+      "id": "a2a2a2a2-0000-4000-8000-0000000000a2:wake-wait",
+      "kind": "event_wait",
+      "name": "wait_event",
+      "node_id": "wait_wake",
+      "order": [
+        "2026-10-27T10:00:11.000000+00:00",
+        "a2a2a2a2-0000-4000-8000-0000000000a2",
+        1
+      ],
+      "run_id": "a2a2a2a2-0000-4000-8000-0000000000a2",
+      "seqs": [
+        1,
+        2
+      ],
+      "started_at": "2026-10-27T10:00:11.000000+00:00",
+      "status": "waiting",
+      "step_ids": [
+        "wake-wait"
+      ],
+      "wait": {
+        "ended_by": null,
+        "kind": "automation_wake",
+        "until": null,
+        "wait_key": "automation:auto-0001:wake"
+      }
+    },
+    {
+      "effect_type": "wait_event",
+      "ended_at": null,
+      "execution_id": "signal-wait",
+      "id": "a3a3a3a3-0000-4000-8000-0000000000a3:signal-wait",
+      "kind": "event_wait",
+      "name": "wait_event",
+      "node_id": "wait_signal",
+      "order": [
+        "2026-10-27T10:00:13.000000+00:00",
+        "a3a3a3a3-0000-4000-8000-0000000000a3",
+        1
+      ],
+      "run_id": "a3a3a3a3-0000-4000-8000-0000000000a3",
+      "seqs": [
+        1,
+        2
+      ],
+      "started_at": "2026-10-27T10:00:13.000000+00:00",
+      "status": "waiting",
+      "step_ids": [
+        "signal-wait"
+      ],
+      "wait": {
+        "ended_by": null,
+        "kind": "signal",
+        "until": null,
+        "wait_key": "evt:run:a3a3a3a3-0000-4000-8000-0000000000a3:go"
+      }
+    },
+    {
+      "effect_type": "wait_event",
+      "ended_at": null,
+      "execution_id": "event-wait",
+      "id": "a4a4a4a4-0000-4000-8000-0000000000a4:event-wait",
+      "kind": "event_wait",
+      "name": "wait_event",
+      "node_id": "wait_event",
+      "order": [
+        "2026-10-27T10:00:15.000000+00:00",
+        "a4a4a4a4-0000-4000-8000-0000000000a4",
+        1
+      ],
+      "run_id": "a4a4a4a4-0000-4000-8000-0000000000a4",
+      "seqs": [
+        1,
+        2
+      ],
+      "started_at": "2026-10-27T10:00:15.000000+00:00",
+      "status": "waiting",
+      "step_ids": [
+        "event-wait"
+      ],
+      "wait": {
+        "ended_by": null,
+        "kind": "event",
+        "until": null,
+        "wait_key": "evt:run:a4a4a4a4-0000-4000-8000-0000000000a4:color"
+      }
+    }
+  ],
+  "artifacts": [],
+  "cursor": {
+    "records": 16,
+    "runs": {
+      "a0a0a0a0-0000-4000-8000-0000000000a0": 8,
+      "a1a1a1a1-0000-4000-8000-0000000000a1": 2,
+      "a2a2a2a2-0000-4000-8000-0000000000a2": 2,
+      "a3a3a3a3-0000-4000-8000-0000000000a3": 2,
+      "a4a4a4a4-0000-4000-8000-0000000000a4": 2
+    },
+    "token": "a0a0a0a0:8.a1a1a1a1:2.a2a2a2a2:2.a3a3a3a3:2.a4a4a4a4:2"
+  },
+  "display_status": null,
+  "interaction": {
+    "activity_id": "a4a4a4a4-0000-4000-8000-0000000000a4:event-wait",
+    "allow_free_text": true,
+    "answer_payload": "{payload}",
+    "choices": [
+      "red",
+      "blue"
+    ],
+    "command": {
+      "payload": {
+        "wait_key": "evt:run:a4a4a4a4-0000-4000-8000-0000000000a4:color"
+      },
+      "run_id": "a4a4a4a4-0000-4000-8000-0000000000a4",
+      "type": "resume"
+    },
+    "details": null,
+    "kind": "event",
+    "prompt": "Which colour should the chart use?",
+    "run_id": "a4a4a4a4-0000-4000-8000-0000000000a4",
+    "seq": 2,
+    "step_id": "event-wait",
+    "tool_calls": null,
+    "wait_key": "evt:run:a4a4a4a4-0000-4000-8000-0000000000a4:color"
+  },
+  "messages": [
+    {
+      "artifact_ids": [],
+      "id": "a0a0a0a0-0000-4000-8000-0000000000a0:input",
+      "kind": "prompt",
+      "order": [
+        "2026-10-27T10:00:00.000000+00:00",
+        "a0a0a0a0-0000-4000-8000-0000000000a0",
+        0
+      ],
+      "role": "user",
+      "run_id": "a0a0a0a0-0000-4000-8000-0000000000a0",
+      "seqs": [],
+      "source": "run_input",
+      "step_ids": [],
+      "text": "Start the four waiters"
+    }
+  ],
+  "open_waits": [
+    {
+      "child_run_id": null,
+      "kind": "pause",
+      "person_facing": false,
+      "run_id": "a1a1a1a1-0000-4000-8000-0000000000a1",
+      "seq": 2,
+      "step_id": "pause-wait",
+      "until": null,
+      "wait_key": "pause:a1a1a1a1-0000-4000-8000-0000000000a1"
+    },
+    {
+      "child_run_id": null,
+      "kind": "automation_wake",
+      "person_facing": false,
+      "run_id": "a2a2a2a2-0000-4000-8000-0000000000a2",
+      "seq": 2,
+      "step_id": "wake-wait",
+      "until": null,
+      "wait_key": "automation:auto-0001:wake"
+    },
+    {
+      "child_run_id": null,
+      "kind": "signal",
+      "person_facing": false,
+      "run_id": "a3a3a3a3-0000-4000-8000-0000000000a3",
+      "seq": 2,
+      "step_id": "signal-wait",
+      "until": null,
+      "wait_key": "evt:run:a3a3a3a3-0000-4000-8000-0000000000a3:go"
+    },
+    {
+      "child_run_id": null,
+      "kind": "event",
+      "person_facing": true,
+      "run_id": "a4a4a4a4-0000-4000-8000-0000000000a4",
+      "seq": 2,
+      "step_id": "event-wait",
+      "until": null,
+      "wait_key": "evt:run:a4a4a4a4-0000-4000-8000-0000000000a4:color"
+    }
+  ],
+  "root_run_id": "a0a0a0a0-0000-4000-8000-0000000000a0",
+  "runs": [
+    {
+      "depth": 0,
+      "display_status": null,
+      "first_seq": 1,
+      "holds_interaction": false,
+      "last_seq": 8,
+      "order": [
+        "",
+        "",
+        0,
+        "a0a0a0a0-0000-4000-8000-0000000000a0"
+      ],
+      "parent_run_id": null,
+      "records": 8,
+      "run_id": "a0a0a0a0-0000-4000-8000-0000000000a0",
+      "status": "running",
+      "waiting": null,
+      "workflow": {
+        "bundle_id": "wait-kinds",
+        "bundle_version": "1.0.0",
+        "flow_id": "main",
+        "id": "wait-kinds@1.0.0:main"
+      },
+      "workflow_id": "wait-kinds@1.0.0:main"
+    },
+    {
+      "depth": 1,
+      "display_status": null,
+      "first_seq": 1,
+      "holds_interaction": false,
+      "last_seq": 2,
+      "order": [
+        "",
+        "",
+        0,
+        "a0a0a0a0-0000-4000-8000-0000000000a0",
+        "2026-10-27T10:00:02.000000+00:00",
+        "a1a1a1a1-0000-4000-8000-0000000000a1",
+        2,
+        "a1a1a1a1-0000-4000-8000-0000000000a1"
+      ],
+      "parent_run_id": "a0a0a0a0-0000-4000-8000-0000000000a0",
+      "records": 2,
+      "run_id": "a1a1a1a1-0000-4000-8000-0000000000a1",
+      "status": "waiting",
+      "waiting": {
+        "child_run_id": null,
+        "kind": "pause",
+        "wait_key": "pause:a1a1a1a1-0000-4000-8000-0000000000a1"
+      },
+      "workflow": {
+        "bundle_id": "wait-kinds",
+        "bundle_version": "1.0.0",
+        "flow_id": "pause",
+        "id": "wait-kinds@1.0.0:pause"
+      },
+      "workflow_id": "wait-kinds@1.0.0:pause"
+    },
+    {
+      "depth": 1,
+      "display_status": null,
+      "first_seq": 1,
+      "holds_interaction": false,
+      "last_seq": 2,
+      "order": [
+        "",
+        "",
+        0,
+        "a0a0a0a0-0000-4000-8000-0000000000a0",
+        "2026-10-27T10:00:04.000000+00:00",
+        "a2a2a2a2-0000-4000-8000-0000000000a2",
+        4,
+        "a2a2a2a2-0000-4000-8000-0000000000a2"
+      ],
+      "parent_run_id": "a0a0a0a0-0000-4000-8000-0000000000a0",
+      "records": 2,
+      "run_id": "a2a2a2a2-0000-4000-8000-0000000000a2",
+      "status": "waiting",
+      "waiting": {
+        "child_run_id": null,
+        "kind": "automation_wake",
+        "wait_key": "automation:auto-0001:wake"
+      },
+      "workflow": {
+        "bundle_id": "wait-kinds",
+        "bundle_version": "1.0.0",
+        "flow_id": "wake",
+        "id": "wait-kinds@1.0.0:wake"
+      },
+      "workflow_id": "wait-kinds@1.0.0:wake"
+    },
+    {
+      "depth": 1,
+      "display_status": null,
+      "first_seq": 1,
+      "holds_interaction": false,
+      "last_seq": 2,
+      "order": [
+        "",
+        "",
+        0,
+        "a0a0a0a0-0000-4000-8000-0000000000a0",
+        "2026-10-27T10:00:06.000000+00:00",
+        "a3a3a3a3-0000-4000-8000-0000000000a3",
+        6,
+        "a3a3a3a3-0000-4000-8000-0000000000a3"
+      ],
+      "parent_run_id": "a0a0a0a0-0000-4000-8000-0000000000a0",
+      "records": 2,
+      "run_id": "a3a3a3a3-0000-4000-8000-0000000000a3",
+      "status": "waiting",
+      "waiting": {
+        "child_run_id": null,
+        "kind": "signal",
+        "wait_key": "evt:run:a3a3a3a3-0000-4000-8000-0000000000a3:go"
+      },
+      "workflow": {
+        "bundle_id": "wait-kinds",
+        "bundle_version": "1.0.0",
+        "flow_id": "signal",
+        "id": "wait-kinds@1.0.0:signal"
+      },
+      "workflow_id": "wait-kinds@1.0.0:signal"
+    },
+    {
+      "depth": 1,
+      "display_status": null,
+      "first_seq": 1,
+      "holds_interaction": true,
+      "last_seq": 2,
+      "order": [
+        "",
+        "",
+        0,
+        "a0a0a0a0-0000-4000-8000-0000000000a0",
+        "2026-10-27T10:00:08.000000+00:00",
+        "a4a4a4a4-0000-4000-8000-0000000000a4",
+        8,
+        "a4a4a4a4-0000-4000-8000-0000000000a4"
+      ],
+      "parent_run_id": "a0a0a0a0-0000-4000-8000-0000000000a0",
+      "records": 2,
+      "run_id": "a4a4a4a4-0000-4000-8000-0000000000a4",
+      "status": "waiting",
+      "waiting": {
+        "child_run_id": null,
+        "kind": "event",
+        "wait_key": "evt:run:a4a4a4a4-0000-4000-8000-0000000000a4:color"
+      },
+      "workflow": {
+        "bundle_id": "wait-kinds",
+        "bundle_version": "1.0.0",
+        "flow_id": "event",
+        "id": "wait-kinds@1.0.0:event"
+      },
+      "workflow_id": "wait-kinds@1.0.0:event"
+    }
+  ],
+  "session_id": "sess-synthetic-0001",
+  "status": "running",
+  "usage": {
+    "input_tokens": 0,
+    "llm_calls": 0,
+    "output_tokens": 0,
+    "total_tokens": 0
+  },
+  "version": "replay_view_v1",
+  "warnings": [],
+  "workflow": {
+    "bundle_id": "wait-kinds",
+    "bundle_version": "1.0.0",
+    "entrypoint": "main",
+    "flow_id": "main",
+    "id": "wait-kinds@1.0.0:main"
+  }
+}

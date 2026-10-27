@@ -1,0 +1,199 @@
+{
+  "activities": [
+    {
+      "effect_type": "wait_event",
+      "ended_at": "2026-10-27T10:00:03.000000+00:00",
+      "execution_id": "ask-plan",
+      "id": "b0b0b0b0-0000-4000-8000-0000000000b0:ask-plan",
+      "kind": "event_wait",
+      "name": "wait_event",
+      "node_id": "ask",
+      "order": [
+        "2026-10-27T10:00:01.000000+00:00",
+        "b0b0b0b0-0000-4000-8000-0000000000b0",
+        1
+      ],
+      "run_id": "b0b0b0b0-0000-4000-8000-0000000000b0",
+      "seqs": [
+        1,
+        2,
+        3
+      ],
+      "started_at": "2026-10-27T10:00:01.000000+00:00",
+      "status": "completed",
+      "step_ids": [
+        "ask-plan",
+        "resume-plan"
+      ],
+      "wait": {
+        "ended_by": "resume",
+        "kind": "event",
+        "until": null,
+        "wait_key": "evt:run:b0b0b0b0-0000-4000-8000-0000000000b0:approve_plan"
+      }
+    },
+    {
+      "effect_type": "answer_user",
+      "ended_at": "2026-10-27T10:00:05.000000+00:00",
+      "execution_id": "say",
+      "id": "b0b0b0b0-0000-4000-8000-0000000000b0:say",
+      "kind": "answer",
+      "name": "answer_user",
+      "node_id": "say",
+      "order": [
+        "2026-10-27T10:00:04.000000+00:00",
+        "b0b0b0b0-0000-4000-8000-0000000000b0",
+        4
+      ],
+      "run_id": "b0b0b0b0-0000-4000-8000-0000000000b0",
+      "seqs": [
+        4,
+        5
+      ],
+      "started_at": "2026-10-27T10:00:04.000000+00:00",
+      "status": "completed",
+      "step_ids": [
+        "say"
+      ]
+    },
+    {
+      "effect_type": "wait_event",
+      "ended_at": null,
+      "execution_id": "pause",
+      "id": "b0b0b0b0-0000-4000-8000-0000000000b0:pause",
+      "kind": "event_wait",
+      "name": "wait_event",
+      "node_id": "pause",
+      "order": [
+        "2026-10-27T10:00:06.000000+00:00",
+        "b0b0b0b0-0000-4000-8000-0000000000b0",
+        6
+      ],
+      "run_id": "b0b0b0b0-0000-4000-8000-0000000000b0",
+      "seqs": [
+        6,
+        7
+      ],
+      "started_at": "2026-10-27T10:00:06.000000+00:00",
+      "status": "waiting",
+      "step_ids": [
+        "pause"
+      ],
+      "wait": {
+        "ended_by": null,
+        "kind": "pause",
+        "until": null,
+        "wait_key": "pause:b0b0b0b0-0000-4000-8000-0000000000b0"
+      }
+    }
+  ],
+  "artifacts": [],
+  "cursor": {
+    "records": 7,
+    "runs": {
+      "b0b0b0b0-0000-4000-8000-0000000000b0": 7
+    },
+    "token": "b0b0b0b0:7"
+  },
+  "display_status": null,
+  "interaction": null,
+  "messages": [
+    {
+      "artifact_ids": [],
+      "id": "b0b0b0b0-0000-4000-8000-0000000000b0:input",
+      "kind": "prompt",
+      "order": [
+        "2026-10-27T10:00:00.000000+00:00",
+        "b0b0b0b0-0000-4000-8000-0000000000b0",
+        0
+      ],
+      "role": "user",
+      "run_id": "b0b0b0b0-0000-4000-8000-0000000000b0",
+      "seqs": [],
+      "source": "run_input",
+      "step_ids": [],
+      "text": "Plan, then wait for me"
+    },
+    {
+      "artifact_ids": [],
+      "id": "b0b0b0b0-0000-4000-8000-0000000000b0:say:answer_user",
+      "kind": "answer",
+      "order": [
+        "2026-10-27T10:00:05.000000+00:00",
+        "b0b0b0b0-0000-4000-8000-0000000000b0",
+        5
+      ],
+      "role": "assistant",
+      "run_id": "b0b0b0b0-0000-4000-8000-0000000000b0",
+      "seqs": [
+        5
+      ],
+      "source": "answer_user",
+      "step_ids": [
+        "say"
+      ],
+      "text": "Plan approved; pausing until you resume."
+    }
+  ],
+  "open_waits": [
+    {
+      "child_run_id": null,
+      "kind": "pause",
+      "person_facing": false,
+      "run_id": "b0b0b0b0-0000-4000-8000-0000000000b0",
+      "seq": 7,
+      "step_id": "pause",
+      "until": null,
+      "wait_key": "pause:b0b0b0b0-0000-4000-8000-0000000000b0"
+    }
+  ],
+  "root_run_id": "b0b0b0b0-0000-4000-8000-0000000000b0",
+  "runs": [
+    {
+      "depth": 0,
+      "display_status": null,
+      "first_seq": 1,
+      "holds_interaction": false,
+      "last_seq": 7,
+      "order": [
+        "",
+        "",
+        0,
+        "b0b0b0b0-0000-4000-8000-0000000000b0"
+      ],
+      "parent_run_id": null,
+      "records": 7,
+      "run_id": "b0b0b0b0-0000-4000-8000-0000000000b0",
+      "status": "waiting",
+      "waiting": {
+        "child_run_id": null,
+        "kind": "pause",
+        "wait_key": "pause:b0b0b0b0-0000-4000-8000-0000000000b0"
+      },
+      "workflow": {
+        "bundle_id": "event-then-pause",
+        "bundle_version": "1.0.0",
+        "flow_id": "main",
+        "id": "event-then-pause@1.0.0:main"
+      },
+      "workflow_id": "event-then-pause@1.0.0:main"
+    }
+  ],
+  "session_id": "sess-synthetic-0001",
+  "status": "waiting",
+  "usage": {
+    "input_tokens": 0,
+    "llm_calls": 0,
+    "output_tokens": 0,
+    "total_tokens": 0
+  },
+  "version": "replay_view_v1",
+  "warnings": [],
+  "workflow": {
+    "bundle_id": "event-then-pause",
+    "bundle_version": "1.0.0",
+    "entrypoint": "main",
+    "flow_id": "main",
+    "id": "event-then-pause@1.0.0:main"
+  }
+}

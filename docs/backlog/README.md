@@ -14,7 +14,7 @@ If you are new to the project, start with `../README.md` and `../architecture.md
 
 - Planned: 31
 - Proposed: 14
-- Completed: 37
+- Completed: 38
 - Deprecated: 13
 - Recurrent: 0
 

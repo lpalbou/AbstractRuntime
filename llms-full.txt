@@ -5089,6 +5089,14 @@ per `session_id` in a store outside run vars
 the tools the account is authorized for); the TOOL_CALLS handler reads the run's session row once
 per batch, **before** it decides whether the batch must wait.
 
+Store API (both stores): `get(session_id)`, `get_with_revision(session_id) -> (revision, policy)`
+(the base of a host's guarded read-merge-write), `put(session_id, policy, if_revision=None)`,
+`delete(session_id, if_revision=None, actor=None) -> revision`, `revision(session_id)`,
+`history(session_id)`. Revisions only grow (a reset is a revision, `get` then answers `None`); an
+`if_revision` mismatch raises `SessionToolPolicyConflict` (`.expected`, `.actual`), which the
+gateway answers as a 409 carrying the current revision. A store read failure during a tool batch
+is logged and keeps the normal decision (ask where the defaults ask), never a wider one.
+
 Stored shape (the runtime reads only these keys):
 
 ```json

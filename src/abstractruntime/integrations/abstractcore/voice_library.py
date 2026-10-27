@@ -179,7 +179,12 @@ def _remote_error(exc: Exception, *, action: str) -> VoiceLibraryError:
     if response is not None:
         try:
             body = response.json()
-            detail = body.get("detail") if isinstance(body, dict) else body
+            # FastAPI's `{"detail": ...}`, or AbstractCore server's `{"error": {"message": ...}}`.
+            if isinstance(body, dict):
+                error = body.get("error")
+                detail = body.get("detail") or (error.get("message") if isinstance(error, dict) else error)
+            else:
+                detail = body
         except Exception:
             detail = getattr(response, "text", None)
     if isinstance(status, int) and status in (401, 403, 404, 422, 501):

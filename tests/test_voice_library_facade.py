@@ -297,6 +297,18 @@ def test_remote_errors_keep_their_status(status: int, expected: int) -> None:
     assert err.value.status_code == expected and "refused" in err.value.detail
 
 
+def test_remote_error_reads_the_core_server_error_shape() -> None:
+    class _CoreError(Exception):
+        def __init__(self) -> None:
+            super().__init__("Client error '404 Not Found'")
+            self.response = _Response(404, {"error": {"message": "Unknown voice_id: nope", "type": "http_error"}})
+
+    facade, _sender = _remote({("GET", "/voice/clones/nope"): _CoreError()})
+    with pytest.raises(VoiceLibraryError) as err:
+        facade.get_cloned_voice("nope")
+    assert err.value.status_code == 404 and "Unknown voice_id: nope" in err.value.detail
+
+
 def test_remote_unreachable_is_502() -> None:
     facade, _sender = _remote({("GET", "/voice/clones"): ConnectionError("refused")})
     with pytest.raises(VoiceLibraryError) as err:

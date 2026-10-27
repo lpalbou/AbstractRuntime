@@ -204,6 +204,26 @@ def test_named_artifacts_must_exist_and_be_checkable(tmp_path: Path) -> None:
     assert real.status == "completed" and real.result["sources"] == [{"kind": "artifact", "artifact_id": span.artifact_id}]
 
 
+def test_the_default_revision_id_covers_the_callers_sources(tmp_path: Path) -> None:
+    """Review 3a R4. Mutant: hash only (run, node, scope, owner, cause, ops) -> the second source is a silent no-op."""
+    home = _Home(tmp_path)
+    run = RunState.new(workflow_id="wf", entry_node="n1")
+    a1 = home.artifacts.store_text("first source").artifact_id
+    a2 = home.artifacts.store_text("second, different source").artifact_id
+    h = home.handlers[EffectType.MEMORY_REVISE]
+
+    def revise(**extra: Any) -> Any:
+        return h(run, Effect(type=EffectType.MEMORY_REVISE, payload={"ops": OPS, "scope": "global", **extra}), None)
+
+    first, second = revise(artifact_ids=[a1]), revise(artifact_ids=[a2])
+    assert first.result["applied"] and second.result["applied"]
+    assert first.result["revision_id"] != second.result["revision_id"]
+    retry = revise(artifact_ids=[a1])  # the same revision again (a retried attempt): a no-op
+    assert retry.result["revision_id"] == first.result["revision_id"] and retry.result["applied"] is False
+    later = revise(artifact_ids=[a1], occurred_at="2026-10-28T00:00:00+00:00")
+    assert later.result["applied"] is True
+
+
 def test_unknown_payload_keys_are_refused(tmp_path: Path) -> None:
     home = _Home(tmp_path)
     run = RunState.new(workflow_id="wf", entry_node="n1")

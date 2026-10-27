@@ -126,7 +126,7 @@ Payload (a Revision WITHOUT the runtime-owned part of its provenance):
 | `scope` | no | memory scope, default `"run"` |
 | `owner_id` | no | default: resolved from `scope` like the KG lane (`run` / `session` / `global`); required for any other scope |
 | `cause` | no | `ingest` (default), `reinterpret`, `merge`, `unmerge`, `ripple`, `person`, `maintenance`, `import`, `migration` |
-| `revision_id` | no | default `rev_<sha256(run_id, node, scope, owner, cause, ops)[:32]>`: a retried attempt is a no-op |
+| `revision_id` | no | default `rev_<sha256(run_id, node, scope, owner, cause, ops, provenance.sources, provenance.derived_from, artifact_ids, occurred_at)[:32]>`: a retried attempt is a no-op; the same ops from a new source are a new revision |
 | `occurred_at` | no | observation time (ISO UTC), default now |
 | `recorded_at` | no | record time, default now |
 | `summary` | no | free text |

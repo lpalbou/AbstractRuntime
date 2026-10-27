@@ -29,6 +29,21 @@ from ..core.run_attribution import automation_index_fields, is_turn_root, latest
 from ..core.run_identity import verify_run_identity
 from ..core.run_lifecycle import run_lifecycle_index_fields
 
+try:  # POSIX advisory file locks (the JSONL ledger's cross-process append lock)
+    import fcntl as _fcntl
+except ImportError:  # pragma: no cover - Windows
+    _fcntl = None  # type: ignore[assignment]
+
+
+def _flock(f: Any) -> None:
+    if _fcntl is not None:
+        _fcntl.flock(f.fileno(), _fcntl.LOCK_EX)
+
+
+def _funlock(f: Any) -> None:
+    if _fcntl is not None:
+        _fcntl.flock(f.fileno(), _fcntl.LOCK_UN)
+
 logger = logging.getLogger(__name__)
 
 # Scan-sidecar row shape version. 2 (automations, 2026-09-27): rows gained the
@@ -2483,15 +2498,23 @@ class JsonlLedgerStore(LedgerStore):
         p = self._path(record.run_id)
         record_dict = steprecord_to_dict(record)
         with self._seq_lock:
-            seq = self._head_seq(record.run_id, p) + 1
-            record_dict["seq"] = seq
-            line = dumps_compact(record_dict)
             with p.open("a", encoding="utf-8") as f:
-                # Write as a single append operation to reduce the chance of
-                # concurrent writers producing concatenated JSON objects on one line.
-                f.write(line + "\n")
-                f.flush()
-                size = f.tell()
+                # Another PROCESS appending to the same run (the split API process, a CLI next to
+                # a gateway) must not take the same seq: an advisory exclusive lock on the file
+                # spans reading the head and writing the line (POSIX; elsewhere the in-process
+                # lock alone, the pre-seq posture).
+                _flock(f)
+                try:
+                    seq = self._head_seq(record.run_id, p) + 1
+                    record_dict["seq"] = seq
+                    line = dumps_compact(record_dict)
+                    # Write as a single append operation to reduce the chance of
+                    # concurrent writers producing concatenated JSON objects on one line.
+                    f.write(line + "\n")
+                    f.flush()
+                    size = f.tell()
+                finally:
+                    _funlock(f)
             self._seq_heads[record.run_id] = (size, seq)
             self._seq_heads.move_to_end(record.run_id)
             while len(self._seq_heads) > self._seq_heads_max:

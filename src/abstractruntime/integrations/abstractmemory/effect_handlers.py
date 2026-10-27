@@ -1017,7 +1017,16 @@ def build_memory_kg_effect_handlers(
         caller_sources = raw_prov.get("sources") or []
         if not isinstance(caller_sources, list) or not all(isinstance(r, dict) for r in caller_sources):
             return EffectOutcome.failed("MEMORY_REVISE provenance.sources is a list of SourceRef objects")
-        owned = sorted({str(r.get("kind")) for r in caller_sources} & _RUNTIME_OWNED_REF_KINDS)
+        # Validate (and normalize: kind is case- and space-insensitive) through AbstractMemory's own SourceRef FIRST,
+        # then compare the normalized kind: "STEP" or " step " is a step ref too and is refused like one.
+        from abstractmemory.graph import SourceRef  # type: ignore
+
+        try:
+            parsed_sources = [SourceRef.from_dict(r) for r in caller_sources]
+        except ValueError as e:  # InvalidSourceRef
+            return EffectOutcome.failed(f"MEMORY_REVISE provenance.sources holds an invalid SourceRef: {e}")
+        caller_sources = [r.to_dict() for r in parsed_sources]
+        owned = sorted({r.kind for r in parsed_sources} & _RUNTIME_OWNED_REF_KINDS)
         if owned:
             return EffectOutcome.failed(
                 f"MEMORY_REVISE: {owned} refs are runtime-owned (the runtime stamps the executing step); "

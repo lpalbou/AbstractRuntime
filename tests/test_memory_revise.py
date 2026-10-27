@@ -152,6 +152,22 @@ def test_run_and_step_refs_are_runtime_owned(tmp_path: Path) -> None:
     assert home.facade.graph.revisions()[0] == []
 
 
+@pytest.mark.parametrize("kind", ["STEP", " step ", "Run"])
+def test_run_and_step_refs_are_refused_whatever_their_spelling(tmp_path: Path, kind: str) -> None:
+    """Review 3a R1: the kind is normalized by SourceRef before the runtime-owned check. Mutant: compare the raw
+    kind string -> "STEP" slips through and the forged ledger address of another run is written."""
+    home = _Home(tmp_path)
+    ref = {"kind": kind, "run_id": "someone-else"}
+    if kind.strip().lower() == "step":
+        ref["seq"] = 1
+    run = RunState.new(workflow_id="wf", entry_node="n1")
+    home.run_store.save(run)
+    outcome = home.handlers[EffectType.MEMORY_REVISE](run, Effect(type=EffectType.MEMORY_REVISE, payload={
+        "ops": OPS, "scope": "global", "provenance": {"sources": [ref]}}), None)
+    assert outcome.status == "failed" and "runtime-owned" in outcome.error
+    assert home.facade.graph.revisions()[0] == []
+
+
 def test_unknown_payload_keys_are_refused(tmp_path: Path) -> None:
     home = _Home(tmp_path)
     run = RunState.new(workflow_id="wf", entry_node="n1")

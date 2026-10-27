@@ -122,3 +122,32 @@ Seams and notes:
   case-insensitively, plus the configured global memory owner; a test pins that the two packages agree.
 - `llms-full.txt` was not regenerated (coredoc pass at release).
 
+### Review fixes (2026-10-27: gateway review R5/R6, runtime review 3a)
+- R1 `1779fa9`: MEMORY_REVISE normalizes caller ref kinds through `SourceRef` before refusing `run`/`step` ("STEP").
+- R2 `7bd49ab`: a caller ref's `run_id` must be the executing run or absent.
+- R3 `860eac7`: named artifacts must exist in the builder's new `artifact_store`; without one, a revision naming
+  artifacts is refused.
+- R4 `e184633`: the default `revision_id` also hashes the caller's sources, derived_from, artifact_ids, occurred_at.
+- R5 `e84be06`, `12b61c7`: `runtime_id` on the facade (`open_mind`, the KG / seam builders); a ref naming another
+  runtime (or any runtime, on a facade without one) is `unsupported`; lifted refs carry the facade's runtime_id.
+- R6 `e84be06`: a `run` source's ledger is bounded (`limit` default 200, max 1000, `ledger_left_out`, `truncated`).
+- R7 + R13 `af2ba20`: `stamp` screens caller refs (run/step dropped, synthetic run ids stripped, invalid refs
+  rejected, a flat run_id other than the stamped run never lifted; `rejected_sources` records each; never raises);
+  `is_real_run` reuses AbstractMemory's `is_synthetic_run_id`, case-insensitively.
+- R8 `69fcccc`: parity test: every stamped dict reads back through `Provenance.from_legacy` (AbstractMemory 4c821b2).
+- R9 `630b2ef`: the JSONL append ends a torn last line first.
+- R10 `11630a9`: `coerce_ledger_seq` never truncates (3.9 is refused); seq is 1-based (a step ref's seq >= 1).
+- R11 `a38324b`: a duplicate KG assertion's unrecorded sources are reported (`skipped_duplicate_rows[].lost_sources`).
+- R14 `6f44bf1`: `metadata.unresolved_markers` on a step whose STARTED row is gone.
+
+Notes (not fixed here):
+- R12: the step context is a `ContextVar`. A handler that starts a plain `threading.Thread` gives that thread no
+  context (the thread sees None and stamps no step ref); the tool executor copies the context into its workers
+  (`contextvars.copy_context`), and a handler that spawns its own threads must do the same.
+- R15: rows written by `MEMORY_KG_ASSERT` (and the seam writers) go through `store.add`, not through the graph, so
+  `MemoryGraph` does not know them until a revision adopts them (an `import`/`migration` revision); a `close` or
+  `narrow` revision on such a row needs that adoption first. Moving the writers onto `apply_revision` is the
+  convergence track (Out, above).
+- Follow-up (R11): record a second source on an existing memory (a revision adopting the row with the new refs)
+  instead of reporting it as lost.
+

@@ -663,6 +663,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#voice-library" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Voice library
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#durable-run-scoped-media-and-comms-execution" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1626,6 +1637,17 @@
     <span class="md-ellipsis">
       
         Discovery snapshots
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#voice-library" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Voice library
       
     </span>
   </a>
@@ -2700,6 +2722,58 @@ mode forwards them to <code>/v1/models?capability_route=...</code>:</p>
     <span class="n">task</span><span class="o">=</span><span class="s2">"text_to_video"</span><span class="p">,</span>
     <span class="n">model</span><span class="o">=</span><span class="s2">"AbstractFramework/wan2.2-t2v-a14b-diffusers-8bit"</span><span class="p">,</span>
 <span class="p">)</span>
+</code></pre></div>
+<h2 id="voice-library">Voice library<a class="headerlink" href="#voice-library" title="Permanent link">&para;</a></h2>
+<p><code>get_abstractcore_voice_facade(runtime)</code> (<code>AbstractCoreVoiceFacade</code>) manages the voices AbstractCore can speak with:</p>
+<ul>
+<li><code>list_languages(kind=None, provider=None)</code>: <code>{"languages": {kind: {provider: {provider, languages, open, declared}}}}</code>
+  for <code>tts</code>, <code>stt</code> and <code>cloning</code>, read without loading a model;</li>
+<li><code>list_cloned_voices(provider=None, model=None, language=None)</code>: <code>{"voices": [...], "count": n}</code>, designed and
+  built-in voices included (<code>tags.designed</code>, <code>tags.builtin</code>); <code>language</code> keeps the voices that can speak it, native
+  speakers first;</li>
+<li><code>get_cloned_voice(voice_id)</code>, <code>update_cloned_voice(voice_id, name=None, reference_text=None)</code> (both fields checked
+  before either is applied) and <code>delete_cloned_voice(voice_id)</code>; built-in voices are read-only;</li>
+<li><code>clone_voice(audio_bytes, filename=None, content_type=None, name=None, reference_text=None, provider=None, model=None)</code>:
+  a voice from a reference recording (<code>provider</code> = the cloning engine, e.g. <code>qwen3-tts</code>, <code>omnivoice</code>);</li>
+<li><code>design_voice(description, name=None, language=None, text=None)</code>: a voice from a written description, stored as a
+  cloned voice (needs <code>abstractvoice[qwen3-tts]</code> and <code>abstractvoice[stt]</code> where the voice capability runs);</li>
+<li><code>deploy_voice_to_library(voice_id)</code>: copies one of the runtime's personal voices into its first library (see below);</li>
+<li><code>compatibility_catalog()</code>: per kind, provider, model and surface, the support level of each feature (<code>native</code>,
+  <code>emulated</code>, <code>conditional</code>, <code>unsupported</code>), e.g. which engines honour <code>speed</code> or <code>one_shot</code>.</li>
+</ul>
+<p>Local clients run these in process on the same AbstractCore capability registry their synthesis uses (same voice
+manager, settings and voice stores; a model pool uses its media host), AbstractCore 2.30.0+ and AbstractVoice 0.18.2+.
+<code>clone_voice</code> answers the stored record, flat, with its <code>voice_id</code>, on both sides; <code>clone_voice(..., language=)</code> records
+the recording's language in process (AbstractVoice 0.19.0). A remote AbstractCore 2.30.0 server does not take the
+language yet (its clone form has no such field), so a remotely cloned voice's language is identified from its transcript. The remote client calls the AbstractCore server's <code>/v1/audio/languages</code>, <code>/v1/voice/clones[/{id}]</code>
+(<code>GET</code>, <code>PATCH</code>, <code>DELETE</code>), <code>/v1/voice/clone</code> and <code>/v1/voice/design</code>, and reads the capability catalog from
+<code>/v1/audio/voices</code>; the server's changes need its operator token in the runtime's headers. Every refusal is a
+<code>VoiceLibraryError</code> with <code>status_code</code> (404 unknown voice, 422 refused input, 401 server token missing, 501 capability
+or engine runtime missing; a remote server's own 400, 403, 409, 413, 429 and 503 pass through; 502 for any other remote
+failure) and <code>detail</code>, so a host maps it to its own answer.</p>
+<p>Cloned voices live in AbstractVoice's store. By default that is one store per machine user, shared by every account a
+host serves. A runtime can instead have its own personal voice store in front of read-only libraries: put
+<code>voice_store_dir</code> (and optionally <code>voice_library_dirs</code>, a list of folders) in its AbstractCore client settings, e.g.
+<code>create_local_runtime(llm_kwargs={"voice_store_dir": "/data/alice/voices", "voice_library_dirs": ["/data/voice-library"]})</code>.
+Synthesis, the voice catalog and the voice library facade of that runtime then use the same stores: voices cloned or
+designed go to the personal store, library voices (built-in ones included) are listed and spoken but read-only (422), and
+<code>deploy_voice_to_library(voice_id)</code> copies a personal voice into the first library (local runtimes; 501 remote, where the
+AbstractCore server keeps its own store). Who may deploy is the host's decision. Needs AbstractVoice 0.19.0; with an older
+AbstractVoice, these settings are not honoured. Records carry <code>meta.scope</code> (<code>personal</code> | <code>library</code>).</p>
+<p>The voice catalog takes the same language filter: <code>get_abstractcore_discovery_facade(rt).get_voice_catalog(language="fr")</code>.
+A remote run's buffered TTS forwards <code>one_shot</code> (the whole text as one take, refused beyond an engine's limit); the
+streamed lane never sends it, as AbstractCore refuses <code>one_shot</code> on a stream.</p>
+<div class="highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">abstractruntime.integrations.abstractcore</span><span class="w"> </span><span class="kn">import</span> <span class="n">VoiceLibraryError</span><span class="p">,</span> <span class="n">get_abstractcore_voice_facade</span>
+
+<span class="n">voices</span> <span class="o">=</span> <span class="n">get_abstractcore_voice_facade</span><span class="p">(</span><span class="n">rt</span><span class="p">)</span>
+<span class="n">french</span> <span class="o">=</span> <span class="n">voices</span><span class="o">.</span><span class="n">list_cloned_voices</span><span class="p">(</span><span class="n">language</span><span class="o">=</span><span class="s2">"fr"</span><span class="p">)[</span><span class="s2">"voices"</span><span class="p">]</span>
+<span class="n">designed</span> <span class="o">=</span> <span class="n">voices</span><span class="o">.</span><span class="n">design_voice</span><span class="p">(</span><span class="s2">"A calm, warm low female voice"</span><span class="p">,</span> <span class="n">name</span><span class="o">=</span><span class="s2">"Calm"</span><span class="p">,</span> <span class="n">language</span><span class="o">=</span><span class="s2">"en"</span><span class="p">)</span>
+<span class="n">voices</span><span class="o">.</span><span class="n">update_cloned_voice</span><span class="p">(</span><span class="n">designed</span><span class="p">[</span><span class="s2">"voice_id"</span><span class="p">],</span> <span class="n">name</span><span class="o">=</span><span class="s2">"Calm narrator"</span><span class="p">)</span>
+<span class="n">voices</span><span class="o">.</span><span class="n">delete_cloned_voice</span><span class="p">(</span><span class="n">designed</span><span class="p">[</span><span class="s2">"voice_id"</span><span class="p">])</span>
+<span class="k">try</span><span class="p">:</span>
+    <span class="n">voices</span><span class="o">.</span><span class="n">get_cloned_voice</span><span class="p">(</span><span class="n">designed</span><span class="p">[</span><span class="s2">"voice_id"</span><span class="p">])</span>
+<span class="k">except</span> <span class="n">VoiceLibraryError</span> <span class="k">as</span> <span class="n">err</span><span class="p">:</span>
+    <span class="nb">print</span><span class="p">(</span><span class="n">err</span><span class="o">.</span><span class="n">status_code</span><span class="p">,</span> <span class="n">err</span><span class="o">.</span><span class="n">detail</span><span class="p">)</span>  <span class="c1"># 404: the voice is gone</span>
 </code></pre></div>
 <h2 id="durable-run-scoped-media-and-comms-execution">Durable run-scoped media and comms execution<a class="headerlink" href="#durable-run-scoped-media-and-comms-execution" title="Permanent link">&para;</a></h2>
 <p>Hosts sometimes need to trigger image/TTS/music/STT work or outbound comms sends for an existing run. That work should still execute through Runtime so the child run ledger, artifact ownership, and replay surface remain Runtime-authored.</p>

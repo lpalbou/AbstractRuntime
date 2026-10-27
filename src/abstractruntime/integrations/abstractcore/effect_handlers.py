@@ -1827,7 +1827,14 @@ def make_llm_call_handler(*, llm: AbstractCoreLLMClient, artifact_store: Optiona
                 ]
 
                 # The attachment index rides the TAIL as a SYSTEM message (backlog 0212 cache
-                # stability). It MUST stay role=system: it is context, not user speech, and both the
+                # stability). It is the ONE per-call difference between consecutive calls of a run:
+                # everything before it is append-only (pinned by
+                # tests/test_llm_call_prefix_stability_contract.py). A provider whose reusable
+                # prefix snapshot sits at the END of the prompt must place it BEFORE trailing system
+                # riders, or a hybrid model re-prefills the whole conversation on every call
+                # (2026-10-27: 10 of 10 tool-loop calls cold on Qwen3.8-27B MTP); AbstractCore's MLX
+                # native lane does so in `MLXProvider._native_rider_tail_tokens`. Never move this
+                # index into the middle of the history. It MUST stay role=system: it is context, not user speech, and both the
                 # grounding-envelope placement and durable-context extraction key off "the last user
                 # message" — a user-role index would be mistaken for user input and polluted into
                 # durable context.messages.

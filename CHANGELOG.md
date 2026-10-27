@@ -39,6 +39,18 @@ PyPI: a release never ships above an unpublished floor (root ADR 0034). ADR 0009
   store that is not a graph home answers a failed outcome naming AbstractMemory backlog 0057; an ungrounded revision
   fails with `ProvenanceRequired`.
 
+- **Source integrity** (architect pass): every ref the runtime stamps carries a `digest` (step: sha256 of the STARTED
+  record as written, also on the step context; artifact: the sha256 of its bytes; diary entry: the chain
+  `record_hash`), and `reconstruct_source` verifies it: new statuses `mismatch` (the bytes changed since the memory
+  named them) and `partial` (a `$slim` marker or an `{"$artifact": id}` leaf whose artifact is gone or uncheckable;
+  never `ok` with a hole). A step ref resolves only to its STARTED row (a rewritten JSON-file ledger answers
+  `source_gone`, never another row).
+- **Owner partitions**: `MEMORY_REVISE` and `MEMORY_KG_ASSERT` write only the run's own owners (its run, its session,
+  the global owner); `MEMORY_REVISE` refuses `recorded_at` (record time is the store's); a replayed revision reports
+  the memory's sources, not the retry's step.
+- **Persisted JSON-file row index** (`ledger_<run_id>.idx` beside the ledger): a fresh process reads a 100,000-row
+  ledger's row in 39 ms instead of 320 ms.
+
 ### Changed
 
 - **Contract change for ledger readers**: every record `LedgerStore.list(run_id)` returns now carries an additive

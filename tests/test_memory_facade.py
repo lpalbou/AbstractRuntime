@@ -498,3 +498,44 @@ def test_an_offloaded_leaf_whose_artifact_was_purged_is_partial_never_ok(tmp_pat
     unchecked = MemoryFacade(ledger_store=ledger).reconstruct_source(ref)  # no artifact store: cannot vouch
     assert unchecked["status"] == "partial"
 
+
+
+def test_artifact_and_diary_digests_are_verified(tmp_path: Path) -> None:
+    """Architect A4: an artifact ref's digest is the sha256 of its bytes, a diary entry ref's is the entry's chain
+    `record_hash`. Edited bytes answer `mismatch`. Mutant: skip the verification -> `ok`."""
+    import hashlib
+
+    artifacts = FileArtifactStore(tmp_path / "home")
+    meta = artifacts.store(b"the verbatim", content_type="text/plain")
+    good = {"kind": "artifact", "artifact_id": meta.artifact_id, "digest": hashlib.sha256(b"the verbatim").hexdigest()}
+    diary = DiaryStore(entity_id="ent", ledger_store=SqliteLedgerStore(SqliteDatabase(tmp_path / "home.sqlite3")))
+    stored = diary.append_entry(DiaryEntry(entry_id="diary_1", author="ent", text="I wrote this.",
+                                           written_at="2026-10-27T00:00:00Z"))
+    facade = MemoryFacade(artifact_store=artifacts, diary_store=diary)
+    assert facade.reconstruct_source(good)["metadata"]["digest_verified"] is True
+    other = dict(good, digest=hashlib.sha256(b"something else").hexdigest())
+    assert facade.reconstruct_source(other)["status"] == "mismatch"
+    entry = {"kind": "diary_entry", "entry_id": "diary_1", "digest": stored["record_hash"]}
+    assert facade.reconstruct_source(entry)["metadata"]["digest_verified"] is True
+    assert facade.reconstruct_source(dict(entry, digest="0" * 64))["status"] == "mismatch"
+    assert facade.reconstruct_source(dict(entry, digest="not-hex"))["status"] == "unsupported"
+    plain = facade.reconstruct_source({"kind": "artifact", "artifact_id": meta.artifact_id})
+    assert plain["status"] == "ok" and plain["metadata"]["digest_verified"] is False
+
+
+def test_stamped_refs_carry_their_digest(tmp_path: Path) -> None:
+    """Architect A4 (AbstractMemory 5e6be90 `SourceRef.digest`): the runtime stamps the digest it read: a step ref
+    the step context's, an artifact ref the store's sha256 of the bytes (lifted `payload_ref` included). Mutants: drop
+    `step_digest` / the artifact digest -> the refs carry none."""
+    artifacts = FileArtifactStore(tmp_path / "home")
+    meta = artifacts.store(b"verbatim bytes", content_type="text/plain")
+    f = MemoryFacade(artifact_store=artifacts)
+    out = f.stamp({"payload_ref": meta.artifact_id}, run_id="real-run-1", seq=2, step_digest="b" * 64,
+                  artifact_ids=[meta.artifact_id])
+    import hashlib
+
+    want = hashlib.sha256(b"verbatim bytes").hexdigest()
+    assert out["sources"] == [{"kind": "artifact", "artifact_id": meta.artifact_id, "digest": want},
+                              {"kind": "step", "run_id": "real-run-1", "seq": 2, "digest": "b" * 64}]
+    assert MemoryFacade().stamp({}, run_id="real-run-1", artifact_ids=["x"])["sources"][1] == {
+        "kind": "artifact", "artifact_id": "x", "run_id": "real-run-1"}  # no store: no digest is vouched

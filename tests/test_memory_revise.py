@@ -95,15 +95,18 @@ def test_a_memory_revise_step_writes_a_revision_grounded_in_its_own_ledger_row(t
 
     started = [r for r in home.ledger.list(run_id) if r["status"] == "started" and r["effect"]["type"] == "memory_revise"]
     assert len(started) == 1
-    step_ref = {"kind": "step", "run_id": run_id, "seq": started[0]["seq"], "step_id": started[0]["step_id"]}
+    from abstractruntime.storage.serialize import record_digest
+
+    step_ref = {"kind": "step", "run_id": run_id, "seq": started[0]["seq"], "step_id": started[0]["step_id"],
+                "digest": record_digest(started[0])}
     assert step_ref in out["sources"]
-    assert {"kind": "artifact", "artifact_id": span.artifact_id, "run_id": run_id} in out["sources"]
+    assert {"kind": "artifact", "artifact_id": span.artifact_id, "run_id": run_id, "digest": span.blob_id} in out["sources"]
 
     # The graph indexes the revision by its ledger row, both ways.
     assert sorted(home.facade.derived_from_source({"kind": "step", "run_id": run_id, "seq": step_ref["seq"]})) == sorted(
         out["assertion_ids"])
     for aid in out["assertion_ids"]:
-        assert step_ref in home.facade.sources_of(aid)
+        assert step_ref in [{k: v for k, v in s.items() if k in step_ref} for s in home.facade.sources_of(aid)]
         assert home.facade.history(aid)[0]["revision_id"] == out["revision_id"]
     (rev,), _ = home.facade.graph.revisions()
     assert rev.provenance.actor == "entity:e1" and rev.provenance.reason == "she said so" and rev.summary == "met Bob"
@@ -111,6 +114,7 @@ def test_a_memory_revise_step_writes_a_revision_grounded_in_its_own_ledger_row(t
     # The source reads back verbatim: the MEMORY_REVISE STARTED row carries the revision payload as sent.
     back = home.facade.reconstruct_source(step_ref)
     assert back["status"] == "ok" and back["metadata"]["effect_type"] == "memory_revise"
+    assert back["metadata"]["digest_verified"] is True
     assert back["metadata"]["status"] == "started"
     assert back["content"]["effect"]["payload"]["ops"] == OPS
     assert home.facade.reconstruct_source(
@@ -201,7 +205,8 @@ def test_named_artifacts_must_exist_and_be_checkable(tmp_path: Path) -> None:
     assert home.facade.graph.revisions()[0] == []
     real = home.handlers[EffectType.MEMORY_REVISE](loose, Effect(type=EffectType.MEMORY_REVISE, payload={
         "ops": OPS, "scope": "global", "artifact_ids": [span.artifact_id]}), None)
-    assert real.status == "completed" and real.result["sources"] == [{"kind": "artifact", "artifact_id": span.artifact_id}]
+    assert real.status == "completed"
+    assert real.result["sources"] == [{"kind": "artifact", "artifact_id": span.artifact_id, "digest": span.blob_id}]
 
 
 def test_the_default_revision_id_covers_the_callers_sources(tmp_path: Path) -> None:
@@ -308,26 +313,22 @@ def _revise_steps(home: "_Home", run_id: str) -> list:
     return [r for r in home.ledger.list(run_id) if r["status"] == "started" and r["effect"]["type"] == "memory_revise"]
 
 
-def test_the_same_ops_run_twice_are_one_memory(tmp_path: Path) -> None:
-    """Architect E1: the run id is not in the default revision_id, so the same workflow run twice with the same ops
-    is one revision (no duplicate triples). Mutant: put run_id back -> two revisions, two copies of each claim."""
+def test_the_same_ops_run_twice_are_one_memory_re_observed_by_both_runs(tmp_path: Path) -> None:
+    """Architect E1, as resolved with AbstractMemory 8e4279f: a re-run is a NEW revision (the run is in the default
+    revision_id) that re-observes the memory the graph holds open: no duplicate claim, and the second run's step is
+    recorded on it. Mutant: drop the run from the basis -> the re-run is a no-op and its step is lost."""
+    from abstractmemory import TripleQuery
+
     home = _Home(tmp_path)
     _, s1 = home.run_flow({"ops": OPS, "scope": "global"})
-    _, s2 = home.run_flow({"ops": OPS, "scope": "global"})
+    r2, s2 = home.run_flow({"ops": OPS, "scope": "global"})
     o1, o2 = _effect_result(s1), _effect_result(s2)
-    assert o1["revision_id"] == o2["revision_id"] and o1["applied"] is True and o2["applied"] is False
-    assert len(home.store.query(__import__("abstractmemory").TripleQuery(subject="ex:alice", limit=0))) == 2
-
-
-@pytest.mark.xfail(strict=True, reason="needs AbstractMemory's re-observation rule (a re-applied revision records the "
-                                       "new run's step ref on the memory); not on the graph worktree yet")
-def test_a_re_run_is_recorded_as_a_re_observation(tmp_path: Path) -> None:
-    home = _Home(tmp_path)
-    _, s1 = home.run_flow({"ops": OPS, "scope": "global"})
-    r2, _ = home.run_flow({"ops": OPS, "scope": "global"})
+    assert o1["revision_id"] != o2["revision_id"] and o2["applied"] is True
+    assert sorted(o2["re_observed"]) == sorted(o1["assertion_ids"])
+    assert len(home.store.query(TripleQuery(subject="ex:alice", limit=0))) == 2  # one row per claim, not two
     (step2,) = _revise_steps(home, r2)
-    ids = _effect_result(s1)["assertion_ids"]
-    assert sorted(home.facade.derived_from_source({"kind": "step", "run_id": r2, "seq": step2["seq"]})) == sorted(ids)
+    ids = home.facade.derived_from_source({"kind": "step", "run_id": r2, "seq": step2["seq"]})
+    assert sorted(ids) == sorted(o1["assertion_ids"])
 
 
 def _retry_after_a_post_apply_crash(tmp_path: Path) -> tuple:
@@ -366,10 +367,10 @@ def test_a_replayed_revision_never_reports_the_retry_step_as_the_memorys_source(
     assert [s.seq for s in rev.provenance.sources if s.kind == "step"] == [attempt1["seq"]]
 
 
-@pytest.mark.xfail(strict=True, reason="needs AbstractMemory's RevisionResult carrying the logged ids on a replay "
-                                       "(applied=False today returns assertion_ids=[]); not on the graph worktree yet")
 def test_a_replayed_revision_reports_the_memorys_ids_and_sources(tmp_path: Path) -> None:
+    """Architect A5 (AbstractMemory's RevisionResult carries the logged ids on a replay): the outcome reports the
+    memory's ids and the memory's own sources (attempt 1's step). Mutant: keep the stamped sources -> fails."""
     home, run_id, out, (attempt1, _) = _retry_after_a_post_apply_crash(tmp_path)
     assert len(out["assertion_ids"]) == 2
-    assert {"kind": "step", "run_id": run_id, "seq": attempt1["seq"], "step_id": attempt1["step_id"]} in out["sources"]
+    assert any(s.get("kind") == "step" and s.get("seq") == attempt1["seq"] for s in out["sources"])
 

@@ -93,6 +93,7 @@ def project_diary_entry(
     resolves: Optional[str] = None,
     explores: Optional[str] = None,
     digest_method: Optional[str] = None,
+    entry_record_hash: Optional[str] = None,
 ) -> Tuple[Optional[str], List[str]]:
     """Project the MEMORY OF THE ACT of a diary write into the graph.
 
@@ -251,6 +252,8 @@ def project_diary_entry(
         from .memory_facade import MemoryFacade
 
         entry_ref = {"kind": "diary_entry", "entry_id": entry_id, "run_id": diary_chain_id(entity_id)}
+        if entry_record_hash:  # the chain's own hash of the entry: what the projection vouches the entry said
+            entry_ref["digest"] = entry_record_hash
         provenance = {**provenance, "sources": [entry_ref]}
         writer_run = None if private else origin.get("run_id")
         provenance = MemoryFacade().stamp_current_step(provenance, run_id=writer_run)

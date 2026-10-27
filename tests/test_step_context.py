@@ -176,3 +176,51 @@ def test_a_tool_run_by_an_approval_resume_sees_the_waiting_steps_started_row(kin
     assert row["status"] == "started" and row["step_id"] == ctx.step_id and row["seq"] < waiting_row["seq"]
     assert row["effect"]["payload"]["tool_calls"][0]["arguments"] == {"text": "Met Dana"}
     assert current_step_context() is None
+
+
+@pytest.mark.parametrize("kind", ["sqlite", "jsonl"])
+def test_a_step_digest_vouches_for_the_started_row_and_an_edit_is_a_mismatch(kind: str, tmp_path: Path) -> None:
+    """Architect A4: the step context carries the sha256 of the STARTED record as written; reconstruction of a ref
+    carrying it verifies the row, and an in-place edit of the row (an UPDATE on SQLite, a rewritten line on JSONL)
+    answers `mismatch`, never `ok` with the edited bytes. Mutants: no digest in the context -> nothing to verify;
+    skip the verification -> `ok` after the edit."""
+    import json
+    import sqlite3
+
+    from abstractruntime.integrations.abstractmemory.memory_facade import MemoryFacade
+    from abstractruntime.storage.serialize import record_digest
+
+    run_store, ledger = _stores(kind, tmp_path)
+    seen: List[Any] = []
+
+    def handler(run: RunState, effect: Effect, default_next_node: Optional[str] = None) -> EffectOutcome:
+        seen.append(current_step_context(run.run_id))
+        return EffectOutcome.completed({"results": []})
+
+    wf = _one_effect_workflow("wf-digest", {"tool_calls": [{"name": "t", "arguments": {"say": "the truth"}}]})
+    rt = Runtime(run_store=run_store, ledger_store=ledger, effect_handlers={EffectType.TOOL_CALLS: handler})
+    run_id = rt.start(workflow=wf)
+    rt.tick(workflow=wf, run_id=run_id)
+    (ctx,) = seen
+    row = ledger.get_record(run_id, ctx.seq)
+    assert ctx.digest and ctx.digest == record_digest(row)
+    ref = {"kind": "step", "run_id": run_id, "seq": ctx.seq, "step_id": ctx.step_id, "digest": ctx.digest}
+    first = MemoryFacade(ledger_store=ledger).reconstruct_source(ref)
+    assert first["status"] == "ok" and first["metadata"]["digest_verified"] is True
+
+    edited = json.loads(json.dumps({k: v for k, v in row.items() if k != "seq"}))
+    edited["effect"]["payload"]["tool_calls"][0]["arguments"]["say"] = "a lie"
+    if kind == "sqlite":
+        with sqlite3.connect(tmp_path / "runtime.sqlite3") as conn:
+            conn.execute("UPDATE ledger SET record_json = ? WHERE run_id = ? AND seq = ?",
+                         (json.dumps(edited), run_id, ctx.seq))
+        reader = ledger
+    else:
+        path = tmp_path / "runs" / f"ledger_{run_id}.jsonl"
+        lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
+        lines[ctx.seq - 1] = json.dumps(edited) + "\n"
+        path.write_text("".join(lines), encoding="utf-8")
+        reader = JsonlLedgerStore(tmp_path / "runs")
+    second = MemoryFacade(ledger_store=reader).reconstruct_source(ref)
+    assert second["status"] == "mismatch" and second["expected_digest"] == ctx.digest
+    assert second["content"]["effect"]["payload"]["tool_calls"][0]["arguments"]["say"] == "a lie"

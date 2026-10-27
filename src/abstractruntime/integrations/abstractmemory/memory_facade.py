@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import base64
 import dataclasses
+import hashlib
 import importlib
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Tuple
@@ -189,6 +190,10 @@ def _ref_problem(ref: Any) -> Optional[str]:
                 return f"a 'step' SourceRef requires an int 'seq' >= 1 (got {value!r})"
         elif not isinstance(value, str) or not value.strip():
             return f"a {kind!r} SourceRef requires {name!r}"
+    digest = ref.get("digest")
+    if digest is not None and not (isinstance(digest, str) and len(digest) == 64
+                                   and all(c in "0123456789abcdef" for c in digest)):
+        return f"SourceRef.digest is a lowercase sha256 hex string (got {digest!r})"
     return None
 
 
@@ -203,7 +208,12 @@ def _ref_dedupe(refs: Iterable[Mapping[str, Any]]) -> List[Dict[str, Any]]:
     by_key: Dict[str, Any] = {}
     for item in refs:
         ref = SourceRef.from_dict(item)
-        by_key.setdefault(ref.key(), ref)
+        seen = by_key.get(ref.key())
+        if seen is None:
+            by_key[ref.key()] = ref
+        elif ref.digest and seen.digest != ref.digest:
+            # The runtime's refs come last and carry the digest it computed from the store: that one is the truth.
+            by_key[ref.key()] = dataclasses.replace(seen, digest=ref.digest)
     step_runs = {r.run_id for r in by_key.values() if r.kind == "step"}
     return [r.to_dict() for r in by_key.values() if not (r.kind == "run" and r.run_id in step_runs)]
 
@@ -306,6 +316,20 @@ class MemoryFacade:
     def is_real_run(self, run_id: Any) -> bool:
         return is_real_run(run_id, run_store=self.run_store)
 
+    def _artifact_digest(self, artifact_id: str) -> Optional[str]:
+        """sha256 of the artifact's bytes (its `blob_id`, which is exactly that), None without a store or artifact:
+        a digest is only stamped when the runtime read it from the store."""
+        if self.artifact_store is None or not artifact_id:
+            return None
+        meta = self.artifact_store.get_metadata(artifact_id)
+        if meta is None:
+            return None
+        blob = getattr(meta, "blob_id", None)
+        if isinstance(blob, str) and len(blob) == 64:
+            return blob.lower()
+        artifact = self.artifact_store.load(artifact_id)
+        return hashlib.sha256(artifact.content).hexdigest() if artifact is not None else None
+
     def _real(self, run_id: Any, trusted_run_id: Optional[str]) -> bool:
         # A run the runtime is executing right now (its step context names it) is loadable by construction: only the
         # synthetic-id check applies, and the hot path pays no run-store read.
@@ -321,6 +345,7 @@ class MemoryFacade:
         step_id: Optional[str] = None,
         artifact_ids: Iterable[Any] = (),
         runtime_id: Optional[str] = None,
+        step_digest: Optional[str] = None,
         _trusted_run_id: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """The refs the runtime can vouch for: a `step` ref when `run_id` is real and `seq` is a ledger row address,
@@ -334,6 +359,8 @@ class MemoryFacade:
             ref: Dict[str, Any] = {"kind": "step", "run_id": rid, "seq": s}
             if isinstance(step_id, str) and step_id.strip():
                 ref["step_id"] = step_id.strip()
+            if step_digest:
+                ref["digest"] = step_digest
             refs.append(ref)
         elif rid:
             refs.append({"kind": "run", "run_id": rid})
@@ -345,6 +372,9 @@ class MemoryFacade:
             ref = {"kind": "artifact", "artifact_id": aid.strip()}
             if rid:
                 ref["run_id"] = rid
+            digest = self._artifact_digest(aid.strip())
+            if digest:
+                ref["digest"] = digest
             refs.append(ref)
         if rt:
             for ref in refs:
@@ -360,6 +390,7 @@ class MemoryFacade:
         step_id: Optional[str] = None,
         artifact_ids: Iterable[Any] = (),
         runtime_id: Optional[str] = None,
+        step_digest: Optional[str] = None,
         _trusted_run_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Return `provenance` with the ledger refs the runtime knows added to its `sources` list.
@@ -376,7 +407,7 @@ class MemoryFacade:
         prov = dict(provenance or {})
         new_refs = self.source_refs(
             run_id=run_id, seq=seq, step_id=step_id, artifact_ids=artifact_ids, runtime_id=runtime_id,
-            _trusted_run_id=_trusted_run_id,
+            step_digest=step_digest, _trusted_run_id=_trusted_run_id,
         )
         graph_shape = bool(prov) and set(prov) <= G.PROVENANCE_KEYS and ("sources" in prov or "derived_from" in prov)
         if graph_shape:
@@ -405,9 +436,13 @@ class MemoryFacade:
                                  "reason": "a flat run_id that is not the run the runtime stamps for"})
         lifted = [s.to_dict() for s in G.Provenance.from_legacy(lift, actor="runtime").sources]
         rt = runtime_id or self.runtime_id
-        if rt:  # refs the runtime lifts are its own: they name the ledger they resolve against
-            for ref in lifted:
+        for ref in lifted:
+            if rt:  # refs the runtime lifts are its own: they name the ledger they resolve against
                 ref.setdefault("runtime_id", rt)
+            if ref["kind"] == "artifact":  # a lifted payload_ref / span_id: digest from the store when it holds it
+                digest = self._artifact_digest(ref["artifact_id"])
+                if digest:
+                    ref["digest"] = digest
         merged = _ref_dedupe([*kept, *lifted, *new_refs])
         if rejected:
             # A flat key: AbstractMemory's from_legacy carries it into `extra`.
@@ -434,7 +469,8 @@ class MemoryFacade:
             return self.stamp(provenance, run_id=run_id, artifact_ids=artifact_ids, runtime_id=runtime_id)
         return self.stamp(
             provenance, run_id=ctx.run_id, seq=ctx.seq, step_id=ctx.step_id, artifact_ids=artifact_ids,
-            runtime_id=runtime_id, _trusted_run_id=ctx.run_id,
+            runtime_id=runtime_id, step_digest=ctx.digest if ctx.seq is not None else None,
+            _trusted_run_id=ctx.run_id,
         )
 
     # -- graph pass-through ------------------------------------------------------------------------------------------
@@ -487,9 +523,10 @@ class MemoryFacade:
             )
         try:
             if kind == "run":
-                return self._reconstruct_run(ref, limit)
+                return _verify(ref, self._reconstruct_run(ref, limit), None)
             handler = getattr(self, f"_reconstruct_{kind}")
-            return handler(ref)
+            out = handler(ref)
+            return _verify(ref, out, self._actual_digest(kind, out))
         except Exception as exc:  # a store failing to read is reported, never raised to the reader
             return {"status": "source_gone", "ref": ref, "reason": f"{kind} source could not be read: {exc}"}
 
@@ -535,6 +572,20 @@ class MemoryFacade:
                     "unresolved": unresolved}
         return _ok(ref, "step", record, metadata)
 
+    def _actual_digest(self, kind: str, out: Dict[str, Any]) -> Optional[str]:
+        """The digest of what was read, in the form the runtime stamps for that kind (None: not digestible)."""
+        if out.get("status") != "ok":
+            return None
+        if kind == "step":
+            from ...storage.serialize import record_digest
+
+            return record_digest(out["content"])
+        if kind == "artifact":
+            return out["metadata"].get("sha256")
+        if kind == "diary_entry":
+            return out["metadata"].get("record_hash")
+        return None
+
     def _holes(self, record: Any) -> List[str]:
         from ...storage.artifacts import get_artifact_id
 
@@ -577,6 +628,7 @@ class MemoryFacade:
         if artifact is None:
             return _gone(ref, f"artifact {aid!r} does not exist (deleted or collected)")
         meta = artifact.metadata.to_dict()
+        meta["sha256"] = hashlib.sha256(artifact.content).hexdigest()
         try:
             content: Any = artifact.content.decode("utf-8")
             meta["encoding"] = "utf-8"
@@ -658,6 +710,26 @@ def _artifact_ref_paths(value: Any, path: str = "", depth: int = 0) -> List[Tupl
     elif isinstance(value, list):
         for i, v in enumerate(value):
             out.extend(_artifact_ref_paths(v, f"{path}[{i}]", depth + 1))
+    return out
+
+
+def _verify(ref: Dict[str, Any], out: Dict[str, Any], actual: Optional[str]) -> Dict[str, Any]:
+    """Check a stamped `digest` (architect A4): an `ok` read whose bytes differ from what the memory was built from
+    answers `mismatch` (the source was edited after the memory named it). A ref without a digest, or a kind with no
+    digest form, is read as before; `metadata.digest_verified` says which."""
+    want = ref.get("digest")
+    if out.get("status") != "ok" or not want:
+        if out.get("status") == "ok":
+            out["metadata"]["digest_verified"] = False
+        return out
+    if actual is None:
+        out["metadata"]["digest_verified"] = False
+        return out
+    if actual != want:
+        return {"status": "mismatch", "ref": ref, "kind": out["kind"], "content": out["content"],
+                "metadata": out["metadata"], "expected_digest": want, "actual_digest": actual,
+                "reason": "the source's bytes differ from the digest the memory was stamped with (edited since)"}
+    out["metadata"]["digest_verified"] = True
     return out
 
 

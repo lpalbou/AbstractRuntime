@@ -340,7 +340,7 @@ def build_memory_kg_effect_handlers(
         out_rows: list[Any] = []
         parse_errors: list[str] = []
         # Ledger provenance (ADR 0009): the MEMORY_KG_ASSERT step that wrote each assertion; `span_id` -> artifact.
-        facade = MemoryFacade(run_store=run_store, runtime_id=runtime_id)
+        facade = MemoryFacade(run_store=run_store, runtime_id=runtime_id, artifact_store=artifact_store)
         writer_run_id = str(getattr(run, "run_id", "") or "")
         for a in assertions:
             try:
@@ -1022,9 +1022,9 @@ def build_memory_kg_effect_handlers(
 
         The payload is a Revision (contract §3) WITHOUT the runtime-owned part of its provenance: `scope` defaults
         to "run" and `owner_id` resolves like the KG lane; `cause` defaults to "ingest"; `occurred_at` to now;
-        `revision_id` to a hash of (node, scope, owner, cause, ops, caller sources, derived_from, artifact_ids,
-        occurred_at) so a retried attempt or a re-run is a no-op (a re-observation) and a new source is a new
-        revision. The runtime
+        `revision_id` to a hash of (run, node, scope, owner, cause, ops, caller sources, derived_from, artifact_ids,
+        occurred_at) so a retried attempt is a no-op, while a re-run or a new source is a new revision (re-observing
+        a memory the graph holds open, never duplicating it). The runtime
         stamps the step ref of THIS effect (and an artifact ref per `artifact_ids`); the caller keeps
         `derived_from` / `actor` / `reader` / `reason` / `extra` and may name artifact / message / event /
         diary_entry sources, never a `run` or `step` ref. An ungrounded revision (no source, no derived_from, e.g.
@@ -1128,11 +1128,12 @@ def build_memory_kg_effect_handlers(
         if not (isinstance(revision_id, str) and revision_id.strip()):
             # Everything the caller said, so a retried attempt of the SAME revision is a no-op while the same ops
             # with a new source (another artifact, another derivation, another observation time) are a new revision.
-            # Neither the run nor the runtime's step ref is in the basis: a retry has a new STARTED row, and the same
-            # workflow run again with the same ops re-observes ONE memory instead of duplicating it (AbstractMemory's
-            # re-observation rule records the new run's step on it).
+            # The runtime's step ref is NOT in the basis (a retry has a new STARTED row: a retry is the same revision,
+            # a no-op). The RUN is: the same workflow run again is a NEW revision, and AbstractMemory's re-observation
+            # rule (8e4279f) records that run's step on the memory it already holds open instead of duplicating it.
+            # (Dropping the run made a re-run a no-op that lost the new run's source.)
             basis = json.dumps(
-                [str(getattr(run, "current_node", "") or ""), scope, owner_id, cause, ops,
+                [run_id, str(getattr(run, "current_node", "") or ""), scope, owner_id, cause, ops,
                  caller_sources, raw_prov.get("derived_from") or [], sorted(a.strip() for a in artifact_ids),
                  payload.get("occurred_at")],
                 sort_keys=True, ensure_ascii=False, separators=(",", ":"), default=str,
@@ -1186,7 +1187,8 @@ def build_memory_kg_effect_handlers(
             out["attempt_sources"] = stamped["sources"]
         return EffectOutcome.completed(out)
 
-    facade = MemoryFacade(graph=memory_graph, run_store=run_store, runtime_id=runtime_id)
+    facade = MemoryFacade(graph=memory_graph, run_store=run_store, runtime_id=runtime_id,
+                          artifact_store=artifact_store)
 
     return {
         EffectType.MEMORY_KG_ASSERT: _handle_assert,

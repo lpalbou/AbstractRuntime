@@ -54,6 +54,9 @@ class StepContext:
     node_id: str
     attempt: int
     effect_type: str
+    # sha256 of the STARTED record as written (`storage.serialize.record_digest`), None when unknown: what a
+    # memory's step ref vouches the row said, so a later edit of the row is detectable.
+    digest: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -63,6 +66,7 @@ class StepContext:
             "node_id": self.node_id,
             "attempt": self.attempt,
             "effect_type": self.effect_type,
+            "digest": self.digest,
         }
 
 

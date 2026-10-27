@@ -69,7 +69,7 @@ from ..storage.ledger_slim import (
     slim_result_metadata,
     slim_terminal_effect,
 )
-from ..storage.serialize import dumps_compact
+from ..storage.serialize import dumps_compact, record_digest
 from .health import RuntimeHealth
 from .event_keys import build_event_wait_key
 
@@ -3138,6 +3138,7 @@ class Runtime:
             node_id=str(waiting.get("node_id") or node_id),
             attempt=int(attempt) if isinstance(attempt, int) and attempt > 0 else 1,
             effect_type=effect_type.value,
+            digest=record_digest(started) if isinstance(started, dict) else None,
         )
 
     def _resume_commit(
@@ -3862,6 +3863,7 @@ class Runtime:
                 node_id=str(node_id),
                 attempt=int(attempt),
                 effect_type=str(getattr(effect.type, "value", effect.type)),
+                digest=record_digest(rec),
             )
             # Out of band, never in the payload (core.progress_channel): the
             # handler reads it from the context, the effect it receives stays

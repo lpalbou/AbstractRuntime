@@ -15,6 +15,7 @@ Mutants this file kills (each checked by hand when it was written; each test fai
 
 from __future__ import annotations
 
+import hashlib
 import warnings
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -97,12 +98,17 @@ def _step_refs(prov: Dict[str, Any]) -> List[Dict[str, Any]]:
 
 def _assert_step_ref_is_the_writer(env: _Env, prov: Dict[str, Any], run_id: str, effect_type: str) -> Dict[str, Any]:
     started = env.started_step(run_id, effect_type)
+    from abstractruntime.storage.serialize import record_digest
+
     refs = _step_refs(prov)
-    assert refs == [{"kind": "step", "run_id": run_id, "seq": started["seq"], "step_id": started["step_id"]}], prov
+    # The address, and the digest of the STARTED row as written (architect A4): what the memory vouches it said.
+    assert refs == [{"kind": "step", "run_id": run_id, "seq": started["seq"], "step_id": started["step_id"],
+                     "digest": record_digest(started)}], prov
     row = env.ledger.get_record(run_id, refs[0]["seq"])
     assert row["status"] == "started" and row["effect"] == started["effect"]  # the writing effect, verbatim
     rebuilt = env.facade.reconstruct_source(refs[0])
     assert rebuilt["status"] == "ok" and rebuilt["metadata"]["effect_type"] == effect_type
+    assert rebuilt["metadata"]["digest_verified"] is True
     return row
 
 
@@ -136,6 +142,7 @@ def test_memory_form_in_a_real_run_names_its_step_and_verbatim(tmp_path: Path) -
         assert row["effect"]["payload"]["records"][0]["verbatim"] == VERBATIM
         arts = [s for s in prov["sources"] if s["kind"] == "artifact"]
         assert len(arts) == 1 and arts[0]["run_id"] == run_id
+        assert arts[0]["digest"] == hashlib.sha256(VERBATIM.encode("utf-8")).hexdigest()  # the bytes it vouches for
         verbatim = env.facade.reconstruct_source(arts[0])
         assert verbatim["status"] == "ok" and verbatim["content"] == VERBATIM
         assert not [s for s in prov["sources"] if s["kind"] == "run"]  # the step ref is the precise address
@@ -177,7 +184,8 @@ def test_memory_form_called_directly_for_a_stored_run_gets_no_step_ref(tmp_path:
 def test_memory_kg_assert_in_a_real_run_names_its_step_and_span(tmp_path: Path) -> None:
     env = _Env(tmp_path)
     span = env.artifacts.store_text("the span the fact came from", run_id=None)
-    handlers = build_memory_kg_effect_handlers(store=env.store, run_store=env.run_store, now_iso=lambda: NOW)
+    handlers = build_memory_kg_effect_handlers(store=env.store, run_store=env.run_store, now_iso=lambda: NOW,
+                                               artifact_store=env.artifacts)
     payload = {"assertions": [{"subject": "ex:alice", "predicate": "schema:description", "object": "a person"}],
                "span_id": span.artifact_id, "scope": "run"}
     run_id, out = env.run_one(EffectType.MEMORY_KG_ASSERT, payload, handlers)
@@ -188,6 +196,7 @@ def test_memory_kg_assert_in_a_real_run_names_its_step_and_span(tmp_path: Path) 
     _assert_step_ref_is_the_writer(env, prov, run_id, "memory_kg_assert")
     (art,) = [s for s in prov["sources"] if s["kind"] == "artifact"]
     assert art["artifact_id"] == span.artifact_id
+    assert art["digest"] == hashlib.sha256(b"the span the fact came from").hexdigest()
     assert env.facade.reconstruct_source(art)["content"] == "the span the fact came from"
 
 
@@ -210,13 +219,15 @@ def test_diary_projection_names_the_entry_and_the_writing_step(tmp_path: Path, v
                "gist": "learned the pool"}
     run_id, out = env.run_one(EffectType.DIARY_WRITE, payload, handlers)
     record_id = out["projected_record_id"]
-    entry_ref = {"kind": "diary_entry", "entry_id": out["entry_id"], "run_id": "diary:ent"}
+    chain_hash = env.facade.diary_store.get_record(out["entry_id"])["record_hash"]
+    entry_ref = {"kind": "diary_entry", "entry_id": out["entry_id"], "run_id": "diary:ent", "digest": chain_hash}
     for prov in env.provenances(subject=record_id, scope="diary", owner_id="ent"):
         assert prov["entry_id"] == out["entry_id"] and prov["source"] == "diary-projection"
         _assert_parity(prov)
         assert entry_ref in prov["sources"]
         entry = env.facade.reconstruct_source(entry_ref)
         assert entry["status"] == "ok" and entry["content"]["text"] == payload["text"]
+        assert entry["metadata"]["digest_verified"] is True
         if visibility == "private":
             assert prov["sources"] == [entry_ref]  # a private projection carries no origin, the chain holds it
         else:
@@ -233,7 +244,9 @@ def test_diary_projection_on_the_chat_path_names_the_entry_only(tmp_path: Path) 
     for prov in env.provenances(subject=outcome.result["projected_record_id"], scope="diary", owner_id="ent"):
         assert prov["run_id"] == "chat-s9"  # the legacy origin stays
         _assert_parity(prov)
-        assert prov["sources"] == [{"kind": "diary_entry", "entry_id": outcome.result["entry_id"], "run_id": "diary:ent"}]
+        chain_hash = env.facade.diary_store.get_record(outcome.result["entry_id"])["record_hash"]
+        assert prov["sources"] == [{"kind": "diary_entry", "entry_id": outcome.result["entry_id"], "run_id": "diary:ent",
+                                    "digest": chain_hash}]
 
 
 def test_a_duplicate_kg_assertion_reports_the_sources_it_could_not_record(tmp_path: Path) -> None:

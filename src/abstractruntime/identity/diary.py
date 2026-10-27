@@ -324,7 +324,7 @@ def build_diary_effect_handlers(
             "one diary, one entity, one chain"
         )
 
-    def _project(entry: DiaryEntry) -> tuple[Optional[str], List[str]]:
+    def _project(entry: DiaryEntry, record_hash: Optional[str] = None) -> tuple[Optional[str], List[str]]:
         """Project the MEMORY OF THE ACT into the graph (findability plane).
 
         The graph involuntarily records that the act happened — "I wrote
@@ -356,6 +356,7 @@ def build_diary_effect_handlers(
             resolves=entry.resolves,
             explores=entry.explores,
             digest_method=str(entry.origin.get("digest_method") or "") or None,
+            entry_record_hash=record_hash,
         )
 
     def _handle_diary_write(run: RunState, effect: Effect, default_next_node: Optional[str]) -> EffectOutcome:
@@ -513,7 +514,13 @@ def build_diary_effect_handlers(
         # Projection is idempotent memory-side (supplied-id dedup), so
         # re-projecting on a replayed chain entry repairs an earlier
         # projection failure instead of duplicating.
-        projected_record_id, warnings = _project(entry)
+        # The chain's hash of the entry rides the projection's diary_entry ref (ADR 0009 digest); a replayed append
+        # returns the stored entry, whose hash is read back from the chain.
+        record_hash = appended.get("record_hash")
+        if not record_hash:
+            chain_row = diary_store.get_record(entry.entry_id)
+            record_hash = chain_row.get("record_hash") if isinstance(chain_row, dict) else None
+        projected_record_id, warnings = _project(entry, record_hash)
 
         result: Dict[str, Any] = {
             "entry_id": str(stored.get("entry_id") or entry.entry_id),

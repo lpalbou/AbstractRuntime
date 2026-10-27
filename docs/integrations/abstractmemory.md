@@ -107,6 +107,11 @@ the stores a host has; every one is optional.
 `{"status": "partial", ..., "unresolved": [paths]}` when a step row still holds a `$slim` marker or an
 `{"$artifact": id}` leaf whose artifact is gone (an offloaded leaf purged by retention, `delete_by_run`, gc) or
 cannot be checked (the facade has no `artifact_store`): the content comes back with the holes in place, never as `ok`.
+`{"status": "mismatch", ..., "expected_digest", "actual_digest"}` when the ref carries a `digest` and the bytes read
+differ (the source was edited after the memory named it). The runtime stamps a digest on every ref it creates: a step
+ref the sha256 of its STARTED record as written (`storage.serialize.record_digest`, also on the step context), an
+artifact ref the sha256 of the artifact's bytes (its `blob_id`; only when the facade/handler has the artifact store),
+a diary entry ref the entry's chain `record_hash`. `metadata.digest_verified` says whether a digest was checked.
 `{"status": "source_gone", "reason"}` when the run, row, artifact, entry or event no longer exists (or a pruned event),
 or when the row at a step ref's seq is not that step's STARTED row (a rewritten JSON-file ledger);
 a `run` source's `ledger` is the listing as stored (`$slim` markers and offloaded leaves unresolved by design: read a
@@ -140,7 +145,7 @@ Payload (a Revision WITHOUT the runtime-owned part of its provenance):
 | `scope` | no | memory scope, default `"run"` |
 | `owner_id` | no | default: resolved from `scope` like the KG lane (`run` / `session` / `global`). When given it must be one of the run's own partitions (its run id, its session's owner, the global owner); anything else fails the effect (`MEMORY_KG_ASSERT` applies the same rule to its payload and per-assertion `owner_id`) |
 | `cause` | no | `ingest` (default), `reinterpret`, `merge`, `unmerge`, `ripple`, `person`, `maintenance`, `import`, `migration` |
-| `revision_id` | no | default `rev_<sha256(node, scope, owner, cause, ops, provenance.sources, provenance.derived_from, artifact_ids, occurred_at)[:32]>`: a retried attempt, or the same workflow run again with the same ops, re-observes the same revision (no duplicate memory); the same ops from a new source are a new revision |
+| `revision_id` | no | default `rev_<sha256(run_id, node, scope, owner, cause, ops, provenance.sources, provenance.derived_from, artifact_ids, occurred_at)[:32]>`: a retried attempt is the same revision (a no-op); a re-run of the workflow, or the same ops from a new source, is a new revision that RE-OBSERVES a memory the graph holds open (AbstractMemory's rule: the new step is recorded on it, no duplicate; `re_observed` in the result) |
 | `occurred_at` | no | observation time (ISO UTC), default now |
 | `summary` | no | free text |
 | `artifact_ids` | no | artifacts the revision came from (stamped as `artifact` refs) |

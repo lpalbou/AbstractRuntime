@@ -6,6 +6,8 @@ the view's scalars whole (`status`, `display_status`, `interaction`, `open_waits
 `artifacts`), each keyed by `id` (`run_id` for runs). Items are never removed: an item only
 changes. `apply_delta(view, delta)` therefore replaces the scalars, upserts the items and
 re-sorts each list by its `order`, and `apply_delta(old, diff_views(old, new)) == new`.
+A delta's `changes` (typed change entries for a push dispatcher, root backlog 1058) describe the
+same change and are ignored here: a client's view is the scalars and the lists.
 """
 
 from __future__ import annotations

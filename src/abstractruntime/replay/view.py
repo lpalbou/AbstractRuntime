@@ -36,9 +36,10 @@ from __future__ import annotations
 import copy
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Set, Tuple
 
+from ..automations.attention import ANSWER_PAYLOADS
 from ..history_bundle import _extract_usage_from_ledger_record, _extract_user_prompt_from_input
 from ..storage.ledger_slim import is_slim_marker, resolve_slim_value
-from .executions import ExecutionTracker, is_progress_record
+from .executions import ExecutionTracker, is_completion_record, is_progress_record
 
 REPLAY_VIEW_VERSION = "replay_view_v1"
 
@@ -83,6 +84,16 @@ def _text_of(value: Any) -> str:
     return ""
 
 
+def _output_text(output: Any) -> str:
+    """A run output's display text. `{result: {...}}` beside other keys (`success`, ...) and no
+    `response`/`answer`/`notify` of its own is read through `result`: the runtime's own rule
+    (`automations.attention.normalize_occurrence_output`)."""
+    if isinstance(output, dict) and isinstance(output.get("result"), dict) and not any(
+            k in output for k in ("response", "answer", "notify")):
+        return _text_of(output["result"]) or _text_of(output)
+    return _text_of(output)
+
+
 def _artifact_refs(value: Any, path: str = "", depth: int = 0) -> List[Tuple[str, str]]:
     """Every `{"$artifact": id}` reference under `value` as (artifact_id, json path)."""
     if depth > _MAX_WALK_DEPTH:
@@ -123,8 +134,6 @@ def _snapshot(run: Any) -> Dict[str, Any]:
     source = d.get("input_data") if isinstance(d.get("input_data"), dict) else d.get("vars")
     prompt = _extract_user_prompt_from_input(source)[0] if isinstance(source, dict) else ""
     out = d.get("output")
-    if isinstance(out, dict) and isinstance(out.get("result"), dict) and len(out) == 1:
-        out = out["result"]
     # Only what the view reads is kept (a snapshot's vars can be conversation-sized).
     return {
         "run_id": _s(d.get("run_id")),
@@ -134,7 +143,7 @@ def _snapshot(run: Any) -> Dict[str, Any]:
         "parent_run_id": _s(d.get("parent_run_id")) or None,
         "waiting": waiting if isinstance(waiting, dict) else None,
         "prompt": prompt,
-        "output_text": _text_of(out),
+        "output_text": _output_text(out),
         "output_artifacts": [a for a, _ in _artifact_refs(out)],
         "created_at": _s(d.get("created_at")),
         "updated_at": _s(d.get("updated_at")),
@@ -175,25 +184,44 @@ def workflow_ref(workflow_id: Any) -> Optional[Dict[str, Any]]:
     return {"id": wid, "bundle_id": bundle_id, "bundle_version": version, "flow_id": flow_id}
 
 
-def wait_kind(wait: Dict[str, Any], effect_type: str = "") -> str:
-    """tool_approval | ask_user | delegation | timer | event | job"""
+def wait_kind(wait: Dict[str, Any], effect_type: str = "", run_id: str = "") -> str:
+    """tool_approval | ask_user | event | delegation | timer | job | pause | automation_wake | signal
+
+    Agrees with the runtime's attention classifier (`automations.attention.is_interactive_wait` /
+    `wait_kind`, which the gateway's attention stream uses), so a view and the attention stream
+    never disagree on whether a person is asked something:
+    - `tool_approval`: `details.mode == "approval_required"` (also `details.kind` tool_approval or
+      a `tool_approval:` key);
+    - a USER wait is `ask_user`, except a pause (`pause:<run id>` key or `details.kind == "pause"`):
+      `pause`;
+    - an automation controller's wake (`automation:<id>:wake`) is `automation_wake`;
+    - an EVENT wait with a prompt or choices is `event` (a person answers it); without one it is
+      `signal` (a machine wakes it);
+    - `delegation` (`subworkflow:`), `timer` (UNTIL), `job` (JOB).
+    Person-facing: tool_approval, ask_user, event (`PERSON_FACING_KINDS`)."""
     details = _obj(wait.get("details"))
     reason = _enum(wait.get("reason"))
     key = _s(wait.get("wait_key"))
-    if _s(details.get("kind")) == "tool_approval" or _s(details.get("mode")) == "approval_required" or key.startswith("tool_approval:"):
+    if _s(details.get("mode")) == "approval_required" or _s(details.get("kind")) == "tool_approval" or key.startswith("tool_approval:"):
         return "tool_approval"
     if reason == "subworkflow" or key.startswith("subworkflow:"):
         return "delegation"
+    if key.startswith("automation:") and key.endswith(":wake"):
+        return "automation_wake"
     if reason == "until":
         return "timer"
     if reason == "job":
         return "job"
-    if effect_type == "ask_user" or reason == "user" or _s(details.get("kind")) in ("ask_user", "ask"):
+    if reason == "user" or effect_type == "ask_user" or (not reason and _s(details.get("kind")) in ("ask_user", "ask")):
+        if _s(details.get("kind")) == "pause" or key == f"pause:{run_id}" or (not run_id and key.startswith("pause:")):
+            return "pause"
         return "ask_user"
-    return "event"
+    if reason == "event" and (wait.get("prompt") or wait.get("choices")):
+        return "event"
+    return "signal"
 
 
-PERSON_FACING_KINDS = frozenset({"tool_approval", "ask_user"})
+PERSON_FACING_KINDS = frozenset({"tool_approval", "ask_user", "event"})
 
 
 def _tool_call_id(call: Dict[str, Any], index: int) -> str:
@@ -226,6 +254,21 @@ def _match_results(calls: List[Dict[str, Any]], results: List[Any]) -> Dict[int,
             if ci not in out and ci not in used:
                 out[ci] = rows[ci]
     return out
+
+
+# The runtime's denial: `Runtime.resume` turns `{"approved": false}` on a tool-approval wait into
+# `{"mode": "executed", "results": [{success: false, output: None, error: <reason>}]}` (default
+# reason "Denied by user", core/runtime.py) and THAT is what the ledger records (the approval
+# step's results and the resume payload); `approved: false` itself is never written. Only the
+# default reason is recognisable: a custom deny reason reads as a failed call (follow-up: the
+# runtime should stamp `denied: true` on those rows).
+_RUNTIME_DENIAL_ERROR = "denied by user"
+
+
+def _is_denial(out: Any) -> bool:
+    if not isinstance(out, dict) or out.get("success") is not False:
+        return False
+    return out.get("output") is None and _s(out.get("error")).lower() == _RUNTIME_DENIAL_ERROR
 
 
 # --------------------------------------------------------------------------- the view
@@ -274,6 +317,8 @@ class ReplayView:
         self._wait_activity: Dict[Tuple[str, str], str] = {}
         self._dirty: Dict[str, Set[str]] = {"runs": set(), "activities": set(), "messages": set(), "artifacts": set()}
         self._interaction: Optional[Dict[str, Any]] = None
+        self._statuses: Dict[str, str] = {}  # run id -> the status the last delta reported
+        self._pending_changes: List[Dict[str, Any]] = []  # interaction opened/closed since the last delta
         self.last_delta: Optional[Dict[str, Any]] = None
         self._run(self.root_run_id)
 
@@ -396,25 +441,32 @@ class ReplayView:
                 self._link(child, rid, (snap.get("created_at") or "", child, 0))
 
     def _run_order(self) -> List[str]:
-        children: Dict[str, List[str]] = {}
-        for rid, r in self._runs.items():
-            if rid != self.root_run_id and r.parent_run_id and r.parent_run_id in self._runs:
-                children.setdefault(r.parent_run_id, []).append(rid)
-        out: List[str] = []
+        """The tree's runs in tree order: root, then each child (by discovery) followed by its own
+        subtree; runs whose ancestry does not reach the root (a windowed or partial read) after.
+
+        Defined as the sort of each row's `order` (`_path_order`), so a client that sorts rows by
+        `order` (`apply_delta`) gets the same order as `to_json`. (A tree-walk order with a
+        per-level `order` disagreed for a grandchild discovered after its uncle and for runs
+        whose parent is not yet known; found by the replay invariants.)"""
+        return sorted(self._runs, key=lambda rid: _order_tuple(self._path_order(rid)) + (rid,))
+
+    def _path_order(self, rid: str) -> List[Any]:
+        """A run row's `order`: the root's `["", "", 0, root]`, then one `[discovered at, run id,
+        seq, run id]` level per run on the path from the root down to `rid`. A run whose ancestry
+        does not reach the root starts with `["~", "", 0, ""]` (after the root's tree)."""
+        levels: List[Any] = []
         seen: Set[str] = set()
-
-        def walk(rid: str) -> None:
-            if rid in seen:
-                return
-            seen.add(rid)
-            out.append(rid)
-            for c in sorted(children.get(rid, []), key=lambda c: (self._runs[c].discover_key, c)):
-                walk(c)
-
-        walk(self.root_run_id)
-        for rid in sorted(r for r in self._runs if r not in seen):  # runs whose parent is not (yet) known
-            walk(rid)
-        return out
+        cur = rid
+        while cur not in seen and len(seen) < 64:
+            if cur == self.root_run_id:
+                return ["", "", 0, self.root_run_id] + levels
+            seen.add(cur)
+            r = self._runs[cur]
+            levels = [r.discover_key[0], r.discover_key[1], r.discover_key[2], cur] + levels
+            if not r.parent_run_id or r.parent_run_id not in self._runs:
+                break
+            cur = r.parent_run_id
+        return ["~", "", 0, ""] + levels
 
     def _run_status(self, r: _Run) -> str:
         snap_status = r.snapshot.get("status") or ""
@@ -448,7 +500,7 @@ class ReplayView:
             "status": self._run_status(r),
             "display_status": r.display_status or None,
             "depth": depth if rid != self.root_run_id else 0,
-            "order": [r.discover_key[0], r.discover_key[1], r.discover_key[2], rid] if rid != self.root_run_id else ["", "", 0, rid],
+            "order": self._path_order(rid),
             "waiting": ({"kind": w["kind"], "wait_key": w["wait_key"], "child_run_id": w.get("child_run_id")} if w else None),
             "holds_interaction": bool(self._interaction and self._interaction.get("run_id") == rid),
             "records": r.record_count,
@@ -532,13 +584,13 @@ class ReplayView:
         if eff_type == "emit_event":
             self._fold_event(r, rec, raw_payload, event_name, ts, seq, step_id)
             return
-        if not eff_type and idem.startswith("system:completion:"):
+        if is_completion_record(rec):
             if status == "completed":
                 r.ledger_terminal = r.ledger_terminal or "completed"
                 self._tracker.execution_id(rec)
                 if run_id == self.root_run_id:
                     output = res.get("output") if "output" in res else res
-                    self._final_message(run_id, step_id, seq, ts, _text_of(output),
+                    self._final_message(run_id, step_id, seq, ts, _output_text(output),
                                         [a for a, _ in _artifact_refs(output)], "ledger")
                 self._note_artifacts(run_id, step_id, seq, res)
             return
@@ -647,6 +699,7 @@ class ReplayView:
             by_id = {row["id"]: row for row in rows}
             results = res.get("results") if isinstance(res.get("results"), list) else []
             matched = _match_results(calls, results) if status in ("completed", "failed") else {}
+            approval = isinstance(act.get("wait"), dict) and act["wait"].get("kind") == "tool_approval"
             for i, call in enumerate(calls):
                 cid = _tool_call_id(call, i)
                 row = by_id.get(cid)
@@ -661,6 +714,10 @@ class ReplayView:
                     row["status"] = "waiting"
                 elif status in ("completed", "failed"):
                     out = matched.get(i)
+                    if approval and _is_denial(out):
+                        row["status"] = "denied"
+                        row["error"] = _s(out.get("error"))
+                        continue
                     failed = status == "failed" or (isinstance(out, dict) and (out.get("success") is False or bool(out.get("error"))))
                     row["status"] = "failed" if failed else "completed"
                     if isinstance(out, dict):
@@ -670,6 +727,11 @@ class ReplayView:
                             row["error"] = str(out.get("error"))
                 elif status == "cancelled":
                     row["status"] = "cancelled"
+            if rows and all(row.get("status") == "denied" for row in rows) and act["status"] != "denied":
+                # The ledger records a denial as the approval step's results, never as
+                # `approved: false` (see `_is_denial`): every call denied = the batch was denied.
+                act["status"] = "denied"
+                act["denied_reason"] = next((row["error"] for row in rows if row.get("error")), "") or "Denied by user"
             names = [row["name"] for row in rows if row.get("name")]
             act["name"] = ", ".join(dict.fromkeys(names)) or act.get("name")
         elif eff_type == "start_subworkflow":
@@ -680,7 +742,7 @@ class ReplayView:
 
     def _open_wait(self, r: _Run, rec: Dict[str, Any], wait: Dict[str, Any], payload: Dict[str, Any], eff_type: str,
                    aid: str, ts: str, seq: int, step_id: str) -> None:
-        kind = wait_kind(wait, eff_type)
+        kind = wait_kind(wait, eff_type, r.run_id)
         key = _s(wait.get("wait_key"))
         details = wait.get("details") if isinstance(wait.get("details"), dict) else None
         tool_calls = None
@@ -825,18 +887,16 @@ class ReplayView:
             self._dirty["messages"].add(mid)
 
     def _final_message(self, run_id: str, step_id: str, seq: int, ts: str, text: str, refs: List[str], source: str) -> None:
+        """The run's final output: always the one `<run_id>:final` message (the ledger's completion
+        record, else the snapshot's output). When it repeats an answer the run already gave, the
+        final message names that answer in `repeats` (set in `_finalize`) and a client shows one.
+
+        (Merging the final into the answer message instead, as before, made the message list
+        depend on read order: a snapshot read before the ledger's answer produced a `final`
+        message that a later answer could no longer absorb, and items are never removed. Found
+        by the replay invariants, fixture l_answer_then_completion.)"""
         if not text:
             return
-        for m in self._messages.values():
-            if m["run_id"] == run_id and m["kind"] == "answer" and m["role"] == "assistant" and m["text"] == text:
-                # The final answer repeats an answer the run already gave: one message, both records.
-                if step_id and step_id not in m["step_ids"]:
-                    m["step_ids"].append(step_id)
-                    if seq:
-                        m["seqs"].append(seq)
-                    m["final"] = True
-                    self._dirty["messages"].add(m["id"])
-                return
         self._message(f"{run_id}:final", role="assistant", kind="final", text=text, run_id=run_id, step_id=step_id,
                       seq=seq, ts=ts, source=source, artifact_ids=refs)
 
@@ -861,19 +921,30 @@ class ReplayView:
                 self._message(f"{self.root_run_id}:input", role="user", kind="prompt", text=snap["prompt"],
                               run_id=self.root_run_id, step_id="", seq=0, ts=snap.get("created_at") or root.first_ts,
                               source="run_input")
-            if snap.get("status") == "completed" and f"{self.root_run_id}:final" not in self._messages and not any(
-                m.get("final") for m in self._messages.values() if m["run_id"] == self.root_run_id
-            ):
+            if snap.get("status") == "completed" and f"{self.root_run_id}:final" not in self._messages:
                 # No terminal record folded (a legacy or windowed ledger): the snapshot's output.
                 self._final_message(self.root_run_id, "", 0, snap.get("updated_at") or "~", snap.get("output_text") or "",
                                     list(snap.get("output_artifacts") or []), "run_output")
+        # A final message that repeats an answer of its run names it (the first such answer).
+        final = self._messages.get(f"{self.root_run_id}:final")
+        if final is not None:
+            same = sorted((m for m in self._messages.values()
+                           if m["run_id"] == self.root_run_id and m["kind"] == "answer" and m["role"] == "assistant"
+                           and m["text"] == final["text"]), key=_order_key)
+            repeats = same[0]["id"] if same else None
+            if final.get("repeats") != repeats:
+                if repeats:
+                    final["repeats"] = repeats
+                else:
+                    final.pop("repeats", None)
+                self._dirty["messages"].add(final["id"])
         # Snapshot waits the ledger never mentioned (a windowed history, an empty ledger).
         for r in self._runs.values():
             w = r.snapshot.get("waiting") if r.snapshot.get("status") == "waiting" else None
             if r.open_wait is None and isinstance(w, dict):
                 key = _s(w.get("wait_key"))
                 if key and key not in r.seen_wait_keys and not r.ledger_terminal:
-                    kind = wait_kind(w)
+                    kind = wait_kind(w, "", r.run_id)
                     details = w.get("details") if isinstance(w.get("details"), dict) else None
                     r.open_wait = {
                         "run_id": r.run_id, "step_id": None, "seq": r.last_seq, "ts": r.snapshot.get("created_at") or "",
@@ -909,6 +980,13 @@ class ReplayView:
             for x in (old, interaction):
                 if x:
                     self._dirty["runs"].add(x["run_id"])
+            if _interaction_identity(old) != _interaction_identity(interaction):
+                # Typed changes (root backlog 1058): the closed one first, then the opened one.
+                if old:
+                    r_old = self._runs.get(old["run_id"])
+                    self._pending_changes.append(self._interaction_change(old, "closed", r_old.last_seq if r_old else 0))
+                if interaction:
+                    self._pending_changes.append(self._interaction_change(interaction, "opened", int(interaction.get("seq") or 0)))
 
     def _interaction_of(self, w: Dict[str, Any]) -> Dict[str, Any]:
         out = {
@@ -917,10 +995,18 @@ class ReplayView:
             "allow_free_text": w.get("allow_free_text"), "details": copy.deepcopy(w.get("details")),
             "tool_calls": copy.deepcopy(w.get("tool_calls")), "activity_id": w.get("activity_id"),
             "command": {"type": "resume", "run_id": w["run_id"], "payload": {"wait_key": w.get("wait_key")}},
+            # What the resume payload carries for this kind (the runtime's attention contract).
+            "answer_payload": ANSWER_PAYLOADS[w["kind"]],
         }
         if isinstance(out["details"], dict) and "tool_calls" in out["details"]:
             out["details"] = {k: v for k, v in out["details"].items() if k != "tool_calls"}
         return out
+
+    @staticmethod
+    def _interaction_change(it: Dict[str, Any], change: str, seq: int) -> Dict[str, Any]:
+        return {"kind": "interaction", "id": it.get("wait_key") or f"{it['run_id']}:{it.get('step_id') or ''}",
+                "run_id": it["run_id"], "seq": seq, "change": change, "interaction_kind": it["kind"],
+                "wait_key": it.get("wait_key")}
 
     def _open_waits(self) -> List[Dict[str, Any]]:
         rows = []
@@ -952,6 +1038,7 @@ class ReplayView:
             "activities": [copy.deepcopy(self._activities[i]) for i in sorted(self._dirty["activities"]) if i in self._activities],
             "artifacts": [copy.deepcopy(self._artifacts[i]) for i in sorted(self._dirty["artifacts"]) if i in self._artifacts],
         }
+        delta["changes"] = self._changes(order, delta)
         for k in self._dirty:
             self._dirty[k] = set()
         # A run row's `order`/`depth` can change when another run is linked; send every row then.
@@ -960,8 +1047,50 @@ class ReplayView:
         return delta
 
 
+    def _changes(self, order: List[str], delta: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """The delta's typed changes (root backlog 1058: a push is a ledger event at its seq).
+
+        Each is `{kind, id, run_id, seq, ...}`; `seq` is the newest seq of that run behind the
+        change (0 when only a snapshot is behind it). Order: status (tree order), interaction
+        (closed, then opened), run (tree order), message, activity, artifact (each by id).
+        `apply_delta` ignores them: the view itself is carried by the scalars and lists."""
+        out: List[Dict[str, Any]] = []
+        for rid in order:
+            r = self._runs[rid]
+            st = self._run_status(r)
+            if self._statuses.get(rid) != st:
+                out.append({"kind": "status", "id": rid, "run_id": rid, "seq": r.last_seq, "status": st,
+                            "previous": self._statuses.get(rid)})
+                self._statuses[rid] = st
+        out.extend(self._pending_changes)
+        self._pending_changes = []
+        for rid in order:
+            if rid in self._dirty["runs"]:
+                out.append({"kind": "run", "id": rid, "run_id": rid, "seq": self._runs[rid].last_seq})
+        for m in delta["messages"]:
+            out.append({"kind": "message", "id": m["id"], "run_id": m["run_id"], "seq": max(m["seqs"] or [0]),
+                        "message_kind": m["kind"], "role": m["role"]})
+        for a in delta["activities"]:
+            out.append({"kind": "activity", "id": a["id"], "run_id": a["run_id"], "seq": max(a["seqs"] or [0]),
+                        "activity_kind": a["kind"], "status": a["status"]})
+        for a in delta["artifacts"]:
+            out.append({"kind": "artifact", "id": a["id"], "run_id": a["run_id"], "seq": int(a.get("seq") or 0)})
+        return out
+
+
+def _interaction_identity(it: Optional[Dict[str, Any]]) -> Optional[Tuple[str, str, str]]:
+    if not it:
+        return None
+    return (str(it.get("run_id") or ""), str(it.get("wait_key") or ""), str(it.get("step_id") or ""))
+
+
+def _order_tuple(order: Iterable[Any]) -> Tuple:
+    # The same formatting as `delta._order_key` (a client sorts by it): ints zero-padded.
+    return tuple(str(x) if not isinstance(x, int) else f"{x:012d}" for x in order or ())
+
+
 def _order_key(item: Dict[str, Any]) -> Tuple:
-    return tuple(str(x) if not isinstance(x, int) else f"{x:012d}" for x in item.get("order") or ()) + (str(item.get("id") or item.get("run_id")),)
+    return _order_tuple(item.get("order") or ()) + (str(item.get("id") or item.get("run_id")),)
 
 
 def _sorted_items(items: Mapping[str, Dict[str, Any]]) -> List[Dict[str, Any]]:

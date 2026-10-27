@@ -49,6 +49,22 @@ def is_progress_record(rec: Dict[str, Any]) -> bool:
     return isinstance(payload, dict) and _s(payload.get("name")) == "abstract.progress"
 
 
+def is_completion_record(rec: Dict[str, Any]) -> bool:
+    """The run's terminal completion record: no effect, keyed `system:completion:<node>`.
+
+    Ledgers written before that key existed (e.g. the operator's gateway, 2026-06 to 2026-08)
+    carry no idempotency key on it; the record is then recognised by its shape (status
+    completed, `result.completed: true`). Found by the replay conformance fixtures."""
+    eff = rec.get("effect")
+    if isinstance(eff, dict) and _s(eff.get("type")):
+        return False
+    idem = _s(rec.get("idempotency_key"))
+    if idem.startswith("system:completion:"):
+        return True
+    res = rec.get("result")
+    return not idem and _status(rec) == "completed" and isinstance(res, dict) and res.get("completed") is True
+
+
 class _RunExecutions:
     __slots__ = ("by_step", "by_wait_key", "latest_by_node", "idem_by_exec")
 
@@ -86,7 +102,7 @@ class ExecutionTracker:
             exec_id = latest
         if not exec_id and latest:
             result_key = _s(effect.get("result_key"))
-            if result_key == f"_temp.agent.{node_id}.structured" or idem.startswith("system:completion:"):
+            if result_key == f"_temp.agent.{node_id}.structured" or is_completion_record(rec):
                 exec_id = latest
         progress = is_progress_record(rec)
         if not exec_id and progress:

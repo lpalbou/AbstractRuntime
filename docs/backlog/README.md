@@ -14,7 +14,7 @@ If you are new to the project, start with `../README.md` and `../architecture.md
 
 - Planned: 29
 - Proposed: 14
-- Completed: 35
+- Completed: 37
 - Deprecated: 13
 - Recurrent: 0
 
@@ -93,6 +93,8 @@ mtime). The anticipated ADR ("an automation is its controller root run") is not 
 
 | ID | Item |
 |----|------|
+| 0851 | [Per-account voice stores](completed/0851_per_account_voice_stores.md): completed 2026-10-27 (0.13.0); the runtime's voice catalog and voice library use its `voice_store_dir` / `voice_library_dirs`; real-weights E2E 9/9. |
+| 0852 | [Capability refusals are not retried](completed/0852_capability_refusals_are_not_retried.md): completed 2026-10-27 (0.13.0); one engine call for a refused request. |
 | 0847 | [Automations v1: controller, contracts, occurrences, triggers](completed/0847_automations_v1_controller_contracts_occurrences_triggers.md): completed 2026-09-27, moved from planned; UNRELEASED; `79d9bf6`…`d02578a`, 2957 passed / 26 skipped; reviews GO after fixes; E2E 9/9. |
 | 0846 | [Existing MLX instance scheduling and execution controls](completed/0846_mlx_instance_scheduling_and_execution_controls.md): completed 2026-09-20; moved from planned, 237 Runtime tests + 616 Core tests and four real-model integration cases; independent review approved, unreleased. |
 | 001 | `completed/001_runtime_kernel.md` |

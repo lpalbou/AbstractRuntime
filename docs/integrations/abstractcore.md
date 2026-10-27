@@ -1024,6 +1024,64 @@ adapters = facade.list_vision_adapters(
 )
 ```
 
+## Voice library
+
+`get_abstractcore_voice_facade(runtime)` (`AbstractCoreVoiceFacade`) manages the voices AbstractCore can speak with:
+
+- `list_languages(kind=None, provider=None)`: `{"languages": {kind: {provider: {provider, languages, open, declared}}}}`
+  for `tts`, `stt` and `cloning`, read without loading a model;
+- `list_cloned_voices(provider=None, model=None, language=None)`: `{"voices": [...], "count": n}`, designed and
+  built-in voices included (`tags.designed`, `tags.builtin`); `language` keeps the voices that can speak it, native
+  speakers first;
+- `get_cloned_voice(voice_id)`, `update_cloned_voice(voice_id, name=None, reference_text=None)` (both fields checked
+  before either is applied) and `delete_cloned_voice(voice_id)`; built-in voices are read-only;
+- `clone_voice(audio_bytes, filename=None, content_type=None, name=None, reference_text=None, provider=None, model=None)`:
+  a voice from a reference recording (`provider` = the cloning engine, e.g. `qwen3-tts`, `omnivoice`);
+- `design_voice(description, name=None, language=None, text=None)`: a voice from a written description, stored as a
+  cloned voice (needs `abstractvoice[qwen3-tts]` and `abstractvoice[stt]` where the voice capability runs);
+- `deploy_voice_to_library(voice_id)`: copies one of the runtime's personal voices into its first library (see below);
+- `compatibility_catalog()`: per kind, provider, model and surface, the support level of each feature (`native`,
+  `emulated`, `conditional`, `unsupported`), e.g. which engines honour `speed` or `one_shot`.
+
+Local clients run these in process on the same AbstractCore capability registry their synthesis uses (same voice
+manager, settings and voice stores; a model pool uses its media host), AbstractCore 2.30.0+ and AbstractVoice 0.18.2+.
+`clone_voice` answers the stored record, flat, with its `voice_id`, on both sides; `clone_voice(..., language=)` records
+the recording's language in process (AbstractVoice 0.19.0). A remote AbstractCore 2.30.0 server does not take the
+language yet (its clone form has no such field), so a remotely cloned voice's language is identified from its transcript. The remote client calls the AbstractCore server's `/v1/audio/languages`, `/v1/voice/clones[/{id}]`
+(`GET`, `PATCH`, `DELETE`), `/v1/voice/clone` and `/v1/voice/design`, and reads the capability catalog from
+`/v1/audio/voices`; the server's changes need its operator token in the runtime's headers. Every refusal is a
+`VoiceLibraryError` with `status_code` (404 unknown voice, 422 refused input, 401 server token missing, 501 capability
+or engine runtime missing; a remote server's own 400, 403, 409, 413, 429 and 503 pass through; 502 for any other remote
+failure) and `detail`, so a host maps it to its own answer.
+
+Cloned voices live in AbstractVoice's store. By default that is one store per machine user, shared by every account a
+host serves. A runtime can instead have its own personal voice store in front of read-only libraries: put
+`voice_store_dir` (and optionally `voice_library_dirs`, a list of folders) in its AbstractCore client settings, e.g.
+`create_local_runtime(llm_kwargs={"voice_store_dir": "/data/alice/voices", "voice_library_dirs": ["/data/voice-library"]})`.
+Synthesis, the voice catalog and the voice library facade of that runtime then use the same stores: voices cloned or
+designed go to the personal store, library voices (built-in ones included) are listed and spoken but read-only (422), and
+`deploy_voice_to_library(voice_id)` copies a personal voice into the first library (local runtimes; 501 remote, where the
+AbstractCore server keeps its own store). Who may deploy is the host's decision. Needs AbstractVoice 0.19.0; with an older
+AbstractVoice, these settings are not honoured. Records carry `meta.scope` (`personal` | `library`).
+
+The voice catalog takes the same language filter: `get_abstractcore_discovery_facade(rt).get_voice_catalog(language="fr")`.
+A remote run's buffered TTS forwards `one_shot` (the whole text as one take, refused beyond an engine's limit); the
+streamed lane never sends it, as AbstractCore refuses `one_shot` on a stream.
+
+```python
+from abstractruntime.integrations.abstractcore import VoiceLibraryError, get_abstractcore_voice_facade
+
+voices = get_abstractcore_voice_facade(rt)
+french = voices.list_cloned_voices(language="fr")["voices"]
+designed = voices.design_voice("A calm, warm low female voice", name="Calm", language="en")
+voices.update_cloned_voice(designed["voice_id"], name="Calm narrator")
+voices.delete_cloned_voice(designed["voice_id"])
+try:
+    voices.get_cloned_voice(designed["voice_id"])
+except VoiceLibraryError as err:
+    print(err.status_code, err.detail)  # 404: the voice is gone
+```
+
 ## Durable run-scoped media and comms execution
 
 Hosts sometimes need to trigger image/TTS/music/STT work or outbound comms sends for an existing run. That work should still execute through Runtime so the child run ledger, artifact ownership, and replay surface remain Runtime-authored.

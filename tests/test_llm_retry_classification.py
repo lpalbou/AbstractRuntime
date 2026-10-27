@@ -169,3 +169,42 @@ def test_harmony_generation_artifact_is_retryable_despite_400():
     err3 = InvalidRequestError("OpenAI-compatible server API error (400): missing field 'messages'")
     err3.status_code = 400
     assert _llm_error_is_retryable(err3) is False
+
+
+def test_a_voice_refusal_is_not_retried_and_other_media_keep_their_retries() -> None:
+    """Runtime backlog 0852: AbstractVoice refuses input it cannot honour with a plain ValueError
+    (one_shot over an engine's limit) or KeyError (an unknown voice id); on a voice request that
+    answers the same every time. Other media lanes raise plain ValueErrors for failures a retry
+    can fix (a failed remote image job, an empty image), so they keep their retries; a missing
+    capability (CapabilityUnavailableError) is never retried."""
+    import json
+
+    from abstractcore.capabilities.errors import CapabilityUnavailableError
+
+    from abstractruntime.integrations.abstractcore.effect_handlers import _is_voice_refusal
+
+    voice = {"modality": "voice", "task": "tts"}
+    assert _is_voice_refusal(ValueError("one_shot synthesis takes at most 1000 characters"), voice) is True
+    assert _is_voice_refusal(KeyError("Unknown voice_id: x"), voice) is True
+    assert _is_voice_refusal(ValueError("returned no images"), {"modality": "image"}) is False
+    assert _is_voice_refusal(RuntimeError("engine crashed"), voice) is False
+    assert _is_voice_refusal(json.JSONDecodeError("bad", "x", 0), voice) is False
+    assert _llm_error_is_retryable(ValueError("returned no images")) is True
+    assert _llm_error_is_retryable(CapabilityUnavailableError(capability="voice", reason="no backend")) is False
+    assert _llm_error_is_retryable(RuntimeError("connection reset")) is True
+    assert _is_voice_refusal(ValueError("one_shot too long"), [{"modality": "image"}, voice]) is True
+
+
+def test_a_remote_servers_4xx_refusal_is_not_retried() -> None:
+    class _Response:
+        def __init__(self, status_code):
+            self.status_code = status_code
+
+    class _HTTPStatusError(Exception):
+        def __init__(self, status_code):
+            super().__init__(f"HTTP {status_code}")
+            self.response = _Response(status_code)
+
+    assert _llm_error_is_retryable(_HTTPStatusError(422)) is False
+    assert _llm_error_is_retryable(_HTTPStatusError(429)) is True
+    assert _llm_error_is_retryable(_HTTPStatusError(503)) is True

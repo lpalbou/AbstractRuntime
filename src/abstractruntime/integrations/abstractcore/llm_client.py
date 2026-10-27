@@ -9337,6 +9337,7 @@ class LocalAbstractCoreLLMClient:
         model: Optional[str] = None,
         providers_only: bool = False,
         voice_openai_api_key: Optional[str] = None,
+        language: Optional[str] = None,
         **kwargs: Any,
     ) -> Dict[str, Any]:
         call_kwargs = dict(kwargs)
@@ -9350,7 +9351,26 @@ class LocalAbstractCoreLLMClient:
             provider=provider,
             model=model,
             providers_only=providers_only,
+            language=language,
+            **voice_store_settings(getattr(self, "_llm_kwargs", None)),
         )
+
+    def voice_library(self, op: str, *, voice_openai_api_key: Optional[str] = None, **kwargs: Any) -> Any:
+        """Voice library operation in this process (see `voice_facade.AbstractCoreVoiceFacade`), on
+        the capability registry this runtime's synthesis uses: the same voice manager, settings and
+        voice stores (`voice_store_dir`, `voice_library_dirs`). `voice_openai_api_key` is unused
+        here: that registry already carries the host's key (AbstractCore config or llm_kwargs)."""
+        from .voice_library import VoiceLibraryError, local_voice_library
+
+        media_host = getattr(self, "_media_host_client", None)
+        if callable(media_host):
+            # A model pool: its media outputs (synthesis included) run on its media host client.
+            return media_host().voice_library(op, voice_openai_api_key=voice_openai_api_key, **kwargs)
+        _pop_provider_api_key(kwargs)
+        registry = getattr(getattr(self, "_llm", None), "capabilities", None)
+        if registry is None:
+            raise VoiceLibraryError(503, "This runtime has no AbstractCore instance to manage voices with.")
+        return local_voice_library(op, kwargs, registry=registry)
 
     def list_tts_models(
         self,
@@ -11772,6 +11792,7 @@ class MultiLocalAbstractCoreLLMClient:
         model: Optional[str] = None,
         providers_only: bool = False,
         voice_openai_api_key: Optional[str] = None,
+        language: Optional[str] = None,
         **kwargs: Any,
     ) -> Dict[str, Any]:
         call_kwargs = dict(kwargs)
@@ -11785,7 +11806,26 @@ class MultiLocalAbstractCoreLLMClient:
             provider=provider,
             model=model,
             providers_only=providers_only,
+            language=language,
+            **voice_store_settings(getattr(self, "_llm_kwargs", None)),
         )
+
+    def voice_library(self, op: str, *, voice_openai_api_key: Optional[str] = None, **kwargs: Any) -> Any:
+        """Voice library operation in this process (see `voice_facade.AbstractCoreVoiceFacade`), on
+        the capability registry this runtime's synthesis uses: the same voice manager, settings and
+        voice stores (`voice_store_dir`, `voice_library_dirs`). `voice_openai_api_key` is unused
+        here: that registry already carries the host's key (AbstractCore config or llm_kwargs)."""
+        from .voice_library import VoiceLibraryError, local_voice_library
+
+        media_host = getattr(self, "_media_host_client", None)
+        if callable(media_host):
+            # A model pool: its media outputs (synthesis included) run on its media host client.
+            return media_host().voice_library(op, voice_openai_api_key=voice_openai_api_key, **kwargs)
+        _pop_provider_api_key(kwargs)
+        registry = getattr(getattr(self, "_llm", None), "capabilities", None)
+        if registry is None:
+            raise VoiceLibraryError(503, "This runtime has no AbstractCore instance to manage voices with.")
+        return local_voice_library(op, kwargs, registry=registry)
 
     def list_tts_models(
         self,
@@ -12720,6 +12760,20 @@ class HttpxRequestSender:
         resp.raise_for_status()
         return HttpResponse(body=resp.json(), headers=dict(resp.headers))
 
+    def request(
+        self,
+        method: str,
+        url: str,
+        *,
+        headers: Dict[str, str],
+        json: Optional[Dict[str, Any]] = None,
+        timeout: float,
+    ) -> HttpResponse:
+        """Any other JSON request (PATCH, DELETE: the voice library's changes)."""
+        resp = self._httpx.request(method, url, headers=headers, json=json, timeout=timeout)
+        resp.raise_for_status()
+        return HttpResponse(body=resp.json(), headers=dict(resp.headers))
+
     def post_bytes(
         self,
         url: str,
@@ -12791,6 +12845,12 @@ def _http_error_response_body(error: Any) -> Optional[Any]:
             return text.strip()
         return parsed if isinstance(parsed, dict) else text.strip()
     return None
+
+
+def voice_store_settings(llm_kwargs: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    from .voice_library import voice_store_settings as _settings
+
+    return _settings(llm_kwargs)
 
 
 def _unwrap_http_response(value: Any) -> Tuple[Dict[str, Any], Dict[str, str]]:
@@ -13709,6 +13769,7 @@ class RemoteAbstractCoreLLMClient:
         model: Optional[str] = None,
         providers_only: bool = False,
         voice_openai_api_key: Optional[str] = None,
+        language: Optional[str] = None,
         **kwargs: Any,
     ) -> Dict[str, Any]:
         from .discovery_queries import _filter_voice_catalog_response
@@ -13727,11 +13788,22 @@ class RemoteAbstractCoreLLMClient:
                 "provider": provider,
                 "model": model,
                 "providers_only": providers_only,
+                "language": language,
             },
             provider_api_key=provider_api_key,
             timeout_s=call_kwargs.get("timeout_s"),
         )
         return _filter_voice_catalog_response(payload, provider=provider, model=model, providers_only=providers_only)
+
+    def voice_library(self, op: str, *, voice_openai_api_key: Optional[str] = None, **kwargs: Any) -> Any:
+        """Voice library operation on the remote AbstractCore server's `/v1` voice routes (see
+        `voice_facade.AbstractCoreVoiceFacade`). `voice_openai_api_key` is a local plugin setting
+        and is never sent; the server uses its own voice configuration."""
+        from .voice_library import remote_voice_library
+
+        del voice_openai_api_key
+        provider_api_key = _pop_provider_api_key(kwargs)
+        return remote_voice_library(self, op, kwargs, provider_api_key=provider_api_key)
 
     def list_tts_models(
         self,
@@ -15721,7 +15793,7 @@ class RemoteAbstractCoreLLMClient:
         if endpoint_model:
             body["model"] = endpoint_model
         endpoint_provider = str(spec.get("provider") or "").strip().lower().replace("_", "-")
-        for key in ("speed", "instructions", "provider", "profile", "quality_preset"):
+        for key in ("speed", "one_shot", "instructions", "provider", "profile", "quality_preset"):
             if key in spec and spec.get(key) is not None:
                 body[key] = spec.get(key)
         if "quality" in spec and "quality_preset" not in body and spec.get("quality") is not None:

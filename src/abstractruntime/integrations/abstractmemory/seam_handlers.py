@@ -272,6 +272,7 @@ def build_memory_seam_effect_handlers(
     artifact_store: Any = None,
     strict: bool = True,
     entity_scope_owner: Optional[str] = None,
+    runtime_id: Optional[str] = None,
 ) -> Dict[EffectType, EffectHandler]:
     """Build `MEMORY_RECALL` / `MEMORY_ACCESS` / `MEMORY_FORM` / `MEMORY_ADJUST`
     handlers over a `MemorySystem`.
@@ -461,7 +462,7 @@ def build_memory_seam_effect_handlers(
         inputs = []
         # Ledger provenance (ADR 0009): every formed record names the MEMORY_FORM step that formed it (when the
         # handler runs inside a runtime step of a real run) and the verbatim artifact it points at.
-        facade = MemoryFacade(run_store=run_store, artifact_store=artifact_store)
+        facade = MemoryFacade(run_store=run_store, artifact_store=artifact_store, runtime_id=runtime_id)
         for i, raw in enumerate(raw_records):
             if not isinstance(raw, dict):
                 return EffectOutcome.failed(f"MEMORY_FORM records[{i}] must be an object")

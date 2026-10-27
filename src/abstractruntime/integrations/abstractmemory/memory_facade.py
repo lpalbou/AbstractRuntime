@@ -125,6 +125,13 @@ def __getattr__(name: str) -> Any:
     return getattr(_import(module), name)
 
 
+# -- read bounds (every read is bounded: AbstractMemory ADR 0003 decision 12) ------------------------------------
+
+#: Ledger records a reconstructed `run` source carries by default, and the most one call may ask for.
+DEFAULT_RUN_LEDGER_LIMIT = 200
+MAX_RUN_LEDGER_LIMIT = 1000
+
+
 # -- synthetic run ids ------------------------------------------------------------------------------------------
 
 #: Run-id prefixes that never name a loadable run: the home-direct entity driver (`chat-<session_id>`), the diary
@@ -228,16 +235,19 @@ class MemoryFacade:
     # -- opening a mind --------------------------------------------------------------------------------------------
 
     @classmethod
-    def open_mind(cls, path: Any, *, embedder: Any = None, **stores: Any) -> "MemoryFacade":
+    def open_mind(
+        cls, path: Any, *, embedder: Any = None, runtime_id: Optional[str] = None, **stores: Any
+    ) -> "MemoryFacade":
         """Open one SQLite home: `SQLiteTripleStore` and `SQLiteJournal` on the SAME file (so a revision's journal
         closures share its transaction) and the `MemoryGraph` over them (graph tables are created on open).
-        `stores` are the facade's other keyword stores (`ledger_store`, `run_store`, `artifact_store`, ...)."""
+        `runtime_id` names the ledger this facade resolves (the plane's or the home's); `stores` are the facade's
+        other keyword stores (`ledger_store`, `run_store`, `artifact_store`, ...)."""
         am = _memory()
         db = Path(path).expanduser()
         store = am.SQLiteTripleStore(db, embedder=embedder) if embedder is not None else am.SQLiteTripleStore(db)
         journal = am.SQLiteJournal(db)
         graph = _graph().MemoryGraph(store, journal)
-        return cls(graph=graph, **stores)
+        return cls(graph=graph, runtime_id=runtime_id, **stores)
 
     @property
     def graph(self) -> Any:
@@ -345,6 +355,10 @@ class MemoryFacade:
         ):
             lift.pop("run_id", None)  # a synthetic run id is never lifted to a run ref
         lifted = [s.to_dict() for s in G.Provenance.from_legacy(lift, actor="runtime").sources]
+        rt = runtime_id or self.runtime_id
+        if rt:  # refs the runtime lifts are its own: they name the ledger they resolve against
+            for ref in lifted:
+                ref.setdefault("runtime_id", rt)
         merged = _ref_dedupe([*(existing if isinstance(existing, list) else []), *lifted, *new_refs])
         if not merged:
             return flat
@@ -392,11 +406,18 @@ class MemoryFacade:
 
     # -- reconstruction ----------------------------------------------------------------------------------------------
 
-    def reconstruct_source(self, ref: Any) -> Dict[str, Any]:
+    def reconstruct_source(self, ref: Any, *, limit: int = DEFAULT_RUN_LEDGER_LIMIT) -> Dict[str, Any]:
         """The verbatim a SourceRef points at (ADR 0009 decision 5). Never raises for a missing source:
         `{"status": "ok", "ref", "kind", "content", "metadata"}`, `{"status": "source_gone", "ref", "reason"}`, or
         `{"status": "unsupported", "ref", "reason"}` (no store for that kind here, an invalid ref, a ref of another
-        runtime, or `message`, which has no indexed path today)."""
+        runtime, or `message`, which has no indexed path today).
+
+        `runtime_id`: a ref naming another runtime than this facade's is `unsupported` (its row address belongs to
+        another ledger). `limit` bounds the ledger records of a `run` source (default 200, at most 1000); the
+        metadata says how many were left out."""
+        if isinstance(limit, bool) or not isinstance(limit, int) or limit <= 0:
+            return {"status": "unsupported", "ref": ref, "reason": f"limit must be a positive int (got {limit!r})"}
+        limit = min(limit, MAX_RUN_LEDGER_LIMIT)
         problem = _ref_problem(ref)
         if problem is not None:
             return {"status": "unsupported", "ref": ref, "reason": f"invalid SourceRef: {problem}"}
@@ -404,8 +425,10 @@ class MemoryFacade:
         kind = str(ref["kind"]).strip().lower()
         ref_rt = ref.get("runtime_id")
         if self.runtime_id and isinstance(ref_rt, str) and ref_rt.strip() and ref_rt.strip() != self.runtime_id:
-            return _unsupported(ref, f"the ref names runtime {ref_rt!r}; this facade reads runtime {self.runtime_id!r}")
+            return _unsupported(ref, f"ref names runtime {ref_rt.strip()}, this facade resolves {self.runtime_id}")
         try:
+            if kind == "run":
+                return self._reconstruct_run(ref, limit)
             handler = getattr(self, f"_reconstruct_{kind}")
             return handler(ref)
         except Exception as exc:  # a store failing to read is reported, never raised to the reader
@@ -437,7 +460,7 @@ class MemoryFacade:
             "ended_at": record.get("ended_at"),
         })
 
-    def _reconstruct_run(self, ref: Dict[str, Any]) -> Dict[str, Any]:
+    def _reconstruct_run(self, ref: Dict[str, Any], limit: int) -> Dict[str, Any]:
         if self.run_store is None:
             return _unsupported(ref, "no run store was given to this facade")
         from ...storage.serialize import runstate_to_dict
@@ -454,8 +477,11 @@ class MemoryFacade:
         }
         if self.ledger_store is not None:
             records = self.ledger_store.list(run_id)
-            content["ledger"] = records
+            content["ledger"] = records[:limit]  # the oldest first: a run reads from its start
             metadata["ledger_records"] = len(records)
+            metadata["ledger_returned"] = len(content["ledger"])
+            metadata["ledger_left_out"] = max(0, len(records) - limit)
+            metadata["truncated"] = len(records) > limit
         return _ok(ref, "run", content, metadata)
 
     def _reconstruct_artifact(self, ref: Dict[str, Any]) -> Dict[str, Any]:
@@ -527,7 +553,9 @@ def _unsupported(ref: Dict[str, Any], reason: str) -> Dict[str, Any]:
 
 
 __all__ = [
+    "DEFAULT_RUN_LEDGER_LIMIT",
     "GATEWAY_NAMES",
+    "MAX_RUN_LEDGER_LIMIT",
     "MemoryFacade",
     "SYNTHETIC_RUN_PREFIXES",
     "is_real_run",

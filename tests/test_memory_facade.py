@@ -312,3 +312,83 @@ def test_open_mind_applies_a_revision_and_reads_its_sources(tmp_path: Path) -> N
     assert [h["event"] for h in facade.history(aid)] == ["asserted"]
     with pytest.raises(RuntimeError):
         MemoryFacade().graph  # noqa: B018 - a facade without a mind says so
+
+
+# -- runtime identity and bounded run reads (gateway review R5 / R6) -----------------------------------------------
+
+
+def test_a_ref_of_another_runtime_is_unsupported_and_stamps_name_this_runtime(tmp_path: Path) -> None:
+    """Mutants: drop the runtime_id comparison -> the home's ref resolves `ok` against the plane's ledger; drop the
+    runtime_id on lifted refs -> the legacy artifact ref names no runtime."""
+    run_store, ledger = _stores(tmp_path)
+    run_id = _run_slimmed_step(run_store, ledger)
+    plane = MemoryFacade.open_mind(tmp_path / "mind.sqlite3", runtime_id="plane-a", ledger_store=ledger,
+                                   run_store=run_store)
+    assert plane.runtime_id == "plane-a"
+    mine = plane.reconstruct_source({"kind": "step", "run_id": run_id, "seq": 1, "runtime_id": "plane-a"})
+    assert mine["status"] == "ok"
+    theirs = plane.reconstruct_source({"kind": "step", "run_id": run_id, "seq": 1, "runtime_id": "home-b"})
+    assert theirs == {"status": "unsupported", "ref": {"kind": "step", "run_id": run_id, "seq": 1,
+                                                       "runtime_id": "home-b"},
+                      "reason": "ref names runtime home-b, this facade resolves plane-a"}
+    unnamed = plane.reconstruct_source({"kind": "step", "run_id": run_id, "seq": 1})
+    assert unnamed["status"] == "ok"  # a ref without a runtime id is read against this facade's ledger
+
+    out = plane.stamp({"run_id": run_id, "payload_ref": "art1"}, run_id=run_id, seq=1, artifact_ids=["art2"])
+    assert out["sources"] and all(s.get("runtime_id") == "plane-a" for s in out["sources"]), out["sources"]
+    explicit = plane.stamp({}, run_id=run_id, seq=1, runtime_id="other")
+    assert explicit["sources"][0]["runtime_id"] == "other"
+
+
+def test_the_kg_handlers_stamp_the_runtime_id_they_are_built_with(tmp_path: Path) -> None:
+    from abstractmemory import InMemoryTripleStore, TripleQuery
+
+    from abstractruntime.integrations.abstractmemory import build_memory_kg_effect_handlers
+
+    run_store, ledger = _stores(tmp_path)
+    store = InMemoryTripleStore()
+    handlers = build_memory_kg_effect_handlers(store=store, run_store=run_store, now_iso=lambda: "2026-10-27T00:00:00Z",
+                                               runtime_id="plane-a")
+
+    def node(run: RunState, ctx: Any) -> StepPlan:
+        if run.vars.get("out") is not None:
+            return StepPlan(node_id="n1", complete_output={"ok": True})
+        return StepPlan(node_id="n1", next_node="n1", effect=Effect(
+            type=EffectType.MEMORY_KG_ASSERT, result_key="out", payload={
+                "assertions": [{"subject": "ex:a", "predicate": "schema:description", "object": "x"}]}))
+
+    wf = WorkflowSpec(workflow_id="wf-rt-id", entry_node="n1", nodes={"n1": node})
+    rt = Runtime(run_store=run_store, ledger_store=ledger, effect_handlers=handlers)
+    run_id = rt.start(workflow=wf)
+    rt.tick(workflow=wf, run_id=run_id)
+    (row,) = store.query(TripleQuery(subject="ex:a", limit=0))
+    (step,) = row.provenance["sources"]
+    assert step["kind"] == "step" and step["run_id"] == run_id and step["runtime_id"] == "plane-a"
+
+
+def test_a_run_source_carries_a_bounded_ledger(tmp_path: Path) -> None:
+    """Every read is bounded (ADR 0003 decision 12). Mutant: return the whole ledger -> the 1,000-row case fails."""
+    from abstractruntime.core.models import StepRecord, StepStatus
+    from abstractruntime.core.models import RunState as _RunState
+
+    run_store, ledger = _stores(tmp_path)
+    run = _RunState.new(workflow_id="wf-big", entry_node="n1")
+    run_store.save(run)
+    for i in range(1000):
+        ledger.append(StepRecord(run_id=run.run_id, step_id=f"s{i}", node_id="n1", status=StepStatus.COMPLETED,
+                                 effect={"type": "tool_calls", "payload": {"i": i}}))
+    facade = MemoryFacade(ledger_store=ledger, run_store=run_store)
+    ref = {"kind": "run", "run_id": run.run_id}
+
+    default = facade.reconstruct_source(ref)
+    assert default["status"] == "ok" and len(default["content"]["ledger"]) == mf.DEFAULT_RUN_LEDGER_LIMIT == 200
+    assert default["content"]["ledger"][0]["seq"] == 1  # a run reads from its start
+    assert default["metadata"] == {**default["metadata"], "ledger_records": 1000, "ledger_returned": 200,
+                                   "ledger_left_out": 800, "truncated": True}
+    most = facade.reconstruct_source(ref, limit=5000)
+    assert len(most["content"]["ledger"]) == mf.MAX_RUN_LEDGER_LIMIT == 1000
+    assert most["metadata"]["ledger_left_out"] == 0 and most["metadata"]["truncated"] is False
+    few = facade.reconstruct_source(ref, limit=3)
+    assert [r["seq"] for r in few["content"]["ledger"]] == [1, 2, 3] and few["metadata"]["ledger_left_out"] == 997
+    for bad in (0, -1, True, "10"):
+        assert facade.reconstruct_source(ref, limit=bad)["status"] == "unsupported"

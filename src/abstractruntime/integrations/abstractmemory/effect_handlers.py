@@ -209,6 +209,7 @@ def build_memory_kg_effect_handlers(
     run_store: RunStore,
     now_iso: Callable[[], str],
     journal: Any = None,
+    runtime_id: Optional[str] = None,
 ) -> Dict[EffectType, EffectHandler]:
     """Build effect handlers for `memory_kg_*` effects and `MEMORY_REVISE`.
 
@@ -216,7 +217,8 @@ def build_memory_kg_effect_handlers(
     `MEMORY_REVISE` applies one revision through `abstractmemory.graph.MemoryGraph` over `store` (a graph home:
     SQLiteTripleStore / InMemoryTripleStore; any other store gets a failed outcome naming AbstractMemory backlog
     0057). `journal` receives the `ClosureRecord` of each `close` op (None: the revision and the history row still
-    carry the close; ranked retrieval folds closures only from a journal).
+    carry the close; ranked retrieval folds closures only from a journal). `runtime_id` (the plane's or the home's)
+    is written on every SourceRef the handlers stamp.
     """
     TripleAssertion, TripleQuery = _import_abstractmemory()
     memory_graph, graph_unavailable = _memory_graph_for(store, journal)
@@ -320,7 +322,7 @@ def build_memory_kg_effect_handlers(
         out_rows: list[Any] = []
         parse_errors: list[str] = []
         # Ledger provenance (ADR 0009): the MEMORY_KG_ASSERT step that wrote each assertion; `span_id` -> artifact.
-        facade = MemoryFacade(run_store=run_store)
+        facade = MemoryFacade(run_store=run_store, runtime_id=runtime_id)
         writer_run_id = str(getattr(run, "run_id", "") or "")
         for a in assertions:
             try:
@@ -1083,7 +1085,7 @@ def build_memory_kg_effect_handlers(
                                "sources": stamped["sources"]}
         return EffectOutcome.completed(out)
 
-    facade = MemoryFacade(graph=memory_graph, run_store=run_store)
+    facade = MemoryFacade(graph=memory_graph, run_store=run_store, runtime_id=runtime_id)
 
     return {
         EffectType.MEMORY_KG_ASSERT: _handle_assert,

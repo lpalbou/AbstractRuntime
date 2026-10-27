@@ -79,7 +79,7 @@ facade.stamp(provenance, run_id=..., seq=None, step_id=None, artifact_ids=(), ru
 facade.stamp_current_step(provenance, run_id=..., artifact_ids=()) -> dict
 facade.apply_revision(revision_or_dict) -> dict          # RevisionResult as a dict; raises ProvenanceRequired
 facade.history(memory_id) / facade.sources_of(memory_id) / facade.derived_from_source(ref)
-facade.reconstruct_source(ref) -> dict
+facade.reconstruct_source(ref, *, limit=200) -> dict     # limit bounds a run's ledger records (max 1000)
 ```
 
 `MemoryFacade(graph=, ledger_store=, run_store=, artifact_store=, diary_store=, event_inbox=, runtime_id=)` takes only
@@ -90,14 +90,19 @@ the stores a host has; every one is optional.
 | `ref.kind` | Reads | `status: "ok"` content |
 |---|---|---|
 | `step` | `ledger_store.get_record(run_id, seq)` (a `step_id` in the ref must match) | the record, payload verbatim |
-| `run` | `run_store.load` (+ `ledger_store.list`) | `{"run": ..., "ledger": [...]}` |
+| `run` | `run_store.load` (+ `ledger_store.list`) | `{"run": ..., "ledger": [the first `limit` records]}`; `metadata.ledger_records` / `ledger_returned` / `ledger_left_out` / `truncated` |
 | `artifact` | `artifact_store.load` | text (utf-8) or base64 (`metadata.encoding`) |
 | `diary_entry` | `diary_store.get_record` | the entry; `metadata.record_hash` / `prev_hash` |
 | `event` | `event_inbox.get` | the event payload |
 | `message` | none | `unsupported` (a message id is not a ledger key today) |
 
 `{"status": "source_gone", "reason"}` when the run, row, artifact, entry or event no longer exists (or a pruned event);
-`{"status": "unsupported", "reason"}` for a kind with no store here, an invalid ref, or a ref of another runtime id.
+`{"status": "unsupported", "reason"}` for a kind with no store here, an invalid ref or limit, or a ref of another
+runtime: give the facade the `runtime_id` of the ledger it reads (`MemoryFacade(runtime_id=)`,
+`open_mind(path, runtime_id=)`, the plane's or the home's) and a ref naming another one answers
+`"ref names runtime <x>, this facade resolves <y>"`. Every ref the facade stamps (lifted legacy refs included)
+carries that `runtime_id`; the handler builders take `runtime_id=` too (`build_memory_kg_effect_handlers`,
+`build_memory_seam_effect_handlers`).
 
 Re-exported AbstractMemory names (`facade.X is abstractmemory.X`, resolved on first use): `memory_facade.GATEWAY_NAMES`
 (budgets, replay stream, spark templates, stores and journal, queries, night passes, embeddings pin, drives, disposal,

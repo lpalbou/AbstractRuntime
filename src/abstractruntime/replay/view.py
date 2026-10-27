@@ -39,6 +39,7 @@ from typing import Any, Dict, Iterable, List, Mapping, Optional, Set, Tuple
 from ..automations.attention import ANSWER_PAYLOADS
 from ..history_bundle import _extract_usage_from_ledger_record, _extract_user_prompt_from_input
 from ..storage.ledger_slim import is_slim_marker, resolve_slim_value
+from .delta import token_run_names
 from .executions import ExecutionTracker, is_completion_record, is_progress_record
 
 REPLAY_VIEW_VERSION = "replay_view_v1"
@@ -340,8 +341,11 @@ class ReplayView:
     def cursor(self) -> Dict[str, Any]:
         runs = {rid: r.last_seq for rid, r in self._runs.items() if r.last_seq > 0 or rid == self.root_run_id}
         order = self._run_order()
-        # One header-safe token (an ETag, an SSE id): no comma, no quote, no space.
-        token = ".".join(f"{rid[:8]}:{self._runs[rid].last_seq}" for rid in order)
+        # One header-safe token (an ETag, an SSE id): no comma, no quote, no space. Each run is
+        # named by the shortest prefix (8 characters at least) that no other run of the tree
+        # shares; `resolve_cursor_token` maps it back.
+        names = token_run_names(order)
+        token = ".".join(f"{names[rid]}:{self._runs[rid].last_seq}" for rid in order)
         return {"token": token, "records": sum(r.record_count for r in self._runs.values()), "runs": runs}
 
     @property

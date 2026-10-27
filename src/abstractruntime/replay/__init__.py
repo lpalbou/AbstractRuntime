@@ -8,7 +8,7 @@ views (a reconnect). Hosts serve the view; clients render it and act through the
 commands, never by re-deriving run state from raw records.
 """
 
-from .delta import apply_delta, diff_views, parse_cursor_token
+from .delta import apply_delta, diff_views, parse_cursor_token, resolve_cursor_token, token_run_names
 from .executions import ExecutionTracker
 from .view import PERSON_FACING_KINDS, REPLAY_VIEW_VERSION, TERMINAL_STATUSES, ReplayView, apply, replay, wait_kind, workflow_ref
 
@@ -23,6 +23,8 @@ __all__ = [
     "apply_delta",
     "diff_views",
     "parse_cursor_token",
+    "resolve_cursor_token",
+    "token_run_names",
     "wait_kind",
     "workflow_ref",
 ]

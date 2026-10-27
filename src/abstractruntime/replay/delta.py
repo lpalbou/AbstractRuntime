@@ -13,7 +13,8 @@ same change and are ignored here: a client's view is the scalars and the lists.
 from __future__ import annotations
 
 import copy
-from typing import Any, Dict, List, Optional
+import re
+from typing import Any, Dict, Iterable, List, Optional
 
 SCALAR_KEYS = ("version", "root_run_id", "workflow", "session_id", "status", "display_status", "cursor", "interaction", "open_waits", "usage", "warnings")
 LIST_KEYS = ("runs", "messages", "activities", "artifacts")
@@ -79,3 +80,38 @@ def parse_cursor_token(token: Any) -> Optional[Dict[str, int]]:
             return None
         out[prefix.strip()] = n
     return out or None
+
+
+_TOKEN_UNSAFE = re.compile(r"[^A-Za-z0-9_-]")
+
+
+def _token_id(run_id: str) -> str:
+    return _TOKEN_UNSAFE.sub("", str(run_id or ""))
+
+
+def token_run_names(run_ids: Iterable[str]) -> Dict[str, str]:
+    """run id -> the name its cursor token part uses: the run id's letters, digits, `_` and `-`,
+    cut to the shortest length (8 at least) that no other run of the tree shares."""
+    ids = list(dict.fromkeys(run_ids))
+    safe = {rid: _token_id(rid) for rid in ids}
+    length = 8
+    longest = max((len(v) for v in safe.values()), default=0)
+    while length < longest and len({v[:length] for v in safe.values()}) < len(ids):
+        length += 4
+    return {rid: (safe[rid][:length] or "_") for rid in ids}
+
+
+def resolve_cursor_token(token: Any, run_ids: Iterable[str]) -> Optional[Dict[str, int]]:
+    """A cursor token -> {run id: seq} over `run_ids` (a view's runs); None when the token is not
+    one of this tree's (a name matching no run, or more than one)."""
+    parsed = parse_cursor_token(token)
+    if not parsed:
+        return None
+    safe = {rid: _token_id(rid) for rid in run_ids}
+    out: Dict[str, int] = {}
+    for name, seq in parsed.items():
+        hits = [rid for rid, v in safe.items() if v.startswith(name)]
+        if len(hits) != 1 or hits[0] in out:
+            return None
+        out[hits[0]] = seq
+    return out

@@ -544,9 +544,13 @@ class OffloadingLedgerStore(LedgerStore):
     def inner(self) -> LedgerStore:
         return self._inner
 
-    def append(self, record: StepRecord) -> None:
+    def append(self, record: StepRecord) -> Optional[int]:
         persisted = _offload_step_record(record, artifact_store=self._artifact_store, max_inline_bytes=self._max_inline_bytes)
-        self._inner.append(persisted)
+        return self._inner.append(persisted)
+
+    def list_after(self, *, run_id: str, after: int, limit: int = 1000) -> Tuple[List[Dict[str, Any]], int]:
+        """Plain delegation, refs stay refs (as `list`)."""
+        return self._inner.list_after(run_id=run_id, after=after, limit=limit)
 
     def _rehydrate_tree(self, value: Any, *, _depth: int = 0) -> Any:
         """Resolve refs THIS offloader created back into their values.

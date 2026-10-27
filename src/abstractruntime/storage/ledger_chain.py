@@ -17,7 +17,7 @@ from __future__ import annotations
 import hashlib
 import json
 import threading
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from .base import LedgerStore
 from .serialize import dataclass_json_default, steprecord_to_dict
@@ -53,6 +53,8 @@ def compute_record_hash(*, record: Dict[str, Any], prev_hash: Optional[str]) -> 
     clean = dict(record)
     clean.pop("record_hash", None)
     clean.pop("signature", None)
+    # `seq` is the store's position for the record (ADR-0009), assigned after the hash.
+    clean.pop("seq", None)
 
     clean["prev_hash"] = prev_hash
     return _sha256_hex(_canonical_json(clean))
@@ -96,27 +98,29 @@ class HashChainedLedgerStore(LedgerStore):
             return None
         return records[-1].get("record_hash")
 
-    def append(self, record: StepRecord) -> None:
+    def append(self, record: StepRecord) -> Optional[int]:
         with self._append_lock:
             append_chained = getattr(self._inner, "append_chained", None)
             if callable(append_chained):
                 # Transaction-internal derivation: the store reads the head
                 # under its write lock; the hash policy stays ours.
-                append_chained(
+                return append_chained(
                     record,
                     lambda record_dict, prev: compute_record_hash(
                         record=record_dict, prev_hash=prev
                     ),
                 )
-                return
             prev = self._persisted_head(record.run_id)
             record.prev_hash = prev
             record_dict = steprecord_to_dict(record)
             record.record_hash = compute_record_hash(record=record_dict, prev_hash=prev)
-            self._inner.append(record)
+            return self._inner.append(record)
 
     def list(self, run_id: str) -> List[Dict[str, Any]]:
         return self._inner.list(run_id)
+
+    def list_after(self, *, run_id: str, after: int, limit: int = 1000) -> Tuple[List[Dict[str, Any]], int]:
+        return self._inner.list_after(run_id=run_id, after=after, limit=limit)
 
     def find_completed_result(
         self, run_id: str, idempotency_key: str

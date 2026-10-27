@@ -2462,19 +2462,79 @@ class JsonlLedgerStore(LedgerStore):
         self._idem_cache_lock = threading.Lock()
         self._idem_cache: "OrderedDict[tuple[str, str], Dict[str, Any]]" = OrderedDict()
         self._idem_cache_max = 512
+        # THE DURABLE CURSOR (ADR-0009, gateway backlog 0082): every appended line carries its
+        # per-run `seq` (1, 2, 3, ...), the same cursor SQLite allocates, so a cursor survives a
+        # reconnect and a file -> SQLite migration. A line written before seq existed reads as
+        # the seq after the previous line (its position). The head cache keeps an append O(1):
+        # run_id -> (file size after our last append, last seq); a size we did not write means
+        # another writer appended, and the head is re-read from the file's last line.
+        self._seq_lock = threading.Lock()
+        self._seq_heads: "OrderedDict[str, tuple[int, int]]" = OrderedDict()
+        self._seq_heads_max = 4096
+        # list_after resume points: run_id -> (seq, byte offset just after that record's line).
+        self._offsets: "OrderedDict[str, tuple[int, int]]" = OrderedDict()
+        self._offsets_max = 4096
 
     def _path(self, run_id: str) -> Path:
         return self._base / f"ledger_{run_id}.jsonl"
 
-    def append(self, record: StepRecord) -> None:
+    def append(self, record: StepRecord) -> Optional[int]:
+        """Append one record with its per-run `seq`; return that seq."""
         p = self._path(record.run_id)
         record_dict = steprecord_to_dict(record)
-        line = dumps_compact(record_dict)
-        with p.open("a", encoding="utf-8") as f:
-            # Write as a single append operation to reduce the chance of
-            # concurrent writers producing concatenated JSON objects on one line.
-            f.write(line + "\n")
+        with self._seq_lock:
+            seq = self._head_seq(record.run_id, p) + 1
+            record_dict["seq"] = seq
+            line = dumps_compact(record_dict)
+            with p.open("a", encoding="utf-8") as f:
+                # Write as a single append operation to reduce the chance of
+                # concurrent writers producing concatenated JSON objects on one line.
+                f.write(line + "\n")
+                f.flush()
+                size = f.tell()
+            self._seq_heads[record.run_id] = (size, seq)
+            self._seq_heads.move_to_end(record.run_id)
+            while len(self._seq_heads) > self._seq_heads_max:
+                self._seq_heads.popitem(last=False)
         self._idem_cache_note(record_dict, line)
+        return seq
+
+    def _head_seq(self, run_id: str, p: Path) -> int:
+        """The run's last seq (0 when it has no records). Caller holds `_seq_lock`."""
+        try:
+            size = p.stat().st_size
+        except FileNotFoundError:
+            self._seq_heads.pop(run_id, None)
+            return 0
+        cached = self._seq_heads.get(run_id)
+        if cached is not None and cached[0] == size:
+            return cached[1]
+        if size == 0:
+            return 0
+        for line in reversed(self._tail_lines(p, 1)):
+            try:
+                last = json.loads(line)
+            except json.JSONDecodeError:
+                break
+            if isinstance(last, dict) and isinstance(last.get("seq"), int) and not isinstance(last.get("seq"), bool):
+                return int(last["seq"])
+            break
+        # A ledger written before seq (or a torn last line): number by position, once.
+        records = self.list(run_id)
+        return int(records[-1]["seq"]) if records else 0
+
+    @staticmethod
+    def _number(records: List[Dict[str, Any]], start: int = 0) -> List[Dict[str, Any]]:
+        """Give each record without a persisted seq the seq after the previous record's."""
+        prev = start
+        for rec in records:
+            seq = rec.get("seq")
+            if isinstance(seq, int) and not isinstance(seq, bool) and seq > prev:
+                prev = seq
+            else:
+                prev += 1
+                rec["seq"] = prev
+        return records
 
     # Records above this size are not cached; the bounded tail read serves
     # them. 512 entries x 64KB caps worst-case cache memory at ~32MB.
@@ -2684,7 +2744,77 @@ class JsonlLedgerStore(LedgerStore):
                         str(p),
                     )
                     out.extend(recovered)
-        return out
+        return self._number(out)
+
+    def list_after(self, *, run_id: str, after: int, limit: int = 1000) -> Tuple[List[Dict[str, Any]], int]:
+        """Records with seq > `after` (at most `limit`), and the last seq returned (or `after`).
+
+        Same cursor as `SqliteLedgerStore.list_after`. Byte-offset friendly: the store remembers
+        where the last returned record ended, so a follower reading forward (`after` = the seq it
+        last got) seeks there instead of re-reading the file from the start."""
+        rid = str(run_id or "").strip()
+        a = max(0, int(after or 0))
+        lim = max(1, int(limit or 1000))
+        if not rid:
+            return ([], a)
+        p = self._path(rid)
+        try:
+            size = p.stat().st_size
+        except FileNotFoundError:
+            return ([], a)
+        start_seq, offset = 0, 0
+        with self._seq_lock:
+            hint = self._offsets.get(rid)
+        if hint is not None and hint[0] <= a and hint[1] <= size:
+            start_seq, offset = hint
+        out: List[Dict[str, Any]] = []
+        prev = start_seq  # the seq of the last record before `pos`
+        pos = offset  # byte offset of the next unread line
+        resume = (start_seq, offset)  # where the next call can start: (seq before it, its offset)
+        with p.open("rb") as f:
+            f.seek(offset)
+            for raw in f:
+                if not raw.endswith(b"\n"):
+                    break  # a line still being written: the next read gets it whole
+                line_start, line_prev = pos, prev
+                pos += len(raw)
+                text = raw.decode("utf-8", errors="replace").strip()
+                objs: List[Any] = []
+                if text:
+                    try:
+                        objs = [json.loads(text)]
+                    except json.JSONDecodeError:
+                        decoder = json.JSONDecoder()  # concatenated objects on one line (see list())
+                        i = 0
+                        while i < len(text):
+                            while i < len(text) and text[i].isspace():
+                                i += 1
+                            if i >= len(text):
+                                break
+                            try:
+                                obj, i = decoder.raw_decode(text, idx=i)
+                            except json.JSONDecodeError:
+                                break
+                            objs.append(obj)
+                batch = self._number([o for o in objs if isinstance(o, dict)], prev)
+                if batch:
+                    prev = int(batch[-1]["seq"])
+                wanted = [rec for rec in batch if int(rec["seq"]) > a]
+                if len(out) + len(wanted) > lim:
+                    out.extend(wanted[: lim - len(out)])
+                    resume = (line_prev, line_start)  # this line was only partly returned
+                    break
+                out.extend(wanted)
+                resume = (prev, pos)
+                if len(out) >= lim:
+                    break
+        if resume[1] > offset or hint is None:
+            with self._seq_lock:
+                self._offsets[rid] = resume
+                self._offsets.move_to_end(rid)
+                while len(self._offsets) > self._offsets_max:
+                    self._offsets.popitem(last=False)
+        return (out, int(out[-1]["seq"])) if out else ([], a)
 
     def count(self, run_id: str) -> int:
         """Return the number of ledger records for run_id (fast path).
@@ -2709,6 +2839,9 @@ class JsonlLedgerStore(LedgerStore):
         count = len(self.list(rid))
         if p.exists():
             p.unlink()
+        with self._seq_lock:
+            self._seq_heads.pop(rid, None)
+            self._offsets.pop(rid, None)
         with self._idem_cache_lock:
             # Drop the run's cached results: a recreated ledger under the
             # same run_id must never see the deleted run's completions.

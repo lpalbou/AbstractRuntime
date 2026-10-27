@@ -216,8 +216,12 @@ class InMemoryLedgerStore(LedgerStore):
     def __init__(self):
         self._records: Dict[str, List[Dict[str, Any]]] = {}
 
-    def append(self, record: StepRecord) -> None:
-        self._records.setdefault(record.run_id, []).append(asdict(record))
+    def append(self, record: StepRecord) -> Optional[int]:
+        records = self._records.setdefault(record.run_id, [])
+        rec = asdict(record)
+        rec["seq"] = len(records) + 1  # the durable cursor (ADR-0009)
+        records.append(rec)
+        return rec["seq"]
 
     def list(self, run_id: str) -> List[Dict[str, Any]]:
         return list(self._records.get(run_id, []))

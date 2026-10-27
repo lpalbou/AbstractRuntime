@@ -424,8 +424,13 @@ class MemoryFacade:
         ref = dict(ref)
         kind = str(ref["kind"]).strip().lower()
         ref_rt = ref.get("runtime_id")
-        if self.runtime_id and isinstance(ref_rt, str) and ref_rt.strip() and ref_rt.strip() != self.runtime_id:
-            return _unsupported(ref, f"ref names runtime {ref_rt.strip()}, this facade resolves {self.runtime_id}")
+        if isinstance(ref_rt, str) and ref_rt.strip() and ref_rt.strip() != self.runtime_id:
+            # A facade without a runtime_id cannot tell whether a named runtime is its own: never answer `ok` for
+            # what may be another ledger's row.
+            return _unsupported(
+                ref, f"ref names runtime {ref_rt.strip()}, this facade resolves "
+                f"{self.runtime_id or 'an unnamed runtime (build it with runtime_id=)'}"
+            )
         try:
             if kind == "run":
                 return self._reconstruct_run(ref, limit)

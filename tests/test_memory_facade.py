@@ -318,8 +318,9 @@ def test_open_mind_applies_a_revision_and_reads_its_sources(tmp_path: Path) -> N
 
 
 def test_a_ref_of_another_runtime_is_unsupported_and_stamps_name_this_runtime(tmp_path: Path) -> None:
-    """Mutants: drop the runtime_id comparison -> the home's ref resolves `ok` against the plane's ledger; drop the
-    runtime_id on lifted refs -> the legacy artifact ref names no runtime."""
+    """Mutants: drop the runtime_id comparison -> the home's ref resolves `ok` against the plane's ledger; compare only
+    when the facade has a runtime_id -> the anonymous facade answers `ok`; drop the runtime_id on lifted refs -> the
+    legacy artifact ref names no runtime."""
     run_store, ledger = _stores(tmp_path)
     run_id = _run_slimmed_step(run_store, ledger)
     plane = MemoryFacade.open_mind(tmp_path / "mind.sqlite3", runtime_id="plane-a", ledger_store=ledger,
@@ -333,6 +334,9 @@ def test_a_ref_of_another_runtime_is_unsupported_and_stamps_name_this_runtime(tm
                       "reason": "ref names runtime home-b, this facade resolves plane-a"}
     unnamed = plane.reconstruct_source({"kind": "step", "run_id": run_id, "seq": 1})
     assert unnamed["status"] == "ok"  # a ref without a runtime id is read against this facade's ledger
+    anonymous = MemoryFacade(ledger_store=ledger)  # a facade that does not know which runtime it reads
+    blind = anonymous.reconstruct_source({"kind": "step", "run_id": run_id, "seq": 1, "runtime_id": "home-b"})
+    assert blind["status"] == "unsupported" and "unnamed runtime" in blind["reason"]
 
     out = plane.stamp({"run_id": run_id, "payload_ref": "art1"}, run_id=run_id, seq=1, artifact_ids=["art2"])
     assert out["sources"] and all(s.get("runtime_id") == "plane-a" for s in out["sources"]), out["sources"]

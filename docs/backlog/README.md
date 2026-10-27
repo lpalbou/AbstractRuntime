@@ -14,7 +14,7 @@ If you are new to the project, start with `../README.md` and `../architecture.md
 
 - Planned: 29
 - Proposed: 14
-- Completed: 37
+- Completed: 38
 - Deprecated: 13
 - Recurrent: 0
 
@@ -93,6 +93,7 @@ mtime). The anticipated ADR ("an automation is its controller root run") is not 
 
 | ID | Item |
 |----|------|
+| 0853 | [Memory facade and ledger provenance](completed/0853_memory_facade_and_ledger_provenance.md): 2026-10-27, branch `feat/memory-graph-facade`, UNRELEASED; ADR 0009: `MemoryFacade` (open a mind, stamp, reconstruct a source), `LedgerStore.get_record(run_id, seq)`, the step context, a `step` ref on every memory write the runtime performs. |
 | 0851 | [Per-account voice stores](completed/0851_per_account_voice_stores.md): completed 2026-10-27 (0.13.0); the runtime's voice catalog and voice library use its `voice_store_dir` / `voice_library_dirs`; real-weights E2E 9/9. |
 | 0852 | [Capability refusals are not retried](completed/0852_capability_refusals_are_not_retried.md): completed 2026-10-27 (0.13.0); one engine call for a refused request. |
 | 0847 | [Automations v1: controller, contracts, occurrences, triggers](completed/0847_automations_v1_controller_contracts_occurrences_triggers.md): completed 2026-09-27, moved from planned; UNRELEASED; `79d9bf6`…`d02578a`, 2957 passed / 26 skipped; reviews GO after fixes; E2E 9/9. |

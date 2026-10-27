@@ -53,7 +53,7 @@ readers keep working, and ADDS a `sources` list of SourceRef dicts (AbstractMemo
 | Writer | `sources` |
 |---|---|
 | `MEMORY_FORM` | `step` ref of the forming step; `artifact` ref of the verbatim (stored by the handler, or a caller `payload_ref` the artifact store holds) |
-| `MEMORY_KG_ASSERT` | `step` ref of the asserting step; `artifact` ref for `span_id` |
+| `MEMORY_KG_ASSERT` | `step` ref of the asserting step; `artifact` ref for `span_id`. A duplicate s/p/o/scope/owner is not re-written, so its refs cannot land on the existing row: the outcome lists them in `skipped_duplicate_rows[]` (`existing_assertion_id`, `lost_sources`) |
 | `DIARY_WRITE` projection | `diary_entry` ref (`run_id` = `diary:<entity_id>`); for a public entry also the `step` ref of the `DIARY_WRITE` step. A private projection names the entry only (it carries no origin by design; the chain entry holds it) |
 | `MEMORY_REVISE` | `step` ref of the revising step; one `artifact` ref per `artifact_ids` entry; the caller's own artifact/message/event/diary_entry refs |
 

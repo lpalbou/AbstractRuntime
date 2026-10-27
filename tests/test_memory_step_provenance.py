@@ -234,3 +234,24 @@ def test_diary_projection_on_the_chat_path_names_the_entry_only(tmp_path: Path) 
         assert prov["run_id"] == "chat-s9"  # the legacy origin stays
         _assert_parity(prov)
         assert prov["sources"] == [{"kind": "diary_entry", "entry_id": outcome.result["entry_id"], "run_id": "diary:ent"}]
+
+
+def test_a_duplicate_kg_assertion_reports_the_sources_it_could_not_record(tmp_path: Path) -> None:
+    """Review 3a R11: a repeated s/p/o/scope/owner is not re-written, so its new step + span refs cannot land on the
+    existing row; the outcome lists them (`skipped_duplicate_rows[].lost_sources`) instead of dropping them silently.
+    Mutant: omit the record -> the second outcome has no `skipped_duplicate_rows`."""
+    env = _Env(tmp_path)
+    s1 = env.artifacts.store_text("first span")
+    s2 = env.artifacts.store_text("second span")
+    handlers = build_memory_kg_effect_handlers(store=env.store, run_store=env.run_store, now_iso=lambda: NOW)
+    a = {"subject": "ex:alice", "predicate": "schema:description", "object": "a person"}
+    _, first = env.run_one(EffectType.MEMORY_KG_ASSERT, {"assertions": [a], "scope": "global", "span_id": s1.artifact_id},
+                           handlers)
+    run_id, second = env.run_one(EffectType.MEMORY_KG_ASSERT,
+                                 {"assertions": [a], "scope": "global", "span_id": s2.artifact_id}, handlers)
+    assert first["count"] == 1 and second["count"] == 0 and second["skipped_duplicates"] == 1
+    (row,) = second["skipped_duplicate_rows"]
+    assert row["existing_assertion_id"] == first["assertion_ids"][0]
+    kinds = {(s["kind"], s.get("artifact_id"), s.get("run_id")) for s in row["lost_sources"]}
+    assert ("artifact", s2.artifact_id, None) in kinds and any(k == "step" and r == run_id for k, _, r in kinds)
+

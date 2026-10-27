@@ -376,6 +376,10 @@ def build_memory_kg_effect_handlers(
             dedupe = dedupe_raw.strip().lower() not in {"0", "false", "no", "off"}
 
         skipped_duplicates = 0
+        # A duplicate row is not written, so the NEW sources of this assertion (its step, its span) are not recorded
+        # on the existing row: say so in the outcome instead of dropping them silently. Recording a second source
+        # on an existing memory is the graph's job (a revision that adopts the row), a follow-up of backlog 0853.
+        skipped_rows: list[dict[str, Any]] = []
         to_insert = out_rows
         if dedupe:
             to_insert = []
@@ -397,6 +401,13 @@ def build_memory_kg_effect_handlers(
                     existing = []
                 if existing:
                     skipped_duplicates += 1
+                    prov_new = a.provenance if isinstance(a.provenance, dict) else {}
+                    skipped_rows.append({
+                        "subject": a.subject, "predicate": a.predicate, "object": a.object,
+                        "scope": a.scope, "owner_id": a.owner_id,
+                        "existing_assertion_id": getattr(existing[0], "assertion_id", None),
+                        "lost_sources": list(prov_new.get("sources") or []),
+                    })
                     continue
                 to_insert.append(a)
 
@@ -414,6 +425,8 @@ def build_memory_kg_effect_handlers(
             "count_attempted": len(out_rows),
             "skipped_duplicates": skipped_duplicates,
         }
+        if skipped_rows:
+            result["skipped_duplicate_rows"] = skipped_rows
         warn = _store_warning()
         if warn:
             result["warnings"] = [warn]

@@ -64,6 +64,14 @@ Rules (ADR 0009 decision 4):
   the store cannot load. On the synthetic chat path a memory carries its artifact or diary-entry ref only.
 - No `step` ref without a seq from the step context. A real run outside any step gets a `run` ref.
 - When a `step` ref names a run, the `run` ref of the same run is dropped (the step is the precise address).
+- Caller-supplied refs (a `sources` list already in the provenance) are screened: a `run` or `step` ref is dropped
+  (the runtime stamps those), a synthetic run id is stripped from any other ref (a diary entry keeps its
+  `diary:<entity_id>` chain id), a ref AbstractMemory's `SourceRef` refuses is dropped, and a flat `run_id` that is not
+  the run being stamped stays a flat key, never a ref. Each rejection is recorded (`extra.rejected_sources` in the
+  graph shape, a `rejected_sources` flat key otherwise); `stamp` never raises for a caller ref.
+- `is_real_run` uses AbstractMemory's synthetic prefixes (`chat-`, `diary:`, `session_memory_`, `global_memory`),
+  case-insensitively, plus `ABSTRACTRUNTIME_GLOBAL_MEMORY_RUN_ID`. Without a run store only the syntax is checked:
+  any other string counts as real, so pass the run store wherever one exists.
 
 ## `MemoryFacade`
 

@@ -142,6 +142,21 @@ def test_gateway_names_are_abstractmemorys_own_objects() -> None:
 # -- is_real_run and stamp --------------------------------------------------------------------------------------------
 
 
+def test_is_real_run_agrees_with_abstractmemory_on_synthetic_ids() -> None:
+    """The two packages refuse the same run ids: every AbstractMemory synthetic prefix is not real here, in any case
+    (review 3a R13: compared lower-cased), and AbstractMemory's SourceRef refuses a run ref for each of them."""
+    from abstractmemory.graph import SYNTHETIC_RUN_ID_PREFIXES, InvalidSourceRef, SourceRef, is_synthetic_run_id
+
+    for prefix in SYNTHETIC_RUN_ID_PREFIXES:
+        for rid in (f"{prefix}x", f"{prefix.upper()}x", f"  {prefix}x"):
+            assert is_real_run(rid) is False, rid
+        assert is_synthetic_run_id(f"{prefix}x")
+        with pytest.raises(InvalidSourceRef):
+            SourceRef.from_dict({"kind": "run", "run_id": f"{prefix}x"})
+    assert is_real_run("Chat-Session-1") is False
+    assert is_real_run("real-run-1") is True and not is_synthetic_run_id("real-run-1")
+
+
 def test_is_real_run_refuses_synthetic_and_unloadable_ids(tmp_path: Path) -> None:
     run_store, ledger = _stores(tmp_path)
     run_id = _run_slimmed_step(run_store, ledger)
@@ -186,15 +201,15 @@ def test_stamp_never_fabricates_for_a_synthetic_run_or_a_missing_seq(tmp_path: P
 
 
 def test_stamp_graph_shape_round_trips_and_validates() -> None:
-    from abstractmemory.graph import InvalidSourceRef, ProvenanceRequired
+    from abstractmemory.graph import ProvenanceRequired
 
     facade = MemoryFacade(runtime_id="rt1")
     out = facade.stamp({"derived_from": ["m1"], "actor": "entity:e", "reason": "why"}, run_id="r-1", seq=5)
     assert out["actor"] == "entity:e" and out["derived_from"] == ["m1"] and out["reason"] == "why"
     assert out["sources"] == [{"kind": "step", "run_id": "r-1", "seq": 5, "runtime_id": "rt1"}]
     assert set(out) == {"sources", "derived_from", "actor", "reader", "reason", "extra"}
-    with pytest.raises(InvalidSourceRef):
-        facade.stamp({"sources": [{"kind": "step", "run_id": "r"}]}, run_id=None)
+    bad = facade.stamp({"sources": [{"kind": "artifact"}], "derived_from": ["m1"]}, run_id=None)  # never raises
+    assert bad["sources"] == [] and "invalid SourceRef" in bad["extra"]["rejected_sources"][0]["reason"]
     with pytest.raises(ProvenanceRequired):
         facade.stamp({"sources": [], "derived_from": [""]}, run_id=None)
 
@@ -396,3 +411,29 @@ def test_a_run_source_carries_a_bounded_ledger(tmp_path: Path) -> None:
     assert [r["seq"] for r in few["content"]["ledger"]] == [1, 2, 3] and few["metadata"]["ledger_left_out"] == 997
     for bad in (0, -1, True, "10"):
         assert facade.reconstruct_source(ref, limit=bad)["status"] == "unsupported"
+
+
+def test_stamp_screens_caller_supplied_refs_on_both_shapes() -> None:
+    """Review 3a R7: a caller's `run`/`step` ref is dropped (the runtime stamps those), a synthetic run id is stripped
+    from any other ref (a diary entry's own chain id stays), and every rejection is recorded. Mutant: pass caller
+    sources through unscreened -> the forged refs survive on both shapes."""
+    f = MemoryFacade()
+    graph = f.stamp({"sources": [{"kind": "run", "run_id": "chat-session-9"},
+                                 {"kind": "STEP", "run_id": "other", "seq": 4},
+                                 {"kind": "artifact", "artifact_id": "a1", "run_id": "chat-session-9"},
+                                 {"kind": "diary_entry", "entry_id": "e1", "run_id": "diary:ent"}],
+                     "derived_from": [], "actor": "x"}, run_id="real-run-1", seq=2)
+    assert graph["sources"] == [{"kind": "artifact", "artifact_id": "a1"},
+                                {"kind": "diary_entry", "entry_id": "e1", "run_id": "diary:ent"},
+                                {"kind": "step", "run_id": "real-run-1", "seq": 2}]
+    reasons = [r["reason"] for r in graph["extra"]["rejected_sources"]]
+    assert len(reasons) == 3 and "caller-supplied run ref" in reasons[0] and "caller-supplied step ref" in reasons[1]
+    assert "synthetic run id" in reasons[2]
+
+    legacy = f.stamp({"run_id": "other-run", "sources": [{"kind": "step", "run_id": "other", "seq": 4}],
+                      "payload_ref": "v1"}, run_id="chat-x")
+    assert legacy["sources"] == [{"kind": "artifact", "artifact_id": "v1"}]
+    assert legacy["run_id"] == "other-run"  # the flat key stays for legacy readers; it is not lifted to a ref
+    assert [r["ref"]["kind"] for r in legacy["rejected_sources"]] == ["step", "run"]
+    vouched = f.stamp({"run_id": "real-run-1"}, run_id="real-run-1")
+    assert vouched["sources"] == [{"kind": "run", "run_id": "real-run-1"}] and "rejected_sources" not in vouched

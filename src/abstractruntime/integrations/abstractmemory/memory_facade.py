@@ -134,25 +134,27 @@ MAX_RUN_LEDGER_LIMIT = 1000
 
 # -- synthetic run ids ------------------------------------------------------------------------------------------
 
-#: Run-id prefixes that never name a loadable run: the home-direct entity driver (`chat-<session_id>`), the diary
-#: chain (`diary:<entity_id>`), the session memory owner (`session_memory_<sid>`).
-SYNTHETIC_RUN_PREFIXES: Tuple[str, ...] = ("chat-", "diary:", "session_memory_")
+def _synthetic_prefixes() -> Tuple[str, ...]:
+    """AbstractMemory's own list (`abstractmemory.graph.SYNTHETIC_RUN_ID_PREFIXES`: `chat-`, `diary:`,
+    `session_memory_`, `global_memory`), lower-cased, plus this runtime's configured global memory owner
+    (`ABSTRACTRUNTIME_GLOBAL_MEMORY_RUN_ID`), so the two packages refuse the same run ids."""
+    from .effect_handlers import _global_memory_owner_id
 
-
-def _synthetic_exact_ids() -> Tuple[str, ...]:
-    from .effect_handlers import _DEFAULT_GLOBAL_MEMORY_RUN_ID, _global_memory_owner_id
-
-    return tuple(dict.fromkeys((_DEFAULT_GLOBAL_MEMORY_RUN_ID, _global_memory_owner_id())))
+    return tuple(dict.fromkeys(
+        [p.lower() for p in _graph().SYNTHETIC_RUN_ID_PREFIXES] + [_global_memory_owner_id().lower()]
+    ))
 
 
 def is_real_run(run_id: Any, *, run_store: Any = None) -> bool:
-    """True when `run_id` can name a ledger run: a non-empty string that is not a synthetic id (`chat-*`,
-    `diary:*`, `session_memory_*`, the global memory owner) and, when `run_store` is given, that the store loads.
-    A run id that fails this is never stamped as a `run` or `step` ref (ADR 0009 decision 4)."""
+    """True when `run_id` can name a ledger run: a non-empty string that is not synthetic (AbstractMemory's
+    `SYNTHETIC_RUN_ID_PREFIXES` compared case-insensitively, plus the configured global memory owner) and, when
+    `run_store` is given, that the store loads. WITHOUT a run store only the syntax is checked: any other string
+    counts as real (pass the run store wherever one exists). A run id that fails this is never stamped as a `run`
+    or `step` ref (ADR 0009 decision 4)."""
     if not isinstance(run_id, str) or not run_id.strip():
         return False
     rid = run_id.strip()
-    if rid.startswith(SYNTHETIC_RUN_PREFIXES) or rid in _synthetic_exact_ids():
+    if _graph().is_synthetic_run_id(rid) or rid.lower().startswith(_synthetic_prefixes()):
         return False
     if run_store is None:
         return True
@@ -204,6 +206,42 @@ def _ref_dedupe(refs: Iterable[Mapping[str, Any]]) -> List[Dict[str, Any]]:
         by_key.setdefault(ref.key(), ref)
     step_runs = {r.run_id for r in by_key.values() if r.kind == "step"}
     return [r.to_dict() for r in by_key.values() if not (r.kind == "run" and r.run_id in step_runs)]
+
+
+def _screen_caller_refs(refs: Any) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    """Caller-supplied refs (the `sources` a provenance dict already holds) are screened (review 3a R7): a `run` or
+    `step` ref is the runtime's to stamp (from the step context / `stamp(run_id=, seq=)`), never a caller's claim,
+    so it is dropped; a synthetic run id on another kind is stripped from the ref (the artifact, message or event
+    stays a real source), except a diary entry's own chain id (`diary:<entity_id>`); a ref AbstractMemory's
+    `SourceRef` refuses is rejected with its reason. Never raises. Returns (kept ref dicts, rejected
+    `{ref, reason}` records)."""
+    G = _graph()
+    kept: List[Dict[str, Any]] = []
+    rejected: List[Dict[str, Any]] = []
+    if refs is None:
+        return kept, rejected
+    if isinstance(refs, (str, bytes, Mapping)) or not isinstance(refs, Iterable):
+        return kept, [{"ref": refs if isinstance(refs, (str, Mapping)) else repr(refs),
+                       "reason": "provenance.sources is a list of SourceRef dicts"}]
+    for raw in refs:
+        if not isinstance(raw, Mapping):
+            rejected.append({"ref": raw if isinstance(raw, str) else repr(raw), "reason": "a SourceRef is a dict"})
+            continue
+        d = dict(raw)
+        kind = str(d.get("kind") or "").strip().lower()
+        if kind in ("run", "step"):
+            rejected.append({"ref": d, "reason": f"a caller-supplied {kind} ref (the runtime stamps run/step refs)"})
+            continue
+        rid = d.get("run_id")
+        chain = kind == "diary_entry" and isinstance(rid, str) and rid.strip().startswith("diary:")
+        if isinstance(rid, str) and rid.strip() and not chain and not is_real_run(rid):
+            rejected.append({"ref": dict(d), "reason": f"synthetic run id {rid!r} stripped from the ref"})
+            d.pop("run_id", None)
+        try:
+            kept.append(G.SourceRef.from_dict(d).to_dict())  # validated and normalized (kind case, spaces)
+        except G.InvalidSourceRef as e:
+            rejected.append({"ref": d, "reason": f"invalid SourceRef: {e}"})
+    return kept, rejected
 
 
 class MemoryFacade:
@@ -342,24 +380,38 @@ class MemoryFacade:
         )
         graph_shape = bool(prov) and set(prov) <= G.PROVENANCE_KEYS and ("sources" in prov or "derived_from" in prov)
         if graph_shape:
-            base = G.Provenance.from_dict({**prov, "actor": prov.get("actor") or "runtime"})
-            merged = _ref_dedupe([*(s.to_dict() for s in base.sources), *new_refs])
-            return {**base.to_dict(), "sources": merged}
+            kept, rejected = _screen_caller_refs(prov.get("sources"))
+            base = G.Provenance.from_dict({**prov, "sources": kept, "actor": prov.get("actor") or "runtime"})
+            merged = _ref_dedupe([*(r.to_dict() for r in base.sources), *new_refs])
+            out = {**base.to_dict(), "sources": merged}
+            if rejected:
+                out["extra"] = {**out["extra"], "rejected_sources": [*out["extra"].get("rejected_sources", []),
+                                                                      *rejected]}
+            return out
 
         existing = prov.get("sources")
         flat = {k: v for k, v in prov.items() if k != "sources"}
+        kept, rejected = _screen_caller_refs(existing)
         lift = dict(flat)
         legacy_run = lift.get("run_id")
-        if isinstance(legacy_run, str) and not legacy_run.strip().startswith("diary:") and not self._real(
-            legacy_run, _trusted_run_id
-        ):
-            lift.pop("run_id", None)  # a synthetic run id is never lifted to a run ref
+        vouched = str(run_id).strip() if isinstance(run_id, str) else None
+        if isinstance(legacy_run, str) and not legacy_run.strip().startswith("diary:"):
+            if not self._real(legacy_run, _trusted_run_id):
+                lift.pop("run_id", None)  # a synthetic run id is never lifted to a run ref
+            elif legacy_run.strip() != vouched:
+                # A flat run_id the runtime is not stamping for is a caller claim: kept as a flat key, not a ref.
+                lift.pop("run_id", None)
+                rejected.append({"ref": {"kind": "run", "run_id": legacy_run.strip()},
+                                 "reason": "a flat run_id that is not the run the runtime stamps for"})
         lifted = [s.to_dict() for s in G.Provenance.from_legacy(lift, actor="runtime").sources]
         rt = runtime_id or self.runtime_id
         if rt:  # refs the runtime lifts are its own: they name the ledger they resolve against
             for ref in lifted:
                 ref.setdefault("runtime_id", rt)
-        merged = _ref_dedupe([*(existing if isinstance(existing, list) else []), *lifted, *new_refs])
+        merged = _ref_dedupe([*kept, *lifted, *new_refs])
+        if rejected:
+            # A flat key: AbstractMemory's from_legacy carries it into `extra`.
+            flat = {**flat, "rejected_sources": [*(flat.get("rejected_sources") or []), *rejected]}
         if not merged:
             return flat
         return {**flat, "sources": merged}
@@ -562,7 +614,6 @@ __all__ = [
     "GATEWAY_NAMES",
     "MAX_RUN_LEDGER_LIMIT",
     "MemoryFacade",
-    "SYNTHETIC_RUN_PREFIXES",
     "is_real_run",
     *GATEWAY_NAMES,
 ]

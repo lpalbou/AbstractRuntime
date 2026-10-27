@@ -118,7 +118,7 @@ Seams and notes:
   (`contextvars.copy_context`). Test: `test_step_context.py::test_a_tool_run_by_an_approval_resume_sees_the_waiting_steps_started_row`
   (SQLite and JSONL); the reviewer's AbstractNote proof script now records `ledger_seq` / `ledger_step_id` resolving to
   the `note_capture` TOOL_CALLS STARTED row.
-- `is_real_run` keeps its own `SYNTHETIC_RUN_PREFIXES`: AbstractMemory's `SYNTHETIC_RUN_ID_PREFIXES` was not on its
-  branch when this landed (follow-up: reuse it, with a test that the two agree).
+- `is_real_run` reuses AbstractMemory's `is_synthetic_run_id` / `SYNTHETIC_RUN_ID_PREFIXES` (9e2c231), compared
+  case-insensitively, plus the configured global memory owner; a test pins that the two packages agree.
 - `llms-full.txt` was not regenerated (coredoc pass at release).
 

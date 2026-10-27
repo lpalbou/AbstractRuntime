@@ -13,7 +13,7 @@ from __future__ import annotations
 import copy
 from typing import Any, Dict, List, Optional
 
-SCALAR_KEYS = ("version", "root_run_id", "status", "display_status", "cursor", "interaction", "open_waits", "usage", "warnings")
+SCALAR_KEYS = ("version", "root_run_id", "workflow", "session_id", "status", "display_status", "cursor", "interaction", "open_waits", "usage", "warnings")
 LIST_KEYS = ("runs", "messages", "activities", "artifacts")
 
 
@@ -54,13 +54,16 @@ def diff_views(old: Optional[Dict[str, Any]], new: Dict[str, Any]) -> Dict[str, 
 
 
 def parse_cursor_token(token: Any) -> Optional[Dict[str, int]]:
-    """`"<run id prefix>:<seq>,…"` (a view's `cursor.token`, its ETag and SSE event id) -> {prefix: seq}.
+    """`"<run id prefix>:<seq>.…"` (a view's `cursor.token`, its ETag and SSE event id) -> {prefix: seq}.
 
     None when the token is not one (a client's own id, a damaged header)."""
     if not isinstance(token, str) or not token.strip():
         return None
     out: Dict[str, int] = {}
-    for part in token.strip().strip('"').split(","):
+    raw = token.strip()
+    if raw.startswith("W/"):
+        raw = raw[2:]
+    for part in raw.strip('"').split("."):
         prefix, sep, seq = part.partition(":")
         if not sep or not prefix.strip():
             return None

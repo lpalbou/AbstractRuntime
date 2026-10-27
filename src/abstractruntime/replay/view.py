@@ -130,6 +130,7 @@ def _snapshot(run: Any) -> Dict[str, Any]:
         "run_id": _s(d.get("run_id")),
         "workflow_id": _s(d.get("workflow_id")),
         "status": _enum(d.get("status")),
+        "session_id": _s(d.get("session_id")) or None,
         "parent_run_id": _s(d.get("parent_run_id")) or None,
         "waiting": waiting if isinstance(waiting, dict) else None,
         "prompt": prompt,
@@ -149,6 +150,29 @@ def _child_from_wait(wait: Dict[str, Any]) -> str:
         if _s(details.get(k)):
             return _s(details.get(k))
     return ""
+
+
+def workflow_ref(workflow_id: Any) -> Optional[Dict[str, Any]]:
+    """What a run executes, named: `{id, bundle_id, bundle_version, flow_id}`.
+
+    Workflows are the framework's native unit (agents, automations and trigger responses are
+    workflows). A bundled workflow's id is `bundle_id@version:flow_id` (the grammar of
+    `WorkflowBundleRegistry.resolve_entrypoint`; `bundle_id:flow_id` without a version is
+    accepted too); any other id (a visual flow, a host-registered workflow) is its own flow
+    with no bundle."""
+    wid = _s(workflow_id)
+    if not wid:
+        return None
+    bundle_id: Optional[str] = None
+    version: Optional[str] = None
+    flow_id = wid
+    left, sep, right = wid.partition(":")
+    if sep and left.strip() and right.strip() and "/" not in left and "\\" not in left:
+        bundle, at, ver = left.partition("@")
+        bundle_id = bundle.strip() or None
+        version = ver.strip() or None if at else None
+        flow_id = right.strip()
+    return {"id": wid, "bundle_id": bundle_id, "bundle_version": version, "flow_id": flow_id}
 
 
 def wait_kind(wait: Dict[str, Any], effect_type: str = "") -> str:
@@ -271,7 +295,8 @@ class ReplayView:
     def cursor(self) -> Dict[str, Any]:
         runs = {rid: r.last_seq for rid, r in self._runs.items() if r.last_seq > 0 or rid == self.root_run_id}
         order = self._run_order()
-        token = ",".join(f"{rid[:8]}:{self._runs[rid].last_seq}" for rid in order)
+        # One header-safe token (an ETag, an SSE id): no comma, no quote, no space.
+        token = ".".join(f"{rid[:8]}:{self._runs[rid].last_seq}" for rid in order)
         return {"token": token, "records": sum(r.record_count for r in self._runs.values()), "runs": runs}
 
     @property
@@ -286,6 +311,10 @@ class ReplayView:
     def status(self) -> str:
         return self._run_status(self._runs[self.root_run_id])
 
+    def run_statuses(self) -> Dict[str, str]:
+        """run id -> its derived status (no serialization)."""
+        return {rid: self._run_status(r) for rid, r in self._runs.items()}
+
     def is_terminal(self) -> bool:
         return self.status() in TERMINAL_STATUSES
 
@@ -295,6 +324,8 @@ class ReplayView:
         return {
             "version": REPLAY_VIEW_VERSION,
             "root_run_id": self.root_run_id,
+            "workflow": self._root_workflow(),
+            "session_id": root.snapshot.get("session_id"),
             "status": self._run_status(root),
             "display_status": root.display_status or None,
             "cursor": self.cursor,
@@ -310,6 +341,13 @@ class ReplayView:
 
     # ----------------------------------------------------------------- runs
 
+    def _root_workflow(self) -> Optional[Dict[str, Any]]:
+        """The root run's workflow, with `entrypoint` (the flow the run was started at)."""
+        ref = workflow_ref(self._runs[self.root_run_id].workflow_id)
+        if ref is not None:
+            ref["entrypoint"] = ref["flow_id"]
+        return ref
+
     def _run(self, run_id: str) -> _Run:
         r = self._runs.get(run_id)
         if r is None:
@@ -321,10 +359,20 @@ class ReplayView:
         if not child_id or child_id == parent_id or child_id == self.root_run_id:
             return
         child = self._run(child_id)
-        if child.parent_run_id is None:
-            child.parent_run_id = parent_id
-            child.discover_key = discover_key
-            self._dirty["runs"].add(child_id)
+        # The ledger's link (a seq > 0) outranks a snapshot's (seq 0), whichever is folded first,
+        # so a run's place in the tree does not depend on when its snapshot was read.
+        if child.parent_run_id is None or (child.discover_key[2] == 0 and discover_key[2] > 0):
+            if child.parent_run_id != parent_id or child.discover_key != discover_key:
+                child.parent_run_id = parent_id
+                child.discover_key = discover_key
+                self._dirty["runs"].add(child_id)
+
+    def _ledger_workflow(self, run_id: str, workflow_id: str) -> None:
+        """A run's workflow as its parent's ledger names it (its own snapshot, when read, wins)."""
+        r = self._runs.get(run_id)
+        if r is not None and workflow_id and not r.snapshot.get("workflow_id") and r.workflow_id != workflow_id:
+            r.workflow_id = workflow_id
+            self._dirty["runs"].add(run_id)
 
     def _fold_snapshot(self, snap: Dict[str, Any]) -> None:
         rid = snap.get("run_id") or ""
@@ -334,8 +382,9 @@ class ReplayView:
         if r.snapshot != snap:
             r.snapshot = snap
             self._dirty["runs"].add(rid)
-        if snap.get("workflow_id"):
+        if snap.get("workflow_id") and r.workflow_id != snap["workflow_id"]:
             r.workflow_id = snap["workflow_id"]
+            self._dirty["runs"].add(rid)
         parent = snap.get("parent_run_id")
         if parent and rid != self.root_run_id:
             self._run(parent)
@@ -395,6 +444,7 @@ class ReplayView:
             "run_id": rid,
             "parent_run_id": r.parent_run_id if rid != self.root_run_id else None,
             "workflow_id": r.workflow_id or None,
+            "workflow": workflow_ref(r.workflow_id),
             "status": self._run_status(r),
             "display_status": r.display_status or None,
             "depth": depth if rid != self.root_run_id else 0,
@@ -543,6 +593,7 @@ class ReplayView:
             if child:
                 act["child_run_id"] = child
                 self._link(child, run_id, (ts, child, seq))
+                self._ledger_workflow(child, _s(payload.get("workflow_id")))
 
         if eff_type == "answer_user" and status == "completed":
             text = _text_of(res) or _text_of(payload)
@@ -651,6 +702,7 @@ class ReplayView:
             if act is not None:
                 act["child_run_id"] = child
             self._link(child, r.run_id, (ts, child, seq))
+            self._ledger_workflow(child, _s(payload.get("workflow_id")))
         if key:
             r.seen_wait_keys.add(key)
             self._wait_activity[(r.run_id, key)] = aid
@@ -886,6 +938,8 @@ class ReplayView:
         delta = {
             "version": REPLAY_VIEW_VERSION,
             "root_run_id": self.root_run_id,
+            "workflow": self._root_workflow(),
+            "session_id": self._runs[self.root_run_id].snapshot.get("session_id"),
             "cursor": self.cursor,
             "status": self._run_status(self._runs[self.root_run_id]),
             "display_status": self._runs[self.root_run_id].display_status or None,

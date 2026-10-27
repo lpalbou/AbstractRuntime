@@ -1,6 +1,6 @@
 """Replay conformance: each fixture's view equals its golden, AND means what the case is about.
 
-Fixtures live in `tests/fixtures/replay/<case>/` (records.json, runs.json, manifest.json,
+Fixtures live in `src/abstractruntime/replay/conformance/<case>/` (shipped with the package) (records.json, runs.json, manifest.json,
 expected_view.json; `regen.py` rewrites the goldens after a reviewed change). Most are redacted
 from the operator's gateway data; the manifest says which. The golden comparison pins the whole
 view; the per-case assertions below are written from the case's meaning and computed from the
@@ -17,7 +17,7 @@ import pytest
 import abstractruntime.replay as replay_pkg
 from abstractruntime.replay import PERSON_FACING_KINDS, REPLAY_VIEW_VERSION, replay, wait_kind, workflow_ref
 
-FIXTURES = Path(__file__).resolve().parent / "fixtures" / "replay"
+from abstractruntime.replay.conformance import HERE as FIXTURES  # noqa: E402  (shipped with the package)
 CASES = sorted(p.name for p in FIXTURES.iterdir() if (p / "manifest.json").exists())
 
 
@@ -72,7 +72,7 @@ def test_corpus_is_present_and_tested_against_this_checkout():
 def test_view_equals_golden(case):
     view, *_ = _view(case)
     golden = json.loads((FIXTURES / case / "expected_view.json").read_text(encoding="utf-8"))
-    assert view == golden, f"{case}: the view changed; review, then `python tests/fixtures/replay/regen.py --write {case}`"
+    assert view == golden, f"{case}: the view changed; review, then `python scripts/regen_replay_conformance.py --write {case}`"
 
 
 @pytest.mark.parametrize("case", CASES)

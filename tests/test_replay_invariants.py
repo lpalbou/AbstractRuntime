@@ -22,7 +22,7 @@ import pytest
 import abstractruntime.replay as replay_pkg
 from abstractruntime.replay import ReplayView, apply_delta, diff_views, parse_cursor_token, replay
 
-FIXTURES = Path(__file__).resolve().parent / "fixtures" / "replay"
+from abstractruntime.replay.conformance import HERE as FIXTURES  # noqa: E402  (shipped with the package)
 CASES = sorted(p.name for p in FIXTURES.iterdir() if (p / "manifest.json").exists())
 SEEDS = range(12)
 

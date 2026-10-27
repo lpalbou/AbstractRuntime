@@ -1,8 +1,8 @@
 """Regenerate the replay conformance goldens (`expected_view.json`) from each fixture's inputs.
 
-    python tests/fixtures/replay/regen.py            # report which goldens would change (no write)
-    python tests/fixtures/replay/regen.py --write    # rewrite them (all cases, or the named ones)
-    python tests/fixtures/replay/regen.py --write a_delegated_child_approval
+    python scripts/regen_replay_conformance.py            # report which goldens would change (no write)
+    python scripts/regen_replay_conformance.py --write    # rewrite them (all cases, or the named ones)
+    python scripts/regen_replay_conformance.py --write a_delegated_child_approval
 
 A fixture is a directory holding `records.json` ({run_id: [ledger records in order, each with its
 seq]}), `runs.json` ({run_id: run snapshot}), `manifest.json` (case, what it pins, provenance,
@@ -20,8 +20,9 @@ import json
 import sys
 from pathlib import Path
 
-HERE = Path(__file__).resolve().parent
-sys.path.insert(0, str(HERE.parents[2] / "src"))
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "src"))
+HERE = ROOT / "src" / "abstractruntime" / "replay" / "conformance"
 
 from abstractruntime.replay import replay  # noqa: E402
 

@@ -244,6 +244,16 @@ def project_diary_entry(
     )
 
     try:
+        # Ledger provenance (ADR 0009): the diary entry (with its chain) is the ground; a public projection also
+        # names the DIARY_WRITE step of the writing run when it runs inside one. A private projection names the
+        # entry only: it carries no origin by design, and the chain entry itself holds it.
+        from ...identity.diary import diary_chain_id
+        from .memory_facade import MemoryFacade
+
+        entry_ref = {"kind": "diary_entry", "entry_id": entry_id, "run_id": diary_chain_id(entity_id)}
+        provenance = {**provenance, "sources": [entry_ref]}
+        writer_run = None if private else origin.get("run_id")
+        provenance = MemoryFacade().stamp_current_step(provenance, run_id=writer_run)
         MemoryRecordInput = _import_record_input()
         record_ids = memory_system.remember_many(
             [

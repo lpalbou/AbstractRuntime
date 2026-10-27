@@ -254,6 +254,13 @@ class MemoryFacade:
     def is_real_run(self, run_id: Any) -> bool:
         return is_real_run(run_id, run_store=self.run_store)
 
+    def _real(self, run_id: Any, trusted_run_id: Optional[str]) -> bool:
+        # A run the runtime is executing right now (its step context names it) is loadable by construction: only the
+        # synthetic-id check applies, and the hot path pays no run-store read.
+        if trusted_run_id is not None and isinstance(run_id, str) and run_id.strip() == trusted_run_id:
+            return is_real_run(run_id)
+        return self.is_real_run(run_id)
+
     def source_refs(
         self,
         *,
@@ -262,11 +269,12 @@ class MemoryFacade:
         step_id: Optional[str] = None,
         artifact_ids: Iterable[Any] = (),
         runtime_id: Optional[str] = None,
+        _trusted_run_id: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """The refs the runtime can vouch for: a `step` ref when `run_id` is real and `seq` is a ledger row address,
         else a `run` ref when `run_id` is real; one `artifact` ref per artifact id. Nothing for a synthetic run."""
         rt = runtime_id or self.runtime_id
-        real = self.is_real_run(run_id)
+        real = self._real(run_id, _trusted_run_id)
         rid = str(run_id).strip() if real else None
         refs: List[Dict[str, Any]] = []
         s = coerce_ledger_seq(seq)
@@ -300,6 +308,7 @@ class MemoryFacade:
         step_id: Optional[str] = None,
         artifact_ids: Iterable[Any] = (),
         runtime_id: Optional[str] = None,
+        _trusted_run_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Return `provenance` with the ledger refs the runtime knows added to its `sources` list.
 
@@ -314,7 +323,8 @@ class MemoryFacade:
         G = _graph()
         prov = dict(provenance or {})
         new_refs = self.source_refs(
-            run_id=run_id, seq=seq, step_id=step_id, artifact_ids=artifact_ids, runtime_id=runtime_id
+            run_id=run_id, seq=seq, step_id=step_id, artifact_ids=artifact_ids, runtime_id=runtime_id,
+            _trusted_run_id=_trusted_run_id,
         )
         graph_shape = bool(prov) and set(prov) <= G.PROVENANCE_KEYS and ("sources" in prov or "derived_from" in prov)
         if graph_shape:
@@ -326,8 +336,8 @@ class MemoryFacade:
         flat = {k: v for k, v in prov.items() if k != "sources"}
         lift = dict(flat)
         legacy_run = lift.get("run_id")
-        if isinstance(legacy_run, str) and not legacy_run.strip().startswith("diary:") and not self.is_real_run(
-            legacy_run
+        if isinstance(legacy_run, str) and not legacy_run.strip().startswith("diary:") and not self._real(
+            legacy_run, _trusted_run_id
         ):
             lift.pop("run_id", None)  # a synthetic run id is never lifted to a run ref
         lifted = [s.to_dict() for s in G.Provenance.from_legacy(lift, actor="runtime").sources]
@@ -335,6 +345,27 @@ class MemoryFacade:
         if not merged:
             return flat
         return {**flat, "sources": merged}
+
+    def stamp_current_step(
+        self,
+        provenance: Optional[Mapping[str, Any]],
+        *,
+        run_id: Any,
+        artifact_ids: Iterable[Any] = (),
+        runtime_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """`stamp` with the step the runtime is executing for `run_id` (`core.step_context`): a `step` ref
+        `(run_id, seq, step_id)` when the handler runs inside a runtime step of THAT run; outside any step (a handler
+        called directly, the home-direct entity driver) no seq is known and none is guessed."""
+        from ...core.step_context import current_step_context
+
+        ctx = current_step_context(run_id) if isinstance(run_id, str) and run_id.strip() else None
+        if ctx is None:
+            return self.stamp(provenance, run_id=run_id, artifact_ids=artifact_ids, runtime_id=runtime_id)
+        return self.stamp(
+            provenance, run_id=ctx.run_id, seq=ctx.seq, step_id=ctx.step_id, artifact_ids=artifact_ids,
+            runtime_id=runtime_id, _trusted_run_id=ctx.run_id,
+        )
 
     # -- graph pass-through ------------------------------------------------------------------------------------------
 

@@ -9,6 +9,7 @@ from typing import Any, Callable, Dict, Iterable, Optional
 from ...core.models import Effect, EffectType, RunState
 from ...core.runtime import EffectHandler, EffectOutcome
 from ...storage.base import RunStore
+from .memory_facade import MemoryFacade
 
 _DEFAULT_GLOBAL_MEMORY_RUN_ID = "global_memory"
 _DEFAULT_SESSION_MEMORY_RUN_PREFIX = "session_memory_"
@@ -284,6 +285,9 @@ def build_memory_kg_effect_handlers(
         observed_at = now_iso()
         out_rows: list[Any] = []
         parse_errors: list[str] = []
+        # Ledger provenance (ADR 0009): the MEMORY_KG_ASSERT step that wrote each assertion; `span_id` -> artifact.
+        facade = MemoryFacade(run_store=run_store)
+        writer_run_id = str(getattr(run, "run_id", "") or "")
         for a in assertions:
             try:
                 merged = dict(a)
@@ -301,9 +305,9 @@ def build_memory_kg_effect_handlers(
                 prov2: dict[str, Any] = dict(provenance) if isinstance(provenance, dict) else {}
                 if span_id_default and "span_id" not in prov2:
                     prov2["span_id"] = span_id_default
-                prov2.setdefault("writer_run_id", str(getattr(run, "run_id", "") or ""))
+                prov2.setdefault("writer_run_id", writer_run_id)
                 prov2.setdefault("writer_workflow_id", str(getattr(run, "workflow_id", "") or ""))
-                merged["provenance"] = prov2
+                merged["provenance"] = facade.stamp_current_step(prov2, run_id=writer_run_id)
                 if attributes_defaults:
                     attrs = merged.get("attributes")
                     attrs2: dict[str, Any] = dict(attrs) if isinstance(attrs, dict) else {}

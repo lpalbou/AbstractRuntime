@@ -58,6 +58,7 @@ import json
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from ...core.models import Effect, EffectType, RunState
+from .memory_facade import MemoryFacade
 from ...core.runtime import EffectHandler, EffectOutcome
 from ...storage.base import RunStore
 from .effect_handlers import resolve_scope_owner_id
@@ -458,6 +459,9 @@ def build_memory_seam_effect_handlers(
         MemoryRecordInput = _import_record_input()
         warnings: List[str] = []
         inputs = []
+        # Ledger provenance (ADR 0009): every formed record names the MEMORY_FORM step that formed it (when the
+        # handler runs inside a runtime step of a real run) and the verbatim artifact it points at.
+        facade = MemoryFacade(run_store=run_store, artifact_store=artifact_store)
         for i, raw in enumerate(raw_records):
             if not isinstance(raw, dict):
                 return EffectOutcome.failed(f"MEMORY_FORM records[{i}] must be an object")
@@ -466,6 +470,7 @@ def build_memory_seam_effect_handlers(
             # Full verbatim goes to the RUNTIME artifact store; memory gets a ref.
             payload_ref = rec.get("payload_ref")
             verbatim = rec.pop("verbatim", None)
+            verbatim_artifact: Optional[str] = None
             if payload_ref is None and isinstance(verbatim, str) and verbatim.strip():
                 if artifact_store is not None and callable(getattr(artifact_store, "store_text", None)):
                     meta = artifact_store.store_text(
@@ -476,6 +481,7 @@ def build_memory_seam_effect_handlers(
                     payload_ref = getattr(meta, "artifact_id", None) or (
                         meta.get("artifact_id") if isinstance(meta, dict) else None
                     )
+                    verbatim_artifact = str(payload_ref) if payload_ref else None
                 else:
                     warnings.append(
                         f"#FALLBACK records[{i}]: no artifact_store wired; verbatim dropped, digest-only formation"
@@ -484,6 +490,15 @@ def build_memory_seam_effect_handlers(
             provenance = dict(rec.get("provenance") or {})
             provenance.setdefault("run_id", run_id)
             provenance.setdefault("turn_id", turn_id)
+            # A caller-supplied payload_ref is an artifact ref only when the artifact store holds it (a payload_ref
+            # may also name an identity-core `.yaml` record); one this handler just stored always is.
+            if verbatim_artifact is None and isinstance(payload_ref, str) and payload_ref.strip():
+                exists = getattr(artifact_store, "exists", None)
+                if callable(exists) and exists(payload_ref.strip()):
+                    verbatim_artifact = payload_ref.strip()
+            provenance = facade.stamp_current_step(
+                provenance, run_id=run_id, artifact_ids=[verbatim_artifact] if verbatim_artifact else ()
+            )
 
             try:
                 inputs.append(

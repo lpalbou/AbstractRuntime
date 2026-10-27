@@ -12,6 +12,7 @@ from __future__ import annotations
 import bisect
 import contextlib
 import logging
+import sys
 from array import array
 import json
 import os
@@ -2487,18 +2488,29 @@ class _JsonlRowIndex:
     `seq - 1 - bisect_left(offsets, offset)`. `size` is the byte length indexed (newline-terminated lines only);
     `ino` the file's inode, so a deleted-and-recreated ledger is re-indexed from scratch."""
 
-    __slots__ = ("ino", "size", "offsets")
+    __slots__ = ("ino", "size", "offsets", "persisted_size")
 
     def __init__(self, ino: int) -> None:
         self.ino = ino
         self.size = 0
         self.offsets = array("q")
+        self.persisted_size = 0  # the indexed size the `.idx` file on disk covers
+
+
+# Persisted row index (`ledger_<run_id>.idx`, beside the ledger): magic, then (inode, indexed size, row count) as
+# native int64s, then the offsets. Byte order is in the magic, so a file moved across architectures is rebuilt.
+_IDX_MAGIC = b"ARLIDX1" + (b"L" if sys.byteorder == "little" else b"B")
 
 
 class JsonlLedgerStore(LedgerStore):
     # Row-index cache bound (ADR 0009 / backlog 0853 performance): runs whose line offsets are kept (8 bytes per
     # record), least recently used evicted. A 10k-row ledger costs ~80KB.
     _ROW_INDEX_MAX_RUNS = 128
+    # The persisted `.idx` is rewritten (atomically, whole) once the newly indexed ledger bytes reach
+    # max(_ROW_INDEX_PERSIST_BYTES, 1/_ROW_INDEX_PERSIST_FRACTION of the ledger): a fresh process then parses at most
+    # that tail instead of the whole file, and the rewrites total a small multiple of the final index size.
+    _ROW_INDEX_PERSIST_BYTES = 256 * 1024
+    _ROW_INDEX_PERSIST_FRACTION = 8
     # First backward window of `find_started_record` (doubles until the STARTED row is found or the file start).
     _STARTED_SCAN_WINDOW_BYTES = 65536
 
@@ -2596,6 +2608,7 @@ class JsonlLedgerStore(LedgerStore):
                 return
             idx.offsets.append(size_before)
             idx.size = size_after
+            self._row_index_maybe_persist(run_id, idx)
 
     def _row_index_current(self, run_id: str) -> Optional[_JsonlRowIndex]:
         """The run's line-offset index, extended to the file's current newline-terminated end; None when the
@@ -2610,14 +2623,65 @@ class JsonlLedgerStore(LedgerStore):
         with self._row_index_lock:
             idx = self._row_index.get(run_id)
             if idx is None or idx.ino != st.st_ino or st.st_size < idx.size:
-                idx = _JsonlRowIndex(st.st_ino)
+                # A fresh process, an evicted run, or a recreated file: the persisted index, when it still matches
+                # this file, saves the full parse (C3); else rebuild from byte 0.
+                idx = self._row_index_load(run_id, p, st) or _JsonlRowIndex(st.st_ino)
             if st.st_size > idx.size:
                 self._row_index_extend(p, idx)
+                self._row_index_maybe_persist(run_id, idx)
             self._row_index[run_id] = idx
             self._row_index.move_to_end(run_id)
             while len(self._row_index) > self._ROW_INDEX_MAX_RUNS:
                 self._row_index.popitem(last=False)
             return idx
+
+    def _idx_path(self, run_id: str) -> Path:
+        return self._base / f"ledger_{run_id}.idx"
+
+    def _row_index_load(self, run_id: str, p: Path, st: os.stat_result) -> Optional[_JsonlRowIndex]:
+        """The persisted index when it describes THIS file (same inode, a size within it ending on a line break);
+        None otherwise (it is then rebuilt and rewritten)."""
+        try:
+            data = self._idx_path(run_id).read_bytes()
+        except OSError:
+            return None
+        head = len(_IDX_MAGIC) + 24
+        if len(data) < head or data[: len(_IDX_MAGIC)] != _IDX_MAGIC:
+            return None
+        meta = array("q")
+        meta.frombytes(data[len(_IDX_MAGIC):head])
+        ino, size, count = meta
+        if ino != st.st_ino or size > st.st_size or size < 0 or len(data) != head + 8 * count:
+            return None
+        if size:
+            with p.open("rb") as f:
+                f.seek(size - 1)
+                if f.read(1) != b"\n":
+                    return None
+        idx = _JsonlRowIndex(st.st_ino)
+        idx.offsets.frombytes(data[head:])
+        if idx.offsets and not (0 <= idx.offsets[-1] < size):
+            return None
+        idx.size = idx.persisted_size = size
+        return idx
+
+    def _row_index_maybe_persist(self, run_id: str, idx: _JsonlRowIndex) -> None:
+        due = max(self._ROW_INDEX_PERSIST_BYTES, idx.size // self._ROW_INDEX_PERSIST_FRACTION)
+        if idx.size - idx.persisted_size >= due:
+            self._row_index_persist(run_id, idx)
+
+    def _row_index_persist(self, run_id: str, idx: _JsonlRowIndex) -> None:
+        """Write the index atomically beside the ledger (best effort: a failure only costs a re-parse later)."""
+        target = self._idx_path(run_id)
+        tmp = target.with_name(f"{target.name}.{uuid.uuid4().hex}.tmp")
+        try:
+            meta = array("q", [idx.ino, idx.size, len(idx.offsets)])
+            tmp.write_bytes(_IDX_MAGIC + meta.tobytes() + idx.offsets.tobytes())
+            os.replace(tmp, target)
+            idx.persisted_size = idx.size
+        except OSError:
+            with contextlib.suppress(OSError):
+                tmp.unlink()
 
     @staticmethod
     def _row_index_extend(p: Path, idx: _JsonlRowIndex) -> None:
@@ -2975,4 +3039,6 @@ class JsonlLedgerStore(LedgerStore):
         with self._seq_cache_lock:
             self._seq_cache.pop(rid, None)
         self._row_index_drop(rid)
+        with contextlib.suppress(OSError):
+            self._idx_path(rid).unlink()
         return count

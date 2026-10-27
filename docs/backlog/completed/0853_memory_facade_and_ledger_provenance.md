@@ -157,3 +157,10 @@ Open operator decisions, written in ADR 0009 (Open decisions), not chosen here:
   JSON-file ledger is append-only by contract; a rewritten one answers `source_gone`, never another row (A2).
 - Owner = principal, scope = kind (B1's full fix); the runtime now refuses an `owner_id` the run does not derive.
 
+C3 (persisted JSON-file row index, `ledger_<run_id>.idx`): 100,000-row run (87.5 MB), the architect's
+`c_jsonl_ledger.py`, this machine: first `get_record` in a fresh process 320 ms -> 39 ms (the persisted index plus at
+most 1/8 of the ledger's tail parsed); after 129 other runs evicted it from the 128-run cache 305 ms -> 42 ms; warm
+point read 0.03 ms (unchanged); 100k appends 5.0-5.2 s -> 6.0 s (the index rewrites, a small multiple of its final
+800 KB in total). The index is validated against the ledger (inode, indexed size inside the file and ending on a line
+break, row count) and rebuilt otherwise; `delete` removes it.
+

@@ -159,3 +159,50 @@ def test_a_crash_torn_half_line_never_swallows_the_next_append(tmp_path: Path) -
     assert [r["node_id"] for r in store.list(RID)] == ["n1", "n2", "n3", "n99", "n100"]
     _assert_matches_list(store)
 
+
+
+def _persisting(tmp_path: Path) -> JsonlLedgerStore:
+    store = JsonlLedgerStore(tmp_path)
+    store._ROW_INDEX_PERSIST_BYTES = 1  # persist on every indexed append (the default waits for 256 KB / 1/8 file)
+    store._ROW_INDEX_PERSIST_FRACTION = 1 << 30
+    return store
+
+
+def test_a_fresh_process_loads_the_persisted_index_instead_of_parsing(tmp_path: Path) -> None:
+    """Architect C3: the row index is persisted beside the ledger (`ledger_<run>.idx`) so a fresh process (or an
+    evicted run) does not re-parse the whole file. Mutants: never load the file -> `_row_index_load` answers None;
+    load without the inode/size checks -> the recreated-ledger case reads the old offsets."""
+    import os
+
+    writer = _persisting(tmp_path)
+    for i in range(1, 30):
+        writer.append(_step(i))
+    idx_file = tmp_path / f"ledger_{RID}.idx"
+    assert idx_file.exists()
+    fresh = JsonlLedgerStore(tmp_path)
+    path = tmp_path / f"ledger_{RID}.jsonl"
+    loaded = fresh._row_index_load(RID, path, path.stat())
+    assert loaded is not None and list(loaded.offsets) == list(writer._row_index[RID].offsets)
+    _assert_matches_list(fresh)
+
+    # The ledger grew behind the persisted index: the tail is indexed on top of it.
+    JsonlLedgerStore(tmp_path).append(_step(30))  # a writer without write-through of the persisted index
+    _assert_matches_list(JsonlLedgerStore(tmp_path))
+
+    # A garbage index is ignored and rebuilt.
+    idx_file.write_bytes(b"garbage")
+    assert JsonlLedgerStore(tmp_path)._row_index_load(RID, path, path.stat()) is None
+    _assert_matches_list(JsonlLedgerStore(tmp_path))
+
+    # An index of a previous file (the ledger was recreated: other inode, other rows) is never used.
+    writer2 = _persisting(tmp_path)
+    writer2.get_record_unresolved(RID, 1)  # builds + persists for the current file
+    keep = tmp_path / "old.jsonl"
+    path.rename(keep)  # keeps the old inode alive
+    path.write_text("".join(_line(f"z{i}", 120) for i in range(1, 4)), encoding="utf-8")
+    assert JsonlLedgerStore(tmp_path)._row_index_load(RID, path, path.stat()) is None
+    assert JsonlLedgerStore(tmp_path).get_record_unresolved(RID, 2)["node_id"] == "z2"
+    _assert_matches_list(JsonlLedgerStore(tmp_path))
+    assert os.path.exists(idx_file)
+    JsonlLedgerStore(tmp_path).delete(RID)
+    assert not idx_file.exists()  # delete removes the index with the ledger

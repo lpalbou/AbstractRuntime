@@ -23,6 +23,9 @@ from __future__ import annotations
 import abstractcore.comms.email as _core_email
 from abstractcore.comms.email import *  # noqa: F401,F403 - re-exported unchanged
 from abstractcore.comms.email import legacy  # noqa: F401 - re-exported module
+# Mailbox server discovery (AbstractCore 2.28.0+): the SRV lookup a host's "Read and write"
+# mailbox access uses to find a provider's outgoing server (AbstractGateway mail/accounts.py).
+from abstractcore.comms.email.discovery import resolve_srv_default  # noqa: F401 - re-exported unchanged
 
 # The names AbstractGateway imports (framework backlog 0992, WP3 request).
 GATEWAY_NAMES = (
@@ -30,7 +33,7 @@ GATEWAY_NAMES = (
     "EmailInvalidSettings", "EmailNotConfigured", "EmailOAuthFailed", "EmailOAuthPending", "EmailRateLimited",
     "EmailSecret", "ImapSettings", "LoopbackAuthorization", "MailCursor", "OAuthSettings", "OAuthTokenClient",
     "OutgoingMessage", "SearchCriteria", "SecretVault", "SmtpSettings", "builtin_client", "evaluate", "guarded_send",
-    "legacy", "parse_recipients", "provider_preset", "resolve_oauth_client", "tls_context",
+    "legacy", "parse_recipients", "provider_preset", "resolve_oauth_client", "resolve_srv_default", "tls_context",
 )
 
-__all__ = [*_core_email.__all__, "legacy", "GATEWAY_NAMES"]
+__all__ = [*_core_email.__all__, "legacy", "resolve_srv_default", "GATEWAY_NAMES"]

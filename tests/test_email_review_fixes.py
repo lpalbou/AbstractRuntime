@@ -531,7 +531,10 @@ def test_email_facade_mirrors_core_mail_package():
     import abstractcore.comms.email as core_email
     from abstractruntime.integrations.abstractcore import email_facade
 
-    assert set(email_facade.__all__) == set(core_email.__all__) | {"legacy", "GATEWAY_NAMES"}
+    assert set(email_facade.__all__) == set(core_email.__all__) | {"legacy", "resolve_srv_default", "GATEWAY_NAMES"}
+    from abstractcore.comms.email.discovery import resolve_srv_default as core_resolve
+
+    assert email_facade.resolve_srv_default is core_resolve
     for name in core_email.__all__:
         assert getattr(email_facade, name) is getattr(core_email, name), name
     from abstractcore.comms.email import legacy

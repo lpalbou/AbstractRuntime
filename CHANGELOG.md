@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.13.1] - 2026-10-27
+
+### Added
+
+- `email_facade.resolve_srv_default` (AbstractCore's mailbox SRV lookup) is re-exported, so a host's mail code imports
+  it from the runtime facade like every other mail name.
+
 ## [0.13.0] - 2026-10-27
 
 Requires AbstractCore 2.30.0 or newer. Personal voice stores need AbstractVoice 0.19.0.

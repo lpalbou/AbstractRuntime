@@ -503,6 +503,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#replay-view-one-reconstruction-of-a-run-every-client" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Replay view (one reconstruction of a run, every client)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#runtime-owned-integrations" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1444,6 +1455,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#replay-view-one-reconstruction-of-a-run-every-client" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Replay view (one reconstruction of a run, every client)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#runtime-owned-integrations" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1654,6 +1676,11 @@
 - The creation journal (<code>.runs_created.log</code> in the run folder) carries one line per change another store object or process must learn about: <code>+&lt;run_id&gt;</code> created, <code>-&lt;run_id&gt;</code> deleted, <code>~&lt;run_id&gt;</code> became active again (resumed, re-opened, first save after a restart, or saved after another writer touched the file). Lines are written before the file change they announce; readers apply the lines they have not seen at their next lookup, and a line whose file has not landed yet (or does not read active yet) is re-checked until it does. Readers from AbstractRuntime 0.10.0 ignore <code>~</code> lines, and writers from 0.10.0 never write them: a re-open made by such a writer reaches other store objects through the periodic rescan. <code>=&lt;run_id&gt;</code>: a run that is not active changed its file (it finished, or a finished run was re-saved), written AFTER the file is published; older readers ignore it, and a change made by an older writer reaches the trusted run index through the reconciliation.
 - <code>JsonFileRunStore</code> event-wait and mailbox indexes (<code>list_event_waiters</code>, <code>list_event_waiters_by_prefix</code>, <code>list_mailbox_runs</code>) see what another process saved on the same folder (a split gateway: API process + runner process). Before each lookup the store reads its change signal (the creation log's size and the folder's mtime): when either moved, or at least every <code>EVENT_INDEX_REFRESH_S</code> (2 s), it stats each running or waiting run and re-reads the ones whose file changed since it last filed them. An idle store pays two stats per lookup; its own saves are never re-read. <code>event_index_stats()</code> returns <code>{refreshes, refiled, tracked}</code>.
 - <code>JsonFileRunStore.change_token()</code> answers "did any run of this folder change?" with one stat: <code>(creation-log size, active-index counter)</code>. Every save, create and delete through the store moves the counter; another process's create, delete or became-active line moves the log size. Not seen: another process re-saving a run that stays active (one ticking process per folder); ending a run, or re-saving a finished one, writes <code>=&lt;run_id&gt;</code>. <code>changed_run_ids(token)</code> names the runs this store changed since <code>token</code>, or <code>None</code> when that is unknown (the log moved, or more than 8,192 changes ago). <code>ObservableLedgerStore.change_token()</code> / <code>changed_run_ids(token)</code> do the same for ledger appends (process-local). The gateway runner's scan gate and its mail notification check compare these tokens instead of reading the directory.</p>
+<p>The durable cursor (ADR 0010):
+- Every ledger store numbers a run's records 1, 2, 3, … and <code>list()</code> returns each record with its <code>seq</code>. <code>JsonlLedgerStore</code> writes it on each line, allocated under an advisory file lock that spans the head read and the write, so another process appending to the same run never takes the same number. A line written before the field existed is numbered by its position. <code>append()</code> returns the seq.
+- <code>LedgerStore.list_after(*, run_id, after, limit=1000) -&gt; (records, last_seq)</code>: the records after a seq. SQLite does an indexed read; JSONL seeks to the byte offset where the previous read ended; the default implementation filters <code>list()</code>. The decorators (observable, hash-chained, offloading) delegate it.
+- <code>ObservableLedgerStore</code> hands subscribers the record with its <code>seq</code>.
+- <code>SqliteLedgerStore.import_records(run_id, records)</code> copies a run's ledger in, keeping each <code>seq</code>. A migration from files to SQLite therefore keeps every cursor valid. It refuses a run that already has records.</p>
 <p>Common decorators:
 - <code>ObservableLedgerStore</code> for subscriptions (<code>src/abstractruntime/storage/observable.py</code>)
 - <code>HashChainedLedgerStore</code> + <code>verify_ledger_chain(...)</code> for tamper-evidence (<code>src/abstractruntime/storage/ledger_chain.py</code>)
@@ -1817,6 +1844,24 @@ Deep dive: <a href="../automations/">automations.md</a>.</p>
 <p>This produces a portable record of a run’s state + ledger + artifacts suitable for debugging/review.
 When available, it also includes <code>resolved_actions</code>: bounded capability/action summaries derived
 from Core route resolution and persisted from <code>LLM_CALL</code> results.</p>
+<h2 id="replay-view-one-reconstruction-of-a-run-every-client">Replay view (one reconstruction of a run, every client)<a class="headerlink" href="#replay-view-one-reconstruction-of-a-run-every-client" title="Permanent link">&para;</a></h2>
+<p>Implementation: <code>src/abstractruntime/replay/</code> (ADR 0010). Guide: <a href="../replay/">replay.md</a>.</p>
+<ul>
+<li><code>replay(records_by_run, runs_by_id=None, *, root_run_id=None) -&gt; ReplayView</code>: folds a run
+  tree's ledger records (<code>{run_id: [records in ledger order]}</code>) and durable snapshots
+  (<code>RunState</code> or dicts) into a view. Pure and deterministic.</li>
+<li><code>ReplayView.apply(records, *, runs_by_id=None) -&gt; delta</code>: folds newer records and snapshots.
+  The same delta is kept as <code>view.last_delta</code>. <code>apply(view, records)</code> is the module-level form.</li>
+<li><code>ReplayView.to_json()</code>: the view, <code>replay_view_v1</code> (status, <code>interaction</code>, <code>open_waits</code>,
+  <code>runs</code>, <code>messages</code>, <code>activities</code>, <code>artifacts</code>, <code>usage</code>, <code>workflow</code>, <code>cursor</code>, <code>warnings</code>).
+  Other reads: <code>cursor</code>, <code>run_ids</code>, <code>last_seq(run_id)</code>, <code>status()</code>, <code>run_statuses()</code> and
+  <code>is_terminal()</code>.</li>
+<li><code>apply_delta(view_json, delta)</code>, <code>diff_views(old, new)</code> and <code>parse_cursor_token(token)</code>: the
+  client side of a delta, the delta between two views, and a cursor token as <code>{run id prefix:
+  seq}</code>.</li>
+<li><code>wait_kind(wait)</code>, <code>workflow_ref(workflow_id)</code>, <code>PERSON_FACING_KINDS</code>,
+  <code>TERMINAL_STATUSES</code>, <code>REPLAY_VIEW_VERSION</code>.</li>
+</ul>
 <h2 id="runtime-owned-integrations">Runtime-owned integrations<a class="headerlink" href="#runtime-owned-integrations" title="Permanent link">&para;</a></h2>
 <h3 id="abstractcore-llm-tools">AbstractCore (LLM + tools)<a class="headerlink" href="#abstractcore-llm-tools" title="Permanent link">&para;</a></h3>
 <p>Requires: <code>pip install abstractruntime</code> (AbstractCore 2.30.0 or newer is part of the base install).</p>

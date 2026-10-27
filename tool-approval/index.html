@@ -516,6 +516,17 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#session-tool-policy-a-conversations-standing-word" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Session tool policy: a conversation's standing word
+      
+    </span>
+  </a>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -1112,6 +1123,17 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#session-tool-policy-a-conversations-standing-word" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Session tool policy: a conversation's standing word
+      
+    </span>
+  </a>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -1261,6 +1283,56 @@ The rules below apply to both versions.</p>
 </ul>
 <p>Until the operator email is configured, <code>send_email</code> stays in the
 require-approval set: self and others both ask.</p>
+<h2 id="session-tool-policy-a-conversations-standing-word">Session tool policy: a conversation's standing word<a class="headerlink" href="#session-tool-policy-a-conversations-standing-word" title="Permanent link">&para;</a></h2>
+<p>A person can approve tools for a whole conversation ("approve all", "approve all web tools",
+"approve <code>fetch_url</code>"), deny some, or reset. That decision is a <strong>session tool policy</strong>: one row
+per <code>session_id</code> in a store outside run vars
+(<code>src/abstractruntime/storage/session_tool_policy.py</code>: <code>SqliteSessionToolPolicyStore</code>,
+<code>InMemorySessionToolPolicyStore</code>), installed with <code>Runtime(session_tool_policy_store=...)</code> or
+<code>Runtime.set_session_tool_policy_store(store)</code>. Hosts write it (the gateway's
+<code>/api/gateway/sessions/{session_id}/tool-policy</code> routes, which expand and clamp the request to
+the tools the account is authorized for); the TOOL_CALLS handler reads the run's session row once
+per batch, <strong>before</strong> it decides whether the batch must wait.</p>
+<p>Store API (both stores): <code>get(session_id)</code>, <code>get_with_revision(session_id) -&gt; (revision, policy)</code>
+(the base of a host's guarded read-merge-write), <code>put(session_id, policy, if_revision=None)</code>,
+<code>delete(session_id, if_revision=None, actor=None) -&gt; revision</code>, <code>revision(session_id)</code>,
+<code>history(session_id)</code>. Revisions only grow (a reset is a revision, <code>get</code> then answers <code>None</code>); an
+<code>if_revision</code> mismatch raises <code>SessionToolPolicyConflict</code> (<code>.expected</code>, <code>.actual</code>), which the
+gateway answers as a 409 carrying the current revision. A store read failure during a tool batch
+is logged and keeps the normal decision (ask where the defaults ask), never a wider one.</p>
+<p>Stored shape (the runtime reads only these keys):</p>
+<div class="highlight"><pre><span></span><code><span class="p">{</span><span class="nt">"version"</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="nt">"session_id"</span><span class="p">:</span><span class="w"> </span><span class="s2">"s-123"</span><span class="p">,</span><span class="w"> </span><span class="nt">"revision"</span><span class="p">:</span><span class="w"> </span><span class="mi">5</span><span class="p">,</span>
+<span class="w"> </span><span class="nt">"approve"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">"fetch_url"</span><span class="p">:</span><span class="w"> </span><span class="s2">"kind:web"</span><span class="p">},</span><span class="w"> </span><span class="nt">"deny"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">"execute_command"</span><span class="p">:</span><span class="w"> </span><span class="s2">"tool"</span><span class="p">},</span><span class="w"> </span><span class="nt">"ask"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">"send_email"</span><span class="p">],</span>
+<span class="w"> </span><span class="nt">"set_by"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">"tenant_id"</span><span class="p">:</span><span class="w"> </span><span class="s2">"default"</span><span class="p">,</span><span class="w"> </span><span class="nt">"user_id"</span><span class="p">:</span><span class="w"> </span><span class="s2">"laurent"</span><span class="p">,</span><span class="w"> </span><span class="nt">"client"</span><span class="p">:</span><span class="w"> </span><span class="s2">"panel-chat"</span><span class="p">},</span>
+<span class="w"> </span><span class="nt">"set_at"</span><span class="p">:</span><span class="w"> </span><span class="s2">"2026-10-27T10:00:00+00:00"</span><span class="p">}</span>
+</code></pre></div>
+<p>Decision order for each call:</p>
+<ol>
+<li>The run's tool ceiling (<code>allowed_tools</code>): a call outside it is blocked first; a session policy
+   never widens what a run may call.</li>
+<li>The row is the one of the run tree's ROOT session (a child started with another <code>session_id</code>
+   does not borrow that session's grant). No row: nothing changes.</li>
+<li><code>deny</code> → refused with no wait (<code>"Denied by this conversation's tool policy"</code>), in every run of
+   the session, automation occurrences and untrusted-input runs included (narrowing is always
+   safe). A deny set while an approval is shown also wins over that approval when it is answered.
+   <code>approve</code> (5) never applies to untrusted-input runs or automation occurrences and their
+   descendants.</li>
+<li>Names the run policy lists in <code>withheld_tools</code> are never session-approved.</li>
+<li><code>approve</code> (minus <code>ask</code>, minus <code>deny</code>) counts as auto for the batch, over the start-time
+   <code>require_approval_tools</code>, the gateway's default grant and the executor's default caution list.</li>
+<li>Everything else as before (run policy, tier ceiling, refiners, static policy).</li>
+</ol>
+<p>The approval decision stays per batch: if any call still needs approval, the whole batch waits as
+before. A batch that executes only because of the session policy, and every denial, writes one
+<code>emit_event</code> record named <code>abstract.tool_policy_decision</code> to the run's ledger
+(<code>decision: auto_approved | denied</code>, <code>source: session_policy</code>, the calls with the selector that
+matched, and the policy's <code>revision</code>, <code>set_by</code>, <code>set_at</code>). There is no wait, no waiting record and
+no resume for these calls, so every client renders them as activity, never as a question. If the
+record cannot be written, the batch is not auto-approved (it asks).</p>
+<p>Every run of the session reads the same row: each turn's root run, delegated child runs (they
+inherit <code>session_id</code>), runs resumed after a restart. A change applies from the next batch. A wait
+that already exists is not answered by the policy: a client that offers "approve all" on a shown
+wait writes the policy first, then answers that wait as a one-off approval.</p>
 
 
 

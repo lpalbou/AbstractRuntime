@@ -1130,7 +1130,13 @@ host needed, with no rule saying whose job it was to close the gap.</p>
    defect, fixed by adding the re-export or method in the runtime and cutting a patch release.</li>
 <li>A host never works around a missing name by importing <code>abstractcore</code> directly, vendoring the
    code, or guessing a replacement. It raises the gap to the runtime (backlog item or PR) and
-   pins the runtime floor that carries the fix.</li>
+   pins the runtime floor that carries the fix.
+   The same holds one level down and for whole capabilities, not only names: when a host finds
+   a FEATURE or CAPABILITY missing (a voice operation, a mail verb, a media task, a lookup), the
+   runtime, which does the integration, surfaces it through a facade, a typed refusal
+   (<code>CapabilityUnavailableError</code>, a 501 with the install hint) or a backlog item. A missing
+   capability is never a reason for a host to import a lower-level package (AbstractCore,
+   AbstractVoice, AbstractMemory, their dependencies) directly.</li>
 <li>A re-export is unchanged in identity (<code>facade.name is abstractcore.module.name</code>) and listed in
    the facade's <code>__all__</code>; the facade documents which AbstractCore version introduced the name.</li>
 <li>The facades are additive within a minor line: a name, once exported, is not removed without

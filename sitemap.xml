@@ -61,6 +61,10 @@
          <lastmod>2026-10-27</lastmod>
     </url>
     <url>
+         <loc>https://www.lpalbou.info/AbstractRuntime/replay/</loc>
+         <lastmod>2026-10-27</lastmod>
+    </url>
+    <url>
          <loc>https://www.lpalbou.info/AbstractRuntime/snapshots/</loc>
          <lastmod>2026-10-27</lastmod>
     </url>
@@ -114,6 +118,10 @@
     </url>
     <url>
          <loc>https://www.lpalbou.info/AbstractRuntime/adr/0008_integration_facades_are_the_complete_host_surface/</loc>
+         <lastmod>2026-10-27</lastmod>
+    </url>
+    <url>
+         <loc>https://www.lpalbou.info/AbstractRuntime/adr/0010_one_replay_many_views/</loc>
          <lastmod>2026-10-27</lastmod>
     </url>
     <url>
@@ -374,6 +382,14 @@
     </url>
     <url>
          <loc>https://www.lpalbou.info/AbstractRuntime/backlog/planned/0848_automations_v2_external_event_inbox_and_run_triggers/</loc>
+         <lastmod>2026-10-27</lastmod>
+    </url>
+    <url>
+         <loc>https://www.lpalbou.info/AbstractRuntime/backlog/planned/0853_session_tool_policy_before_the_approval_wait/</loc>
+         <lastmod>2026-10-27</lastmod>
+    </url>
+    <url>
+         <loc>https://www.lpalbou.info/AbstractRuntime/backlog/planned/0854_replay_view/</loc>
          <lastmod>2026-10-27</lastmod>
     </url>
     <url>

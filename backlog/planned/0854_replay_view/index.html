@@ -1,0 +1,2006 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Durable workflow execution, checkpoints, resumable waits, and AbstractCore integration.">
+      
+      
+      
+        <link rel="canonical" href="https://www.lpalbou.info/AbstractRuntime/backlog/planned/0854_replay_view/">
+      
+      
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.8.0">
+    
+    
+      
+        <title>0854 — Replay view: one reducer of a run tree's ledger, served as a view every client renders - AbstractRuntime</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../../assets/stylesheets/main.57a0d79d.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("../../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    <body dir="ltr">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#0854-replay-view-one-reducer-of-a-run-trees-ledger-served-as-a-view-every-client-renders" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../../.." title="AbstractRuntime" class="md-header__button md-logo" aria-label="AbstractRuntime" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            AbstractRuntime
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              0854 — Replay view: one reducer of a run tree's ledger, served as a view every client renders
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/lpalbou/abstractruntime" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    lpalbou/abstractruntime
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../../.." title="AbstractRuntime" class="md-nav__button md-logo" aria-label="AbstractRuntime" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    AbstractRuntime
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/lpalbou/abstractruntime" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    lpalbou/abstractruntime
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../getting-started/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Getting Started
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../api/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    API Reference
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../architecture/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../integrations/abstractcore/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    AbstractCore Integration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../troubleshooting/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Troubleshooting
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../artifacts/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Artifacts
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../tool-approval/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tool Approval
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../entity-runtime/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Entity Runtime
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../tools-comms/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tools and Comms
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../email/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Email
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../automations/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Automations
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../mcp-worker/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    MCP Worker
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../workflow-bundles/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Workflow Bundles
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../snapshots/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Snapshots
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../provenance/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Provenance
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../evidence/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Evidence
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../limits/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Limits
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../faq/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    FAQ
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../manual_testing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Manual Testing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_21" >
+        
+          
+          <label class="md-nav__link" for="__nav_21" id="__nav_21_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Design
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_21_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_21">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Design
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../proposal/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../adr/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR Index
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../adr/0001_layered_coupling_with_abstractcore/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Layered Coupling
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../adr/0002_execution_modes_local_remote_hybrid/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Execution Modes
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../adr/0003_provenance_tamper_evident_hash_chain/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Hash-Chained Ledger
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#summary" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Summary
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#why" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Why
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#current-code-reality" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Current code reality
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Current code reality">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#what-the-runtime-already-provides-this-branch" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What the runtime already provides (this branch)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#server-side-reconstruction-paths-gateway-and-runtime" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Server-side reconstruction paths (gateway and runtime)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#client-side-reconstruction-paths" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Client-side reconstruction paths
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Client-side reconstruction paths">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#panel-chat-abstractframeworkpanel-chat-041-abstractuicpanel-chatsrcworkflow_runtimets-used-by-abstractcode-web-and-any-host-that-embeds-the-chat" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        panel-chat (@abstractframework/panel-chat 0.4.1, abstractuic/panel-chat/src/workflow_runtime.ts); used by AbstractCode web and any host that embeds the chat
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#abstractcode-web-abstractcodeweb-0120" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        AbstractCode web (abstractcode/web, 0.12.0)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#abstractcode-terminal-client-rust-abstractcodetuisrc" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        AbstractCode terminal client (Rust, abstractcode/tui/src)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#abstractassistant-desktop-pythonqt-iphone-watch" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        AbstractAssistant (desktop Python/Qt, iPhone, watch)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#abstractobserver-abstractflow-abstractnote-abstractentity" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        AbstractObserver, AbstractFlow, AbstractNote, AbstractEntity
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#gateway-consoles" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Gateway consoles
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#summary-of-the-decisions-each-path-makes-differently" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Summary of the decisions each path makes differently
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#decision" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Decision
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-view-model-replay_view_v1-as-implemented-in-replayviewpy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The view model (replay_view_v1, as implemented in replay/view.py)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#scope" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Scope
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Scope">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#in-abstractruntime" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        In (abstractruntime)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#in-abstractgateway-tracked-by-0943" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        In (abstractgateway, tracked by 0943)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#in-clients-each-in-its-own-repo-in-this-order" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        In (clients, each in its own repo, in this order)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#out" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Out
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#acceptance-criteria" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Acceptance criteria
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#validation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Validation
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="0854-replay-view-one-reducer-of-a-run-trees-ledger-served-as-a-view-every-client-renders">0854 — Replay view: one reducer of a run tree's ledger, served as a view every client renders<a class="headerlink" href="#0854-replay-view-one-reducer-of-a-run-trees-ledger-served-as-a-view-every-client-renders" title="Permanent link">&para;</a></h1>
+<p><strong>Status</strong>: planned, in progress (runtime slice released in abstractruntime 0.14.0, 2026-10-27, PR #8 merge <code>0efe68f</code>; gateway routes and client migration remain) · <strong>Priority</strong>: P0 · <strong>Created</strong>: 2026-10-27
+<strong>Package</strong>: abstractruntime (reducer, durable cursor, conformance fixtures, ADR) · <strong>Slices</strong>: abstractgateway (routes, cache), every client that renders runs (migration)
+<strong>Master item</strong>: framework root backlog 0993, <code>abstractframework/docs/backlog/planned/0993_one_ledger_replay_many_views.md</code>
+<strong>Release wave</strong>: framework root backlog 1055, <code>abstractframework/docs/backlog/planned/1055_release_wave_2026_10_27_voice_library_replay_memory.md</code> (abstractruntime 0.14.0 carries this item; abstractgateway 0.16.0 waits for it)
+<strong>Cross-package</strong>: AbstractGateway backlog 0082 (<code>abstractgateway/docs/backlog/proposed/0082_ledger_replay_integrity_and_durable_cursor.md</code>), 0075 (<code>abstractgateway/docs/backlog/proposed/0075_event_driven_ledger_streaming.md</code>), 0943 (<code>abstractgateway/docs/backlog/planned/0943_replay_view_routes_cache_and_client_migration.md</code>), 0939 (sessions index, out of scope here); AbstractAssistant backlog 0008 (<code>abstractassistant/docs/backlog/planned/0008_v2_runtime_replayer_adr_compliance_hardening.md</code>)
+<strong>ADR</strong>: <a href="../../../adr/0010_one_replay_many_views/">ADR 0010 — One replay, many views</a></p>
+<h2 id="summary">Summary<a class="headerlink" href="#summary" title="Permanent link">&para;</a></h2>
+<p>Every client that shows a run (status, the approval or question it waits on, tool rows, replies,
+activity) rebuilds that state today from raw ledger records, run snapshots and its own memory, each
+in its own way. This item puts the one reconstruction in AbstractRuntime: a pure, deterministic
+reducer <code>abstractruntime.replay</code> that folds a run tree's ledger records and durable snapshots into
+a versioned JSON view (<code>replay_view_v1</code>), incrementally with <code>apply</code>. AbstractGateway serves that
+view and its deltas; clients render it and act through the gateway's commands. Each client deletes
+its private reconstruction once it passes the conformance suite.</p>
+<p>This item also records the inventory of every reconstruction path that exists today (master item
+0993, scope step 1), with file:line anchors and the points where each path can disagree with the
+reducer.</p>
+<h2 id="why">Why<a class="headerlink" href="#why" title="Permanent link">&para;</a></h2>
+<p>Operator, 2026-09-30, after the delegated-approval bug: "there should be only one unified way to
+replay the ledger, on top of which we could have different views, but only one way to replay the
+ledger." Operator principles this item implements (quoted as given):</p>
+<ul>
+<li>"logic should not be in the thin client" (2026-10-01; full text in 0993: "full execution must
+  happen in gateway/runtime and clients just read what's happening + forward execution parameters
+  and requests/interactions from the user; all of that should be handled by the replayable
+  ledger").</li>
+<li>"each client decides what to show and how to forward requests from users and entities".</li>
+<li>"workflows are the framework's central native primitive (agents, automations, trigger responses
+  are workflows)": the view names the workflow (bundle, version, flow, entrypoint) each run
+  executes and keeps the run tree (delegation) explicit.</li>
+<li>"special attention to performance (caching, indexing, leveraging the runtime/ledger, the
+  file&lt;-&gt;SQL coupling)".</li>
+</ul>
+<p>Incidents, each a disagreement between two reconstructions of the same ledger:</p>
+<table>
+<thead>
+<tr>
+<th>Date</th>
+<th>What happened</th>
+<th>Where it was patched</th>
+<th>Rule the reducer now owns</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>2026-09-29</td>
+<td><code>basic-agent@0.0.5</code>: the root parks on <code>subworkflow:&lt;child&gt;</code>, the child asks to approve <code>write_file</code>. The client that started the turn showed Allow/Deny; a second browser and a phone showed "Running a tool write_file" and a Steer composer. The history fold replaced the child's waiting record with the root's delegation wait, and the tool row read the <code>$slim</code> pointer as "no calls".</td>
+<td>panel-chat 0.1.20 / AbstractCode web 0.6.2 (client side)</td>
+<td>A delegation wait is never the interaction; the newest open approval or question anywhere in the tree is. <code>$slim</code> resolved before any client sees the record.</td>
+</tr>
+<tr>
+<td>2026-10-04</td>
+<td>Code web's Activity showed "Start · Waiting for you" on a completed run: a <code>wait_until</code> timer has no resume record (182 of 3,278 runs on the operator's gateway).</td>
+<td><code>abstractcode/web/src/lib/activity_rows.ts</code> (client side)</td>
+<td>A wait is over when its run records a resume for its key or any later step.</td>
+</tr>
+<tr>
+<td>2026-10-11</td>
+<td>AbstractFlow showed every Agent node twice ("Reviewer 0ms" + "Reviewer 14.5s"): one node execution is several ledger steps with different step ids.</td>
+<td><code>executionIdFor</code>, <code>abstractflow/src/utils/ledgerEvents.ts:64</code> (client side)</td>
+<td>One activity per node execution (<code>replay/executions.py</code>, ported from Flow).</td>
+</tr>
+<tr>
+<td>2026-10-26</td>
+<td>The iPhone's conversation list shows "1+" where the watch shows a plain number: every client folds <code>GET /runs?root_only=true</code> pages by <code>session_id</code> over its own window.</td>
+<td>not fixed</td>
+<td>Out of scope here: gateway backlog 0939 (sessions index with exact counts).</td>
+</tr>
+</tbody>
+</table>
+<h2 id="current-code-reality">Current code reality<a class="headerlink" href="#current-code-reality" title="Permanent link">&para;</a></h2>
+<p>Checked on 2026-10-27 against: abstractruntime <code>feat/replay-view</code> (82c0c74), abstractgateway main
+(227c6890), abstractuic main (c6b7cc6, panel-chat 0.4.1), abstractcode main (85b32ec, web 0.12.0),
+abstractassistant <code>feat/voice-library</code> (d9fb414), abstractobserver main (e308e6b), abstractflow main
+(75c059e), abstractnote main (b8b0f7b), abstractentity main (a2aea5c). Line numbers are those of
+these commits.</p>
+<h3 id="what-the-runtime-already-provides-this-branch">What the runtime already provides (this branch)<a class="headerlink" href="#what-the-runtime-already-provides-this-branch" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>src/abstractruntime/replay/view.py</code>: the reducer (<code>replay</code>, <code>apply</code>, <code>ReplayView.to_json</code>).</li>
+<li><code>src/abstractruntime/replay/executions.py</code>: execution identity (<code>ExecutionTracker</code>), the five
+  rules of Flow's <code>executionIdFor</code> plus progress ticks.</li>
+<li><code>src/abstractruntime/replay/delta.py</code>: <code>apply_delta</code>, <code>diff_views</code>, <code>parse_cursor_token</code> (the
+  client side of a delta and of a reconnect).</li>
+<li>Durable cursor: every ledger record carries its per-run <code>seq</code>.
+  <code>storage/json_files.py:2496</code> <code>JsonlLedgerStore.append</code> persists it under an advisory file lock
+  that spans the head read and the write (commit 82c0c74, gateway 0082 question 3);
+  <code>storage/json_files.py:2772</code> <code>list_after</code>; <code>storage/sqlite.py:1523</code> <code>list_after</code>;
+  <code>storage/sqlite.py:1202</code> <code>import_records</code> keeps each record's <code>seq</code> (the file to SQLite path);
+  <code>storage/base.py:264</code> a default <code>list_after</code> for every store; <code>storage/in_memory.py:222</code>;
+  <code>storage/observable.py:89</code> passes <code>seq</code> to subscribers.</li>
+</ul>
+<h3 id="server-side-reconstruction-paths-gateway-and-runtime">Server-side reconstruction paths (gateway and runtime)<a class="headerlink" href="#server-side-reconstruction-paths-gateway-and-runtime" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Path</th>
+<th>Reads, in order</th>
+<th>Status</th>
+<th>Interaction</th>
+<th>Tool / message / activity</th>
+<th>Divergence from the reducer</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>History bundle: runtime <code>history_bundle.py:981</code> <code>export_run_history_bundle</code>, served by gateway <code>routes/gateway.py:10825</code> <code>GET /runs/{id}/history_bundle</code></td>
+<td>root snapshot (<code>history_bundle.py:1021</code>); descendants by <code>run_store.list_children</code> BFS (<code>:528</code>, <code>:1031</code>); each run's <code>ledger_store.list</code> (<code>:1093</code>); tail window of 2,000 records per run by default (<code>:1125-1150</code>)</td>
+<td>root snapshot only (<code>:1219-1231</code>); child snapshots are not in the bundle</td>
+<td>root <code>waiting</code> only (<code>:1230</code>); a child's wait is only in its ledger records, which the tail window can drop</td>
+<td>none: raw records; <code>detail=replay</code> replaces request-side payloads with <code>$omitted</code> (<code>:947</code>)</td>
+<td>Cursors are record indexes (<code>cursor_start = start_idx + 1</code>, <code>:1127</code>), not <code>seq</code>. <code>$slim</code> pointers stay unresolved in <code>ledgers[*].items</code>; the warning itself says a pointer whose STARTED record fell before the window "cannot resolve client-side" (<code>:1135</code>). Every client folds the bundle itself.</td>
+</tr>
+<tr>
+<td><code>GET /runs/{id}/ledger</code>: gateway <code>routes/gateway.py:11502</code></td>
+<td>run snapshot (existence check), then <code>ledger_store.list</code> of the whole run (<code>:11529</code>), sliced <code>[after:after+limit]</code> (<code>:11532-11534</code>)</td>
+<td>none</td>
+<td>none</td>
+<td>raw records</td>
+<td>Cursor is a record index; the whole ledger is read for every page. One run per call (<code>POST /runs/ledger/batch</code>, <code>:11538</code>, for many).</td>
+</tr>
+<tr>
+<td><code>GET /runs/{id}/ledger/stream</code> + <code>ledger_tail.py</code></td>
+<td>snapshot (<code>routes/gateway.py:11673</code>), then an incremental tail (<code>:11708</code>, <code>ledger_tail.py:318</code> <code>resolve_ledger_tail</code>: JSONL byte-offset tail <code>:78</code>, SQLite <code>list_after</code> <code>:202</code>, list-slice fallback <code>:244</code>); live <code>llm.delta</code> frames from <code>live_deltas</code></td>
+<td>terminal from the run snapshot, re-read on a settle window; <code>event: done</code> after a final drain</td>
+<td>none</td>
+<td>raw <code>step</code> frames, one run per stream; live deltas cover the run and every run below it</td>
+<td>Already event-driven: <code>ObservableLedgerStore.subscribe</code> is wired as a coalescing dirty flag (<code>routes/gateway.py:11741</code>), <code>Last-Event-ID</code> is honored (<code>:11683</code>), the 0.25 s wait is a timeout on that flag that only <code>stat()</code>s the file (<code>:11884</code>, needed only in the split-runner deployment where appends happen in another process). <strong>Gateway 0075's "Current code reality" (250 ms full re-parse, <code>subscribe()</code> never called, <code>Last-Event-ID</code> ignored) is stale.</strong> The stream's <code>id:</code> is still "records consumed" (<code>ledger_tail.py:20-22</code>), equal to <code>seq</code> only while seq is dense. Children need their own streams.</td>
+</tr>
+<tr>
+<td><code>GET /runs/{id}</code>: gateway <code>routes/gateway.py:9837</code> <code>get_run</code> -&gt; <code>service.py:1905</code> <code>run_summary</code></td>
+<td>run store <code>load</code></td>
+<td>the snapshot's <code>status</code></td>
+<td><code>waiting</code> copied as is: reason, wait_key, until, prompt, choices, allow_free_text, details (<code>service.py:2057-2066</code>)</td>
+<td>none</td>
+<td>Says "waiting" between the runtime's <code>resume</code> append and its save without the wait (the ordering hazard of 0993). Never names the child that holds the question. A timer that ended without a resume record still shows its wait until the run saves.</td>
+</tr>
+<tr>
+<td>Per-user event stream: gateway <code>events_stream.py:825</code> <code>wait_attention_from_record</code>, called from the runner's append hook (<code>runner.py:879</code>); closed by <code>still_waiting_on</code> (<code>events_stream.py:934</code>) and <code>wait_outcome</code> (<code>:897</code>) from <code>runner.py:514-525</code>; read by <code>GET /me/events[/stream]</code> (<code>routes/me_events.py:75</code>, <code>:173</code>) and <code>GET /runs/{id}/after</code> (<code>run_after.py</code>, tree by <code>list_children</code>, <code>:180</code>)</td>
+<td>the waiting record at append time; later the run snapshot</td>
+<td><code>run.finished</code> pointer</td>
+<td><code>attention.raised {kind: approval|question}</code>; <code>prompt_ref</code> points the client to <code>GET /runs/{id}</code> (<code>events_stream.py:888</code>)</td>
+<td>none</td>
+<td>Its own wait classifier: a tool approval is only <code>details.mode == "approval_required"</code> with reason <code>user</code> (<code>events_stream.py:848</code>); an EVENT wait with a prompt or choices is a "question" (<code>:849-852</code>). The reducer's <code>wait_kind</code> (<code>replay/view.py</code>) also accepts <code>details.kind == "tool_approval"</code> and a <code>tool_approval:</code> key, and treats an EVENT wait as <code>event</code> (not person-facing). The runtime's own <code>automations/attention.py:168</code> <code>wait_kind</code> agrees with the gateway, not with the reducer. Resolution is decided from the snapshot (<code>still_waiting_on</code>), so it inherits the resume-before-save window.</td>
+</tr>
+<tr>
+<td><code>abstractgateway/migrate.py:58-86</code> (file to SQLite)</td>
+<td>each <code>ledger_&lt;run&gt;.jsonl</code> line</td>
+<td>n/a</td>
+<td>n/a</td>
+<td>n/a</td>
+<td>Renumbers: <code>seq += 1</code> per parsed line (<code>:73</code>), so a held cursor does not survive and a JSONL <code>seq</code> is discarded. The runtime's <code>SqliteLedgerStore.import_records</code> (<code>storage/sqlite.py:1202</code>) keeps it; the gateway switches to it under 0943.</td>
+</tr>
+</tbody>
+</table>
+<h3 id="client-side-reconstruction-paths">Client-side reconstruction paths<a class="headerlink" href="#client-side-reconstruction-paths" title="Permanent link">&para;</a></h3>
+<h4 id="panel-chat-abstractframeworkpanel-chat-041-abstractuicpanel-chatsrcworkflow_runtimets-used-by-abstractcode-web-and-any-host-that-embeds-the-chat">panel-chat (<code>@abstractframework/panel-chat</code> 0.4.1, <code>abstractuic/panel-chat/src/workflow_runtime.ts</code>); used by AbstractCode web and any host that embeds the chat<a class="headerlink" href="#panel-chat-abstractframeworkpanel-chat-041-abstractuicpanel-chatsrcworkflow_runtimets-used-by-abstractcode-web-and-any-host-that-embeds-the-chat" title="Permanent link">&para;</a></h4>
+<ul>
+<li><strong>Reads, in order.</strong> <code>load()</code> (<code>:338</code>) requests <code>getRun(root)</code> and <code>getHistory(root)</code> in parallel
+  (<code>:348</code>); AbstractCode web's transport asks for
+  <code>history_bundle?include_subruns=true&amp;include_session=true&amp;ledger_mode=full</code>
+  (<code>abstractcode/web/src/workspace/session_transport.ts:24-27</code>). It folds the bundle's session turns
+  and then every run's bundle records (<code>ingestHistory</code>, <code>:752-783</code>), applies the root snapshot
+  (<code>:362-368</code>), opens the child named by the root's wait (<code>:371</code>), then <code>catchUpAndWatch(root)</code>
+  (<code>:372</code>): <code>GET /ledger?after=</code> pages (<code>catchUp</code>, <code>:666-681</code>) then the SSE stream (<code>followStream</code>,
+  <code>:692</code>), and after each stream end another page and another <code>GET /runs/{id}</code> (<code>:719-724</code>).
+  Every record that names a child (<code>subRunIds</code>, <code>:250-259</code>: <code>sub_run_id</code>, <code>child_run_id</code>, a
+  <code>subworkflow:</code> key) opens a catch-up and a stream for that child (<code>ingestItem</code>, <code>:876</code>).
+  <code>pollRootLifecycle</code> re-reads <code>GET /runs/{root}</code> every 2 s while the run is not terminal
+  (<code>:1273-1290</code>).</li>
+<li><strong>Cursor and dedup.</strong> Record identity is <code>${runId}:${cursor}</code> where the cursor is the bundle's or
+  the page's record index (<code>:865-869</code>); a record arriving with a different index (bundle tail vs
+  page) is folded twice.</li>
+<li><strong>Status.</strong> Only from <code>GET /runs/{id}</code> (<code>updateRunState</code>, <code>:1217-1235</code>); the bundle's snapshot is
+  ignored for lifecycle (<code>:775-777</code>). Ledger terminal records are not read.</li>
+<li><strong>Interaction.</strong> Any waiting record that is not a delegation becomes the interaction, the latest
+  arrival winning (<code>foldRecord</code>, <code>:929-934</code>; <code>interactionWith</code>, <code>:516-521</code>); a snapshot wait is
+  adopted unless the ledger's <code>resume</code> resolved that key (<code>adoptDurableWait</code>, <code>:530-538</code>,
+  <code>resolvedWaits</code>, <code>:288</code>). The interaction is cleared only by a <code>resume</code> record with
+  <code>result.resumed === true</code> (<code>:937-944</code>) or a terminal run state. Event waits are presented as a
+  "Send event" interaction (<code>present_interaction.tsx:111</code>).</li>
+<li><strong>Tools.</strong> <code>foldWorkflowTools</code> (<code>workflow_evidence.ts:193</code>): a waiting record whose payload is a
+  <code>$slim</code> pointer falls back to <code>result.wait.details.tool_calls</code> (<code>:202-209</code>); identity is
+  <code>runtime_call_id</code>/<code>call_uid</code>, else <code>idempotency_key|step_id|cursor</code> plus the call index.</li>
+<li><strong>Messages.</strong> <code>answer_user</code> records (<code>:887-893</code>), <code>abstract.message</code> events (<code>:896-907</code>), the
+  bundle's session turns and input prompt (<code>:762-774</code>); the final answer comes only from a terminal
+  run snapshot's <code>output</code> (<code>:1225-1233</code>).</li>
+<li><strong>Client-held state.</strong> <code>approvedWaits</code>, <code>grantedToolWaits</code> (<code>:279-282</code>), the automatic approver
+  (<code>autoApproveCurrentWait</code>, <code>:588</code>), the stop evidence (<code>:972</code>).</li>
+<li><strong>Divergence.</strong> (1) No "later step closes a wait" rule: a timer or event wait with no resume
+  record stays <code>snapshot.interaction</code> until a terminal snapshot. (2) "Latest arrival wins" depends on
+  which child stream delivers first; the reducer orders by (record time, seq, run id). (3) Event
+  waits are person-facing here and not in the reducer's <code>interaction</code> (they are in <code>open_waits</code>).
+  (4) The root's final message waits for the snapshot; the reducer takes the ledger's
+  <code>system:completion:*</code> record first. (5) Index cursors: a migrated or windowed ledger can repeat
+  or skip records. (6) A timed 2 s <code>GET /runs</code> poll per open conversation.</li>
+<li><strong>Evidence of the 0.1.20 fix.</strong> <code>abstractuic/panel-chat/scripts/check_approval_sync.mjs</code> with the
+  redacted live fixture <code>scripts/fixtures/run_approval_subrun.json</code> (header <code>:1-15</code>); AbstractCode
+  <code>web/e2e/approval_sync.spec.ts</code>. Both become conformance cases (see below).</li>
+</ul>
+<h4 id="abstractcode-web-abstractcodeweb-0120">AbstractCode web (<code>abstractcode/web</code>, 0.12.0)<a class="headerlink" href="#abstractcode-web-abstractcodeweb-0120" title="Permanent link">&para;</a></h4>
+<ul>
+<li>The chat is panel-chat's controller (above). The Activity panel is AbstractCode's own fold over
+  the controller's records: <code>activity_rows</code> (<code>src/lib/activity_rows.ts:890</code>), rendered at
+  <code>src/workspace/workspace_panels.tsx:92</code>.</li>
+<li><strong>Rows.</strong> One row per <code>run|effect type|idempotency_key or step_id or cursor|attempt</code>
+  (<code>group_key</code>, <code>:739-743</code>); <code>merge_group</code> (<code>:751</code>) keeps the concrete payload over a later <code>$slim</code>
+  pointer (<code>:759</code>). An Agent node is therefore several rows (its <code>start_subworkflow</code> and its
+  structured-output <code>llm_call</code> differ by effect type) and a retry with a new <code>attempt</code> is its own
+  row; the reducer makes one activity per execution.</li>
+<li><strong>Wait end.</strong> A wait row ends when its run has a later step (<code>movedOn</code>, <code>:922-923</code>, the
+  2026-10-04 fix) or when any run resumed its wait key (<code>resumeKeys</code>, <code>:906-913</code>: the set is not
+  per run).</li>
+<li><strong>Dead code.</strong> <code>src/lib/wait_resolution.ts</code> (<code>resolve_blocking_wait</code>: the newest record of the
+  child decides), <code>src/lib/history_bundle_seed.ts</code> and <code>src/lib/subworkflow_follow.ts</code> are imported
+  only by their own tests: three earlier reconstructions to delete, not migrate.</li>
+<li><strong>Conversation list.</strong> <code>GET /runs?root_only=true...&amp;limit=</code> folded by the client
+  (<code>src/workspace/conversation_paging.ts:15</code>); gateway 0939.</li>
+</ul>
+<h4 id="abstractcode-terminal-client-rust-abstractcodetuisrc">AbstractCode terminal client (Rust, <code>abstractcode/tui/src</code>)<a class="headerlink" href="#abstractcode-terminal-client-rust-abstractcodetuisrc" title="Permanent link">&para;</a></h4>
+<ul>
+<li><strong>Reads, in order.</strong> Session attach (<code>runner.rs:1820</code>): <code>GET /runs?session_id=..&amp;root_only=true</code>
+  (<code>gateway/mod.rs:599</code>); the live run is the newest one whose status is running or waiting
+  (<code>runner.rs:1923-1933</code>); earlier turns from <code>history_bundle?detail=replay</code> (<code>gateway/mod.rs:932</code>,
+  <code>runner.rs:1986</code>). Live attach (<code>runner.rs:2357</code>): the bundle (<code>:2374</code>), then one
+  <code>ledger/stream?after=&lt;cursor&gt;</code> per run of the bundle (<code>runner.rs:2425-2436</code>,
+  <code>gateway/mod.rs:976</code>); on a failed bundle, <code>input_data</code> and a stream from 0 (<code>runner.rs:2444-2485</code>).
+  <code>GET /runs/{id}</code> on stream idle and at the end (<code>runner.rs:3664</code>, <code>:3826</code>); <code>GET /ledger?after=</code>
+  when the stream fails (<code>:3731</code>) and a final drain (<code>:3785</code>). Automation activity is a separate
+  fold over <code>GET /ledger</code> that walks children depth first, not in time order
+  (<code>gateway/rail.rs:220</code>).</li>
+<li><strong>Status.</strong> Two phases, Running and Idle. A turn ends on an answer-shaped flow end of the root or
+  of the bound agent child (<code>transcript.rs:1681</code>), on <code>done</code>, or on a terminal <code>GET /runs/{id}</code>
+  (<code>runner.rs:3667</code>). No <code>system:completion:*</code> or <code>system:terminal_status:*</code> read anywhere in <code>src</code>.
+  A wrapper root still waiting after its child answered shows Idle (<code>runner.rs:3348</code>).</li>
+<li><strong>Interaction.</strong> Waiting records (<code>transcript.rs:1561</code>); approval calls from
+  <code>result.wait.details.tool_calls</code> (<code>protocol.rs:115</code>), so <code>$slim</code> does not affect the card; one
+  <code>pending_wait</code> slot, newest wins (<code>transcript.rs:2594</code>, <code>:2613</code>); deduped by (wait_key, step_id)
+  (<code>:2527</code>); children followed through <code>subworkflow</code> waits (<code>:1563-1570</code>, <code>runner.rs:3311</code>).
+  <strong>Any</strong> later record of the waiting run clears it (<code>transcript.rs:1603-1610</code>), observability
+  events included.</li>
+<li><strong>Tools and text.</strong> Rows keyed <code>call:{run}:{call_id}</code> or <code>pos:{run}:{node}:{i}</code>
+  (<code>transcript.rs:2320</code>); <code>$slim</code> not resolved, completed records fall back to <code>result.results</code>
+  (<code>protocol.rs:360-379</code>); live text from <code>llm.delta</code> frames keyed by step id (<code>live.rs:1-35</code>,
+  <code>runner.rs:3397</code>). Bundle records of several runs are merged by sorting on the
+  <code>ended_at</code>/<code>started_at</code> string (<code>runner.rs:4174-4247</code>). Reconnects use <code>after=</code>, never
+  <code>Last-Event-ID</code> (<code>gateway/mod.rs:986</code>).</li>
+<li><strong>Divergence.</strong> (a) an <code>abstract.status</code> or progress event closes a wait; (b) one slot, no
+  tree-wide search, no check that the ledger mentioned a snapshot's wait; (c) no ledger terminal
+  records; (d) <code>$slim</code> unresolved; (e) no execution identity.</li>
+</ul>
+<h4 id="abstractassistant-desktop-pythonqt-iphone-watch">AbstractAssistant (desktop Python/Qt, iPhone, watch)<a class="headerlink" href="#abstractassistant-desktop-pythonqt-iphone-watch" title="Permanent link">&para;</a></h4>
+<p>Desktop paths are under <code>abstractassistant/abstractassistant/</code>; the iPhone under
+<code>abstractassistant/phone/iphone/Packages/AssistantKit/Sources/AssistantKit/</code>; the watch under
+<code>abstractassistant/watch/apple/Sources/App/</code>; iPhone and watch share the Swift gateway client
+<code>abstractassistant/watch/apple/Packages/AbstractGatewayClient/Sources/AbstractGatewayClient/</code>
+(written <code>GC/</code> below).</p>
+<ul>
+<li><strong>Desktop, live turn</strong> (<code>GatewayWorker</code> -&gt; <code>GatewayRunController</code>). Reads <code>GET /ledger?after&amp;limit=2000</code>
+  (<code>gateway/run_controller.py:130-150</code>), then <code>ledger/stream</code>; on stream idle <code>GET /runs/{id}</code>
+  (<code>:257-318</code>). One run at a time on a stack: a <code>subworkflow:</code> wait pushes the child and the
+  parent's ledger is not read again until the child completes (<code>:113-128</code>, <code>:385-432</code>). Terminal is
+  the snapshot only, then a drain until the ledger stops growing (<code>:152-200</code>, <code>:306-316</code>); a follow
+  that ends without a terminal status is reported as "completed" (<code>ui/gateway_worker.py:1259-1261</code>).
+  Interactions come from each record's <code>result.wait</code> (<code>gateway/events.py:139-154</code>), deduped per
+  (wait_key, step_id) and cleared by a resume record (<code>gateway/adapter.py:249-255</code>, <code>:296-337</code>).
+  When another client answers, nothing closes the open approval sheet (<code>app.py:11086-11120</code>; only
+  the attention banner is re-checked, <code>:6827-6858</code>). The <code>threading.Event</code>s named in assistant 0008
+  are set but no longer awaited (<code>ui/gateway_worker.py:120-123</code>, <code>:152</code>, <code>:186</code>); answers go out on
+  a background thread (<code>:810-833</code>).</li>
+<li><strong>Desktop, rows and text.</strong> Activity = one cycle per STARTED <code>llm_call</code> with <code>node_id == "reason"</code>
+  plus STARTED <code>tool_calls</code> (<code>gateway/adapter.py:133-215</code>, <code>ui/activity.py:302-326</code>); Agent nodes,
+  <code>start_subworkflow</code> and structured-output calls get no row. Tool results are read from the
+  COMPLETED record's <code>effect.payload.tool_calls</code> (<code>gateway/history_seed.py:398-402</code>): a <code>$slim</code>
+  pointer there is not a list, so the result is dropped and the tool never finishes on screen. The
+  final answer is any record with <code>result.output</code> of the root or the followed run
+  (<code>gateway/events.py:73</code>, <code>gateway/adapter.py:275-285</code>, <code>ui/gateway_worker.py:1020-1029</code>); local
+  fallback texts come from <code>ui/gateway_worker.py:742-805</code>.</li>
+<li><strong>Desktop, attach and history.</strong> <code>history_bundle</code> (subruns, tail 2,000) first
+  (<code>ui/gateway_worker.py:1150</code>), then <code>GET /runs/{id}</code> (<code>:1151</code>), then seed and follow from cursor 0
+  (<code>:1152-1161</code>, <code>:1242</code>). Answered waits: the Nth waiting record of a key is answered by the Nth
+  resume of that key (<code>:385-428</code>); no later-step rule. Pending wait: the root snapshot's <code>waiting</code>
+  first, through a synthetic record (<code>_maybe_emit_pending_wait</code>, <code>:510-520</code>), else the newest wait
+  record of each ledger without a resume check (<code>:457-479</code>), else <code>GET /runs/{id}</code> per bundle run
+  (<code>:481-503</code>): a snapshot wait is adopted even when the ledger resolved it. The transcript is the
+  bundle's session turns plus tool cards from the ROOT ledger only (<code>gateway/history_seed.py:67-100</code>,
+  <code>:459-490</code>), so tools run by the agent child are lost on every reseed;
+  <code>LLMManager.replace_gateway_messages</code> replaces the transcript wholesale
+  (<code>core/llm_manager.py:258-286</code>, and <code>sync_session_from_gateway</code>, <code>:647-703</code>), and the reseed is
+  skipped once a final answer was seen on the stream (<code>ui/gateway_worker.py:1252-1258</code>), so local
+  state stands. Assistant 0008's other finding (local messages sent as workflow input) no longer
+  holds: no messages are passed to <code>build_run_input_data</code> (<code>ui/gateway_worker.py:1198</code>,
+  <code>gateway/run_input.py:94</code>, <code>:148</code>).</li>
+<li><strong>iPhone</strong> (<code>AssistantStore.swift</code>). Every 3 s <code>followActiveRun</code> (<code>:200-216</code>, <code>:568-633</code>) reads
+  <code>GET /runs/{id}</code>, walks the tree by <code>waitingOnChild</code> and <code>GET /runs?parent_run_id</code>, hydrates each
+  child (<code>:970-1007</code>), streams <code>ledger/stream</code> for at most 4 runs or pages <code>/ledger</code>
+  (<code>:1009-1068</code>); <code>openSession</code> reads <code>/runs?session_id&amp;root_only</code> and per turn <code>/runs/{id}</code> and
+  <code>/input_data</code> (<code>:762-827</code>), never the bundle. Status: the snapshot (<code>:594</code>); a timer shows as
+  running (<code>:614-618</code>). Interaction: every <code>personWait</code> snapshot in the tree, not the newest one
+  (<code>:583</code>; <code>GC/Models.swift:249-266</code>); answers from elsewhere found by a 1 s <code>GET /runs/{id}</code> poll
+  per pending wait (<code>:221-243</code>); locally granted tools auto-approved (<code>:854-909</code>). Rows
+  (<code>RunActivity.swift</code>): a "Waiting" row closes on a resume of the same node or any later
+  non-waiting record of the run, observability included (<code>:64-96</code>); one row per <code>step_id</code>, so an
+  Agent node is several rows (<code>:79-111</code>); tool rows keyed by call id else <code>step:index</code>
+  (<code>:113-118</code>); <code>$slim</code> yields no calls, and <code>finish()</code> marks the row completed without a result
+  (<code>:181-187</code>). The reply is the snapshot's <code>conversationText</code> (<code>AssistantStore.swift:589-592</code>).</li>
+<li><strong>Watch.</strong> Waits from <code>GET /runs?status=waiting</code> filtered to reason <code>user</code>, at most 12, then
+  <code>GET /runs/{id}</code> (<code>GC/GatewayClient.swift:353-362</code>): no ledger check, and an approval in a child
+  run of a different reason is not listed. <code>AskView.follow</code> polls <code>GET /runs/{id}</code> every second and
+  walks <code>waitingOnChild</code> to depth 4 (<code>Ask/AskView.swift:783-835</code>); the Runs screen labels any
+  waiting turn "Needs you" (<code>Runs/RunsView.swift:290</code>), timers included. Wait identity is
+  <code>runId:waitKey</code> with no step (<code>GC/Models.swift:112</code>), and <code>decidedWaits</code> answers a repeat of the
+  same key as already decided (<code>Shared/AppModel.swift:419</code>, <code>:756</code>, <code>:774-781</code>): a second approval
+  on a reused key is skipped and the run stalls. Activity (<code>Shared/RunActivity.swift:81-116</code>) reads
+  the leaf run only, one <code>/ledger?limit=25</code> page per tick (<code>GC/GatewayClient.swift:884-888</code>); it
+  keys steps by <code>idempotency_key</code> (<code>GC/Activity.swift:167</code>) and resolves <code>$slim</code> from the STARTED
+  record with the same key (<code>:194-195</code>), the closest of all clients to the reducer.</li>
+<li><strong>Conversation lists</strong> (gateway 0939, listed for completeness): desktop pages of 200 root runs
+  until 100 sessions (<code>gateway/client.py:540-561</code>, <code>core/gateway_sessions.py:58-59</code>), worst status
+  of any turn wins (<code>:65-72</code>, <code>:159-215</code>); iPhone and watch <code>SessionSummary.group</code>
+  (<code>GC/Models.swift:1527-1546</code>) over 60 and 80 runs (<code>AssistantStore.swift:114</code>, <code>:261</code>;
+  <code>Shared/AppModel.swift:58</code>, <code>:188-189</code>, <code>:608</code>), <code>anyTurnNeedsPerson</code> checks reason <code>user</code> only.</li>
+<li><strong>Divergence.</strong> (a) desktop: the Nth-resume pairing and no later-step rule; phone: observability
+  closes a wait. (b) desktop: the root snapshot's wait first and adopted even when resolved; phone:
+  every person wait at once; watch: reason <code>user</code> only and no step identity. (c) every path: the
+  snapshot only, and the desktop turns an interrupted follow into "completed". (d) desktop and
+  phone drop <code>$slim</code> tool results; the watch resolves them. (e) desktop: no node rows; phone: one
+  row per step; watch: by idempotency key.</li>
+</ul>
+<h4 id="abstractobserver-abstractflow-abstractnote-abstractentity">AbstractObserver, AbstractFlow, AbstractNote, AbstractEntity<a class="headerlink" href="#abstractobserver-abstractflow-abstractnote-abstractentity" title="Permanent link">&para;</a></h4>
+<ul>
+<li><strong>AbstractObserver</strong> (<code>abstractobserver/src</code>). Attach (<code>connect_to_run</code>, <code>ui/app.tsx:2719</code>):
+  <code>GET /runs/{id}</code> (<code>:2771</code>) and <code>/input_data</code>; <code>/ledger?after&amp;limit=200</code> pages from 0 until empty
+  (<code>replay_ledger</code>, <code>:2694-2717</code>); <code>history_bundle?include_subruns&amp;ledger_mode=tail&amp;ledger_max_items=1</code>
+  only to discover child runs (<code>:2817</code>); then a loop of <code>/ledger</code> pages and <code>ledger/stream?after=</code>
+  (<code>:2873-2891</code>). In parallel: <code>GET /runs/{id}</code> every 2 s (<code>:1800-1822</code>), one SSE stream for the
+  followed child (<code>:4196-4250</code>), <code>POST /runs/ledger/batch</code> every 2 s for the other children
+  (<code>:4253-4296</code>). The Discuss chat is panel-chat's <code>WorkflowChat</code> (<code>ui/automation_discussion.tsx:35-41</code>,
+  <code>:162</code>); everything else is Observer's own fold.
+  Status: the snapshot (<code>ui/app.tsx:4505</code>, <code>:3817</code>); no ledger terminal record read. A wait is open
+  when the root's LAST record is waiting (<code>:991-992</code>, <code>:3818-3819</code>, <code>lib/runtime_extractors.ts:3-8</code>),
+  so any later record, observability included, ends it. The wait modal reads the root's last record
+  only and does not follow a <code>subworkflow:</code> wait to the child's approval (<code>ui/app.tsx:3825-3835</code>);
+  the board's <code>state_line</code> recurses into the live child but labels a parent whose child needs the
+  person "waiting", not "needs you" (<code>ui/state_line.ts:464-536</code>, <code>:524-535</code>). Steps
+  (<code>ui/run_steps.ts:244</code>) merge STARTED and terminal records by <code>step_id</code>, tool calls by
+  idempotency key (the approved-call fix, <code>:226-237</code>), and resolve <code>$slim</code> against the STARTED
+  payload with a sha256 check (<code>:76-140</code>, applied at <code>:272</code>). No execution identity: an Agent's
+  structured-output call, <code>system:completion:*</code> and progress ticks are not joined to their
+  execution (<code>ui/run_step_kinds.ts:69-71</code>).</li>
+<li><strong>AbstractFlow</strong> (<code>abstractflow/src</code>). Live (<code>hooks/useWebSocket.ts</code>): <code>POST /runs/start</code>, then
+  <code>ledger/stream?after=0</code> (<code>:752-803</code>) and one stream per <code>sub_run_id</code> into the same state
+  (<code>:596-605</code>, <code>:620-666</code>); <code>GET /runs/{id}</code> after <code>done</code> (<code>:787-799</code>, <code>applyRunSummary</code> <code>:672-740</code>).
+  Past runs (<code>components/Toolbar.tsx:615</code>): <code>history_bundle?include_subruns&amp;ledger_mode=full</code>,
+  re-folded every 2 s while active (<code>:741-757</code>), all ledgers merged by timestamp string, not cursor
+  (<code>:688</code>), the snapshot's wait pushed last even when the ledger answered it (<code>:708-721</code>). Status:
+  the snapshot. Interaction: the newest <code>flow_waiting</code> event, child waits included, a delegation
+  never overriding an approval (<code>hooks/useWebSocket.ts:415-490</code>, <code>:425-433</code>); a timer clears only on
+  a ROOT <code>node_start</code> or progress tick (<code>:351-361</code>, <code>:402-413</code>, <code>:588-596</code>), and a child's next
+  <code>node_start</code> is dropped by the root guard (<code>:352</code>), so a child approval answered elsewhere stays on
+  screen. <code>$slim</code> is not handled anywhere in <code>src</code>: tool badges read <code>effect.payload.tool_calls</code>
+  (<code>components/RunFlowModal.tsx:5277-5281</code>). Rows: <code>run:exec:&lt;execId&gt;</code>
+  (<code>components/RunFlowModal.tsx:3128-3129</code>) from <code>executionIdFor</code> (<code>utils/ledgerEvents.ts:64-112</code>),
+  the origin of <code>replay/executions.py</code>.</li>
+<li><strong>AbstractNote</strong> (<code>abstractnote/web/src/lib/runs.ts:116-176</code>, used by Remember and Capture):
+  follows a run it started until terminal through <code>ledger/stream?after=0</code>, then <code>GET /runs/{id}</code>;
+  falls back to <code>/ledger</code> pages. No wait notion: a run parked on a question, an approval or a timer
+  polls with no UI. Progress lines read <code>effect.payload.tool_calls</code> (<code>:46-49</code>), so <code>$slim</code> yields no
+  line. Only panel-chat presentation components are used.</li>
+<li><strong>AbstractEntity</strong> (<code>abstractentity/src</code>): renders no run view and reads no run ledger; it follows
+  runs with <code>GET /runs/{id}</code> until terminal (<code>stream_source.ts:853-858</code>, <code>flow_lane.ts:34-74</code>), a
+  waiting run counting as unfinished until a 600 s deadline (<code>use_flow_conversation.ts:180</code>). Its
+  "ledger" panel is the entity's own replay stream. Nothing to migrate beyond status; the waiting
+  case should read <code>interaction</code> from the view.</li>
+</ul>
+<h4 id="gateway-consoles">Gateway consoles<a class="headerlink" href="#gateway-consoles" title="Permanent link">&para;</a></h4>
+<ul>
+<li><strong>Web console</strong> (<code>abstractgateway/src/abstractgateway/console.py</code>, inline JavaScript): lists
+  <code>GET /runs?...&amp;root_only=</code> (<code>console.py:8814-8830</code>), Inspect reads <code>GET /runs/{id}</code> (<code>:8899</code>) and
+  prints <code>waiting</code> cut to 160 characters (<code>:8905</code>); cancel and <code>inject_guidance</code> through
+  <code>POST /commands</code> (<code>:8931</code>, <code>:8949</code>). No ledger, bundle or stream read; the run detail is handed to
+  the Observer (<code>/apps/observer/#run/{run_id}</code>, <code>:13646-13650</code>).</li>
+<li><strong>Terminal console crate</strong> (<code>abstractgateway/console-tui/src</code>): <code>GET /runs</code> (<code>api.rs:1109-1127</code>),
+  the admin per-runtime list (<code>api.rs:1131-1151</code>), <code>GET /runs/{id}</code> (<code>api.rs:1159</code>), commands
+  (<code>worker.rs:3245-3290</code>); the docs Q&amp;A polls <code>GET /runs/{id}</code> every 2 s (<code>ui/docs.rs:16</code>,
+  <code>worker.rs:2703</code>); <code>waiting</code> shown as JSON in Inspect (<code>store.rs:3196</code>, <code>ui/runtimes.rs:1647-1663</code>).
+  No ledger read.</li>
+<li><strong>Divergence.</strong> Both show the snapshot's status as is: a run past a timer without a resume
+  record, or between a resume append and its save, shows "waiting"; neither names the child that
+  holds a question. They need <code>status</code>, <code>display_status</code>, <code>interaction</code> and <code>runs[]</code> from the view,
+  nothing else.</li>
+</ul>
+<h3 id="summary-of-the-decisions-each-path-makes-differently">Summary of the decisions each path makes differently<a class="headerlink" href="#summary-of-the-decisions-each-path-makes-differently" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Decision</th>
+<th>Reducer (<code>replay/view.py</code>)</th>
+<th>Paths that decide differently today</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>When a wait ends</td>
+<td>a <code>resume</code> for its key, or any later non-observability step of the same run</td>
+<td>panel-chat: only <code>resume</code> with <code>resumed: true</code>; Assistant desktop: the Nth resume of the key; Code TUI, Observer, iPhone: any later record, observability included; Flow: a root <code>node_start</code> or progress tick; gateway attention stream: the snapshot</td>
+</tr>
+<tr>
+<td>Which wait is the interaction</td>
+<td>newest open <code>tool_approval</code> / <code>ask_user</code> in the tree by (time, seq, run id); never a delegation or timer; a snapshot wait only if the ledger never named its key</td>
+<td>panel-chat: latest arrival, event waits included; Code TUI: one slot, newest; Assistant desktop: the root snapshot's wait first, adopted even when resolved; iPhone: every person wait in the tree; watch: reason <code>user</code> only, no step identity; Observer modal: the root's last record, children not followed; Flow: newest event, snapshot wait pushed last on history; consoles: none</td>
+</tr>
+<tr>
+<td>Tool approval vs question</td>
+<td><code>details.kind == "tool_approval"</code>, <code>details.mode == "approval_required"</code>, or a <code>tool_approval:</code> key</td>
+<td>gateway <code>events_stream.py:848</code> and runtime <code>automations/attention.py:180</code>: <code>mode</code> only; panel-chat <code>isToolApproval</code> (<code>workflow_runtime.ts:583-586</code>): <code>mode</code> or <code>kind</code></td>
+</tr>
+<tr>
+<td>Event waits</td>
+<td><code>event</code>, listed in <code>open_waits</code> (<code>person_facing: false</code>)</td>
+<td>panel-chat: a "Send event" interaction; gateway and runtime attention: a "question" when it has a prompt or choices</td>
+</tr>
+<tr>
+<td>Run status</td>
+<td>terminal snapshot, then ledger terminal record, then open wait, then running</td>
+<td>every client: the snapshot only (Code TUI: also an answer-shaped flow end; Assistant desktop: an interrupted follow reported as completed)</td>
+</tr>
+<tr>
+<td><code>$slim</code></td>
+<td>resolved against the STARTED record of the same step; unresolved pointers dropped and named in <code>warnings</code></td>
+<td>panel-chat and Code TUI: fall back to <code>wait.details.tool_calls</code> or <code>result.results</code>; Code web: keeps the earlier concrete payload; Observer steps and the watch: resolve it; Assistant desktop, iPhone, Flow, Note: the tool result is lost; the bundle: left to the client</td>
+</tr>
+<tr>
+<td>Activity identity</td>
+<td>one per node execution (<code>executions.py</code>)</td>
+<td>Flow: <code>executionIdFor</code> (the origin); Code web: one row per effect type and key; Observer, watch: by step id and idempotency key; iPhone: one row per step; Assistant desktop, Code TUI: no node rows</td>
+</tr>
+<tr>
+<td>Cursor</td>
+<td>per-run <code>seq</code></td>
+<td>every stream and page: a record index</td>
+</tr>
+<tr>
+<td>Timed reads</td>
+<td>none: the view stream is driven by ledger appends</td>
+<td>panel-chat: <code>GET /runs/{root}</code> every 2 s; Observer: <code>GET /runs/{id}</code> and <code>POST /runs/ledger/batch</code> every 2 s; Flow: the history bundle re-folded every 2 s for an active past run; iPhone: the tree every 3 s and <code>GET /runs/{id}</code> every 1 s per pending wait; watch: <code>GET /runs/{id}</code> every 1 s; gateway terminal console docs Q&amp;A: every 2 s</td>
+</tr>
+<tr>
+<td>Run tree</td>
+<td>ledger links (<code>start_subworkflow</code> results, <code>subworkflow:</code> keys, wait details) outrank snapshot <code>parent_run_id</code></td>
+<td>bundle and <code>run_after</code>: <code>list_children</code>; panel-chat, Code TUI, Flow: ledger links; Assistant desktop: one followed run at a time; iPhone, watch: <code>waitingOnChild</code> snapshots; Observer: the bundle, one streamed child and a 2 s batch poll for the rest</td>
+</tr>
+</tbody>
+</table>
+<h2 id="decision">Decision<a class="headerlink" href="#decision" title="Permanent link">&para;</a></h2>
+<p>Taken; recorded here, not re-opened.</p>
+<ul>
+<li><strong>The reducer lives in AbstractRuntime</strong> as <code>abstractruntime.replay</code>: pure, deterministic
+  <code>replay(records_by_run, runs_by_id) -&gt; ReplayView</code>; incremental <code>apply(view, new_records)</code>, whose
+  delta is <code>view.last_delta</code>; versioned JSON <code>replay_view_v1</code> (<code>ReplayView.to_json()</code>); the client
+  side of a delta in <code>replay/delta.py</code>. <code>replay(all records) == apply</code> record by record, by
+  construction (<code>replay</code> is <code>apply</code> over every record).</li>
+<li><strong>AbstractGateway serves the projection</strong> (gateway 0943):</li>
+<li><code>GET /api/gateway/runs/{run_id}/view</code>: the view; <code>ETag</code> = the view's <code>cursor.token</code>; a
+    matching <code>If-None-Match</code> answers 304.</li>
+<li><code>GET /api/gateway/runs/{run_id}/view/stream</code> (SSE): one <code>view</code> event, then <code>delta</code> events
+    produced by the runtime's <code>apply</code>; the event <code>id</code> and <code>Last-Event-ID</code> are the cursor token;
+    driven by the ledger append subscription of the runs in the tree, no timed re-parse.</li>
+<li>A per-run view cache, advanced by <code>apply</code> on append (never rebuilt from scratch while it is
+    warm), dropped when the run tree changes in a way <code>apply</code> cannot fold.</li>
+<li>Authorization as <code>GET /runs/{id}</code>.</li>
+<li><strong>Clients act through the existing routes</strong>: <code>POST /api/gateway/commands</code> (the view's
+  <code>interaction.command</code> is the resume to send, the client adds the answer under
+  <code>payload.payload</code>) and <code>/runs/start</code>. The view adds no command route.</li>
+<li><strong>The durable cursor is the per-run ledger <code>seq</code>.</strong> JSONL persists it on append (under the
+  advisory lock of 82c0c74), SQLite has it in the table, <code>list_after</code> exists on every store,
+  <code>import_records</code> keeps it across a file to SQLite migration (the gateway's <code>migrate.py</code> moves to
+  it). The view's <code>cursor.token</code> is <code>&lt;run id prefix&gt;:&lt;seq&gt;</code> per run of the tree, joined by <code>.</code>.</li>
+</ul>
+<p>Trade-offs against the three options of 0993:</p>
+<ul>
+<li>(a) <strong>Server-side projection</strong> — chosen as the delivery: clients become thin, the Rust and Qt
+  clients need no reducer port, the gateway can cache and index (one fold per run tree shared by
+  every viewer instead of one fold per client), and storage encodings (<code>$slim</code>, windows, index
+  cursors) stay server-side. Cost: the gateway holds a view per watched run tree, bounded by the
+  cache.</li>
+<li>(b) <strong>One shared client reducer package</strong> (TypeScript plus Python/Rust ports): rejected. Three
+  implementations to keep equal is the problem this item removes.</li>
+<li>(c) <strong>Both</strong> (server authoritative, client reducer for latency): rejected for now. The view
+  stream's deltas are the live path; <code>llm.delta</code> live text keeps flowing on the ledger stream as
+  today. Offline replay of an exported ledger is served by the same Python reducer
+  (<code>replay(records_by_run, runs_by_id)</code>), not by a client port. Revisit only with a measured latency
+  gap that the delta stream cannot close.</li>
+</ul>
+<h2 id="the-view-model-replay_view_v1-as-implemented-in-replayviewpy">The view model (<code>replay_view_v1</code>, as implemented in <code>replay/view.py</code>)<a class="headerlink" href="#the-view-model-replay_view_v1-as-implemented-in-replayviewpy" title="Permanent link">&para;</a></h2>
+<p>Top level (<code>ReplayView.to_json</code>):</p>
+<ul>
+<li><code>version</code>: <code>"replay_view_v1"</code>.</li>
+<li><code>root_run_id</code>.</li>
+<li><code>workflow</code>: what the root run executes, <code>{id, bundle_id, bundle_version, flow_id, entrypoint}</code>
+  (<code>workflow_ref</code>: <code>bundle_id@version:flow_id</code>, or a non-bundled id as its own flow; <code>entrypoint</code>
+  is the flow the root was started at).</li>
+<li><code>session_id</code> (from the root snapshot).</li>
+<li><code>status</code> (<code>running | waiting | completed | failed | cancelled | unknown</code>) and <code>display_status</code>
+  (the latest <code>abstract.status</code> text, never a terminal word).</li>
+<li><code>cursor</code>: <code>{token, records, runs}</code>:</li>
+<li><code>token</code> is header-safe: <code>&lt;run name&gt;:&lt;seq&gt;</code> per run, joined by <code>.</code>. A run's name is the
+    shortest run-id prefix (8 characters at least, letters, digits, <code>_</code> and <code>-</code>) that no other run
+    of the tree shares, and <code>resolve_cursor_token</code> maps it back. The token serves as an ETag and
+    as an SSE id.</li>
+<li><code>records</code> is the number of folded records.</li>
+<li><code>runs</code> maps each run id to its last folded <code>seq</code>.</li>
+<li><code>runs[]</code>: the tree in path order (<code>order</code> is the path from the root; a child follows its
+  parent, and siblings appear in the order they were started): <code>run_id</code>,
+  <code>parent_run_id</code>, <code>workflow_id</code>, <code>workflow</code> (as above, without <code>entrypoint</code>), <code>status</code>,
+  <code>display_status</code>, <code>depth</code>, <code>order</code>, <code>waiting</code> (<code>{kind, wait_key, child_run_id}</code> or null),
+  <code>holds_interaction</code>, <code>records</code>, <code>first_seq</code>, <code>last_seq</code>.</li>
+<li><code>interaction</code>: the one person-facing wait, or null. Its fields:</li>
+<li><code>kind</code> (<code>tool_approval | ask_user | event</code>), <code>run_id</code>, <code>wait_key</code>, <code>step_id</code>, <code>seq</code>;</li>
+<li><code>prompt</code>, <code>choices</code>, <code>allow_free_text</code>;</li>
+<li><code>details</code> (without <code>tool_calls</code>), and <code>tool_calls</code> (resolved, never a <code>$slim</code> pointer);</li>
+<li><code>activity_id</code>;</li>
+<li><code>answer_payload</code> (the resume payload's shape, from <code>automations.attention.ANSWER_PAYLOADS</code>);</li>
+<li><code>command</code> = <code>{type: "resume", run_id, payload: {wait_key}}</code>.</li>
+<li><code>open_waits[]</code>: every open wait in the tree. Its fields: <code>run_id</code>, <code>kind</code>, <code>wait_key</code>,
+  <code>step_id</code>, <code>seq</code>, <code>until</code>, <code>child_run_id</code>, <code>person_facing</code>. The kinds are <code>tool_approval</code>,
+  <code>ask_user</code>, <code>event</code> (person-facing), and <code>delegation</code>, <code>timer</code>, <code>job</code>, <code>pause</code>,
+  <code>automation_wake</code>, <code>signal</code> (not person-facing).</li>
+<li>Each delta (not the view) also carries <code>changes[]</code>, the typed changes for push dispatch (root
+  1058):</li>
+<li>every change has <code>{kind, id, run_id, seq}</code>;</li>
+<li><code>status</code> changes add <code>status</code> and <code>previous</code>;</li>
+<li><code>interaction</code> changes add <code>change: opened|closed</code>, <code>interaction_kind</code> and <code>wait_key</code>;</li>
+<li><code>run</code>, <code>message</code>, <code>activity</code> and <code>artifact</code> changes have no extra fields.</li>
+<li><code>messages[]</code>: verbatim text with provenance: <code>id</code>, <code>role</code>, <code>kind</code> (<code>prompt | answer | question |
+  final | event</code>), <code>text</code>, <code>run_id</code>, <code>step_ids</code>, <code>seqs</code>, <code>artifact_ids</code>, <code>source</code> (<code>run_input |
+  answer_user | wait | resume | emit_event | ledger | run_output</code>), <code>order</code>, and per kind <code>final</code>,
+  <code>choices</code>, <code>wait_key</code>, <code>level</code>.</li>
+<li><code>activities[]</code>: one per node execution: <code>id</code> (<code>&lt;run&gt;:&lt;execution id&gt;</code>), <code>run_id</code>, <code>execution_id</code>,
+  <code>node_id</code>, <code>kind</code> (<code>llm | tool | subworkflow | timer | event_wait | ask_user | answer | step</code>),
+  <code>effect_type</code>, <code>name</code>, <code>status</code> (<code>running | waiting | completed | failed | cancelled | denied</code>),
+  <code>started_at</code>, <code>ended_at</code>, <code>seqs</code>, <code>step_ids</code>, <code>order</code>; per kind <code>tool_calls[]</code> (<code>id</code>, <code>name</code>,
+  <code>arguments</code>, <code>status</code>, <code>output</code>, <code>error</code>), <code>provider</code>, <code>model</code>, <code>usage</code>, <code>child_run_id</code>, <code>wait</code>
+  (<code>{kind, wait_key, until, ended_by: resume | later_step | terminal}</code>), <code>progress</code>,
+  <code>denied_reason</code>, <code>error</code>.</li>
+<li><code>artifacts[]</code>: every <code>{"$artifact": id}</code> reference: <code>id</code>, <code>run_id</code>, <code>step_id</code>, <code>seq</code>, <code>path</code>.</li>
+<li><code>usage</code>: <code>{input_tokens, output_tokens, total_tokens, llm_calls}</code> over the tree.</li>
+<li><code>warnings[]</code>: what the view could not fold (a windowed history, an unresolvable <code>$slim</code>
+  pointer), as sentences.</li>
+</ul>
+<p>Rules (module docstring and code of <code>replay/view.py</code>):</p>
+<ol>
+<li><strong>Run tree.</strong> Children come from delegation waits (<code>subworkflow:&lt;id&gt;</code>, <code>sub_run_id</code> /
+   <code>child_run_id</code> in wait details), <code>start_subworkflow</code> results, and snapshot <code>parent_run_id</code>. A
+   ledger link (seq &gt; 0) outranks a snapshot link, so a run's place does not depend on read order.</li>
+<li><strong>Wait end.</strong> A wait is over when its run records a <code>resume</code> for its key or any later step of
+   the same run; <code>abstract.status</code> and <code>abstract.progress</code> events are not steps. A terminal record
+   also closes it. <code>activities[].wait.ended_by</code> records which.</li>
+<li><strong>Interaction.</strong> The newest open person-facing wait (<code>tool_approval</code>, <code>ask_user</code>, or an <code>event</code>
+   wait carrying a prompt or choices; <code>wait_kind</code> agrees with <code>automations/attention.py</code>, pinned
+   by a test) anywhere in the tree, ordered by (record time, seq, run id). A delegation, timer,
+   job, pause, automation wake or prompt-less event (<code>signal</code>) never is one; none once the root is
+   terminal. A snapshot's wait is adopted only when the run's ledger never mentioned its key (a
+   windowed or empty ledger).</li>
+<li><strong>Status.</strong> A terminal snapshot wins; then the ledger's terminal record
+   (<code>system:terminal_status:&lt;status&gt;</code>, <code>system:completion:*</code>, a run-level failure); then an open
+   wait; then running. A snapshot that still says "waiting" for a key the ledger resolved reads as
+   running (the resume-before-save window).</li>
+<li><strong><code>$slim</code>.</strong> Resolved against the STARTED record of the step the pointer names (an approved
+   tool call completes under a new step id pointing back at the waiting step), only for the payload fields
+   the view reads (<code>tool_calls</code>, <code>prompt</code>, <code>message</code>, <code>text</code>, <code>content</code>, <code>provider</code>, <code>model</code>,
+   <code>workflow_id</code>); an unresolvable pointer is dropped and named in <code>warnings</code>.</li>
+<li><strong>Executions.</strong> <code>replay/executions.py</code>: same step; a resume joins the execution whose wait it
+   answers; a repeated idempotency key joins the node's latest execution; an Agent's
+   <code>_temp.agent.&lt;node&gt;.structured</code> call and <code>system:completion:*</code> join the latest execution;
+   progress ticks join the step they report on and never start one.</li>
+<li><strong>Messages.</strong> The root's input prompt from its snapshot; <code>answer_user</code> text; ask-user questions
+   and their answers; <code>abstract.message</code> events; the final answer from the root's
+   <code>system:completion:*</code> record, else from a completed snapshot's output, always as
+   <code>&lt;root&gt;:final</code>. A final answer equal to an earlier answer names it in <code>repeats</code>, and clients
+   show the text once.</li>
+<li><strong>Idempotence and order.</strong> Records carry their <code>seq</code>; a record at or below a run's folded seq is
+   ignored. Records of different runs may arrive in any order. <code>apply_delta(old, diff_views(old,
+   new)) == new</code>; list items are never removed from a view, only changed.</li>
+</ol>
+<p>Open points the conformance suite must settle before 0.14.0 (found by this inventory):</p>
+<ul>
+<li>Settled (2026-10-27): an <code>event</code> wait with a prompt or choices is person-facing. The reducer's
+  <code>wait_kind</code> agrees with <code>automations/attention.py</code> (<code>pause</code>, <code>automation_wake</code> and <code>signal</code> are
+  not person-facing), and <code>tests/test_replay_conformance.py</code> compares the two on every wait of
+  every fixture. Still open: the gateway's attention stream keeps its own copy
+  (<code>events_stream.py:848-852</code>) and should call the runtime's classifier.</li>
+<li>Settled: the raw ledger stream's <code>id:</code> ("records consumed") equals the record's <code>seq</code>, because
+  every store now numbers records densely from 1 (a pre-seq JSONL line is numbered by its
+  position). The view stream uses cursor tokens.</li>
+</ul>
+<h2 id="scope">Scope<a class="headerlink" href="#scope" title="Permanent link">&para;</a></h2>
+<h3 id="in-abstractruntime">In (abstractruntime)<a class="headerlink" href="#in-abstractruntime" title="Permanent link">&para;</a></h3>
+<ul>
+<li>The reducer <code>abstractruntime.replay</code> (view, executions, delta), exported from the package root,
+  documented in <code>docs/</code> (architecture page and API reference).</li>
+<li>The durable cursor: <code>seq</code> on every record of every store, <code>list_after</code> on every store,
+  <code>import_records</code> keeping <code>seq</code>, <code>seq</code> passed to append subscribers.</li>
+<li>One wait classifier: <code>replay.wait_kind</code> used by <code>automations/attention.py</code> (or the reverse), so
+  the runtime has one answer to "is this wait a person's".</li>
+<li>The conformance fixtures: redacted real ledgers plus run snapshots with the expected
+  <code>replay_view_v1</code>, shipped as package data so the gateway and clients can run them; cases below.</li>
+<li>ADR 0010 (one replay, many views; the cursor is <code>seq</code>; clients render the view).</li>
+</ul>
+<h3 id="in-abstractgateway-tracked-by-0943">In (abstractgateway, tracked by 0943)<a class="headerlink" href="#in-abstractgateway-tracked-by-0943" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>GET /runs/{id}/view</code> (ETag, 304), <code>GET /runs/{id}/view/stream</code> (SSE <code>view</code> then <code>delta</code>,
+  <code>Last-Event-ID</code>), the per-run view cache invalidated on append, authorization as <code>GET /runs/{id}</code>.</li>
+<li><code>migrate.py</code> through <code>import_records</code>; 0082 and 0075 closed against this item (0075's text
+  corrected: the tail is already event-driven).</li>
+<li>A benchmark: view build and <code>apply</code> cost on the largest ledgers of the operator's gateway, cache
+  hit rate, one fold per tree whatever the number of viewers.</li>
+</ul>
+<h3 id="in-clients-each-in-its-own-repo-in-this-order">In (clients, each in its own repo, in this order)<a class="headerlink" href="#in-clients-each-in-its-own-repo-in-this-order" title="Permanent link">&para;</a></h3>
+<ol>
+<li>panel-chat (<code>WorkflowSessionController</code> renders the view; <code>ingestHistory</code>, <code>foldRecord</code>,
+   <code>adoptDurableWait</code>, <code>resolvedWaits</code>, <code>foldWorkflowTools</code> and the 2 s lifecycle poll go), then
+   AbstractCode web (<code>activity_rows</code> reads <code>activities[]</code>; delete <code>wait_resolution.ts</code>,
+   <code>history_bundle_seed.ts</code>, <code>subworkflow_follow.ts</code>).</li>
+<li>AbstractAssistant desktop (<code>GatewayRunController</code> and <code>GatewayWorker</code> follow the view stream;
+   assistant 0008's replay findings close with it), then its iPhone and watch apps.</li>
+<li>AbstractObserver and AbstractFlow run views (Flow's <code>executionIdFor</code> is replaced by
+   <code>activities[].execution_id</code>).</li>
+<li>The AbstractCode terminal client (the fold in <code>transcript.rs</code> and the bundle merge in
+   <code>runner.rs</code>).</li>
+<li>The gateway web console and terminal console (status, interaction, run tree only).</li>
+</ol>
+<p>Each client deletes its private reconstruction once it passes the conformance suite; a client
+keeps only what it decides to show and how it forwards a person's or an entity's request.</p>
+<h3 id="out">Out<a class="headerlink" href="#out" title="Permanent link">&para;</a></h3>
+<ul>
+<li>The conversation list and its counts (gateway 0939).</li>
+<li>Live token text (<code>llm.delta</code> frames stay on the ledger stream).</li>
+<li>Any change to the ledger's append-only semantics or record format beyond <code>seq</code>.</li>
+<li>A client-side reducer (option c), until a measured need.</li>
+</ul>
+<h2 id="acceptance-criteria">Acceptance criteria<a class="headerlink" href="#acceptance-criteria" title="Permanent link">&para;</a></h2>
+<ul>
+<li>[x] <code>abstractruntime.replay</code> exported; <code>replay(all) == apply</code> record by record on every
+      conformance fixture; <code>apply_delta(old, diff_views(old, new)) == new</code>.</li>
+<li>[x] Every store returns records with their per-run <code>seq</code>; <code>list_after(after=seq)</code> returns exactly
+      the records after it on JSONL, SQLite and in-memory; a JSONL ledger migrated to SQLite keeps
+      every <code>seq</code>, so a cursor held before the migration resumes at the same record.</li>
+<li>[ ] Conformance fixtures with expected views. Fourteen cases ship in
+      <code>abstractruntime.replay.conformance</code>: a, a2, b-h, i-l. Still missing: a question in a
+      child, a snapshot read between resume and save, a reconnect at a cursor (covered by the
+      gateway tests, not by a fixture), and records of a child arriving before its parent's link
+      (covered by the invariants' interleavings). The cases this item asks for are: the 2026-09-29 delegated approval
+      (<code>run_approval_subrun.json</code>), a question in a child, a parallel tool batch, an approved
+      batch (new step id, same idempotency key), a denied batch, a timer wait without a resume
+      record (2026-10-04), an Agent node with its structured output (2026-10-11), a cancellation,
+      a windowed history with an unresolvable <code>$slim</code>, a snapshot read between resume and save,
+      a reconnect at a cursor, records of a child arriving before its parent's link.</li>
+<li>[ ] One wait classifier in the runtime; the gateway attention stream uses it.</li>
+<li>[x] ADR 0010 accepted; <code>docs/</code> describes the view and the cursor (<code>docs/replay.md</code>, <code>docs/api.md</code>).</li>
+<li>[ ] Gateway 0943 done: <code>/view</code>, <code>/view/stream</code>, cache, benchmark; <code>migrate.py</code> keeps <code>seq</code>
+      (implemented on <code>feat/replay-view</code>, merged with the gateway's 0.16.0 line).</li>
+<li>[ ] panel-chat and AbstractCode web render the view and pass the fixtures; their private folds
+      are deleted (the other clients follow in their own releases; each is tracked in its repo).</li>
+<li>[ ] Two clients on different machines show the same interaction for the 2026-09-29 scenario
+      and either can answer it.</li>
+</ul>
+<h2 id="validation">Validation<a class="headerlink" href="#validation" title="Permanent link">&para;</a></h2>
+<p>Runtime (this repo):</p>
+<ul>
+<li><code>tests/test_replay_conformance.py</code>: every fixture folds to its expected <code>replay_view_v1</code>.</li>
+<li><code>tests/test_replay_invariants.py</code>: <code>replay(all) == apply</code> in any split; the same records in any
+  cross-run order give the same view; folding a record twice changes nothing; <code>diff_views</code> /
+  <code>apply_delta</code> round trip; the incident rules each go red when the rule is removed.</li>
+<li><code>tests/test_ledger_cursor_invariants.py</code>: <code>seq</code> and <code>list_after</code> on every store; JSONL <code>seq</code> across
+  processes (<code>tests/test_jsonl_ledger_seq_cross_process.py</code>); <code>import_records</code> keeps <code>seq</code>.</li>
+</ul>
+<p>Gateway (0943):</p>
+<ul>
+<li><code>tests/test_gateway_replay_view.py</code>: <code>/view</code> equals the runtime's <code>replay</code> of the same stores;
+  ETag and 304; <code>/view/stream</code> sends <code>view</code> then <code>delta</code> events whose application equals a fresh
+  <code>/view</code>; reconnect with <code>Last-Event-ID</code>; authorization as <code>GET /runs/{id}</code>.</li>
+<li><code>tests/test_migrate_preserves_ledger_seq.py</code>: a JSONL ledger migrated to SQLite keeps every
+  <code>seq</code> and a held cursor.</li>
+</ul>
+<p>Clients: the conformance fixtures in each client's CI once migrated; panel-chat's
+<code>scripts/check_approval_sync.mjs</code> and AbstractCode's <code>web/e2e/approval_sync.spec.ts</code> kept green on
+the view; a manual check on the operator's gateway from two machines after the upgrade.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../../..", "features": ["navigation.instant", "navigation.tracking", "navigation.top", "content.code.copy"], "search": "../../../assets/javascripts/workers/search.a7633da7.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../../../assets/javascripts/bundle.c21346df.min.js"></script>
+      
+    
+  </body>
+</html>

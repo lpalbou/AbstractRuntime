@@ -2484,7 +2484,7 @@ class JsonlLedgerStore(LedgerStore):
         self._idem_cache_lock = threading.Lock()
         self._idem_cache: "OrderedDict[tuple[str, str], Dict[str, Any]]" = OrderedDict()
         self._idem_cache_max = 512
-        # THE DURABLE CURSOR (ADR-0009, gateway backlog 0082): every appended line carries its
+        # THE DURABLE CURSOR (ADR-0010, gateway backlog 0082): every appended line carries its
         # per-run `seq` (1, 2, 3, ...), the same cursor SQLite allocates, so a cursor survives a
         # reconnect and a file -> SQLite migration. A line written before seq existed reads as
         # the seq after the previous line (its position). The head cache keeps an append O(1):

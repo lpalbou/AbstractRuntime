@@ -219,7 +219,7 @@ class InMemoryLedgerStore(LedgerStore):
     def append(self, record: StepRecord) -> Optional[int]:
         records = self._records.setdefault(record.run_id, [])
         rec = asdict(record)
-        rec["seq"] = len(records) + 1  # the durable cursor (ADR-0009)
+        rec["seq"] = len(records) + 1  # the durable cursor (ADR-0010)
         records.append(rec)
         return rec["seq"]
 

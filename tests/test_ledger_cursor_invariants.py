@@ -1,4 +1,4 @@
-"""The durable ledger cursor at the store level (gateway backlog 0082 I1-I4, ADR-0009).
+"""The durable ledger cursor at the store level (gateway backlog 0082 I1-I4, ADR-0010).
 
 - I1 replay completeness: `list(run_id)` returns every appended record, in append order, with
   `seq` 1..N, and `append` returns that seq;

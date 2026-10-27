@@ -1,11 +1,11 @@
-# 0853 — Replay view: one reducer of a run tree's ledger, served as a view every client renders
+# 0854 — Replay view: one reducer of a run tree's ledger, served as a view every client renders
 
 **Status**: planned, in progress (reducer on branch `feat/replay-view`) · **Priority**: P0 · **Created**: 2026-10-27
 **Package**: abstractruntime (reducer, durable cursor, conformance fixtures, ADR) · **Slices**: abstractgateway (routes, cache), every client that renders runs (migration)
 **Master item**: framework root backlog 0993, `abstractframework/docs/backlog/planned/0993_one_ledger_replay_many_views.md`
 **Release wave**: framework root backlog 1055, `abstractframework/docs/backlog/planned/1055_release_wave_2026_10_27_voice_library_replay_memory.md` (abstractruntime 0.14.0 carries this item; abstractgateway 0.16.0 waits for it)
 **Cross-package**: AbstractGateway backlog 0082 (`abstractgateway/docs/backlog/proposed/0082_ledger_replay_integrity_and_durable_cursor.md`), 0075 (`abstractgateway/docs/backlog/proposed/0075_event_driven_ledger_streaming.md`), 0943 (`abstractgateway/docs/backlog/planned/0943_replay_view_routes_cache_and_client_migration.md`), 0939 (sessions index, out of scope here); AbstractAssistant backlog 0008 (`abstractassistant/docs/backlog/planned/0008_v2_runtime_replayer_adr_compliance_hardening.md`)
-**ADR**: [ADR 0009 — One replay, many views](../../adr/0009_one_replay_many_views.md)
+**ADR**: [ADR 0010 — One replay, many views](../../adr/0010_one_replay_many_views.md)
 
 ## Summary
 
@@ -491,7 +491,7 @@ Open points the conformance suite must settle before 0.14.0 (found by this inven
   the runtime has one answer to "is this wait a person's".
 - The conformance fixtures: redacted real ledgers plus run snapshots with the expected
   `replay_view_v1`, shipped as package data so the gateway and clients can run them; cases below.
-- ADR 0009 (one replay, many views; the cursor is `seq`; clients render the view).
+- ADR 0010 (one replay, many views; the cursor is `seq`; clients render the view).
 
 ### In (abstractgateway, tracked by 0943)
 
@@ -544,7 +544,7 @@ keeps only what it decides to show and how it forwards a person's or an entity's
       a windowed history with an unresolvable `$slim`, a snapshot read between resume and save,
       a reconnect at a cursor, records of a child arriving before its parent's link.
 - [ ] One wait classifier in the runtime; the gateway attention stream uses it.
-- [x] ADR 0009 accepted; `docs/` describes the view and the cursor (`docs/replay.md`, `docs/api.md`).
+- [x] ADR 0010 accepted; `docs/` describes the view and the cursor (`docs/replay.md`, `docs/api.md`).
 - [ ] Gateway 0943 done: `/view`, `/view/stream`, cache, benchmark; `migrate.py` keeps `seq`
       (implemented on `feat/replay-view`, merged with the gateway's 0.16.0 line).
 - [ ] panel-chat and AbstractCode web render the view and pass the fixtures; their private folds

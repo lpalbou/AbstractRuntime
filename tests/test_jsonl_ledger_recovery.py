@@ -16,7 +16,7 @@ def test_jsonl_ledger_recovers_concatenated_records(tmp_path, caplog):
     with caplog.at_level(logging.WARNING):
         records = store.list(run_id)
 
-    # Records written without a seq are numbered by position (ADR-0009, the durable cursor).
+    # Records written without a seq are numbered by position (ADR-0010, the durable cursor).
     assert records == [{**rec1, "seq": 1}, {**rec2, "seq": 2}]
     assert any("#FALLBACK" in r.message for r in caplog.records)
 

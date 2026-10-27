@@ -12,7 +12,7 @@ If you are new to the project, start with `../README.md` and `../architecture.md
 
 ## Counts
 
-- Planned: 29
+- Planned: 30
 - Proposed: 14
 - Completed: 37
 - Deprecated: 13
@@ -145,6 +145,7 @@ mtime). The anticipated ADR ("an automation is its controller root run") is not 
 | 028* | `planned/028_selective_artifact_rehydration.md` |
 | 0070 | `planned/0070_standalone_wui_browser_session_security_contract.md` |
 | 0848 | `planned/0848_automations_v2_external_event_inbox_and_run_triggers.md` (P2, after 0847's release; contracts pass 2026-09-27) |
+| 0854 | `planned/0854_replay_view.md` (P0; abstractruntime 0.14.0 carries the reducer, the durable per-run `seq` cursor and the conformance cases; gateway routes and client migration remain; ADR 0010) |
 | 0044 | `planned/runtime_systemic_reliability/0044_meta_analysis_record.md` (track source record) |
 | 0045 | `planned/runtime_systemic_reliability/0045_crash_replay_harness_and_ordering_invariant.md` |
 | 0046 | `planned/runtime_systemic_reliability/0046_per_run_driver_exclusion.md` |

@@ -1,4 +1,4 @@
-"""The replay reducer: one deterministic fold of a run tree's ledger into a view (ADR-0009).
+"""The replay reducer: one deterministic fold of a run tree's ledger into a view (ADR-0010).
 
 `replay(records_by_run, runs_by_id)` folds the ledger records of a run tree (the root run and
 the runs it delegated to) plus their durable snapshots into a `ReplayView`; `apply(view,

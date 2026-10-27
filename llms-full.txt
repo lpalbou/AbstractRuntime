@@ -1103,7 +1103,7 @@ Run index and creation (all built-in run stores, including the offloading wrappe
 - `JsonFileRunStore` event-wait and mailbox indexes (`list_event_waiters`, `list_event_waiters_by_prefix`, `list_mailbox_runs`) see what another process saved on the same folder (a split gateway: API process + runner process). Before each lookup the store reads its change signal (the creation log's size and the folder's mtime): when either moved, or at least every `EVENT_INDEX_REFRESH_S` (2 s), it stats each running or waiting run and re-reads the ones whose file changed since it last filed them. An idle store pays two stats per lookup; its own saves are never re-read. `event_index_stats()` returns `{refreshes, refiled, tracked}`.
 - `JsonFileRunStore.change_token()` answers "did any run of this folder change?" with one stat: `(creation-log size, active-index counter)`. Every save, create and delete through the store moves the counter; another process's create, delete or became-active line moves the log size. Not seen: another process re-saving a run that stays active (one ticking process per folder); ending a run, or re-saving a finished one, writes `=<run_id>`. `changed_run_ids(token)` names the runs this store changed since `token`, or `None` when that is unknown (the log moved, or more than 8,192 changes ago). `ObservableLedgerStore.change_token()` / `changed_run_ids(token)` do the same for ledger appends (process-local). The gateway runner's scan gate and its mail notification check compare these tokens instead of reading the directory.
 
-The durable cursor (ADR 0009):
+The durable cursor (ADR 0010):
 - Every ledger store numbers a run's records 1, 2, 3, … and `list()` returns each record with its `seq`. `JsonlLedgerStore` writes it on each line, allocated under an advisory file lock that spans the head read and the write, so another process appending to the same run never takes the same number. A line written before the field existed is numbered by its position. `append()` returns the seq.
 - `LedgerStore.list_after(*, run_id, after, limit=1000) -> (records, last_seq)`: the records after a seq. SQLite does an indexed read; JSONL seeks to the byte offset where the previous read ended; the default implementation filters `list()`. The decorators (observable, hash-chained, offloading) delegate it.
 - `ObservableLedgerStore` hands subscribers the record with its `seq`.
@@ -1304,7 +1304,7 @@ from Core route resolution and persisted from `LLM_CALL` results.
 
 ## Replay view (one reconstruction of a run, every client)
 
-Implementation: `src/abstractruntime/replay/` (ADR 0009). Guide: [replay.md](replay.md).
+Implementation: `src/abstractruntime/replay/` (ADR 0010). Guide: [replay.md](replay.md).
 
 - `replay(records_by_run, runs_by_id=None, *, root_run_id=None) -> ReplayView`: folds a run
   tree's ledger records (`{run_id: [records in ledger order]}`) and durable snapshots
@@ -5834,7 +5834,7 @@ payload = rt.load_evidence(evidence_id="...")  # loads from ArtifactStore
 
 `abstractruntime.replay` turns a run tree's ledger records and durable snapshots into the view a
 client shows: the status, the approval or question waiting for a person, the replies, the tool
-calls and the steps. It is the only code that does this ([ADR 0009](adr/0009_one_replay_many_views.md)).
+calls and the steps. It is the only code that does this ([ADR 0010](adr/0010_one_replay_many_views.md)).
 Hosts serve the view, for example AbstractGateway's `GET /api/gateway/runs/{id}/view` and its
 stream. Clients render it and act through the host's commands. They never re-derive run state
 from raw records.
@@ -5888,6 +5888,7 @@ Each rule below was once a divergence between clients:
 | What about `$slim` pointers? | They are resolved against the STARTED record of the step they name. An approved tool call completes under a new step id that points back at the waiting step. A pointer that cannot be resolved (a window) is dropped and named in `warnings`. A client never sees one. |
 | What is the final answer? | One message, `<root>:final`, from the root's terminal record (or the snapshot's output when the ledger has none). When it repeats an answer the run already gave, it names that message in `repeats`, and a client shows the text once. |
 | How many steps did a node take? | One activity per node execution, following AbstractFlow's `executionIdFor` rules (`replay/executions.py`): the same step; a resume joins the execution whose wait it answers; a repeated idempotency key; an Agent's structured-output call and the run's terminal record join the node's latest execution; a progress tick reports on its step. |
+| What did a conversation's tool policy decide? | An `abstract.tool_policy_decision` record (session tool policy contract v1) is an activity of kind `tool_policy` (`decision`: `auto_approved` or `denied`, the policy's `revision`, `set_by`, `set_at`), never an interaction: such a call has no wait. The tool rows it names carry `decided_by: "session_policy"`, and a call the policy refused is `denied`, not failed. A decision written twice (a crash replay, same idempotency key) is one activity. A deny wins even over an approval gate answered "approved" before it: the batch reads `denied`, with `wait.outcome: denied` and `wait.denied_by: session_policy`. Every tool-approval activity says how its gate ended (`wait.outcome`: approved, denied, partly_denied). |
 | What does the run execute? | `workflow_ref(workflow_id)`: `bundle_id@version:flow_id` gives `{bundle_id, bundle_version, flow_id}`. The root's flow is its `entrypoint`. A workflow outside a bundle has `bundle_id: null`. |
 
 ## The view (`to_json()`)
@@ -5897,7 +5898,7 @@ Each rule below was once a divergence between clients:
 | `version`, `root_run_id`, `session_id` | the view's version, its root run and the root's session |
 | `workflow` | `{id, bundle_id, bundle_version, flow_id, entrypoint}` of the root run |
 | `status`, `display_status` | the derived status; the run's own status line |
-| `cursor` | `{token, records, runs}`. `runs` maps each run id to its last folded `seq`. `token` (`<run id prefix>:<seq>.…`, header-safe) is the host's ETag and SSE id; `parse_cursor_token` reads it |
+| `cursor` | `{token, records, runs}`. The token ends with `~<digest>` of what the runs' snapshots contribute, so a pause or a terminal snapshot changes it without a record. A tree of more than 32 runs gets a bounded digest token, which cannot be resolved back: a reconnect with it gets the whole view. `runs` maps each run id to its last folded `seq`. `token` (`<run id prefix>:<seq>.…`, header-safe) is the host's ETag and SSE id; `parse_cursor_token` reads it |
 | `runs[]` | the tree in path order (a child after its parent, siblings in the order they were started): `parent_run_id`, `depth`, `workflow`, `status`, `waiting`, `holds_interaction`, `records`, `first_seq`, `last_seq`, `order` (the path from the root) |
 | `interaction` | the person-facing wait, or `null`: `kind` (`tool_approval`, `ask_user`, `event`), `run_id`, `wait_key`, `step_id`, `seq`, `prompt`, `choices`, `allow_free_text`, `details`, `tool_calls` (resolved), `activity_id`, `answer_payload`, and `command` (the resume a client sends to answer it) |
 | `open_waits[]` | every open wait of the tree, with `person_facing` |
@@ -5933,7 +5934,7 @@ values (a file-to-SQLite migration), so a cursor a client holds stays valid.
 has its records, its snapshots and the expected view. The cases cover a delegated child
 approval, a timer wait without a resume, a parallel tool batch, a cancellation, Agent
 structured-output steps, a windowed history with `$slim`, a question and its answer, and a
-denied approval, plus every wait kind, an event answered then a pause, nested delegation, and an
+denied approval, a session tool policy's decisions, plus every wait kind, an event answered then a pause, nested delegation, and an
 answer repeated by the completion.
 
 `tests/test_replay_conformance.py` checks each expected view plus hand-written semantic
@@ -6432,7 +6433,7 @@ When you ask "why is it designed this way?", the answer is in an ADR. ADRs are:
 | 0006 | [Runtime Owns Durable AbstractCore Bloc Prompt-Cache Control](0006_runtime_owns_durable_abstractcore_bloc_prompt_cache.md) | Accepted | 2026-05-20 | Hosts should use Runtime for durable bloc/KV controls and binding-aware execution |
 | 0007 | [Runtime Relays Core-Owned Model Residency Truth](0007_runtime_relays_core_owned_model_residency_truth.md) | Accepted | 2026-05-21 | Runtime reports loaded state only from AbstractCore residency truth |
 | 0008 | [Integration Facades Are the Complete Host Surface](0008_integration_facades_are_the_complete_host_surface.md) | Accepted | 2026-10-27 | Every AbstractCore name or capability a host needs is surfaced by the runtime (facade re-export, typed refusal, backlog); a gap is a runtime patch, never a host import of a lower-level package |
-| 0009 | [One Replay of the Ledger, Many Views](0009_one_replay_many_views.md) | Accepted | 2026-10-27 | `abstractruntime.replay` is the only reconstruction of run state from the ledger; hosts serve its view, clients render it; the per-run ledger `seq` is the durable cursor |
+| 0010 | [One Replay of the Ledger, Many Views](0010_one_replay_many_views.md) | Accepted | 2026-10-27 | `abstractruntime.replay` is the only reconstruction of run state from the ledger; hosts serve its view, clients render it; the per-run ledger `seq` is the durable cursor |
 
 ## Relationship to Backlog
 
@@ -6448,7 +6449,7 @@ ADRs explain *why*. Backlog items explain *what* and *how*.
 | 0006 | `backlog/completed/027_runtime_durable_bloc_prompt_cache_facade.md` |
 | 0007 | `backlog/completed/0035_model_residency_provider_truth_for_local_http_clients.md`, `backlog/proposed/0036_local_media_residency_bridge_to_core_residency.md` |
 | 0008 | AbstractGateway backlog 1044 (mailbox access) and `tests/test_gateway_import_boundary.py`; runtime 0.13.1 `email_facade.resolve_srv_default` |
-| 0009 | `backlog/planned/0853_replay_view.md`; AbstractGateway backlog 0943 (view routes), 0082 (durable cursor); framework root 0993 |
+| 0010 | `backlog/planned/0854_replay_view.md`; AbstractGateway backlog 0943 (view routes), 0082 (durable cursor); framework root 0993 |
 
 ## Adding New ADRs
 

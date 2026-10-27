@@ -86,7 +86,7 @@ class ObservableLedgerStore(LedgerStore):
 
         payload: LedgerRecordDict = asdict(record)
         if isinstance(seq, int) and not isinstance(seq, bool):
-            payload["seq"] = seq  # subscribers fold by the durable cursor (ADR-0009)
+            payload["seq"] = seq  # subscribers fold by the durable cursor (ADR-0010)
         with self._lock:
             subscribers = list(self._subscribers)
 

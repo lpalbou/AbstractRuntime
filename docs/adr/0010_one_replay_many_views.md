@@ -1,4 +1,4 @@
-# ADR 0009: One replay of the ledger, many views
+# ADR 0010: One replay of the ledger, many views
 
 Status: Accepted.
 Date: 2026-10-27
@@ -11,7 +11,7 @@ the steps. Until this decision, each client worked those facts out for itself fr
 records, run snapshots and its own memory. Panel-chat, the AbstractCode terminal client, the
 desktop Assistant, the iPhone and watch apps, the Observer, AbstractFlow and both gateway
 consoles each had their own reconstruction. The inventory, with file:line anchors, is in
-[backlog 0853](../backlog/planned/0853_replay_view.md). The reconstructions disagreed on the same
+[backlog 0854](../backlog/planned/0854_replay_view.md). The reconstructions disagreed on the same
 run:
 
 - 2026-09-29: a delegated child's tool approval showed as "Approval needed" on one client and as
@@ -101,4 +101,4 @@ records (gateway backlog 0082).
 - AbstractGateway `tests/test_gateway_replay_view.py`, `tests/test_migrate_preserves_ledger_seq.py`
   and the principal isolation matrix: the routes through the real app.
 - Every client that renders runs runs the conformance fixtures in its CI once it migrates
-  (backlog 0853).
+  (backlog 0854).

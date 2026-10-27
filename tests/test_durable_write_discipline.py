@@ -119,7 +119,7 @@ def test_ledger_record_round_trip_matches_asdict(tmp_path) -> None:
     jsonl.append(rec)
     listed = jsonl.list(run.run_id)
     assert len(listed) == 1
-    # The stored record is asdict() plus the store's `seq` (the durable cursor, ADR-0009).
+    # The stored record is asdict() plus the store's `seq` (the durable cursor, ADR-0010).
     assert listed[0] == {**json.loads(json.dumps(asdict(rec), ensure_ascii=False)), "seq": 1}
 
     db = SqliteDatabase(tmp_path / "ledger.sqlite3")

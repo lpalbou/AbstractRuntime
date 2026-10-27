@@ -53,7 +53,7 @@ def compute_record_hash(*, record: Dict[str, Any], prev_hash: Optional[str]) -> 
     clean = dict(record)
     clean.pop("record_hash", None)
     clean.pop("signature", None)
-    # `seq` is the store's position for the record (ADR-0009), assigned after the hash.
+    # `seq` is the store's position for the record (ADR-0010), assigned after the hash.
     clean.pop("seq", None)
 
     clean["prev_hash"] = prev_hash

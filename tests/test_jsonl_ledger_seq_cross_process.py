@@ -1,4 +1,4 @@
-"""Two processes appending to one run's JSONL ledger never take the same seq (ADR-0009).
+"""Two processes appending to one run's JSONL ledger never take the same seq (ADR-0010).
 
 The seq is the durable cursor every reader resumes from; the JSONL store allocates it under an
 advisory file lock spanning the head read and the write, so a split API process (or a CLI next

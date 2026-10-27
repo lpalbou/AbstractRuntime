@@ -1,4 +1,4 @@
-"""Replay reducer invariants over every conformance fixture (framework backlog 0993, ADR-0009).
+"""Replay reducer invariants over every conformance fixture (framework backlog 0993, ADR-0010).
 
 - replay(all) == fold(apply) under many chunkings: seeded random interleavings of the runs
   (each run's records in its ledger order), random chunk sizes, snapshots given at the start,

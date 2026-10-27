@@ -259,7 +259,7 @@ class LedgerStore(ABC):
     @abstractmethod
     def list(self, run_id: str) -> List[Dict[str, Any]]:
         """The run's records in append order. Each carries `seq` (1, 2, ...: the durable cursor,
-        ADR-0009) on the stores that number records (JSONL, SQLite, in-memory)."""
+        ADR-0010) on the stores that number records (JSONL, SQLite, in-memory)."""
 
     def list_after(self, *, run_id: str, after: int, limit: int = 1000) -> Tuple[List[Dict[str, Any]], int]:
         """Records with `seq` > `after` (at most `limit`) and the last seq returned (or `after`).

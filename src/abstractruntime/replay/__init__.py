@@ -1,4 +1,4 @@
-"""One ledger replay, many views (ADR-0009, framework backlog 0993).
+"""One ledger replay, many views (ADR-0010, framework backlog 0993).
 
 `replay(records_by_run, runs_by_id)` folds a run tree's ledger records and durable snapshots
 into a `ReplayView` (JSON `replay_view_v1` through `to_json()`); `apply(view, records)` folds

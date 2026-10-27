@@ -2,7 +2,7 @@
 
 `abstractruntime.replay` turns a run tree's ledger records and durable snapshots into the view a
 client shows: the status, the approval or question waiting for a person, the replies, the tool
-calls and the steps. It is the only code that does this ([ADR 0009](adr/0009_one_replay_many_views.md)).
+calls and the steps. It is the only code that does this ([ADR 0010](adr/0010_one_replay_many_views.md)).
 Hosts serve the view, for example AbstractGateway's `GET /api/gateway/runs/{id}/view` and its
 stream. Clients render it and act through the host's commands. They never re-derive run state
 from raw records.

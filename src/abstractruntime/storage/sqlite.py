@@ -1202,7 +1202,7 @@ class SqliteLedgerStore(LedgerStore):
     def import_records(self, run_id: str, records: List[Dict[str, Any]]) -> int:
         """Copy a run's ledger in, KEEPING each record's `seq` (a file -> SQLite migration).
 
-        A held cursor stays valid across the migration (ADR-0009): record `seq` values are kept
+        A held cursor stays valid across the migration (ADR-0010): record `seq` values are kept
         as they are (a record without one takes the seq after the previous record's), the head
         is set to the last one. Refuses when the run already has records here (an import never
         merges). Returns the number of records imported."""
@@ -1414,7 +1414,7 @@ class SqliteLedgerStore(LedgerStore):
             except Exception:
                 continue
             if isinstance(obj, dict):
-                obj["seq"] = int(row["seq"])  # the durable cursor (ADR-0009)
+                obj["seq"] = int(row["seq"])  # the durable cursor (ADR-0010)
                 out.append(obj)
         return out
 
@@ -1544,7 +1544,7 @@ class SqliteLedgerStore(LedgerStore):
                 continue
             if not isinstance(obj, dict):
                 continue
-            obj["seq"] = int(row["seq"])  # the durable cursor (ADR-0009)
+            obj["seq"] = int(row["seq"])  # the durable cursor (ADR-0010)
             out.append(obj)
             try:
                 next_cursor = max(next_cursor, int(row["seq"] or next_cursor))

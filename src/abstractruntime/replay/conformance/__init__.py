@@ -10,7 +10,7 @@ Each case is a directory holding these files:
 The cases are redacted ledgers from a real gateway plus synthetic ones. They ship with the
 package, so a host or a client can run them without the runtime's repository. The gateway serves
 them through `/view` in its own tests. A client port of the reducer, or of `apply_delta`, can
-check itself against them (ADR 0009).
+check itself against them (ADR 0010).
 
     from abstractruntime.replay.conformance import case_names, load_case
     for name in case_names():

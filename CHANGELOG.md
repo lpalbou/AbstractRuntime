@@ -11,7 +11,7 @@ Planned as 0.14.0.
 
 ### Added
 
-- **Replay view** (`abstractruntime.replay`, ADR 0009, backlog 0853; framework root 0993). One
+- **Replay view** (`abstractruntime.replay`, ADR 0010, backlog 0854; framework root 0993). One
   pure, deterministic reducer turns a run tree's ledger records and snapshots into the view every
   client renders (`replay_view_v1`).
   - What the view holds:

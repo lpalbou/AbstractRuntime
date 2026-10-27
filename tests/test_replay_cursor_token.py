@@ -1,4 +1,4 @@
-"""Cursor tokens name each run of the tree unambiguously (ADR 0009).
+"""Cursor tokens name each run of the tree unambiguously (ADR 0010).
 
 A token (`<run name>:<seq>.…`) is a view's ETag and SSE id; a host maps it back to the tree's
 runs to rebuild the view at that cursor. Run names are run-id prefixes long enough that no

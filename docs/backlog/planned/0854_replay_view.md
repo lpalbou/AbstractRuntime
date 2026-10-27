@@ -1,6 +1,6 @@
 # 0854 — Replay view: one reducer of a run tree's ledger, served as a view every client renders
 
-**Status**: planned, in progress (reducer on branch `feat/replay-view`) · **Priority**: P0 · **Created**: 2026-10-27
+**Status**: planned, in progress (runtime slice released in abstractruntime 0.14.0, 2026-10-27, PR #8 merge `0efe68f`; gateway routes and client migration remain) · **Priority**: P0 · **Created**: 2026-10-27
 **Package**: abstractruntime (reducer, durable cursor, conformance fixtures, ADR) · **Slices**: abstractgateway (routes, cache), every client that renders runs (migration)
 **Master item**: framework root backlog 0993, `abstractframework/docs/backlog/planned/0993_one_ledger_replay_many_views.md`
 **Release wave**: framework root backlog 1055, `abstractframework/docs/backlog/planned/1055_release_wave_2026_10_27_voice_library_replay_memory.md` (abstractruntime 0.14.0 carries this item; abstractgateway 0.16.0 waits for it)

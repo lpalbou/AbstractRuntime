@@ -7,7 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-Planned as 0.14.0.
+## [0.14.0] - 2026-10-27
+
+Two features: the replay view with a durable per-run ledger cursor, and the session tool policy.
+Upgrade note (one way): hash-chained JSONL ledgers written by 0.14.0 carry `seq` on each line, and
+an older `verify_ledger_chain` reports those lines as tampered. Upgrade writers and verifiers together.
 
 ### Added
 
@@ -51,18 +55,6 @@ Planned as 0.14.0.
   - `ObservableLedgerStore` passes `seq` to subscribers.
   - `SqliteLedgerStore.import_records` copies a ledger in and keeps its `seq` values (migration).
 
-### Changed
-
-- Hash-chained ledgers: `seq` is persisted on each JSONL line and excluded from the hash by this
-  version's `compute_record_hash`. A verifier from an older version includes it, so it reports
-  every line written by this version as tampered. Upgrade every process that verifies a chain
-  (`verify_ledger_chain`) together with the writers.
-- `LedgerStore.list()` records carry `seq`. A consumer that compared records to `asdict(record)`
-  sees one more key. The hash chain excludes `seq` (it is the store's position, assigned after
-  the hash).
-
-### Added (session tool policy)
-
 - **Session tool policy**: a conversation's standing "approve / deny without asking", applied before any approval
   wait. `abstractruntime.storage.session_tool_policy` (`SqliteSessionToolPolicyStore`,
   `InMemorySessionToolPolicyStore`, `session_policy_names`), `Runtime(session_tool_policy_store=...)` /
@@ -74,6 +66,16 @@ Planned as 0.14.0.
   before it); never beyond the run's `allowed_tools`. Before this, "approve all" lived in each
   client, which answered the wait after it arrived: the gate flashed in every app and in the ledger. See
   [tool-approval.md](docs/tool-approval.md#session-tool-policy-a-conversations-standing-word).
+
+### Changed
+
+- Hash-chained ledgers: `seq` is persisted on each JSONL line and excluded from the hash by this
+  version's `compute_record_hash`. A verifier from an older version includes it, so it reports
+  every line written by this version as tampered. Upgrade every process that verifies a chain
+  (`verify_ledger_chain`) together with the writers.
+- `LedgerStore.list()` records carry `seq`. A consumer that compared records to `asdict(record)`
+  sees one more key. The hash chain excludes `seq` (it is the store's position, assigned after
+  the hash).
 
 ## [0.13.1] - 2026-10-27
 

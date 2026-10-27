@@ -1,7 +1,7 @@
 # 0853-abstractruntime: [FEATURE] Session tool policy: a conversation's approve/deny applied before the approval wait
 
 > Created: 2026-10-27
-> Status: Planned (implemented on branch `feat/session-tool-policy`; ships with the next release)
+> Status: Planned (released in abstractruntime 0.14.0, 2026-10-27, PR #7 merge `ecfbb28`; remaining: the gateway floor and the follow-ups below)
 > Type: feature
 > Priority: P1
 > Labels: tool-approval, ledger, replay, sessions
@@ -46,7 +46,7 @@ every client and in the replayable ledger.
 
 ## Remaining
 
-- Release (minor bump: new public API) and the gateway's `ABSTRACTRUNTIME_FLOOR` raised to it.
+- The gateway's `ABSTRACTRUNTIME_FLOOR` raised to 0.14.0 (released 2026-10-27).
 - Covering tools enabled after an `all` grant (today they ask until the person grants again).
 - Answering waits that already exist when a policy is written (today the client answers the shown
   one).

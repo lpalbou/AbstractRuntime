@@ -4,9 +4,21 @@
 
 It is designed for long-running workflows that must survive restarts and explicitly model blocking (human input, timers, external events, subworkflows) without keeping Python stacks alive.
 
-**Version:** 0.8.2 • **Python:** 3.10+
+**Version:** 0.14.0 • **Python:** 3.10+
 
 **Status:** pre-1.0 (API may evolve). For production use, pin versions and follow `CHANGELOG.md`.
+
+## What's new in 0.14.0
+
+- **Replay view** (`abstractruntime.replay`): one deterministic reducer turns a run tree's ledger
+  into the view every client renders (status, the interaction to answer, messages, activities,
+  artifacts), with incremental deltas. Every ledger store now numbers records with a durable
+  per-run `seq` cursor (`list_after`). See [docs/replay.md](docs/replay.md).
+- **Session tool policy**: a conversation's standing approve/deny is applied before any approval
+  wait, with an `abstract.tool_policy_decision` audit record. See
+  [docs/tool-approval.md](docs/tool-approval.md#session-tool-policy-a-conversations-standing-word).
+- Upgrade note: hash-chained JSONL ledgers written by 0.14.0 fail an older `verify_ledger_chain`;
+  upgrade writers and verifiers together.
 
 ## AbstractFramework ecosystem
 

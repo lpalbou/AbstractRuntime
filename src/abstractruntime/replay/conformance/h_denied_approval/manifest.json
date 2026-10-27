@@ -1,0 +1,26 @@
+{
+ "adjustments": [],
+ "case": "h_denied_approval",
+ "pins": "a denied tool approval as the runtime records it (no `approved:false` in the ledger: the approval step's results carry success false + the runtime's 'Denied by user'): the tool row and the activity read denied.",
+ "provenance": "redacted from the operator's gateway data 2026-10-27",
+ "redaction": "free text -> salted HMAC placeholders (txt-<hex>); run/session ids -> salted uuid5; conversation-sized fields the view never reads dropped; $slim markers recomputed against the redacted STARTED payload (see the extraction script's docstring)",
+ "root_run_id": "68fa21ed-5513-5bae-a53d-6f45f92bd8b7",
+ "slim_markers": {
+  "slim_dropped": 0,
+  "slim_fixed": 0
+ },
+ "source_runs": {
+  "1e54ebcf-1347-5173-bd2a-7ca330c554a6": {
+   "cut_after_seq": null,
+   "snapshot": "real",
+   "source_run_id": "sha256:00889d74414d8569",
+   "window_from_seq": null
+  },
+  "68fa21ed-5513-5bae-a53d-6f45f92bd8b7": {
+   "cut_after_seq": null,
+   "snapshot": "real",
+   "source_run_id": "sha256:7f6ccf921f314ee2",
+   "window_from_seq": null
+  }
+ }
+}

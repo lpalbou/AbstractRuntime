@@ -16,6 +16,10 @@ def test_jsonl_ledger_recovers_concatenated_records(tmp_path, caplog):
     with caplog.at_level(logging.WARNING):
         records = store.list(run_id)
 
-    assert rec1 in records
-    assert rec2 in records
+    # Records written without a seq are numbered by position (ADR-0010, the durable cursor).
+    assert records == [{**rec1, "seq": 1}, {**rec2, "seq": 2}]
     assert any("#FALLBACK" in r.message for r in caplog.records)
+
+    # list_after reads the recovered line the same way (I4: recovery preserved, observable).
+    after, last = store.list_after(run_id=run_id, after=1)
+    assert after == [{**rec2, "seq": 2}] and last == 2

@@ -253,10 +253,35 @@ class LedgerStore(ABC):
     """Append-only journal store."""
 
     @abstractmethod
-    def append(self, record: StepRecord) -> None: ...
+    def append(self, record: StepRecord) -> Optional[int]:
+        """Append one record. Stores that number records return its per-run `seq`."""
 
     @abstractmethod
-    def list(self, run_id: str) -> List[Dict[str, Any]]: ...
+    def list(self, run_id: str) -> List[Dict[str, Any]]:
+        """The run's records in append order. Each carries `seq` (1, 2, ...: the durable cursor,
+        ADR-0010) on the stores that number records (JSONL, SQLite, in-memory)."""
+
+    def list_after(self, *, run_id: str, after: int, limit: int = 1000) -> Tuple[List[Dict[str, Any]], int]:
+        """Records with `seq` > `after` (at most `limit`) and the last seq returned (or `after`).
+
+        `after` is the last seq a reader consumed (0 = from the start). Default: `list()` then
+        filter; JSONL and SQLite override it with incremental reads."""
+        a = max(0, int(after or 0))
+        lim = max(1, int(limit or 1000))
+        out: List[Dict[str, Any]] = []
+        prev = 0
+        for rec in self.list(run_id):
+            if not isinstance(rec, dict):
+                continue
+            seq = rec.get("seq")
+            seq = int(seq) if isinstance(seq, int) and not isinstance(seq, bool) and seq > prev else prev + 1
+            prev = seq
+            if seq <= a:
+                continue
+            if len(out) >= lim:
+                break
+            out.append(rec if rec.get("seq") == seq else {**rec, "seq": seq})
+        return (out, int(out[-1]["seq"]) if out else a)
 
     def find_completed_result(
         self, run_id: str, idempotency_key: str

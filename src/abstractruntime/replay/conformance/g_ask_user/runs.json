@@ -1,0 +1,134 @@
+{
+ "73c7888f-f6d1-5be9-9f95-254e9eb0ffd9": {
+  "run_id": "73c7888f-f6d1-5be9-9f95-254e9eb0ffd9",
+  "workflow_id": "dialogue@dev:044df8e2",
+  "status": "completed",
+  "current_node": "node-4",
+  "parent_run_id": null,
+  "session_id": "da649efc-e077-5343-b736-a22d3dc1a5da",
+  "created_at": "2026-05-24T17:38:37.548140+00:00",
+  "updated_at": "2026-05-24T17:38:46.340613+00:00",
+  "waiting": null,
+  "output": {
+   "success": true,
+   "result": {
+    "content": "txt-7ddd2d759a50",
+    "reasoning": null,
+    "data": null,
+    "raw_response": {
+     "id": "txt-a1f370260032",
+     "object": "txt-ef0b8e848b68",
+     "created": 1779644325,
+     "model": "qwen/qwen3.6-35b-a3b",
+     "choices": [
+      {
+       "index": 0,
+       "message": {
+        "role": "txt-f2007e1175d4",
+        "content": "txt-7ddd2d759a50",
+        "tool_calls": []
+       },
+       "logprobs": null,
+       "finish_reason": "txt-a2713ef43bda"
+      }
+     ],
+     "usage": {
+      "prompt_tokens": 114,
+      "completion_tokens": 10,
+      "total_tokens": 124
+     },
+     "stats": {},
+     "system_fingerprint": "txt-50c472daddcc"
+    },
+    "tool_calls": null,
+    "usage": {
+     "input_tokens": 114,
+     "output_tokens": 10,
+     "total_tokens": 124,
+     "prompt_tokens": 114,
+     "completion_tokens": 10
+    },
+    "model": "qwen/qwen3.6-35b-a3b",
+    "finish_reason": "txt-a2713ef43bda",
+    "metadata": {
+     "_provider_request": {
+      "url": "txt-06e0fa62e894",
+      "payload": {
+       "model": "qwen/qwen3.6-35b-a3b",
+       "messages": [
+        {
+         "role": "txt-3e8d96281e10",
+         "content": "txt-75d5e52cf06b"
+        },
+        {
+         "role": "txt-39b4b61e5934",
+         "content": "txt-a952e3566dd1"
+        }
+       ],
+       "stream": false,
+       "temperature": 0.7,
+       "max_tokens": 4096,
+       "top_p": 0.95,
+       "top_k": 20
+      }
+     },
+     "trace_id": "txt-f1af271cb7d8",
+     "runtime_grounding": {
+      "local_datetime": "txt-8a67d78dbce9",
+      "country": "txt-2b3245071b0f",
+      "display": "txt-b07fe3e6ae14",
+      "source": "txt-5239488f341f",
+      "prompt_injected": true,
+      "timezone": "txt-ad6496cd969c",
+      "user": "txt-4791f33e4f74"
+     },
+     "_runtime_observability": {
+      "llm_generate_kwargs": {
+       "prompt": "",
+       "messages": [
+        {
+         "role": "txt-3e8d96281e10",
+         "content": "txt-75d5e52cf06b"
+        },
+        {
+         "role": "txt-39b4b61e5934",
+         "content": "txt-8138d4e40137"
+        }
+       ],
+       "system_prompt": null,
+       "media": null,
+       "tools": null,
+       "params": {
+        "temperature": 0.7,
+        "trace_metadata": {
+         "run_id": "73c7888f-f6d1-5be9-9f95-254e9eb0ffd9",
+         "workflow_id": "dialogue@dev:044df8e2",
+         "node_id": "node-4",
+         "actor_id": "txt-4791f33e4f74",
+         "session_id": "txt-75858c65242b"
+        },
+        "_provider": "txt-a059833296ec",
+        "_model": "txt-50c472daddcc",
+        "max_output_tokens": 4096
+       },
+       "structured_output_fallback": false
+      }
+     }
+    },
+    "trace_id": "txt-f1af271cb7d8",
+    "gen_time": 406.9
+   }
+  },
+  "error": null,
+  "vars": {
+   "context": {
+    "messages": [
+     {
+      "role": "user",
+      "content": "txt-8138d4e40137"
+     }
+    ]
+   }
+  }
+ }
+}

@@ -1,0 +1,141 @@
+{
+ "d0d0d0d0-0000-4000-8000-0000000000d0": [
+  {
+   "run_id": "d0d0d0d0-0000-4000-8000-0000000000d0",
+   "step_id": "llm-1",
+   "node_id": "think",
+   "status": "started",
+   "effect": {
+    "type": "llm_call",
+    "payload": {
+     "prompt": "Say hello",
+     "provider": "lmstudio",
+     "model": "qwen/qwen3.6-35b-a3b"
+    },
+    "result_key": "_temp.llm"
+   },
+   "result": null,
+   "error": null,
+   "started_at": "2026-10-27T10:00:01.000000+00:00",
+   "ended_at": null,
+   "actor_id": null,
+   "session_id": "sess-synthetic-0001",
+   "attempt": 1,
+   "idempotency_key": "idem-llm-1",
+   "prev_hash": null,
+   "record_hash": null,
+   "signature": null,
+   "seq": 1
+  },
+  {
+   "run_id": "d0d0d0d0-0000-4000-8000-0000000000d0",
+   "step_id": "llm-1",
+   "node_id": "think",
+   "status": "completed",
+   "effect": {
+    "type": "llm_call",
+    "payload": {
+     "prompt": "Say hello",
+     "provider": "lmstudio",
+     "model": "qwen/qwen3.6-35b-a3b"
+    },
+    "result_key": "_temp.llm"
+   },
+   "result": {
+    "content": "Hello there.",
+    "usage": {
+     "input_tokens": 12,
+     "output_tokens": 3,
+     "total_tokens": 15
+    },
+    "model": "qwen/qwen3.6-35b-a3b"
+   },
+   "error": null,
+   "started_at": "2026-10-27T10:00:02.000000+00:00",
+   "ended_at": "2026-10-27T10:00:02.000000+00:00",
+   "actor_id": null,
+   "session_id": "sess-synthetic-0001",
+   "attempt": 1,
+   "idempotency_key": "idem-llm-1",
+   "prev_hash": null,
+   "record_hash": null,
+   "signature": null,
+   "seq": 2
+  },
+  {
+   "run_id": "d0d0d0d0-0000-4000-8000-0000000000d0",
+   "step_id": "say-1",
+   "node_id": "say",
+   "status": "started",
+   "effect": {
+    "type": "answer_user",
+    "payload": {
+     "message": "Hello there."
+    }
+   },
+   "result": null,
+   "error": null,
+   "started_at": "2026-10-27T10:00:03.000000+00:00",
+   "ended_at": null,
+   "actor_id": null,
+   "session_id": "sess-synthetic-0001",
+   "attempt": 1,
+   "idempotency_key": "idem-say-1",
+   "prev_hash": null,
+   "record_hash": null,
+   "signature": null,
+   "seq": 3
+  },
+  {
+   "run_id": "d0d0d0d0-0000-4000-8000-0000000000d0",
+   "step_id": "say-1",
+   "node_id": "say",
+   "status": "completed",
+   "effect": {
+    "type": "answer_user",
+    "payload": {
+     "message": "Hello there."
+    }
+   },
+   "result": {
+    "message": "Hello there."
+   },
+   "error": null,
+   "started_at": "2026-10-27T10:00:04.000000+00:00",
+   "ended_at": "2026-10-27T10:00:04.000000+00:00",
+   "actor_id": null,
+   "session_id": "sess-synthetic-0001",
+   "attempt": 1,
+   "idempotency_key": "idem-say-1",
+   "prev_hash": null,
+   "record_hash": null,
+   "signature": null,
+   "seq": 4
+  },
+  {
+   "run_id": "d0d0d0d0-0000-4000-8000-0000000000d0",
+   "step_id": "done-1",
+   "node_id": "end",
+   "status": "completed",
+   "effect": null,
+   "result": {
+    "completed": true,
+    "output": {
+     "answer": "Hello there.",
+     "success": true
+    }
+   },
+   "error": null,
+   "started_at": "2026-10-27T10:00:05.000000+00:00",
+   "ended_at": "2026-10-27T10:00:05.000000+00:00",
+   "actor_id": null,
+   "session_id": "sess-synthetic-0001",
+   "attempt": 1,
+   "idempotency_key": "system:completion:end",
+   "prev_hash": null,
+   "record_hash": null,
+   "signature": null,
+   "seq": 5
+  }
+ ]
+}

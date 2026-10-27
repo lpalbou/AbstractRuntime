@@ -41,6 +41,7 @@ In this repo, the AbstractCore wiring lives under `src/abstractruntime/integrati
 - `entity-runtime.md` — per-entity runtimes for summoned entities: homes, the one-writer lease, act-only diary privacy (`$act_only` refs), durable visit waits with deadlines
 - `evidence.md` — artifact-backed evidence capture for external-boundary tools
 - `mcp-worker.md` — MCP worker CLI (`abstractruntime-mcp-worker`)
+- `replay.md` — the replay view: one reconstruction of a run tree (status, the interaction to answer, messages, one activity per execution, artifacts, usage, the workflow it executes) that every client renders; the durable cursor (`seq`, `list_after`); conformance fixtures
 - `snapshots.md` — snapshot/bookmark model and stores
 - `provenance.md` — tamper-evident hash-chained ledger
 - `limits.md` — runtime-aware `_limits` namespace and APIs

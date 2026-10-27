@@ -1,0 +1,38 @@
+{
+ "adjustments": [],
+ "case": "c_parallel_tool_batch",
+ "pins": "one tool_calls step with more than one call: every call is a row, each matched to its own result.",
+ "provenance": "redacted from the operator's gateway data 2026-10-27",
+ "redaction": "free text -> salted HMAC placeholders (txt-<hex>); run/session ids -> salted uuid5; conversation-sized fields the view never reads dropped; $slim markers recomputed against the redacted STARTED payload (see the extraction script's docstring)",
+ "root_run_id": "7acdab4a-b0d4-589a-ad71-787e07262839",
+ "slim_markers": {
+  "slim_dropped": 0,
+  "slim_fixed": 0
+ },
+ "source_runs": {
+  "324f805f-086d-53f3-beba-a8de0e4e25e7": {
+   "cut_after_seq": null,
+   "snapshot": "real",
+   "source_run_id": "sha256:9908395b0a1afe60",
+   "window_from_seq": null
+  },
+  "75821be6-4fb2-504e-bc61-e9ab74f6e4cd": {
+   "cut_after_seq": null,
+   "snapshot": "real",
+   "source_run_id": "sha256:100371b2ffc22c0e",
+   "window_from_seq": null
+  },
+  "7acdab4a-b0d4-589a-ad71-787e07262839": {
+   "cut_after_seq": null,
+   "snapshot": "real",
+   "source_run_id": "sha256:4e26b53e71c66b99",
+   "window_from_seq": null
+  },
+  "9aa00b16-9758-5719-816c-1b63e3866f10": {
+   "cut_after_seq": null,
+   "snapshot": "real",
+   "source_run_id": "sha256:e4e8b75bc8102ffe",
+   "window_from_seq": null
+  }
+ }
+}

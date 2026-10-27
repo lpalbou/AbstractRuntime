@@ -1,0 +1,248 @@
+{
+  "activities": [
+    {
+      "effect_type": "model_residency",
+      "ended_at": "2026-05-24T17:38:37.658964+00:00",
+      "execution_id": "b4f7a705-741a-54be-8890-3d3d384340b4",
+      "id": "73c7888f-f6d1-5be9-9f95-254e9eb0ffd9:b4f7a705-741a-54be-8890-3d3d384340b4",
+      "kind": "model_residency",
+      "name": "model_residency",
+      "node_id": "node-residency-load-1779644207012-76a75",
+      "order": [
+        "2026-05-24T17:38:37.638920+00:00",
+        "73c7888f-f6d1-5be9-9f95-254e9eb0ffd9",
+        1
+      ],
+      "run_id": "73c7888f-f6d1-5be9-9f95-254e9eb0ffd9",
+      "seqs": [
+        1,
+        2
+      ],
+      "started_at": "2026-05-24T17:38:37.638920+00:00",
+      "status": "completed",
+      "step_ids": [
+        "b4f7a705-741a-54be-8890-3d3d384340b4"
+      ]
+    },
+    {
+      "effect_type": "model_residency",
+      "ended_at": "2026-05-24T17:38:37.917888+00:00",
+      "execution_id": "013d2da6-6272-5f0d-80db-acd420d2c693",
+      "id": "73c7888f-f6d1-5be9-9f95-254e9eb0ffd9:013d2da6-6272-5f0d-80db-acd420d2c693",
+      "kind": "model_residency",
+      "name": "model_residency",
+      "node_id": "node-residency-load-1779644253458-22ceb",
+      "order": [
+        "2026-05-24T17:38:37.659823+00:00",
+        "73c7888f-f6d1-5be9-9f95-254e9eb0ffd9",
+        3
+      ],
+      "run_id": "73c7888f-f6d1-5be9-9f95-254e9eb0ffd9",
+      "seqs": [
+        3,
+        4
+      ],
+      "started_at": "2026-05-24T17:38:37.659823+00:00",
+      "status": "completed",
+      "step_ids": [
+        "013d2da6-6272-5f0d-80db-acd420d2c693"
+      ]
+    },
+    {
+      "effect_type": "ask_user",
+      "ended_at": "2026-05-24T17:38:45.898824+00:00",
+      "execution_id": "3eae53fa-a639-5fd1-ae1f-a340108611d9",
+      "id": "73c7888f-f6d1-5be9-9f95-254e9eb0ffd9:3eae53fa-a639-5fd1-ae1f-a340108611d9",
+      "kind": "ask_user",
+      "name": "ask_user",
+      "node_id": "node-2",
+      "order": [
+        "2026-05-24T17:38:37.919640+00:00",
+        "73c7888f-f6d1-5be9-9f95-254e9eb0ffd9",
+        5
+      ],
+      "run_id": "73c7888f-f6d1-5be9-9f95-254e9eb0ffd9",
+      "seqs": [
+        5,
+        6,
+        7
+      ],
+      "started_at": "2026-05-24T17:38:37.919640+00:00",
+      "status": "completed",
+      "step_ids": [
+        "3eae53fa-a639-5fd1-ae1f-a340108611d9",
+        "bbfc56dc-f417-5c25-aaf2-531d0ba0a327"
+      ],
+      "wait": {
+        "ended_by": "resume",
+        "kind": "ask_user",
+        "until": null,
+        "wait_key": "user:73c7888f-f6d1-5be9-9f95-254e9eb0ffd9:node-2"
+      }
+    },
+    {
+      "effect_type": "llm_call",
+      "ended_at": "2026-05-24T17:38:46.339627+00:00",
+      "execution_id": "95a8a19a-8ecf-53ad-a38c-cc04423ad16d",
+      "id": "73c7888f-f6d1-5be9-9f95-254e9eb0ffd9:95a8a19a-8ecf-53ad-a38c-cc04423ad16d",
+      "kind": "llm",
+      "model": "qwen/qwen3.6-35b-a3b",
+      "name": "qwen/qwen3.6-35b-a3b",
+      "node_id": "node-4",
+      "order": [
+        "2026-05-24T17:38:45.909728+00:00",
+        "73c7888f-f6d1-5be9-9f95-254e9eb0ffd9",
+        8
+      ],
+      "provider": "lmstudio",
+      "run_id": "73c7888f-f6d1-5be9-9f95-254e9eb0ffd9",
+      "seqs": [
+        8,
+        9
+      ],
+      "started_at": "2026-05-24T17:38:45.909728+00:00",
+      "status": "completed",
+      "step_ids": [
+        "95a8a19a-8ecf-53ad-a38c-cc04423ad16d"
+      ],
+      "usage": {
+        "input_tokens": 114,
+        "output_tokens": 10,
+        "total_tokens": 124
+      }
+    }
+  ],
+  "artifacts": [],
+  "cursor": {
+    "records": 10,
+    "runs": {
+      "73c7888f-f6d1-5be9-9f95-254e9eb0ffd9": 10
+    },
+    "token": "73c7888f:10~3515304d7d"
+  },
+  "display_status": null,
+  "interaction": null,
+  "messages": [
+    {
+      "artifact_ids": [],
+      "id": "73c7888f-f6d1-5be9-9f95-254e9eb0ffd9:input",
+      "kind": "prompt",
+      "order": [
+        "2026-05-24T17:38:37.548140+00:00",
+        "73c7888f-f6d1-5be9-9f95-254e9eb0ffd9",
+        0
+      ],
+      "role": "user",
+      "run_id": "73c7888f-f6d1-5be9-9f95-254e9eb0ffd9",
+      "seqs": [],
+      "source": "run_input",
+      "step_ids": [],
+      "text": "txt-8138d4e40137"
+    },
+    {
+      "artifact_ids": [],
+      "choices": [],
+      "id": "73c7888f-f6d1-5be9-9f95-254e9eb0ffd9:3eae53fa-a639-5fd1-ae1f-a340108611d9:question",
+      "kind": "question",
+      "order": [
+        "2026-05-24T17:38:37.919783+00:00",
+        "73c7888f-f6d1-5be9-9f95-254e9eb0ffd9",
+        6
+      ],
+      "role": "assistant",
+      "run_id": "73c7888f-f6d1-5be9-9f95-254e9eb0ffd9",
+      "seqs": [
+        6
+      ],
+      "source": "wait",
+      "step_ids": [
+        "3eae53fa-a639-5fd1-ae1f-a340108611d9"
+      ],
+      "text": "txt-53b2e6de23fe",
+      "wait_key": "user:73c7888f-f6d1-5be9-9f95-254e9eb0ffd9:node-2"
+    },
+    {
+      "artifact_ids": [],
+      "id": "73c7888f-f6d1-5be9-9f95-254e9eb0ffd9:bbfc56dc-f417-5c25-aaf2-531d0ba0a327:answer",
+      "kind": "answer",
+      "order": [
+        "2026-05-24T17:38:45.898824+00:00",
+        "73c7888f-f6d1-5be9-9f95-254e9eb0ffd9",
+        7
+      ],
+      "role": "user",
+      "run_id": "73c7888f-f6d1-5be9-9f95-254e9eb0ffd9",
+      "seqs": [
+        7
+      ],
+      "source": "resume",
+      "step_ids": [
+        "bbfc56dc-f417-5c25-aaf2-531d0ba0a327"
+      ],
+      "text": "txt-03082d2641c8",
+      "wait_key": "user:73c7888f-f6d1-5be9-9f95-254e9eb0ffd9:node-2"
+    },
+    {
+      "artifact_ids": [],
+      "id": "73c7888f-f6d1-5be9-9f95-254e9eb0ffd9:final",
+      "kind": "final",
+      "order": [
+        "2026-05-24T17:38:46.340613+00:00",
+        "73c7888f-f6d1-5be9-9f95-254e9eb0ffd9",
+        0
+      ],
+      "role": "assistant",
+      "run_id": "73c7888f-f6d1-5be9-9f95-254e9eb0ffd9",
+      "seqs": [],
+      "source": "run_output",
+      "step_ids": [],
+      "text": "txt-7ddd2d759a50"
+    }
+  ],
+  "open_waits": [],
+  "root_run_id": "73c7888f-f6d1-5be9-9f95-254e9eb0ffd9",
+  "runs": [
+    {
+      "depth": 0,
+      "display_status": null,
+      "first_seq": 1,
+      "holds_interaction": false,
+      "last_seq": 10,
+      "order": [
+        "",
+        "",
+        0,
+        "73c7888f-f6d1-5be9-9f95-254e9eb0ffd9"
+      ],
+      "parent_run_id": null,
+      "records": 10,
+      "run_id": "73c7888f-f6d1-5be9-9f95-254e9eb0ffd9",
+      "status": "completed",
+      "waiting": null,
+      "workflow": {
+        "bundle_id": "dialogue",
+        "bundle_version": "dev",
+        "flow_id": "044df8e2",
+        "id": "dialogue@dev:044df8e2"
+      },
+      "workflow_id": "dialogue@dev:044df8e2"
+    }
+  ],
+  "session_id": "da649efc-e077-5343-b736-a22d3dc1a5da",
+  "status": "completed",
+  "usage": {
+    "input_tokens": 114,
+    "llm_calls": 1,
+    "output_tokens": 10,
+    "total_tokens": 124
+  },
+  "version": "replay_view_v1",
+  "warnings": [],
+  "workflow": {
+    "bundle_id": "dialogue",
+    "bundle_version": "dev",
+    "entrypoint": "044df8e2",
+    "flow_id": "044df8e2",
+    "id": "dialogue@dev:044df8e2"
+  }
+}

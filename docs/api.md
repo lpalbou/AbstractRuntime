@@ -133,6 +133,12 @@ Run index and creation (all built-in run stores, including the offloading wrappe
 - `JsonFileRunStore` event-wait and mailbox indexes (`list_event_waiters`, `list_event_waiters_by_prefix`, `list_mailbox_runs`) see what another process saved on the same folder (a split gateway: API process + runner process). Before each lookup the store reads its change signal (the creation log's size and the folder's mtime): when either moved, or at least every `EVENT_INDEX_REFRESH_S` (2 s), it stats each running or waiting run and re-reads the ones whose file changed since it last filed them. An idle store pays two stats per lookup; its own saves are never re-read. `event_index_stats()` returns `{refreshes, refiled, tracked}`.
 - `JsonFileRunStore.change_token()` answers "did any run of this folder change?" with one stat: `(creation-log size, active-index counter)`. Every save, create and delete through the store moves the counter; another process's create, delete or became-active line moves the log size. Not seen: another process re-saving a run that stays active (one ticking process per folder); ending a run, or re-saving a finished one, writes `=<run_id>`. `changed_run_ids(token)` names the runs this store changed since `token`, or `None` when that is unknown (the log moved, or more than 8,192 changes ago). `ObservableLedgerStore.change_token()` / `changed_run_ids(token)` do the same for ledger appends (process-local). The gateway runner's scan gate and its mail notification check compare these tokens instead of reading the directory.
 
+The durable cursor (ADR 0010):
+- Every ledger store numbers a run's records 1, 2, 3, … and `list()` returns each record with its `seq`. `JsonlLedgerStore` writes it on each line, allocated under an advisory file lock that spans the head read and the write, so another process appending to the same run never takes the same number. A line written before the field existed is numbered by its position. `append()` returns the seq.
+- `LedgerStore.list_after(*, run_id, after, limit=1000) -> (records, last_seq)`: the records after a seq. SQLite does an indexed read; JSONL seeks to the byte offset where the previous read ended; the default implementation filters `list()`. The decorators (observable, hash-chained, offloading) delegate it.
+- `ObservableLedgerStore` hands subscribers the record with its `seq`.
+- `SqliteLedgerStore.import_records(run_id, records)` copies a run's ledger in, keeping each `seq`. A migration from files to SQLite therefore keeps every cursor valid. It refuses a run that already has records.
+
 Common decorators:
 - `ObservableLedgerStore` for subscriptions (`src/abstractruntime/storage/observable.py`)
 - `HashChainedLedgerStore` + `verify_ledger_chain(...)` for tamper-evidence (`src/abstractruntime/storage/ledger_chain.py`)
@@ -325,6 +331,25 @@ Implementation: `src/abstractruntime/history_bundle.py`.
 This produces a portable record of a run’s state + ledger + artifacts suitable for debugging/review.
 When available, it also includes `resolved_actions`: bounded capability/action summaries derived
 from Core route resolution and persisted from `LLM_CALL` results.
+
+## Replay view (one reconstruction of a run, every client)
+
+Implementation: `src/abstractruntime/replay/` (ADR 0010). Guide: [replay.md](replay.md).
+
+- `replay(records_by_run, runs_by_id=None, *, root_run_id=None) -> ReplayView`: folds a run
+  tree's ledger records (`{run_id: [records in ledger order]}`) and durable snapshots
+  (`RunState` or dicts) into a view. Pure and deterministic.
+- `ReplayView.apply(records, *, runs_by_id=None) -> delta`: folds newer records and snapshots.
+  The same delta is kept as `view.last_delta`. `apply(view, records)` is the module-level form.
+- `ReplayView.to_json()`: the view, `replay_view_v1` (status, `interaction`, `open_waits`,
+  `runs`, `messages`, `activities`, `artifacts`, `usage`, `workflow`, `cursor`, `warnings`).
+  Other reads: `cursor`, `run_ids`, `last_seq(run_id)`, `status()`, `run_statuses()` and
+  `is_terminal()`.
+- `apply_delta(view_json, delta)`, `diff_views(old, new)` and `parse_cursor_token(token)`: the
+  client side of a delta, the delta between two views, and a cursor token as `{run id prefix:
+  seq}`.
+- `wait_kind(wait)`, `workflow_ref(workflow_id)`, `PERSON_FACING_KINDS`,
+  `TERMINAL_STATUSES`, `REPLAY_VIEW_VERSION`.
 
 ## Runtime-owned integrations
 

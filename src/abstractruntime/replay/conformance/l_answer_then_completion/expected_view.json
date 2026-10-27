@@ -1,0 +1,174 @@
+{
+  "activities": [
+    {
+      "effect_type": "llm_call",
+      "ended_at": "2026-10-27T10:00:02.000000+00:00",
+      "execution_id": "llm-1",
+      "id": "d0d0d0d0-0000-4000-8000-0000000000d0:llm-1",
+      "kind": "llm",
+      "model": "qwen/qwen3.6-35b-a3b",
+      "name": "qwen/qwen3.6-35b-a3b",
+      "node_id": "think",
+      "order": [
+        "2026-10-27T10:00:01.000000+00:00",
+        "d0d0d0d0-0000-4000-8000-0000000000d0",
+        1
+      ],
+      "provider": "lmstudio",
+      "run_id": "d0d0d0d0-0000-4000-8000-0000000000d0",
+      "seqs": [
+        1,
+        2
+      ],
+      "started_at": "2026-10-27T10:00:01.000000+00:00",
+      "status": "completed",
+      "step_ids": [
+        "llm-1"
+      ],
+      "usage": {
+        "input_tokens": 12,
+        "output_tokens": 3,
+        "total_tokens": 15
+      }
+    },
+    {
+      "effect_type": "answer_user",
+      "ended_at": "2026-10-27T10:00:04.000000+00:00",
+      "execution_id": "say-1",
+      "id": "d0d0d0d0-0000-4000-8000-0000000000d0:say-1",
+      "kind": "answer",
+      "name": "answer_user",
+      "node_id": "say",
+      "order": [
+        "2026-10-27T10:00:03.000000+00:00",
+        "d0d0d0d0-0000-4000-8000-0000000000d0",
+        3
+      ],
+      "run_id": "d0d0d0d0-0000-4000-8000-0000000000d0",
+      "seqs": [
+        3,
+        4
+      ],
+      "started_at": "2026-10-27T10:00:03.000000+00:00",
+      "status": "completed",
+      "step_ids": [
+        "say-1"
+      ]
+    }
+  ],
+  "artifacts": [],
+  "cursor": {
+    "records": 5,
+    "runs": {
+      "d0d0d0d0-0000-4000-8000-0000000000d0": 5
+    },
+    "token": "d0d0d0d0:5~617fefc20a"
+  },
+  "display_status": null,
+  "interaction": null,
+  "messages": [
+    {
+      "artifact_ids": [],
+      "id": "d0d0d0d0-0000-4000-8000-0000000000d0:input",
+      "kind": "prompt",
+      "order": [
+        "2026-10-27T10:00:00.000000+00:00",
+        "d0d0d0d0-0000-4000-8000-0000000000d0",
+        0
+      ],
+      "role": "user",
+      "run_id": "d0d0d0d0-0000-4000-8000-0000000000d0",
+      "seqs": [],
+      "source": "run_input",
+      "step_ids": [],
+      "text": "Say hello"
+    },
+    {
+      "artifact_ids": [],
+      "id": "d0d0d0d0-0000-4000-8000-0000000000d0:say-1:answer_user",
+      "kind": "answer",
+      "order": [
+        "2026-10-27T10:00:04.000000+00:00",
+        "d0d0d0d0-0000-4000-8000-0000000000d0",
+        4
+      ],
+      "role": "assistant",
+      "run_id": "d0d0d0d0-0000-4000-8000-0000000000d0",
+      "seqs": [
+        4
+      ],
+      "source": "answer_user",
+      "step_ids": [
+        "say-1"
+      ],
+      "text": "Hello there."
+    },
+    {
+      "artifact_ids": [],
+      "id": "d0d0d0d0-0000-4000-8000-0000000000d0:final",
+      "kind": "final",
+      "order": [
+        "2026-10-27T10:00:05.000000+00:00",
+        "d0d0d0d0-0000-4000-8000-0000000000d0",
+        5
+      ],
+      "repeats": "d0d0d0d0-0000-4000-8000-0000000000d0:say-1:answer_user",
+      "role": "assistant",
+      "run_id": "d0d0d0d0-0000-4000-8000-0000000000d0",
+      "seqs": [
+        5
+      ],
+      "source": "ledger",
+      "step_ids": [
+        "done-1"
+      ],
+      "text": "Hello there."
+    }
+  ],
+  "open_waits": [],
+  "root_run_id": "d0d0d0d0-0000-4000-8000-0000000000d0",
+  "runs": [
+    {
+      "depth": 0,
+      "display_status": null,
+      "first_seq": 1,
+      "holds_interaction": false,
+      "last_seq": 5,
+      "order": [
+        "",
+        "",
+        0,
+        "d0d0d0d0-0000-4000-8000-0000000000d0"
+      ],
+      "parent_run_id": null,
+      "records": 5,
+      "run_id": "d0d0d0d0-0000-4000-8000-0000000000d0",
+      "status": "completed",
+      "waiting": null,
+      "workflow": {
+        "bundle_id": "hello",
+        "bundle_version": "1.0.0",
+        "flow_id": "main",
+        "id": "hello@1.0.0:main"
+      },
+      "workflow_id": "hello@1.0.0:main"
+    }
+  ],
+  "session_id": "sess-synthetic-0001",
+  "status": "completed",
+  "usage": {
+    "input_tokens": 12,
+    "llm_calls": 1,
+    "output_tokens": 3,
+    "total_tokens": 15
+  },
+  "version": "replay_view_v1",
+  "warnings": [],
+  "workflow": {
+    "bundle_id": "hello",
+    "bundle_version": "1.0.0",
+    "entrypoint": "main",
+    "flow_id": "main",
+    "id": "hello@1.0.0:main"
+  }
+}

@@ -1189,7 +1189,7 @@ class SqliteLedgerStore(LedgerStore):
     def __init__(self, db: SqliteDatabase) -> None:
         self._db = db
 
-    def append(self, record: StepRecord) -> None:
+    def append(self, record: StepRecord) -> Optional[int]:
         run_id = str(record.run_id or "").strip()
         if not run_id:
             raise ValueError("StepRecord.run_id must be non-empty")
@@ -1197,7 +1197,46 @@ class SqliteLedgerStore(LedgerStore):
         payload = dumps_compact(steprecord_to_dict(record))
         conn = self._db.connection()
         with conn:
-            self._insert_in_txn(conn, run_id, payload, record=record)
+            return self._insert_in_txn(conn, run_id, payload, record=record)
+
+    def import_records(self, run_id: str, records: List[Dict[str, Any]]) -> int:
+        """Copy a run's ledger in, KEEPING each record's `seq` (a file -> SQLite migration).
+
+        A held cursor stays valid across the migration (ADR-0010): record `seq` values are kept
+        as they are (a record without one takes the seq after the previous record's), the head
+        is set to the last one. Refuses when the run already has records here (an import never
+        merges). Returns the number of records imported."""
+        rid = str(run_id or "").strip()
+        if not rid:
+            raise ValueError("run_id must be non-empty")
+        conn = self._db.connection()
+        with conn:
+            row = conn.execute("SELECT COUNT(*) AS n FROM ledger WHERE run_id = ?;", (rid,)).fetchone()
+            if row is not None and int(row["n"] or 0) > 0:
+                raise ValueError(f"run {rid} already has ledger records in {self._db.path}; refusing to merge")
+            prev = 0
+            n = 0
+            for rec in records or []:
+                if not isinstance(rec, dict):
+                    continue
+                seq = rec.get("seq")
+                seq = int(seq) if isinstance(seq, int) and not isinstance(seq, bool) and seq > prev else prev + 1
+                prev = seq
+                body = {k: v for k, v in rec.items() if k != "seq"}
+                status = body.get("status")
+                idem = body.get("idempotency_key")
+                conn.execute(
+                    "INSERT INTO ledger (run_id, seq, record_json, idempotency_key, step_status) VALUES (?, ?, ?, ?, ?);",
+                    (rid, seq, dumps_compact(body), idem if isinstance(idem, str) and idem else None,
+                     str(getattr(status, "value", status)) if status is not None else None),
+                )
+                n += 1
+            conn.execute(
+                "INSERT INTO ledger_heads (run_id, last_seq) VALUES (?, ?) "
+                "ON CONFLICT(run_id) DO UPDATE SET last_seq = excluded.last_seq;",
+                (rid, prev),
+            )
+        return n
 
     def last_record(self, run_id: str) -> Optional[Dict[str, Any]]:
         """The run's LAST persisted record (cheap indexed tail read) — the
@@ -1263,7 +1302,7 @@ class SqliteLedgerStore(LedgerStore):
             return super().find_completed_result(rid, key)
         return None
 
-    def append_chained(self, record: StepRecord, compute_hash: Any) -> None:
+    def append_chained(self, record: StepRecord, compute_hash: Any) -> Optional[int]:
         """Append with the hash chain derived INSIDE one write transaction
         (the fork fix, 2026-07-10 adversarial finding): `BEGIN IMMEDIATE`
         takes the database write lock BEFORE the head is read, so two
@@ -1301,8 +1340,9 @@ class SqliteLedgerStore(LedgerStore):
             record.record_hash = compute_hash(record_dict, prev)
             record_dict["record_hash"] = record.record_hash
             payload = dumps_compact(record_dict)
-            self._insert_in_txn(conn, run_id, payload, record=record)
+            seq = self._insert_in_txn(conn, run_id, payload, record=record)
             conn.execute("COMMIT;")
+            return seq
         except BaseException:
             try:
                 conn.execute("ROLLBACK;")
@@ -1317,7 +1357,7 @@ class SqliteLedgerStore(LedgerStore):
         payload: str,
         *,
         record: Optional[StepRecord] = None,
-    ) -> None:
+    ) -> int:
         idem_key: Optional[str] = None
         step_status: Optional[str] = None
         if record is not None:
@@ -1356,6 +1396,7 @@ class SqliteLedgerStore(LedgerStore):
                     self._db.path,
                 )
             raise sqlite3.IntegrityError(f"{msg} (run_id={run_id!r}, seq={seq}, db={self._db.path})") from e
+        return seq
 
     def list(self, run_id: str) -> List[Dict[str, Any]]:
         rid = str(run_id or "").strip()
@@ -1363,7 +1404,7 @@ class SqliteLedgerStore(LedgerStore):
             return []
         conn = self._db.connection()
         rows = conn.execute(
-            "SELECT record_json FROM ledger WHERE run_id = ? ORDER BY seq ASC;",
+            "SELECT seq, record_json FROM ledger WHERE run_id = ? ORDER BY seq ASC;",
             (rid,),
         ).fetchall()
         out: List[Dict[str, Any]] = []
@@ -1373,6 +1414,7 @@ class SqliteLedgerStore(LedgerStore):
             except Exception:
                 continue
             if isinstance(obj, dict):
+                obj["seq"] = int(row["seq"])  # the durable cursor (ADR-0010)
                 out.append(obj)
         return out
 
@@ -1502,6 +1544,7 @@ class SqliteLedgerStore(LedgerStore):
                 continue
             if not isinstance(obj, dict):
                 continue
+            obj["seq"] = int(row["seq"])  # the durable cursor (ADR-0010)
             out.append(obj)
             try:
                 next_cursor = max(next_cursor, int(row["seq"] or next_cursor))

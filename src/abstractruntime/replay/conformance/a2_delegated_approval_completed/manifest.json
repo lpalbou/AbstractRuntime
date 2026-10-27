@@ -1,0 +1,38 @@
+{
+ "adjustments": [],
+ "case": "a2_delegated_approval_completed",
+ "pins": "the same tree as case (a), whole: several approved tool calls in the child (each a new step id with the same idempotency key, rule 3), `$slim` pointers on waiting and completed records, status sub-runs with timer waits, the final answer.",
+ "provenance": "redacted from the operator's gateway data 2026-10-27",
+ "redaction": "free text -> salted HMAC placeholders (txt-<hex>); run/session ids -> salted uuid5; conversation-sized fields the view never reads dropped; $slim markers recomputed against the redacted STARTED payload (see the extraction script's docstring)",
+ "root_run_id": "fd450aa7-f922-5398-b823-7ed8a3f20dfc",
+ "slim_markers": {
+  "slim_dropped": 0,
+  "slim_fixed": 2
+ },
+ "source_runs": {
+  "74808832-e6db-5b9f-a68a-02ef826b4509": {
+   "cut_after_seq": null,
+   "snapshot": "real",
+   "source_run_id": "sha256:6b88dffb484e9b94",
+   "window_from_seq": null
+  },
+  "7baebe55-7fc6-5907-9cc1-2c4de1321676": {
+   "cut_after_seq": null,
+   "snapshot": "real",
+   "source_run_id": "sha256:549359b767228960",
+   "window_from_seq": null
+  },
+  "c298e4ce-3c8d-5adf-8c1e-efabb2385aa2": {
+   "cut_after_seq": null,
+   "snapshot": "real",
+   "source_run_id": "sha256:16c82cbff776795e",
+   "window_from_seq": null
+  },
+  "fd450aa7-f922-5398-b823-7ed8a3f20dfc": {
+   "cut_after_seq": null,
+   "snapshot": "real",
+   "source_run_id": "sha256:9de61d8610a188d1",
+   "window_from_seq": null
+  }
+ }
+}

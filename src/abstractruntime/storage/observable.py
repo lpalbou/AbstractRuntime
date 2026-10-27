@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from dataclasses import asdict
 import threading
-from typing import Any, Callable, Dict, List, Optional, Protocol, runtime_checkable
+from typing import Any, Callable, Dict, List, Optional, Protocol, Tuple, runtime_checkable
 
 from .base import LedgerStore
 from .change_ring import ChangeRing
@@ -78,13 +78,15 @@ class ObservableLedgerStore(LedgerStore):
         with self._change_lock:
             return self._change_ring.since(seq0)
 
-    def append(self, record: StepRecord) -> None:
-        self._inner.append(record)
+    def append(self, record: StepRecord) -> Optional[int]:
+        seq = self._inner.append(record)
         with self._change_lock:
             self._change_seq += 1
             self._change_ring.note(self._change_seq, str(record.run_id))
 
         payload: LedgerRecordDict = asdict(record)
+        if isinstance(seq, int) and not isinstance(seq, bool):
+            payload["seq"] = seq  # subscribers fold by the durable cursor (ADR-0010)
         with self._lock:
             subscribers = list(self._subscribers)
 
@@ -96,9 +98,13 @@ class ObservableLedgerStore(LedgerStore):
             except Exception:
                 # Observability must never compromise durability/execution.
                 continue
+        return seq
 
     def list(self, run_id: str) -> List[LedgerRecordDict]:
         return self._inner.list(run_id)
+
+    def list_after(self, *, run_id: str, after: int, limit: int = 1000) -> Tuple[List[LedgerRecordDict], int]:
+        return self._inner.list_after(run_id=run_id, after=after, limit=limit)
 
     def find_completed_result(
         self, run_id: str, idempotency_key: str

@@ -25,6 +25,11 @@ index moved between turns, a reordered tool list) would silently re-create the s
   index placed after the first user turn → 1 failed.
 - The injection site documents the rider contract and names the Core seam.
 
+## Limits (from the adversarial review)
+- The test stops at the LLM-client seam (stub client): what `llm_client` does afterwards (grounding normalization,
+  synthetic/volatile key stripping) is not covered, and the transcript is built append-only by the test itself; the
+  agent adapter owns that shape. Follow-up: drive the real local client over a stub provider.
+
 ## Not changed (deliberately)
 The index stays a trailing rider. Moving it into the history (after the turn's user message) would make the tool
 loop restorable with today's Core but makes every cross-turn first call cold once Core 0858 ships; stamping it

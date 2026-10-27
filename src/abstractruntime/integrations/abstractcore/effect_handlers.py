@@ -1827,9 +1827,10 @@ def make_llm_call_handler(*, llm: AbstractCoreLLMClient, artifact_store: Optiona
                 ]
 
                 # The attachment index rides the TAIL as a SYSTEM message (backlog 0212 cache
-                # stability). It is the ONE per-call difference between consecutive calls of a run:
-                # everything before it is append-only (pinned by
-                # tests/test_llm_call_prefix_stability_contract.py). A provider whose reusable
+                # stability). It is the ONE per-call addition this handler makes: given an append-only
+                # transcript, consecutive calls differ only in the appended turns and this tail (pinned
+                # at the handler seam by tests/test_llm_call_prefix_stability_contract.py; the
+                # transcript's own append-only shape is the agent adapter's job). A provider whose reusable
                 # prefix snapshot sits at the END of the prompt must place it BEFORE trailing system
                 # riders, or a hybrid model re-prefills the whole conversation on every call
                 # (2026-10-27: 10 of 10 tool-loop calls cold on Qwen3.8-27B MTP); AbstractCore's MLX

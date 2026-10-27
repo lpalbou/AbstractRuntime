@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Session tool policy**: a conversation's standing "approve / deny without asking", applied before any approval
+  wait. `abstractruntime.storage.session_tool_policy` (`SqliteSessionToolPolicyStore`,
+  `InMemorySessionToolPolicyStore`, `session_policy_names`), `Runtime(session_tool_policy_store=...)` /
+  `Runtime.set_session_tool_policy_store()`. The TOOL_CALLS handler reads the run's session row once per batch: an
+  approved call runs with no wait, a denied call is refused with no wait, and each decision writes an
+  `abstract.tool_policy_decision` ledger record (who set the policy, when, which selector matched). It applies to
+  every run of the session (delegated children, resumes, restarts); never to untrusted-input runs, automation
+  occurrences or sessionless runs; never beyond the run's `allowed_tools`. Before this, "approve all" lived in each
+  client, which answered the wait after it arrived: the gate flashed in every app and in the ledger. See
+  [tool-approval.md](docs/tool-approval.md#session-tool-policy-a-conversations-standing-word).
+
 ## [0.13.1] - 2026-10-27
 
 ### Added

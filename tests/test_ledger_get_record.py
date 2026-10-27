@@ -180,8 +180,9 @@ def test_jsonl_seq_stays_true_when_another_writer_appends(tmp_path) -> None:
     assert a.get_record(run.run_id, 3)["node_id"] == "a2"
     # A fresh instance (cold process) recounts from the file.
     assert JsonlLedgerStore(tmp_path).append(rec("c1")) == 4
-    raw = (tmp_path / f"ledger_{run.run_id}.jsonl").read_text(encoding="utf-8")
-    assert '"seq"' not in raw, "seq is never persisted"
+    raw = (tmp_path / f"ledger_{run.run_id}.jsonl").read_text(encoding="utf-8").splitlines()
+    # The seq is persisted on each line (ADR 0010, the durable cursor): the row address survives a rewrite.
+    assert [json.loads(line)["seq"] for line in raw] == [1, 2, 3, 4]
 
 
 @pytest.mark.parametrize("kind", ["sqlite", "jsonl"])

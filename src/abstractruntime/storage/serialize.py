@@ -57,8 +57,8 @@ __all__ = [
 
 
 def record_digest(record: Any) -> Optional[str]:
-    """sha256 (hex) of a ledger record's canonical JSON (sorted keys, compact, `seq` excluded: it is read-side
-    metadata). The digest of what a row SAYS, stable across backends (SQLite, JSON files) and across offloading
+    """sha256 (hex) of a ledger record's canonical JSON (sorted keys, compact, `seq` excluded: the store assigns it
+    after the record is built, ADR 0010). The digest of what a row SAYS, stable across backends (SQLite, JSON files) and across offloading
     (rehydrated leaves digest like the originals): a memory stamps it on its `step` ref and reconstruction verifies
     it (ADR 0011). None when the record is not JSON-representable (raw bytes): no digest is better than a wrong one."""
     import hashlib

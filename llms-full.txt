@@ -29,6 +29,7 @@ See llms.txt for the linked index.
 - docs/entity-runtime.md
 - docs/mcp-worker.md
 - docs/evidence.md
+- docs/replay.md
 - docs/snapshots.md
 - docs/provenance.md
 - docs/workflow-bundles.md
@@ -53,9 +54,21 @@ See llms.txt for the linked index.
 
 It is designed for long-running workflows that must survive restarts and explicitly model blocking (human input, timers, external events, subworkflows) without keeping Python stacks alive.
 
-**Version:** 0.8.2 • **Python:** 3.10+
+**Version:** 0.14.0 • **Python:** 3.10+
 
 **Status:** pre-1.0 (API may evolve). For production use, pin versions and follow `CHANGELOG.md`.
+
+## What's new in 0.14.0
+
+- **Replay view** (`abstractruntime.replay`): one deterministic reducer turns a run tree's ledger
+  into the view every client renders (status, the interaction to answer, messages, activities,
+  artifacts), with incremental deltas. Every ledger store now numbers records with a durable
+  per-run `seq` cursor (`list_after`). See [docs/replay.md](docs/replay.md).
+- **Session tool policy**: a conversation's standing approve/deny is applied before any approval
+  wait, with an `abstract.tool_policy_decision` audit record. See
+  [docs/tool-approval.md](docs/tool-approval.md#session-tool-policy-a-conversations-standing-word).
+- Upgrade note: hash-chained JSONL ledgers written by 0.14.0 fail an older `verify_ledger_chain`;
+  upgrade writers and verifiers together.
 
 ## AbstractFramework ecosystem
 
@@ -1102,6 +1115,12 @@ Run index and creation (all built-in run stores, including the offloading wrappe
 - `JsonFileRunStore` event-wait and mailbox indexes (`list_event_waiters`, `list_event_waiters_by_prefix`, `list_mailbox_runs`) see what another process saved on the same folder (a split gateway: API process + runner process). Before each lookup the store reads its change signal (the creation log's size and the folder's mtime): when either moved, or at least every `EVENT_INDEX_REFRESH_S` (2 s), it stats each running or waiting run and re-reads the ones whose file changed since it last filed them. An idle store pays two stats per lookup; its own saves are never re-read. `event_index_stats()` returns `{refreshes, refiled, tracked}`.
 - `JsonFileRunStore.change_token()` answers "did any run of this folder change?" with one stat: `(creation-log size, active-index counter)`. Every save, create and delete through the store moves the counter; another process's create, delete or became-active line moves the log size. Not seen: another process re-saving a run that stays active (one ticking process per folder); ending a run, or re-saving a finished one, writes `=<run_id>`. `changed_run_ids(token)` names the runs this store changed since `token`, or `None` when that is unknown (the log moved, or more than 8,192 changes ago). `ObservableLedgerStore.change_token()` / `changed_run_ids(token)` do the same for ledger appends (process-local). The gateway runner's scan gate and its mail notification check compare these tokens instead of reading the directory.
 
+The durable cursor (ADR 0010):
+- Every ledger store numbers a run's records 1, 2, 3, … and `list()` returns each record with its `seq`. `JsonlLedgerStore` writes it on each line, allocated under an advisory file lock that spans the head read and the write, so another process appending to the same run never takes the same number. A line written before the field existed is numbered by its position. `append()` returns the seq.
+- `LedgerStore.list_after(*, run_id, after, limit=1000) -> (records, last_seq)`: the records after a seq. SQLite does an indexed read; JSONL seeks to the byte offset where the previous read ended; the default implementation filters `list()`. The decorators (observable, hash-chained, offloading) delegate it.
+- `ObservableLedgerStore` hands subscribers the record with its `seq`.
+- `SqliteLedgerStore.import_records(run_id, records)` copies a run's ledger in, keeping each `seq`. A migration from files to SQLite therefore keeps every cursor valid. It refuses a run that already has records.
+
 Common decorators:
 - `ObservableLedgerStore` for subscriptions (`src/abstractruntime/storage/observable.py`)
 - `HashChainedLedgerStore` + `verify_ledger_chain(...)` for tamper-evidence (`src/abstractruntime/storage/ledger_chain.py`)
@@ -1294,6 +1313,25 @@ Implementation: `src/abstractruntime/history_bundle.py`.
 This produces a portable record of a run’s state + ledger + artifacts suitable for debugging/review.
 When available, it also includes `resolved_actions`: bounded capability/action summaries derived
 from Core route resolution and persisted from `LLM_CALL` results.
+
+## Replay view (one reconstruction of a run, every client)
+
+Implementation: `src/abstractruntime/replay/` (ADR 0010). Guide: [replay.md](replay.md).
+
+- `replay(records_by_run, runs_by_id=None, *, root_run_id=None) -> ReplayView`: folds a run
+  tree's ledger records (`{run_id: [records in ledger order]}`) and durable snapshots
+  (`RunState` or dicts) into a view. Pure and deterministic.
+- `ReplayView.apply(records, *, runs_by_id=None) -> delta`: folds newer records and snapshots.
+  The same delta is kept as `view.last_delta`. `apply(view, records)` is the module-level form.
+- `ReplayView.to_json()`: the view, `replay_view_v1` (status, `interaction`, `open_waits`,
+  `runs`, `messages`, `activities`, `artifacts`, `usage`, `workflow`, `cursor`, `warnings`).
+  Other reads: `cursor`, `run_ids`, `last_seq(run_id)`, `status()`, `run_statuses()` and
+  `is_terminal()`.
+- `apply_delta(view_json, delta)`, `diff_views(old, new)` and `parse_cursor_token(token)`: the
+  client side of a delta, the delta between two views, and a cursor token as `{run id prefix:
+  seq}`.
+- `wait_kind(wait)`, `workflow_ref(workflow_id)`, `PERSON_FACING_KINDS`,
+  `TERMINAL_STATUSES`, `REPLAY_VIEW_VERSION`.
 
 ## Runtime-owned integrations
 
@@ -5077,6 +5115,64 @@ The rules below apply to both versions.
 Until the operator email is configured, `send_email` stays in the
 require-approval set: self and others both ask.
 
+## Session tool policy: a conversation's standing word
+
+A person can approve tools for a whole conversation ("approve all", "approve all web tools",
+"approve `fetch_url`"), deny some, or reset. That decision is a **session tool policy**: one row
+per `session_id` in a store outside run vars
+(`src/abstractruntime/storage/session_tool_policy.py`: `SqliteSessionToolPolicyStore`,
+`InMemorySessionToolPolicyStore`), installed with `Runtime(session_tool_policy_store=...)` or
+`Runtime.set_session_tool_policy_store(store)`. Hosts write it (the gateway's
+`/api/gateway/sessions/{session_id}/tool-policy` routes, which expand and clamp the request to
+the tools the account is authorized for); the TOOL_CALLS handler reads the run's session row once
+per batch, **before** it decides whether the batch must wait.
+
+Store API (both stores): `get(session_id)`, `get_with_revision(session_id) -> (revision, policy)`
+(the base of a host's guarded read-merge-write), `put(session_id, policy, if_revision=None)`,
+`delete(session_id, if_revision=None, actor=None) -> revision`, `revision(session_id)`,
+`history(session_id)`. Revisions only grow (a reset is a revision, `get` then answers `None`); an
+`if_revision` mismatch raises `SessionToolPolicyConflict` (`.expected`, `.actual`), which the
+gateway answers as a 409 carrying the current revision. A store read failure during a tool batch
+is logged and keeps the normal decision (ask where the defaults ask), never a wider one.
+
+Stored shape (the runtime reads only these keys):
+
+```json
+{"version": 1, "session_id": "s-123", "revision": 5,
+ "approve": {"fetch_url": "kind:web"}, "deny": {"execute_command": "tool"}, "ask": ["send_email"],
+ "set_by": {"tenant_id": "default", "user_id": "laurent", "client": "panel-chat"},
+ "set_at": "2026-10-27T10:00:00+00:00"}
+```
+
+Decision order for each call:
+
+1. The run's tool ceiling (`allowed_tools`): a call outside it is blocked first; a session policy
+   never widens what a run may call.
+2. The row is the one of the run tree's ROOT session (a child started with another `session_id`
+   does not borrow that session's grant). No row: nothing changes.
+3. `deny` → refused with no wait (`"Denied by this conversation's tool policy"`), in every run of
+   the session, automation occurrences and untrusted-input runs included (narrowing is always
+   safe). A deny set while an approval is shown also wins over that approval when it is answered.
+   `approve` (5) never applies to untrusted-input runs or automation occurrences and their
+   descendants.
+4. Names the run policy lists in `withheld_tools` are never session-approved.
+5. `approve` (minus `ask`, minus `deny`) counts as auto for the batch, over the start-time
+   `require_approval_tools`, the gateway's default grant and the executor's default caution list.
+6. Everything else as before (run policy, tier ceiling, refiners, static policy).
+
+The approval decision stays per batch: if any call still needs approval, the whole batch waits as
+before. A batch that executes only because of the session policy, and every denial, writes one
+`emit_event` record named `abstract.tool_policy_decision` to the run's ledger
+(`decision: auto_approved | denied`, `source: session_policy`, the calls with the selector that
+matched, and the policy's `revision`, `set_by`, `set_at`). There is no wait, no waiting record and
+no resume for these calls, so every client renders them as activity, never as a question. If the
+record cannot be written, the batch is not auto-approved (it asks).
+
+Every run of the session reads the same row: each turn's root run, delegated child runs (they
+inherit `session_id`), runs resumed after a restart. A change applies from the next batch. A wait
+that already exists is not answered by the policy: a client that offers "approve all" on a shown
+wait writes the policy first, then answers that wait as a one-off approval.
+
 
 ==============================================================================
 # FILE: docs/tools-comms.md
@@ -5801,6 +5897,125 @@ payload = rt.load_evidence(evidence_id="...")  # loads from ArtifactStore
 
 
 ==============================================================================
+# FILE: docs/replay.md
+==============================================================================
+
+# Replay view: one reconstruction of a run, every client
+
+`abstractruntime.replay` turns a run tree's ledger records and durable snapshots into the view a
+client shows: the status, the approval or question waiting for a person, the replies, the tool
+calls and the steps. It is the only code that does this ([ADR 0010](adr/0010_one_replay_many_views.md)).
+Hosts serve the view, for example AbstractGateway's `GET /api/gateway/runs/{id}/view` and its
+stream. Clients render it and act through the host's commands. They never re-derive run state
+from raw records.
+
+```python
+from abstractruntime.replay import replay, apply_delta
+
+view = replay(
+    {root_id: ledger.list(root_id), child_id: ledger.list(child_id)},  # records per run, in ledger order
+    {root_id: run_store.load(root_id), child_id: run_store.load(child_id)},  # snapshots (RunState or dict)
+    root_run_id=root_id,
+)
+doc = view.to_json()                       # replay_view_v1, JSON-safe
+
+delta = view.apply(ledger.list_after(run_id=child_id, after=view.last_seq(child_id))[0])
+client_copy = apply_delta(doc, delta)      # == view.to_json()
+```
+
+## Contract
+
+- **Pure and deterministic.** There is no I/O and no clock. The input is records plus snapshots,
+  and the order between runs does not matter. `replay(all)` is `apply` over every record, so it
+  equals folding the same records in any chunks.
+- **Idempotent.** A record whose `seq` is at or below the run's folded seq is ignored.
+- **Incremental.** `ReplayView.apply(records, runs_by_id=)` folds newer records (and newer
+  snapshots) and returns the **delta**. The scalars come whole; the changed items of `runs`,
+  `messages`, `activities` and `artifacts` come keyed by id. Items are never removed. A delta
+  also lists its typed `changes`. Each change is `{kind, id, run_id, seq}`, where `kind` is
+  one of:
+  - `status`, which adds `status` and `previous`;
+  - `interaction`, which adds `change: opened|closed`, `interaction_kind` and `wait_key`;
+  - `run`, `message`, `activity` or `artifact`.
+
+  A push dispatcher or a cross-run index subscribes to these changes. `apply_delta` ignores
+  them.
+  `apply_delta(view, delta)` is the client side (about 40 lines to port), and
+  `diff_views(old, new)` is the delta between two views (a reconnect).
+- **Versioned.** `version: "replay_view_v1"`. A change in the meaning of a field is a new
+  version.
+
+## The rules it owns
+
+Each rule below was once a divergence between clients:
+
+| Question | Rule |
+|---|---|
+| Which runs belong to the view? | The root, plus every run it delegated to: `subworkflow:<id>` wait keys, `sub_run_id` in a wait's details or a `start_subworkflow` result, and the snapshots' `parent_run_id`. A ledger link outranks a snapshot's. |
+| When is a wait over? | When its run records a `resume` for its key, OR any later step of the same run exists (a timer often has no resume record; the runtime also appends the resume before it saves the run without its wait). Observability events (`abstract.status`, `abstract.progress`) are not steps. A terminal record ends it too. |
+| What is the person asked? | The newest open person-facing wait anywhere in the tree. `wait_kind` gives the kinds and agrees with `automations.attention`, which the gateway's attention stream uses. A tool approval is `tool_approval` (`details.mode == "approval_required"`). A USER wait is `ask_user`. An EVENT wait with a prompt or choices is `event`. None of these are person-facing: a delegation (`delegation`), a timer (`timer`), a job, a pause (`pause:<run>` or `details.kind == "pause"`), an automation's own wake (`automation_wake`) and an EVENT wait without a prompt (`signal`). The interaction carries `answer_payload`, the shape the resume payload takes. A snapshot's wait counts only when the ledger never mentioned its key (a windowed history). |
+| What is the status? | A terminal snapshot, then the ledger's terminal record (`system:completion:*`, `system:terminal_status:<s>`, a run-level failure), then an open wait (`waiting`), then `running`. |
+| What about `$slim` pointers? | They are resolved against the STARTED record of the step they name. An approved tool call completes under a new step id that points back at the waiting step. A pointer that cannot be resolved (a window) is dropped and named in `warnings`. A client never sees one. |
+| What is the final answer? | One message, `<root>:final`, from the root's terminal record (or the snapshot's output when the ledger has none). When it repeats an answer the run already gave, it names that message in `repeats`, and a client shows the text once. |
+| How many steps did a node take? | One activity per node execution, following AbstractFlow's `executionIdFor` rules (`replay/executions.py`): the same step; a resume joins the execution whose wait it answers; a repeated idempotency key; an Agent's structured-output call and the run's terminal record join the node's latest execution; a progress tick reports on its step. |
+| What did a conversation's tool policy decide? | An `abstract.tool_policy_decision` record (session tool policy contract v1) is an activity of kind `tool_policy` (`decision`: `auto_approved` or `denied`, the policy's `revision`, `set_by`, `set_at`), never an interaction: such a call has no wait. The tool rows it names carry `decided_by: "session_policy"`, and a call the policy refused is `denied`, not failed. A decision written twice (a crash replay, same idempotency key) is one activity. A deny wins even over an approval gate answered "approved" before it: the batch reads `denied`, with `wait.outcome: denied` and `wait.denied_by: session_policy`. Every tool-approval activity says how its gate ended (`wait.outcome`: approved, denied, partly_denied). |
+| What does the run execute? | `workflow_ref(workflow_id)`: `bundle_id@version:flow_id` gives `{bundle_id, bundle_version, flow_id}`. The root's flow is its `entrypoint`. A workflow outside a bundle has `bundle_id: null`. |
+
+## The view (`to_json()`)
+
+| Field | Meaning |
+|---|---|
+| `version`, `root_run_id`, `session_id` | the view's version, its root run and the root's session |
+| `workflow` | `{id, bundle_id, bundle_version, flow_id, entrypoint}` of the root run |
+| `status`, `display_status` | the derived status; the run's own status line |
+| `cursor` | `{token, records, runs}`. The token ends with `~<digest>` of what the runs' snapshots contribute, so a pause or a terminal snapshot changes it without a record. A tree of more than 32 runs gets a bounded digest token, which cannot be resolved back: a reconnect with it gets the whole view. `runs` maps each run id to its last folded `seq`. `token` (`<run id prefix>:<seq>.…`, header-safe) is the host's ETag and SSE id; `parse_cursor_token` reads it |
+| `runs[]` | the tree in path order (a child after its parent, siblings in the order they were started): `parent_run_id`, `depth`, `workflow`, `status`, `waiting`, `holds_interaction`, `records`, `first_seq`, `last_seq`, `order` (the path from the root) |
+| `interaction` | the person-facing wait, or `null`: `kind` (`tool_approval`, `ask_user`, `event`), `run_id`, `wait_key`, `step_id`, `seq`, `prompt`, `choices`, `allow_free_text`, `details`, `tool_calls` (resolved), `activity_id`, `answer_payload`, and `command` (the resume a client sends to answer it) |
+| `open_waits[]` | every open wait of the tree, with `person_facing` |
+| `messages[]` | verbatim turns: `role`, `kind` (`prompt`, `answer`, `question`, `final`, `event`), `text`, provenance (`run_id`, `step_ids`, `seqs`, `artifact_ids`, `source`) |
+| `activities[]` | one per execution: `kind`, `name`, `status`, `node_id`, `execution_id`, `seqs`, `step_ids`, `tool_calls[]` (each call's status, output, error), `wait` (`kind`, `wait_key`, `ended_by`: `resume`, `later_step`, `terminal`), `usage`, `child_run_id`, `progress` |
+| `artifacts[]` | every `{"$artifact": id}` reference, with the run, step, seq and JSON path that produced it |
+| `usage` | tokens and LLM calls summed over the tree |
+| `warnings[]` | what the view could not show (records before a window, an unresolved `$slim`) |
+
+Every id is stable and JSON-addressable: run ids, `<run_id>:<execution id>` for activities,
+message ids, artifact ids, and the per-run `seq` of every record they cite. A cross-run index or
+a push can point at them.
+
+## The durable cursor
+
+Every ledger store numbers a run's records 1, 2, 3, … (`seq`):
+
+- `JsonlLedgerStore` writes it on each line under an advisory file lock, so two processes never
+  take the same number. A line written before the field existed is numbered by its position.
+- `SqliteLedgerStore` allocates it in the insert's transaction.
+- `InMemoryLedgerStore` numbers records as they are appended.
+
+`list(run_id)` returns records with their `seq`. `list_after(run_id=, after=, limit=)` returns
+the records after a seq. On SQLite it is an indexed read, and on JSONL it seeks to the remembered
+byte offset. `ObservableLedgerStore` passes `seq` to subscribers.
+`SqliteLedgerStore.import_records(run_id, records)` copies a run's ledger in with its `seq`
+values (a file-to-SQLite migration), so a cursor a client holds stays valid.
+
+## Conformance
+
+`abstractruntime.replay.conformance` holds the cases, and they ship with the package
+(`case_names()`, `load_case(name)`). The cases are redacted real ledgers and synthetic ones. Each
+has its records, its snapshots and the expected view. The cases cover a delegated child
+approval, a timer wait without a resume, a parallel tool batch, a cancellation, Agent
+structured-output steps, a windowed history with `$slim`, a question and its answer, and a
+denied approval, a session tool policy's decisions, plus every wait kind, an event answered then a pause, nested delegation, and an
+answer repeated by the completion.
+
+`tests/test_replay_conformance.py` checks each expected view plus hand-written semantic
+assertions. `tests/test_replay_invariants.py` checks that replay equals fold under any chunking
+and interleaving, idempotence, delta round trips and cursor tokens. A client that renders runs
+runs the same fixtures through its host in CI (AbstractGateway serves every case through `/view`
+in its tests). `scripts/regen_replay_conformance.py` reports which expected views a reducer
+change alters, and `--write` rewrites them after review.
+
+
+==============================================================================
 # FILE: docs/snapshots.md
 ==============================================================================
 
@@ -6288,6 +6503,7 @@ When you ask "why is it designed this way?", the answer is in an ADR. ADRs are:
 | 0006 | [Runtime Owns Durable AbstractCore Bloc Prompt-Cache Control](0006_runtime_owns_durable_abstractcore_bloc_prompt_cache.md) | Accepted | 2026-05-20 | Hosts should use Runtime for durable bloc/KV controls and binding-aware execution |
 | 0007 | [Runtime Relays Core-Owned Model Residency Truth](0007_runtime_relays_core_owned_model_residency_truth.md) | Accepted | 2026-05-21 | Runtime reports loaded state only from AbstractCore residency truth |
 | 0008 | [Integration Facades Are the Complete Host Surface](0008_integration_facades_are_the_complete_host_surface.md) | Accepted | 2026-10-27 | Every AbstractCore name or capability a host needs is surfaced by the runtime (facade re-export, typed refusal, backlog); a gap is a runtime patch, never a host import of a lower-level package |
+| 0010 | [One Replay of the Ledger, Many Views](0010_one_replay_many_views.md) | Accepted | 2026-10-27 | `abstractruntime.replay` is the only reconstruction of run state from the ledger; hosts serve its view, clients render it; the per-run ledger `seq` is the durable cursor |
 
 ## Relationship to Backlog
 
@@ -6303,6 +6519,7 @@ ADRs explain *why*. Backlog items explain *what* and *how*.
 | 0006 | `backlog/completed/027_runtime_durable_bloc_prompt_cache_facade.md` |
 | 0007 | `backlog/completed/0035_model_residency_provider_truth_for_local_http_clients.md`, `backlog/proposed/0036_local_media_residency_bridge_to_core_residency.md` |
 | 0008 | AbstractGateway backlog 1044 (mailbox access) and `tests/test_gateway_import_boundary.py`; runtime 0.13.1 `email_facade.resolve_srv_default` |
+| 0010 | `backlog/planned/0854_replay_view.md`; AbstractGateway backlog 0943 (view routes), 0082 (durable cursor); framework root 0993 |
 
 ## Adding New ADRs
 
@@ -6626,7 +6843,7 @@ In this repo, the AbstractCore wiring lives under `src/abstractruntime/integrati
 - `integrations/abstractcore.md` — wiring `LLM_CALL` / `TOOL_CALLS`, the `config_facade` models/engines/host-jobs passthroughs for hosts, the `structured_facade` response_format check for hosts, cached sessions with per-session prompt-cache listing/clearing, host memory snapshots, model-residency listings, locks and model switching, live token streaming, workspace-scoped tools, durable bloc prompt-cache control, media inputs, generated media outputs, video progress events, and tool approval waits via AbstractCore
 - `tools-comms.md` — enabling the optional comms toolset (email/WhatsApp/Telegram)
 - `email.md` — email for each user: run-scoped account binding and the host resolver, sending without asking (self and pre-authorised recipients), the durable event inbox and mail feeder, the `email.received@1` trigger on the primary or any other mailbox of the user, mail verbs for flows (changes and sends only on a Read and write mailbox: `email_mailbox_read_only`, `email_mailbox_cannot_send`), and the send-email action
-- `tool-approval.md` — tool risk tiers, the run-policy rank ceiling, and per-call refiners (the `send_email` recipient rule: self and pre-authorised recipients)
+- `tool-approval.md` — tool risk tiers, the run-policy rank ceiling, the session tool policy (a conversation's standing approve/deny, applied before any approval wait), and per-call refiners (the `send_email` recipient rule: self and pre-authorised recipients)
 - `api.md#workflowbundles-flow-and-visualflow-distribution` — VisualFlow compiler APIs, media nodes, and document nodes (`read_pdf` / `write_pdf` / `write_docx`)
 - `api.md#sessions-and-history` — session history replay: one window, the most recent 50,000 tokens of whole turns (`HISTORY_REPLAY_MAX_TOKENS`), returned as a `ReplayedHistory` whose `.report` records what was replayed and dropped
 - `api.md#conversation-search` — keyword search over a plane's conversations (`ConversationSearch`): questions, answers and the turn's artifacts, one SQLite FTS5 trigram index per plane, incremental `sync` with a time budget, exact then fuzzy matching
@@ -6638,6 +6855,7 @@ In this repo, the AbstractCore wiring lives under `src/abstractruntime/integrati
 - `entity-runtime.md` — per-entity runtimes for summoned entities: homes, the one-writer lease, act-only diary privacy (`$act_only` refs), durable visit waits with deadlines
 - `evidence.md` — artifact-backed evidence capture for external-boundary tools
 - `mcp-worker.md` — MCP worker CLI (`abstractruntime-mcp-worker`)
+- `replay.md` — the replay view: one reconstruction of a run tree (status, the interaction to answer, messages, one activity per execution, artifacts, usage, the workflow it executes) that every client renders; the durable cursor (`seq`, `list_after`); conformance fixtures
 - `snapshots.md` — snapshot/bookmark model and stores
 - `provenance.md` — tamper-evident hash-chained ledger
 - `limits.md` — runtime-aware `_limits` namespace and APIs

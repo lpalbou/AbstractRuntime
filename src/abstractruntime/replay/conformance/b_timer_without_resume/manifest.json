@@ -1,0 +1,22 @@
+{
+ "adjustments": [
+  "ledger cut after the llm_call that follows the timer (before the terminal record); the snapshot is the stale one a reader can get in between (status waiting, waiting = the timer)"
+ ],
+ "case": "b_timer_without_resume",
+ "pins": "2026-10-04 use case: a `wait_until` timer whose ledger has no resume record, followed by a later step of the same run: the wait is over (ended_by later_step) and the status is not waiting, even with a stale snapshot that still says waiting.",
+ "provenance": "redacted from the operator's gateway data 2026-10-27",
+ "redaction": "free text -> salted HMAC placeholders (txt-<hex>); run/session ids -> salted uuid5; conversation-sized fields the view never reads dropped; $slim markers recomputed against the redacted STARTED payload (see the extraction script's docstring)",
+ "root_run_id": "32831f89-76d0-522e-b305-28c0550088fc",
+ "slim_markers": {
+  "slim_dropped": 0,
+  "slim_fixed": 0
+ },
+ "source_runs": {
+  "32831f89-76d0-522e-b305-28c0550088fc": {
+   "cut_after_seq": 6,
+   "snapshot": "waiting_at_cut",
+   "source_run_id": "sha256:197ebee312fcb965",
+   "window_from_seq": null
+  }
+ }
+}

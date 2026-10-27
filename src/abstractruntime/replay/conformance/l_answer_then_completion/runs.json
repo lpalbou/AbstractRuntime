@@ -1,0 +1,22 @@
+{
+ "d0d0d0d0-0000-4000-8000-0000000000d0": {
+  "run_id": "d0d0d0d0-0000-4000-8000-0000000000d0",
+  "workflow_id": "hello@1.0.0:main",
+  "status": "completed",
+  "current_node": "n",
+  "vars": {
+   "prompt": "Say hello"
+  },
+  "waiting": null,
+  "output": {
+   "answer": "Hello there.",
+   "success": true
+  },
+  "error": null,
+  "created_at": "2026-10-27T10:00:00.000000+00:00",
+  "updated_at": "2026-10-27T10:00:59.000000+00:00",
+  "actor_id": null,
+  "session_id": "sess-synthetic-0001",
+  "parent_run_id": null
+ }
+}

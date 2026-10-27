@@ -2981,20 +2981,112 @@ def _effect_idempotency_key_from_tool_calls(tool_calls: Any) -> Optional[str]:
     return None
 
 
-def _execute_with_run_policy(tools: Any, calls: List[Dict[str, Any]], run: "RunState") -> Dict[str, Any]:
+# Session tool policy (contract v1, `storage/session_tool_policy.py`).
+from ...storage.session_tool_policy import (  # noqa: E402
+    SESSION_POLICY_DENIED_ERROR,
+    TOOL_POLICY_DECISION_EVENT,
+    append_tool_policy_record,
+    resolve_session_tool_policy,
+)
+
+
+def _session_tool_policy_for_run(run: "RunState") -> Tuple[Optional[Dict[str, Any]], bool]:
+    """(policy, approve_applies) of the run tree's root session; see
+    `resolve_session_tool_policy`. A store read failure is logged and keeps the normal decision."""
+    store = getattr(run, "_runtime_session_tool_policy_store", None)
+    if store is None:
+        return None, False
+    try:
+        return resolve_session_tool_policy(run, store=store, run_store=getattr(run, "_runtime_run_store", None))
+    except Exception as e:  # noqa: BLE001 - a broken store keeps the normal decision
+        logger.warning("session tool policy read failed; normal approval applies", run_id=run.run_id, error=str(e))
+        return None, False
+
+
+def _append_tool_policy_record(
+    run: "RunState",
+    *,
+    decision: str,
+    calls: List[Dict[str, Any]],
+    matched: Dict[str, str],
+    policy: Dict[str, Any],
+) -> bool:
+    """Write one `abstract.tool_policy_decision` record to the run's ledger. Returns False when it
+    could not be written: the caller then does NOT auto-approve (no approval without its audit)."""
+    ledger = getattr(run, "_runtime_ledger_store", None)
+    if ledger is None or not callable(getattr(ledger, "append", None)):
+        logger.warning("session tool policy: no ledger store on the run; decision not recorded", run_id=run.run_id)
+        return False
+    try:
+        ident = _effect_idempotency_key_from_tool_calls(calls) or str(_run_effect_seq(run))
+        append_tool_policy_record(
+            ledger, run, decision=decision, calls=calls, matched=matched, policy=policy, idempotency_suffix=ident
+        )
+        return True
+    except Exception as e:  # noqa: BLE001
+        logger.warning("session tool policy record failed", run_id=run.run_id, error=str(e))
+        return False
+
+
+def _session_approvable(session_approved: Optional[Dict[str, str]], pol: Any) -> Set[str]:
+    """The session-approved names a batch may use: never a name the run's own policy withholds
+    (an automation's `withheld_tools`, which no later word widens)."""
+    if not session_approved:
+        return set()
+    names = set(session_approved)
+    if isinstance(pol, dict) and isinstance(pol.get("withheld_tools"), list):
+        names -= {str(t).strip() for t in pol["withheld_tools"] if str(t).strip()}
+    return names
+
+
+def _names_asking(policy: ToolApprovalPolicy, calls: List[Dict[str, Any]]) -> Set[str]:
+    out: Set[str] = set()
+    for call in calls:
+        name = str((call or {}).get("name") or "").strip()
+        if not name:
+            continue
+        try:
+            if policy.requires_approval([{"name": name}]):
+                out.add(name)
+        except Exception:  # noqa: BLE001
+            out.add(name)
+    return out
+
+
+def _execute_with_run_policy(
+    tools: Any,
+    calls: List[Dict[str, Any]],
+    run: "RunState",
+    *,
+    session_approved: Optional[Dict[str, str]] = None,
+    on_session_approved: Optional[Any] = None,
+) -> Dict[str, Any]:
     """Run `_execute_with_run_policy_unscoped` as `run` (framework backlog 0992 WP2).
 
     Every tool of the batch resolves the EXECUTING run's email account (its
     `_runtime.email_account` binding, through its Runtime's resolver), never a
     process-wide one; credentials exist only in memory during the call.
+
+    `session_approved` (name -> matched selector) is the session tool policy's approve set;
+    `on_session_approved(names) -> bool` is called right before a batch executes only because
+    of it (it writes the audit record; False keeps the normal decision).
     """
     from ...email.binding import email_run_scope
 
     with email_run_scope(run):
-        return _execute_with_run_policy_unscoped(tools, calls, run)
+        return _execute_with_run_policy_unscoped(
+            tools, calls, run, session_approved=session_approved, on_session_approved=on_session_approved
+        )
 
 
-def _execute_with_run_policy_unscoped(tools: Any, calls: List[Dict[str, Any]], run: "RunState") -> Dict[str, Any]:
+def _execute_with_run_policy_unscoped(
+    tools: Any,
+    calls: List[Dict[str, Any]],
+    run: "RunState",
+    *,
+    session_approved: Optional[Dict[str, str]] = None,
+    on_session_approved: Optional[Any] = None,
+) -> Dict[str, Any]:
     """Per-run tool-policy consumer (restores the 2026-02-21 feature that
     regressed; two independent confirmations it was consumer-less — the
     2026-07-06 audit and flow's live gateway check 2026-07-20).
@@ -3081,6 +3173,17 @@ def _execute_with_run_policy_unscoped(tools: Any, calls: List[Dict[str, Any]], r
         # require always wins; a missing/failed refiner adds nothing (ask).
         auto |= _refined_auto_names(calls, run, auto=auto, require=req)
         run_policy = ToolApprovalPolicy(auto_approve_tools=auto, require_approval_tools=req)
+        # SESSION TOOL POLICY (contract v1): the person's standing word for this conversation
+        # lowers the names it covers, over the start-time require list, never over withheld.
+        covered = _names_asking(run_policy, calls) & _session_approvable(session_approved, pol)
+        if covered:
+            lowered = ToolApprovalPolicy(auto_approve_tools=auto | covered, require_approval_tools=req - covered)
+            try:
+                lowered_requires = lowered.requires_approval(calls)
+            except Exception:  # noqa: BLE001
+                lowered_requires = True
+            if not lowered_requires and (on_session_approved is None or on_session_approved(covered)):
+                return tools.execute_approved(tool_calls=calls)
         try:
             requires = run_policy.requires_approval(calls)
         except Exception:
@@ -3108,20 +3211,41 @@ def _execute_with_run_policy_unscoped(tools: Any, calls: List[Dict[str, Any]], r
     # require list the host passed explicitly, and a per-run policy's (above), always win;
     # untrusted-input runs never reach here.
     static = getattr(tools, "policy", None)
-    if callable(getattr(tools, "execute_approved", None)) and isinstance(static, ToolApprovalPolicy):
+    gated = callable(getattr(tools, "execute_approved", None))
+    if gated and isinstance(static, ToolApprovalPolicy):
         s_auto = set(static.auto_approve_tools)
         s_req = set(static.require_approval_tools)
         lowerable = s_req & set(getattr(static, "default_require_approval_tools", frozenset()))
         refined = _refined_auto_names(calls, run, auto=s_auto, require=s_req - lowerable)
+        eff_auto, eff_req = s_auto | refined, s_req - refined
+        # SESSION TOOL POLICY (contract v1): lowers the names it covers over the static policy.
+        covered = _names_asking(ToolApprovalPolicy(auto_approve_tools=eff_auto, require_approval_tools=eff_req), calls)
+        covered &= _session_approvable(session_approved, None)
+        if covered:
+            try:
+                requires = ToolApprovalPolicy(
+                    auto_approve_tools=eff_auto | covered, require_approval_tools=eff_req - covered
+                ).requires_approval(calls)
+            except Exception:  # noqa: BLE001 - fail toward asking
+                requires = True
+            if not requires and (on_session_approved is None or on_session_approved(covered)):
+                return tools.execute_approved(tool_calls=calls)
         if refined:
             try:
                 requires = ToolApprovalPolicy(
-                    auto_approve_tools=s_auto | refined, require_approval_tools=s_req - refined
+                    auto_approve_tools=eff_auto, require_approval_tools=eff_req
                 ).requires_approval(calls)
             except Exception:  # noqa: BLE001 - fail toward asking
                 requires = True
             if not requires:
                 return tools.execute_approved(tool_calls=calls)
+    elif gated and session_approved and calls:
+        # An approval-gated executor without an inspectable policy: the session policy can only
+        # vouch for a batch it covers entirely.
+        names = {str((c or {}).get("name") or "").strip() for c in calls}
+        covered = names & _session_approvable(session_approved, None)
+        if "" not in names and covered == names and (on_session_approved is None or on_session_approved(covered)):
+            return tools.execute_approved(tool_calls=calls)
     return tools.execute(tool_calls=calls)
 
 
@@ -3229,6 +3353,29 @@ def make_tool_calls_handler(
         except ToolScopeError as exc:
             return EffectOutcome.failed(str(exc), retryable=False)
         allowlist_enabled = allowed_tools is not None
+
+        # Session tool policy (contract v1): read ONCE per batch, before anything can wait.
+        from ...storage.session_tool_policy import session_policy_names
+
+        session_policy, session_approve_applies = _session_tool_policy_for_run(run)
+        session_approved, session_denied = session_policy_names(session_policy)
+        if not session_approve_applies:
+            # Deny narrows every run of the session; approve never reaches an untrusted-input
+            # run or an automation occurrence.
+            session_approved = {}
+        session_denied_calls: list[Dict[str, Any]] = []
+
+        def _session_recorder(batch: List[Dict[str, Any]]):
+            if not session_approved or session_policy is None:
+                return None
+
+            def _record(names: Set[str]) -> bool:
+                rows = [c for c in batch if str((c or {}).get("name") or "").strip() in names]
+                return _append_tool_policy_record(
+                    run, decision="auto_approved", calls=rows, matched=session_approved, policy=session_policy
+                )
+
+            return _record
 
         if tools is None:
             return EffectOutcome.failed(
@@ -4058,6 +4205,22 @@ def make_tool_calls_handler(
                     )
                     continue
 
+            if name and name in session_denied:
+                # The session tool policy refuses it: no wait, a typed record (below).
+                blocked_by_index[idx] = {
+                    "call_id": call_id,
+                    "runtime_call_id": runtime_call_id_out,
+                    "name": name,
+                    "success": False,
+                    "output": None,
+                    "error": SESSION_POLICY_DENIED_ERROR,
+                }
+                tool_calls_for_evidence.append(
+                    {"call_id": call_id, "runtime_call_id": runtime_call_id_out, "name": name, "arguments": {}}
+                )
+                session_denied_calls.append({"call_id": call_id, "runtime_call_id": runtime_call_id_out, "name": name})
+                continue
+
             raw_arguments = tc.get("arguments") or {}
             arguments = dict(raw_arguments) if isinstance(raw_arguments, dict) else (_loads_dict_like(raw_arguments) or {})
 
@@ -4206,6 +4369,11 @@ def make_tool_calls_handler(
             tool_calls_for_evidence.append(tc2)
             planned.append({"idx": idx, "kind": "host", "name": name, "tc": tc2})
 
+        if session_denied_calls and session_policy is not None:
+            _append_tool_policy_record(
+                run, decision="denied", calls=session_denied_calls, matched=session_denied, policy=session_policy
+            )
+
         # Fast path: if nothing is planned (everything blocked), return blocked results.
         if not planned and blocked_by_index:
             merged_results: list[Any] = []
@@ -4351,7 +4519,13 @@ def make_tool_calls_handler(
                         host_tool_calls.append(tc2)
 
             try:
-                result = _execute_with_run_policy(tools, host_tool_calls, run)
+                result = _execute_with_run_policy(
+                    tools,
+                    host_tool_calls,
+                    run,
+                    session_approved=session_approved,
+                    on_session_approved=_session_recorder(host_tool_calls),
+                )
             except Exception as e:
                 logger.error("TOOL_CALLS execution failed", error=str(e))
                 return EffectOutcome.failed(str(e))
@@ -4504,7 +4678,13 @@ def make_tool_calls_handler(
                 continue
 
             try:
-                seg_result = _execute_with_run_policy(tools, seg_calls, run)
+                seg_result = _execute_with_run_policy(
+                    tools,
+                    seg_calls,
+                    run,
+                    session_approved=session_approved,
+                    on_session_approved=_session_recorder(seg_calls),
+                )
             except Exception as e:
                 logger.error("TOOL_CALLS execution failed", error=str(e))
                 return EffectOutcome.failed(str(e))

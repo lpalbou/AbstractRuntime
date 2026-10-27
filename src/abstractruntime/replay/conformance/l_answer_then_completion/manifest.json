@@ -1,0 +1,7 @@
+{
+ "built_with": "abstractruntime StepRecord/RunState/WaitState appended through InMemoryLedgerStore (scratchpad synth.py)",
+ "case": "l_answer_then_completion",
+ "pins": "a run whose final output repeats the answer it already gave (answer_user) is ONE assistant message (marked final), whatever the read order (the snapshot read before or after the ledger).",
+ "provenance": "synthetic",
+ "root_run_id": "d0d0d0d0-0000-4000-8000-0000000000d0"
+}

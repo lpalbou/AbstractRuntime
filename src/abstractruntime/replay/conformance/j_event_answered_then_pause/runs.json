@@ -1,0 +1,31 @@
+{
+ "b0b0b0b0-0000-4000-8000-0000000000b0": {
+  "run_id": "b0b0b0b0-0000-4000-8000-0000000000b0",
+  "workflow_id": "event-then-pause@1.0.0:main",
+  "status": "waiting",
+  "current_node": "n",
+  "vars": {
+   "prompt": "Plan, then wait for me"
+  },
+  "waiting": {
+   "reason": "user",
+   "wait_key": "pause:b0b0b0b0-0000-4000-8000-0000000000b0",
+   "until": null,
+   "resume_to_node": null,
+   "result_key": null,
+   "prompt": null,
+   "choices": null,
+   "allow_free_text": true,
+   "details": {
+    "kind": "pause"
+   }
+  },
+  "output": null,
+  "error": null,
+  "created_at": "2026-10-27T10:00:00.000000+00:00",
+  "updated_at": "2026-10-27T10:00:59.000000+00:00",
+  "actor_id": null,
+  "session_id": "sess-synthetic-0001",
+  "parent_run_id": null
+ }
+}

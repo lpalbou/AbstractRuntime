@@ -32,6 +32,28 @@ from ..core.run_attribution import automation_index_fields, is_turn_root, latest
 from ..core.run_identity import verify_run_identity
 from ..core.run_lifecycle import run_lifecycle_index_fields
 
+try:  # POSIX advisory file locks (the JSONL ledger's cross-process append lock)
+    import fcntl as _fcntl
+except ImportError:  # pragma: no cover - Windows
+    _fcntl = None  # type: ignore[assignment]
+
+
+def _inode_of(f: Any) -> int:
+    try:
+        return int(os.fstat(f.fileno()).st_ino)
+    except OSError:
+        return -1
+
+
+def _flock(f: Any) -> None:
+    if _fcntl is not None:
+        _fcntl.flock(f.fileno(), _fcntl.LOCK_EX)
+
+
+def _funlock(f: Any) -> None:
+    if _fcntl is not None:
+        _fcntl.flock(f.fileno(), _fcntl.LOCK_UN)
+
 logger = logging.getLogger(__name__)
 
 # Scan-sidecar row shape version. 2 (automations, 2026-09-27): rows gained the
@@ -2529,14 +2551,22 @@ class JsonlLedgerStore(LedgerStore):
         self._idem_cache_lock = threading.Lock()
         self._idem_cache: "OrderedDict[tuple[str, str], Dict[str, Any]]" = OrderedDict()
         self._idem_cache_max = 512
-        # Row-address cache (ADR 0011): run_id -> (file size after our last
-        # append, records in the file then). `append()` returns the new
-        # record's seq (= its 1-based position in `list()`) without re-reading
-        # the file while the size proves nobody else appended; any other size
-        # (another writer, a cold process) recounts with `list()` once.
-        self._seq_cache_lock = threading.Lock()
-        self._seq_cache: "OrderedDict[str, tuple[int, int]]" = OrderedDict()
-        self._seq_cache_max = 4096
+        # THE DURABLE CURSOR (ADR-0010, gateway backlog 0082): every appended line carries its
+        # per-run `seq` (1, 2, 3, ...), the same cursor SQLite allocates, so a cursor survives a
+        # reconnect and a file -> SQLite migration. A line written before seq existed reads as
+        # the seq after the previous line (its position). The head cache keeps an append O(1):
+        # run_id -> (file size after our last append, last seq); a size we did not write means
+        # another writer appended, and the head is re-read from the file's last line.
+        self._seq_lock = threading.Lock()
+        # run_id -> (file size, last seq, file inode): a file deleted and recreated by another
+        # store object (another process) has another inode, so a cached head is never reused for it.
+        self._seq_heads: "OrderedDict[str, tuple[int, int, int]]" = OrderedDict()
+        self._seq_heads_max = 4096
+        # list_after resume points: run_id -> (seq, byte offset just after that record's line).
+        # run_id -> (seq, byte offset, file inode); a hint is used only for the same file (inode)
+        # and only when it points just after a newline (a line start).
+        self._offsets: "OrderedDict[str, tuple[int, int, int]]" = OrderedDict()
+        self._offsets_max = 4096
         # Line-offset index per run (`_JsonlRowIndex`), kept current by our own appends (write-through) and
         # extended by reading ONLY the bytes another writer appended since (keyed by inode + indexed size), so a
         # row-address read is a seek + one line parse instead of a full `list()` parse per call.
@@ -2546,67 +2576,114 @@ class JsonlLedgerStore(LedgerStore):
     def _path(self, run_id: str) -> Path:
         return self._base / f"ledger_{run_id}.jsonl"
 
-    def append(self, record: StepRecord) -> int:
-        """Append one line; returns the record's `seq`: its 1-based position in
-        the file (the order `list()` returns), the JSON-file row address."""
+    def append(self, record: StepRecord) -> Optional[int]:
+        """Append one record with its per-run `seq`; return that seq."""
         p = self._path(record.run_id)
         record_dict = steprecord_to_dict(record)
-        line = dumps_compact(record_dict)
-        run_id = str(record.run_id)
-        with self._seq_cache_lock:
+        with self._seq_lock:
             with p.open("a", encoding="utf-8") as f:
-                size_before = os.fstat(f.fileno()).st_size
-                cached = self._seq_cache.get(run_id)
-                torn = False
-                if cached is not None and cached[0] == size_before:
-                    count_before = cached[1]  # our own last write ended with its newline
-                elif size_before == 0:
-                    count_before = 0
-                else:
-                    # A crashed writer may have left a torn last line (no newline): our record must not be glued
-                    # onto it (it would vanish into an unparseable line and our seq would dangle). Like the run
-                    # journal (`_journal_append`), end the torn line first.
-                    with p.open("rb") as tail:
-                        tail.seek(size_before - 1)
-                        torn = tail.read(1) != b"\n"
-                    # Another writer appended (or a cold process): the row index reads only the new bytes. A
-                    # trailing line without its newline (a torn write) is counted the way `list()` counts it.
-                    idx = self._row_index_current(run_id)
-                    if idx is not None and idx.size == size_before:
-                        count_before = len(idx.offsets)
-                    else:
-                        count_before = len(self.list(run_id))
-                # Write as a single append operation to reduce the chance of
-                # concurrent writers producing concatenated JSON objects on one line.
-                f.write(("\n" if torn else "") + line + "\n")
-                f.flush()
-                st_after = os.fstat(f.fileno())
-                size_after = st_after.st_size
-            seq = count_before + 1
-            self._row_index_note_append(run_id, st_after.st_ino, size_before, size_after, seq)
-            self._seq_cache[run_id] = (size_after, seq)
-            self._seq_cache.move_to_end(run_id)
-            while len(self._seq_cache) > self._seq_cache_max:
-                self._seq_cache.popitem(last=False)
+                # Another PROCESS appending to the same run (the split API process, a CLI next to
+                # a gateway) must not take the same seq: an advisory exclusive lock on the file
+                # spans reading the head and writing the line (POSIX; elsewhere the in-process
+                # lock alone, the pre-seq posture).
+                _flock(f)
+                try:
+                    # A crash mid-write can leave a torn last line (no newline). Appending onto it
+                    # would glue a whole record to the fragment and `list()` would drop both:
+                    # end the fragment first, so it stays alone on its (unreadable) line.
+                    self._terminate_torn_line(record.run_id, p, f)
+                    seq = self._head_seq(record.run_id, p) + 1
+                    record_dict["seq"] = seq
+                    line = dumps_compact(record_dict)
+                    start = f.tell()  # where this record's line begins (after any torn-line newline)
+                    # Write as a single append operation to reduce the chance of
+                    # concurrent writers producing concatenated JSON objects on one line.
+                    f.write(line + "\n")
+                    f.flush()
+                    size = f.tell()
+                    ino = _inode_of(f)
+                finally:
+                    _funlock(f)
+            self._row_index_note_append(record.run_id, ino, start, size)
+            self._seq_heads[record.run_id] = (size, seq, ino)
+            self._seq_heads.move_to_end(record.run_id)
+            while len(self._seq_heads) > self._seq_heads_max:
+                self._seq_heads.popitem(last=False)
         self._idem_cache_note(record_dict, line)
         return seq
 
+    def _terminate_torn_line(self, run_id: str, p: Path, f: Any) -> None:
+        """Write a newline when the file does not end with one (caller holds the file lock)."""
+        try:
+            st = os.fstat(f.fileno())
+        except OSError:
+            return
+        size = st.st_size
+        cached = self._seq_heads.get(run_id)
+        if size == 0 or (cached is not None and cached[0] == size and cached[2] == st.st_ino):
+            return  # empty, or our own last append (which ended with a newline)
+        with p.open("rb") as rf:
+            rf.seek(size - 1)
+            last = rf.read(1)
+        if last != b"\n":
+            logger.warning("JsonlLedgerStore: %s ends with a torn line; it is closed before the next append", p.name)
+            f.write("\n")
+            f.flush()
+
+    def _head_seq(self, run_id: str, p: Path) -> int:
+        """The run's last seq (0 when it has no records). Caller holds `_seq_lock`."""
+        try:
+            st = p.stat()
+        except FileNotFoundError:
+            self._seq_heads.pop(run_id, None)
+            return 0
+        size = st.st_size
+        cached = self._seq_heads.get(run_id)
+        if cached is not None and cached[0] == size and cached[2] == st.st_ino:
+            return cached[1]
+        if size == 0:
+            return 0
+        for line in reversed(self._tail_lines(p, 1)):
+            try:
+                last = json.loads(line)
+            except json.JSONDecodeError:
+                break
+            if isinstance(last, dict) and isinstance(last.get("seq"), int) and not isinstance(last.get("seq"), bool):
+                return int(last["seq"])
+            break
+        # A ledger written before seq (or a torn last line): number by position, once.
+        records = self.list(run_id)
+        return int(records[-1]["seq"]) if records else 0
+
+    @staticmethod
+    def _number(records: List[Dict[str, Any]], start: int = 0) -> List[Dict[str, Any]]:
+        """Give each record without a persisted seq the seq after the previous record's."""
+        prev = start
+        for rec in records:
+            seq = rec.get("seq")
+            if isinstance(seq, int) and not isinstance(seq, bool) and seq > prev:
+                prev = seq
+            else:
+                prev += 1
+                rec["seq"] = prev
+        return records
+
     # -- row address (ADR 0011) -------------------------------------------------------------------------------
 
-    def _row_index_note_append(self, run_id: str, ino: int, size_before: int, size_after: int, seq: int) -> None:
+    def _row_index_note_append(self, run_id: str, ino: int, line_start: int, size_after: int) -> None:
         """Write-through: extend a CURRENT index by the line we just wrote (no read). An index that is not exactly
-        at `size_before` (another writer appended, or none exists yet) is left alone: the next read extends it
-        from its own size."""
+        at `line_start` (another writer appended, a torn line was closed, or none exists yet) is left alone: the
+        next read extends it from its own size."""
         with self._row_index_lock:
             idx = self._row_index.get(run_id)
-            if idx is None and size_before == 0 and seq == 1:  # a new ledger: indexed from birth, for free
+            if idx is None and line_start == 0:  # a new ledger: indexed from birth, for free
                 idx = _JsonlRowIndex(ino)
                 self._row_index[run_id] = idx
                 while len(self._row_index) > self._ROW_INDEX_MAX_RUNS:
                     self._row_index.popitem(last=False)
-            if idx is None or idx.ino != ino or idx.size != size_before or len(idx.offsets) != seq - 1:
+            if idx is None or idx.ino != ino or idx.size != line_start:
                 return
-            idx.offsets.append(size_before)
+            idx.offsets.append(line_start)
             idx.size = size_after
             self._row_index_maybe_persist(run_id, idx)
 
@@ -2704,7 +2781,10 @@ class JsonlLedgerStore(LedgerStore):
             self._row_index.pop(run_id, None)
 
     def get_record_unresolved(self, run_id: str, seq: int) -> Optional[Dict[str, Any]]:
-        """Point read through the line-offset index: one seek + one line parse."""
+        """Point read through the line-offset index: one seek + one line parse at the record's POSITION, verified
+        against the seq persisted on the line (ADR 0010). Positions and seqs agree on a ledger written by this
+        store (a line without a persisted seq reads as its position); when they do not (a rewritten file, an
+        import with gaps) the read falls back to a scan by persisted seq, never answers another row."""
         rid = str(run_id or "")
         s = coerce_ledger_seq(seq)
         if not rid or s is None:
@@ -2730,6 +2810,10 @@ class JsonlLedgerStore(LedgerStore):
             self._row_index_drop(rid)
             return super().get_record_unresolved(rid, s)
         out = dict(records[k])
+        persisted = out.get("seq")
+        if isinstance(persisted, int) and not isinstance(persisted, bool) and persisted != s:
+            # The row at this position carries another seq: find the row whose persisted seq is `s`.
+            return super().get_record_unresolved(rid, s)
         out["seq"] = s
         return out
 
@@ -2777,8 +2861,12 @@ class JsonlLedgerStore(LedgerStore):
                     nl = data.find(b"\n", line_off - lo)
                     line = data[line_off - lo: nl if nl >= 0 else len(data)]
                     for k, rec in reversed(list(enumerate(_jsonl_line_records(line)))):
-                        seq = first + k + 1
-                        if seq > upper:
+                        position = first + k + 1
+                        persisted = rec.get("seq")
+                        seq = persisted if isinstance(persisted, int) and not isinstance(persisted, bool) else position
+                        # seq >= position (seqs only grow), so rows past `upper` are never candidates; the
+                        # persisted seq decides against `before_seq`.
+                        if position > upper or (limit is not None and seq >= limit):
                             continue
                         status = rec.get("status")
                         status = getattr(status, "value", status)
@@ -2962,8 +3050,6 @@ class JsonlLedgerStore(LedgerStore):
             return []
         out: List[Dict[str, Any]] = []
         decoder = json.JSONDecoder()
-        # Each record carries `seq` = its 1-based position (the JSON-file row
-        # address, ADR 0011); added on read, never written to the file.
         with p.open("r", encoding="utf-8") as f:
             for line in f:
                 line = line.strip()
@@ -2972,7 +3058,6 @@ class JsonlLedgerStore(LedgerStore):
                 try:
                     record = json.loads(line)
                     if isinstance(record, dict):
-                        record["seq"] = len(out) + 1
                         out.append(record)
                     continue
                 except json.JSONDecodeError:
@@ -2996,9 +3081,6 @@ class JsonlLedgerStore(LedgerStore):
                     if isinstance(obj, dict):
                         recovered.append(obj)
                     i = end
-                for obj in recovered:
-                    obj["seq"] = len(out) + 1
-                    out.append(obj)
 
                 if recovered:
                     logger.warning(
@@ -3006,7 +3088,86 @@ class JsonlLedgerStore(LedgerStore):
                         len(recovered),
                         str(p),
                     )
-        return out
+                    out.extend(recovered)
+        return self._number(out)
+
+    def list_after(self, *, run_id: str, after: int, limit: int = 1000) -> Tuple[List[Dict[str, Any]], int]:
+        """Records with seq > `after` (at most `limit`), and the last seq returned (or `after`).
+
+        Same cursor as `SqliteLedgerStore.list_after`. Byte-offset friendly: the store remembers
+        where the last returned record ended, so a follower reading forward (`after` = the seq it
+        last got) seeks there instead of re-reading the file from the start."""
+        rid = str(run_id or "").strip()
+        a = max(0, int(after or 0))
+        lim = max(1, int(limit or 1000))
+        if not rid:
+            return ([], a)
+        p = self._path(rid)
+        try:
+            st = p.stat()
+        except FileNotFoundError:
+            return ([], a)
+        size, ino = st.st_size, st.st_ino
+        start_seq, offset = 0, 0
+        with self._seq_lock:
+            hint = self._offsets.get(rid)
+        if hint is not None and hint[0] <= a and hint[1] <= size and hint[2] == ino:
+            start_seq, offset = hint[0], hint[1]
+        out: List[Dict[str, Any]] = []
+        prev = start_seq  # the seq of the last record before `pos`
+        pos = offset  # byte offset of the next unread line
+        resume = (start_seq, offset)  # where the next call can start: (seq before it, its offset)
+        with p.open("rb") as f:
+            if offset > 0:
+                f.seek(offset - 1)
+                if f.read(1) != b"\n":
+                    # Not a line start any more (the file was rewritten under the hint): read
+                    # from the start.
+                    start_seq, offset, prev, pos = 0, 0, 0, 0
+                    resume = (0, 0)
+            f.seek(offset)
+            for raw in f:
+                if not raw.endswith(b"\n"):
+                    break  # a line still being written: the next read gets it whole
+                line_start, line_prev = pos, prev
+                pos += len(raw)
+                text = raw.decode("utf-8", errors="replace").strip()
+                objs: List[Any] = []
+                if text:
+                    try:
+                        objs = [json.loads(text)]
+                    except json.JSONDecodeError:
+                        decoder = json.JSONDecoder()  # concatenated objects on one line (see list())
+                        i = 0
+                        while i < len(text):
+                            while i < len(text) and text[i].isspace():
+                                i += 1
+                            if i >= len(text):
+                                break
+                            try:
+                                obj, i = decoder.raw_decode(text, idx=i)
+                            except json.JSONDecodeError:
+                                break
+                            objs.append(obj)
+                batch = self._number([o for o in objs if isinstance(o, dict)], prev)
+                if batch:
+                    prev = int(batch[-1]["seq"])
+                wanted = [rec for rec in batch if int(rec["seq"]) > a]
+                if len(out) + len(wanted) > lim:
+                    out.extend(wanted[: lim - len(out)])
+                    resume = (line_prev, line_start)  # this line was only partly returned
+                    break
+                out.extend(wanted)
+                resume = (prev, pos)
+                if len(out) >= lim:
+                    break
+        if resume[1] > offset or hint is None:
+            with self._seq_lock:
+                self._offsets[rid] = (resume[0], resume[1], ino)
+                self._offsets.move_to_end(rid)
+                while len(self._offsets) > self._offsets_max:
+                    self._offsets.popitem(last=False)
+        return (out, int(out[-1]["seq"])) if out else ([], a)
 
     def count(self, run_id: str) -> int:
         """Return the number of ledger records for run_id (fast path).
@@ -3031,13 +3192,14 @@ class JsonlLedgerStore(LedgerStore):
         count = len(self.list(rid))
         if p.exists():
             p.unlink()
+        with self._seq_lock:
+            self._seq_heads.pop(rid, None)
+            self._offsets.pop(rid, None)
         with self._idem_cache_lock:
             # Drop the run's cached results: a recreated ledger under the
             # same run_id must never see the deleted run's completions.
             for cache_key in [k for k in self._idem_cache if k[0] == rid]:
                 del self._idem_cache[cache_key]
-        with self._seq_cache_lock:
-            self._seq_cache.pop(rid, None)
         self._row_index_drop(rid)
         with contextlib.suppress(OSError):
             self._idx_path(rid).unlink()

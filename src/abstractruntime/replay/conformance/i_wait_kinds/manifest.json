@@ -1,0 +1,7 @@
+{
+ "built_with": "abstractruntime StepRecord/RunState/WaitState appended through InMemoryLedgerStore (scratchpad synth.py)",
+ "case": "i_wait_kinds",
+ "pins": "wait kinds agree with the runtime's attention classifier: a USER pause is `pause`, an automation controller wake is `automation_wake`, an EVENT wait without prompt/choices is `signal` (none of them person-facing); an EVENT wait WITH a prompt is `event`, person-facing, and is the interaction (answer_payload `{payload}`).",
+ "provenance": "synthetic",
+ "root_run_id": "a0a0a0a0-0000-4000-8000-0000000000a0"
+}

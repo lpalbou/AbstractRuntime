@@ -1,0 +1,7 @@
+{
+ "built_with": "abstractruntime StepRecord/RunState/WaitState appended through InMemoryLedgerStore (scratchpad synth.py)",
+ "case": "j_event_answered_then_pause",
+ "pins": "an event question (EVENT wait with a prompt) answered by its resume, then a pause: the question is closed by the resume, the pause is an open wait but never an interaction, the run reads waiting.",
+ "provenance": "synthetic",
+ "root_run_id": "b0b0b0b0-0000-4000-8000-0000000000b0"
+}

@@ -17,7 +17,7 @@ from __future__ import annotations
 import hashlib
 import json
 import threading
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from .base import LedgerStore
 from .serialize import dataclass_json_default, steprecord_to_dict
@@ -48,14 +48,15 @@ def compute_record_hash(*, record: Dict[str, Any], prev_hash: Optional[str]) -> 
     Rules:
     - `prev_hash` is included in the hashed payload.
     - `record_hash` and `signature` fields are excluded (to avoid recursion).
-    - `seq` is excluded: it is the row ADDRESS the store adds on read (ADR
-      0009), never persisted inside the record, so verifying records read
-      back from a store hashes the same bytes the append hashed.
+    - `seq` is excluded: it is the row address the store assigns after the
+      hash (ADR 0010), so verifying records read back hashes what the append
+      hashed.
     """
 
     clean = dict(record)
     clean.pop("record_hash", None)
     clean.pop("signature", None)
+    # `seq` is the store's position for the record (ADR-0010), assigned after the hash.
     clean.pop("seq", None)
 
     clean["prev_hash"] = prev_hash
@@ -122,18 +123,15 @@ class HashChainedLedgerStore(LedgerStore):
         return self._inner.list(run_id)
 
     def get_record_unresolved(self, run_id: str, seq: int) -> Optional[Dict[str, Any]]:
-        fn = getattr(self._inner, "get_record_unresolved", None)
-        if callable(fn):
-            return fn(run_id, seq)
-        return super().get_record_unresolved(run_id, seq)
+        return self._inner.get_record_unresolved(run_id, seq)
 
     def find_started_record(
         self, run_id: str, step_id: str, *, before_seq: Optional[int] = None
     ) -> Optional[Dict[str, Any]]:
-        fn = getattr(self._inner, "find_started_record", None)
-        if callable(fn):
-            return fn(run_id, step_id, before_seq=before_seq)
-        return super().find_started_record(run_id, step_id, before_seq=before_seq)
+        return self._inner.find_started_record(run_id, step_id, before_seq=before_seq)
+
+    def list_after(self, *, run_id: str, after: int, limit: int = 1000) -> Tuple[List[Dict[str, Any]], int]:
+        return self._inner.list_after(run_id=run_id, after=after, limit=limit)
 
     def find_completed_result(
         self, run_id: str, idempotency_key: str

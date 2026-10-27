@@ -1,0 +1,186 @@
+{
+ "32831f89-76d0-522e-b305-28c0550088fc": [
+  {
+   "run_id": "32831f89-76d0-522e-b305-28c0550088fc",
+   "step_id": "876bf623-27ae-5567-b04c-fdfd82ec39df",
+   "node_id": "node-2",
+   "status": "started",
+   "effect": {
+    "type": "llm_call",
+    "result_key": "_temp.effects.node-2",
+    "payload": {
+     "type": "txt-7aaac946b626",
+     "prompt": "txt-e81a19cf87cb",
+     "include_context": false,
+     "resume_to_node": "txt-2a7b7fe31505"
+    }
+   },
+   "result": null,
+   "error": null,
+   "started_at": "2026-06-10T03:32:00.564021+00:00",
+   "ended_at": null,
+   "idempotency_key": "e5922520da5f8ceb744b5842080a5d38",
+   "attempt": 1,
+   "seq": 1,
+   "session_id": "dc4b296a-aa06-54f2-a351-a3c7dd7a0cd7"
+  },
+  {
+   "run_id": "32831f89-76d0-522e-b305-28c0550088fc",
+   "step_id": "876bf623-27ae-5567-b04c-fdfd82ec39df",
+   "node_id": "node-2",
+   "status": "completed",
+   "effect": {
+    "type": "llm_call",
+    "result_key": "_temp.effects.node-2",
+    "payload": {
+     "type": "txt-7aaac946b626",
+     "prompt": "txt-e81a19cf87cb",
+     "include_context": false,
+     "resume_to_node": "txt-2a7b7fe31505"
+    }
+   },
+   "result": {
+    "content": "txt-7a650f1091b5",
+    "data": null,
+    "tool_calls": null,
+    "usage": {
+     "input_tokens": 139,
+     "output_tokens": 82,
+     "total_tokens": 221,
+     "prompt_tokens": 139,
+     "completion_tokens": 82
+    },
+    "model": "gpt-oss-20b",
+    "finish_reason": "stop",
+    "gen_time": 1082.3
+   },
+   "error": null,
+   "started_at": "2026-06-10T03:32:00.564021+00:00",
+   "ended_at": "2026-06-10T03:32:01.647479+00:00",
+   "idempotency_key": "e5922520da5f8ceb744b5842080a5d38",
+   "attempt": 1,
+   "seq": 2,
+   "session_id": "dc4b296a-aa06-54f2-a351-a3c7dd7a0cd7"
+  },
+  {
+   "run_id": "32831f89-76d0-522e-b305-28c0550088fc",
+   "step_id": "3eaa2623-fc77-5d79-94e2-411346f6eb20",
+   "node_id": "node-5",
+   "status": "started",
+   "effect": {
+    "type": "wait_until",
+    "result_key": "_temp.effects.node-5",
+    "payload": {
+     "type": "wait_until",
+     "until": "2026-06-10T03:32:05.650230+00:00",
+     "resume_to_node": "node-3"
+    }
+   },
+   "result": null,
+   "error": null,
+   "started_at": "2026-06-10T03:32:01.650495+00:00",
+   "ended_at": null,
+   "idempotency_key": "7ed11ed28a74f8b7dcdb365ad2ddf22b",
+   "attempt": 1,
+   "seq": 3,
+   "session_id": "dc4b296a-aa06-54f2-a351-a3c7dd7a0cd7"
+  },
+  {
+   "run_id": "32831f89-76d0-522e-b305-28c0550088fc",
+   "step_id": "3eaa2623-fc77-5d79-94e2-411346f6eb20",
+   "node_id": "node-5",
+   "status": "waiting",
+   "effect": {
+    "type": "wait_until",
+    "result_key": "_temp.effects.node-5",
+    "payload": {
+     "type": "wait_until",
+     "until": "2026-06-10T03:32:05.650230+00:00",
+     "resume_to_node": "node-3"
+    }
+   },
+   "result": {
+    "wait": {
+     "reason": "until",
+     "wait_key": null,
+     "until": "2026-06-10T03:32:05.650230+00:00",
+     "resume_to_node": "node-3",
+     "result_key": "_temp.effects.node-5",
+     "prompt": null,
+     "choices": null,
+     "allow_free_text": true,
+     "details": null
+    }
+   },
+   "error": null,
+   "started_at": "2026-06-10T03:32:01.650495+00:00",
+   "ended_at": "2026-06-10T03:32:01.650808+00:00",
+   "idempotency_key": "7ed11ed28a74f8b7dcdb365ad2ddf22b",
+   "attempt": 1,
+   "seq": 4,
+   "session_id": "dc4b296a-aa06-54f2-a351-a3c7dd7a0cd7"
+  },
+  {
+   "run_id": "32831f89-76d0-522e-b305-28c0550088fc",
+   "step_id": "8684574d-d786-5420-b50a-024eaa8070d7",
+   "node_id": "node-3",
+   "status": "started",
+   "effect": {
+    "type": "llm_call",
+    "result_key": "_temp.effects.node-3",
+    "payload": {
+     "type": "txt-7aaac946b626",
+     "prompt": "txt-ed2b721201d6",
+     "include_context": false,
+     "resume_to_node": null
+    }
+   },
+   "result": null,
+   "error": null,
+   "started_at": "2026-06-10T03:32:05.775066+00:00",
+   "ended_at": null,
+   "idempotency_key": "7fc3629b15a517933f6ebcf67410cd27",
+   "attempt": 1,
+   "seq": 5,
+   "session_id": "dc4b296a-aa06-54f2-a351-a3c7dd7a0cd7"
+  },
+  {
+   "run_id": "32831f89-76d0-522e-b305-28c0550088fc",
+   "step_id": "8684574d-d786-5420-b50a-024eaa8070d7",
+   "node_id": "node-3",
+   "status": "completed",
+   "effect": {
+    "type": "llm_call",
+    "result_key": "_temp.effects.node-3",
+    "payload": {
+     "type": "txt-7aaac946b626",
+     "prompt": "txt-ed2b721201d6",
+     "include_context": false,
+     "resume_to_node": null
+    }
+   },
+   "result": {
+    "content": "txt-78cfab7714b9",
+    "data": null,
+    "tool_calls": null,
+    "usage": {
+     "input_tokens": 139,
+     "output_tokens": 95,
+     "total_tokens": 234,
+     "prompt_tokens": 139,
+     "completion_tokens": 95
+    },
+    "model": "gpt-oss-20b",
+    "finish_reason": "stop",
+    "gen_time": 1342.5
+   },
+   "error": null,
+   "started_at": "2026-06-10T03:32:05.775066+00:00",
+   "ended_at": "2026-06-10T03:32:07.119063+00:00",
+   "idempotency_key": "7fc3629b15a517933f6ebcf67410cd27",
+   "attempt": 1,
+   "seq": 6,
+   "session_id": "dc4b296a-aa06-54f2-a351-a3c7dd7a0cd7"
+  }
+ ]
+}

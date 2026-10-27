@@ -40,6 +40,7 @@ DOCUMENTS = [
     "docs/entity-runtime.md",
     "docs/mcp-worker.md",
     "docs/evidence.md",
+    "docs/replay.md",
     "docs/snapshots.md",
     "docs/provenance.md",
     "docs/workflow-bundles.md",

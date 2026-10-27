@@ -29,7 +29,7 @@ In this repo, the AbstractCore wiring lives under `src/abstractruntime/integrati
 - `integrations/abstractcore.md` — wiring `LLM_CALL` / `TOOL_CALLS`, the `config_facade` models/engines/host-jobs passthroughs for hosts, the `structured_facade` response_format check for hosts, cached sessions with per-session prompt-cache listing/clearing, host memory snapshots, model-residency listings, locks and model switching, live token streaming, workspace-scoped tools, durable bloc prompt-cache control, media inputs, generated media outputs, video progress events, and tool approval waits via AbstractCore
 - `tools-comms.md` — enabling the optional comms toolset (email/WhatsApp/Telegram)
 - `email.md` — email for each user: run-scoped account binding and the host resolver, sending without asking (self and pre-authorised recipients), the durable event inbox and mail feeder, the `email.received@1` trigger on the primary or any other mailbox of the user, mail verbs for flows (changes and sends only on a Read and write mailbox: `email_mailbox_read_only`, `email_mailbox_cannot_send`), and the send-email action
-- `tool-approval.md` — tool risk tiers, the run-policy rank ceiling, and per-call refiners (the `send_email` recipient rule: self and pre-authorised recipients)
+- `tool-approval.md` — tool risk tiers, the run-policy rank ceiling, the session tool policy (a conversation's standing approve/deny, applied before any approval wait), and per-call refiners (the `send_email` recipient rule: self and pre-authorised recipients)
 - `api.md#workflowbundles-flow-and-visualflow-distribution` — VisualFlow compiler APIs, media nodes, and document nodes (`read_pdf` / `write_pdf` / `write_docx`)
 - `api.md#sessions-and-history` — session history replay: one window, the most recent 50,000 tokens of whole turns (`HISTORY_REPLAY_MAX_TOKENS`), returned as a `ReplayedHistory` whose `.report` records what was replayed and dropped
 - `api.md#conversation-search` — keyword search over a plane's conversations (`ConversationSearch`): questions, answers and the turn's artifacts, one SQLite FTS5 trigram index per plane, incremental `sync` with a time budget, exact then fuzzy matching
@@ -41,6 +41,7 @@ In this repo, the AbstractCore wiring lives under `src/abstractruntime/integrati
 - `entity-runtime.md` — per-entity runtimes for summoned entities: homes, the one-writer lease, act-only diary privacy (`$act_only` refs), durable visit waits with deadlines
 - `evidence.md` — artifact-backed evidence capture for external-boundary tools
 - `mcp-worker.md` — MCP worker CLI (`abstractruntime-mcp-worker`)
+- `replay.md` — the replay view: one reconstruction of a run tree (status, the interaction to answer, messages, one activity per execution, artifacts, usage, the workflow it executes) that every client renders; the durable cursor (`seq`, `list_after`); conformance fixtures
 - `snapshots.md` — snapshot/bookmark model and stores
 - `provenance.md` — tamper-evident hash-chained ledger
 - `limits.md` — runtime-aware `_limits` namespace and APIs

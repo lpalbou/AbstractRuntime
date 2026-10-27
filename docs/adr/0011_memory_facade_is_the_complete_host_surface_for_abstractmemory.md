@@ -39,10 +39,9 @@ no rule saying whose job it is to close the gap.
    decision 2 applies unchanged).
 2. **The ledger row address is `(run_id, seq)`.** `LedgerStore.get_record(run_id, seq)` returns one record with its
    `$slim` markers resolved against the STARTED row of the same `step_id` and, under `OffloadingLedgerStore`, its
-   offloaded `{"$artifact": id}` leaves rehydrated; `list(run_id)` records carry `"seq"`. `seq` is added on read and
-   never persisted inside the record (the hash chain excludes it). SQLite uses its primary key; the JSON-file backend
-   assigns `seq` = the 1-based position of the record in its file (the order `list()` returns). `append()` returns
-   the seq of the row it wrote when the backend knows it.
+   offloaded `{"$artifact": id}` leaves rehydrated; `list(run_id)` records carry `"seq"`. `seq` is the per-run
+   record number of ADR 0010 (runtime 0.14.0): SQLite's key, persisted on each JSON-file line (lines written before
+   it read as their position), excluded from the hash chain. `append()` returns the seq of the row it wrote.
 3. **The runtime stamps every memory write it performs.** The runtime publishes the current step to the handler it is
    executing (`abstractruntime.core.step_context`: `run_id`, `seq` of the step's STARTED row, `step_id`, `node_id`,
    `attempt`, `effect_type`). The memory writers stamp through `MemoryFacade.stamp`: a `step` ref `(run_id, seq,
@@ -79,19 +78,18 @@ no rule saying whose job it is to close the gap.
   ledger source until backlog 0857 lands.
 
 ### Neutral
-- `seq` is read-side metadata: persisted bytes, hashes and the diary chain are unchanged.
+- `seq` is ADR 0010's per-run record number (persisted on JSON-file lines, excluded from hashes); the diary chain and
+  the record digests a memory stamps exclude it.
 - The step context is out of band (a `ContextVar`, like the progress callback): effect payloads stay JSON and a
   handler called directly, outside a runtime step, sees no step.
 
 ### Open decisions (operator)
-- **Durability of a JSON-file row address.** On the JSON-file ledger (the gateway's default) `seq` is a line
-  position: a rewrite of the file (a dropped line, a compaction) shifts every later seq. The facade never answers
-  `ok` for a shifted row (a step ref resolves only to a STARTED row of the named step, and a stamped digest is
-  verified), but the memory's source then reads `source_gone`. Two ways to make the address durable, not chosen
-  here: (a) persist `seq` inside each JSON-file record at append time (the record bytes then carry their address;
-  rewrites keep it; the hash chain must keep excluding it, and readers of old files fall back to the position);
-  (b) move plane ledgers to the SQLite backend, whose `seq` is a primary key (the JSON-file backend stays for
-  development). Until decided, JSON-file ledgers are append-only by contract: nothing rewrites them.
+- **Durability of a JSON-file row address: decided, option (a).** Of the two options (a) persist `seq` inside each
+  JSON-file record at append, (b) SQLite plane ledgers, runtime 0.14.0 shipped (a) with ADR 0010 (the per-run `seq`
+  is the durable cursor, persisted on each JSONL line under a file lock, excluded from the hash chain; lines written
+  before it read as their position). The row address therefore survives a rewrite: `get_record` and the JSON-file
+  row index find a record by its persisted `seq` (never by line position), and a step ref whose row was dropped
+  answers `source_gone`.
 - **Memory ownership.** `owner_id` is a partition string derived from the run (`run`: the run id, `session`:
   `session_memory_<sid>`, `global`: the plane's global owner). The runtime refuses a payload `owner_id` the run does
   not derive, but a session id is still caller-chosen upstream. The full fix (owner = the principal, scope = the

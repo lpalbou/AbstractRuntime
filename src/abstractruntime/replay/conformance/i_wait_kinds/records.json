@@ -1,0 +1,487 @@
+{
+ "a0a0a0a0-0000-4000-8000-0000000000a0": [
+  {
+   "run_id": "a0a0a0a0-0000-4000-8000-0000000000a0",
+   "step_id": "root-start-pause",
+   "node_id": "start_pause",
+   "status": "started",
+   "effect": {
+    "type": "start_subworkflow",
+    "payload": {
+     "workflow_id": "wait-kinds@1.0.0:pause",
+     "async": true
+    },
+    "result_key": "_temp.effects.start_pause"
+   },
+   "result": null,
+   "error": null,
+   "started_at": "2026-10-27T10:00:01.000000+00:00",
+   "ended_at": null,
+   "actor_id": null,
+   "session_id": "sess-synthetic-0001",
+   "attempt": 1,
+   "idempotency_key": "idem-root-pause",
+   "prev_hash": null,
+   "record_hash": null,
+   "signature": null,
+   "seq": 1
+  },
+  {
+   "run_id": "a0a0a0a0-0000-4000-8000-0000000000a0",
+   "step_id": "root-start-pause",
+   "node_id": "start_pause",
+   "status": "completed",
+   "effect": {
+    "type": "start_subworkflow",
+    "payload": {
+     "workflow_id": "wait-kinds@1.0.0:pause",
+     "async": true
+    },
+    "result_key": "_temp.effects.start_pause"
+   },
+   "result": {
+    "sub_run_id": "a1a1a1a1-0000-4000-8000-0000000000a1",
+    "async": true
+   },
+   "error": null,
+   "started_at": "2026-10-27T10:00:02.000000+00:00",
+   "ended_at": "2026-10-27T10:00:02.000000+00:00",
+   "actor_id": null,
+   "session_id": "sess-synthetic-0001",
+   "attempt": 1,
+   "idempotency_key": "idem-root-pause",
+   "prev_hash": null,
+   "record_hash": null,
+   "signature": null,
+   "seq": 2
+  },
+  {
+   "run_id": "a0a0a0a0-0000-4000-8000-0000000000a0",
+   "step_id": "root-start-wake",
+   "node_id": "start_wake",
+   "status": "started",
+   "effect": {
+    "type": "start_subworkflow",
+    "payload": {
+     "workflow_id": "wait-kinds@1.0.0:wake",
+     "async": true
+    },
+    "result_key": "_temp.effects.start_wake"
+   },
+   "result": null,
+   "error": null,
+   "started_at": "2026-10-27T10:00:03.000000+00:00",
+   "ended_at": null,
+   "actor_id": null,
+   "session_id": "sess-synthetic-0001",
+   "attempt": 1,
+   "idempotency_key": "idem-root-wake",
+   "prev_hash": null,
+   "record_hash": null,
+   "signature": null,
+   "seq": 3
+  },
+  {
+   "run_id": "a0a0a0a0-0000-4000-8000-0000000000a0",
+   "step_id": "root-start-wake",
+   "node_id": "start_wake",
+   "status": "completed",
+   "effect": {
+    "type": "start_subworkflow",
+    "payload": {
+     "workflow_id": "wait-kinds@1.0.0:wake",
+     "async": true
+    },
+    "result_key": "_temp.effects.start_wake"
+   },
+   "result": {
+    "sub_run_id": "a2a2a2a2-0000-4000-8000-0000000000a2",
+    "async": true
+   },
+   "error": null,
+   "started_at": "2026-10-27T10:00:04.000000+00:00",
+   "ended_at": "2026-10-27T10:00:04.000000+00:00",
+   "actor_id": null,
+   "session_id": "sess-synthetic-0001",
+   "attempt": 1,
+   "idempotency_key": "idem-root-wake",
+   "prev_hash": null,
+   "record_hash": null,
+   "signature": null,
+   "seq": 4
+  },
+  {
+   "run_id": "a0a0a0a0-0000-4000-8000-0000000000a0",
+   "step_id": "root-start-signal",
+   "node_id": "start_signal",
+   "status": "started",
+   "effect": {
+    "type": "start_subworkflow",
+    "payload": {
+     "workflow_id": "wait-kinds@1.0.0:signal",
+     "async": true
+    },
+    "result_key": "_temp.effects.start_signal"
+   },
+   "result": null,
+   "error": null,
+   "started_at": "2026-10-27T10:00:05.000000+00:00",
+   "ended_at": null,
+   "actor_id": null,
+   "session_id": "sess-synthetic-0001",
+   "attempt": 1,
+   "idempotency_key": "idem-root-signal",
+   "prev_hash": null,
+   "record_hash": null,
+   "signature": null,
+   "seq": 5
+  },
+  {
+   "run_id": "a0a0a0a0-0000-4000-8000-0000000000a0",
+   "step_id": "root-start-signal",
+   "node_id": "start_signal",
+   "status": "completed",
+   "effect": {
+    "type": "start_subworkflow",
+    "payload": {
+     "workflow_id": "wait-kinds@1.0.0:signal",
+     "async": true
+    },
+    "result_key": "_temp.effects.start_signal"
+   },
+   "result": {
+    "sub_run_id": "a3a3a3a3-0000-4000-8000-0000000000a3",
+    "async": true
+   },
+   "error": null,
+   "started_at": "2026-10-27T10:00:06.000000+00:00",
+   "ended_at": "2026-10-27T10:00:06.000000+00:00",
+   "actor_id": null,
+   "session_id": "sess-synthetic-0001",
+   "attempt": 1,
+   "idempotency_key": "idem-root-signal",
+   "prev_hash": null,
+   "record_hash": null,
+   "signature": null,
+   "seq": 6
+  },
+  {
+   "run_id": "a0a0a0a0-0000-4000-8000-0000000000a0",
+   "step_id": "root-start-event",
+   "node_id": "start_event",
+   "status": "started",
+   "effect": {
+    "type": "start_subworkflow",
+    "payload": {
+     "workflow_id": "wait-kinds@1.0.0:event",
+     "async": true
+    },
+    "result_key": "_temp.effects.start_event"
+   },
+   "result": null,
+   "error": null,
+   "started_at": "2026-10-27T10:00:07.000000+00:00",
+   "ended_at": null,
+   "actor_id": null,
+   "session_id": "sess-synthetic-0001",
+   "attempt": 1,
+   "idempotency_key": "idem-root-event",
+   "prev_hash": null,
+   "record_hash": null,
+   "signature": null,
+   "seq": 7
+  },
+  {
+   "run_id": "a0a0a0a0-0000-4000-8000-0000000000a0",
+   "step_id": "root-start-event",
+   "node_id": "start_event",
+   "status": "completed",
+   "effect": {
+    "type": "start_subworkflow",
+    "payload": {
+     "workflow_id": "wait-kinds@1.0.0:event",
+     "async": true
+    },
+    "result_key": "_temp.effects.start_event"
+   },
+   "result": {
+    "sub_run_id": "a4a4a4a4-0000-4000-8000-0000000000a4",
+    "async": true
+   },
+   "error": null,
+   "started_at": "2026-10-27T10:00:08.000000+00:00",
+   "ended_at": "2026-10-27T10:00:08.000000+00:00",
+   "actor_id": null,
+   "session_id": "sess-synthetic-0001",
+   "attempt": 1,
+   "idempotency_key": "idem-root-event",
+   "prev_hash": null,
+   "record_hash": null,
+   "signature": null,
+   "seq": 8
+  }
+ ],
+ "a1a1a1a1-0000-4000-8000-0000000000a1": [
+  {
+   "run_id": "a1a1a1a1-0000-4000-8000-0000000000a1",
+   "step_id": "pause-wait",
+   "node_id": "wait_pause",
+   "status": "started",
+   "effect": {
+    "type": "wait_event",
+    "payload": {
+     "wait_key": "pause:a1a1a1a1-0000-4000-8000-0000000000a1"
+    }
+   },
+   "result": null,
+   "error": null,
+   "started_at": "2026-10-27T10:00:09.000000+00:00",
+   "ended_at": null,
+   "actor_id": null,
+   "session_id": "sess-synthetic-0001",
+   "attempt": 1,
+   "idempotency_key": "idem-pause-wait",
+   "prev_hash": null,
+   "record_hash": null,
+   "signature": null,
+   "seq": 1
+  },
+  {
+   "run_id": "a1a1a1a1-0000-4000-8000-0000000000a1",
+   "step_id": "pause-wait",
+   "node_id": "wait_pause",
+   "status": "waiting",
+   "effect": {
+    "type": "wait_event",
+    "payload": {
+     "wait_key": "pause:a1a1a1a1-0000-4000-8000-0000000000a1"
+    }
+   },
+   "result": {
+    "wait": {
+     "reason": "user",
+     "wait_key": "pause:a1a1a1a1-0000-4000-8000-0000000000a1",
+     "until": null,
+     "resume_to_node": null,
+     "result_key": null,
+     "prompt": null,
+     "choices": null,
+     "allow_free_text": true,
+     "details": {
+      "kind": "pause"
+     }
+    }
+   },
+   "error": null,
+   "started_at": "2026-10-27T10:00:10.000000+00:00",
+   "ended_at": "2026-10-27T10:00:10.000000+00:00",
+   "actor_id": null,
+   "session_id": "sess-synthetic-0001",
+   "attempt": 1,
+   "idempotency_key": "idem-pause-wait",
+   "prev_hash": null,
+   "record_hash": null,
+   "signature": null,
+   "seq": 2
+  }
+ ],
+ "a2a2a2a2-0000-4000-8000-0000000000a2": [
+  {
+   "run_id": "a2a2a2a2-0000-4000-8000-0000000000a2",
+   "step_id": "wake-wait",
+   "node_id": "wait_wake",
+   "status": "started",
+   "effect": {
+    "type": "wait_event",
+    "payload": {
+     "wait_key": "automation:auto-0001:wake"
+    }
+   },
+   "result": null,
+   "error": null,
+   "started_at": "2026-10-27T10:00:11.000000+00:00",
+   "ended_at": null,
+   "actor_id": null,
+   "session_id": "sess-synthetic-0001",
+   "attempt": 1,
+   "idempotency_key": "idem-wake-wait",
+   "prev_hash": null,
+   "record_hash": null,
+   "signature": null,
+   "seq": 1
+  },
+  {
+   "run_id": "a2a2a2a2-0000-4000-8000-0000000000a2",
+   "step_id": "wake-wait",
+   "node_id": "wait_wake",
+   "status": "waiting",
+   "effect": {
+    "type": "wait_event",
+    "payload": {
+     "wait_key": "automation:auto-0001:wake"
+    }
+   },
+   "result": {
+    "wait": {
+     "reason": "event",
+     "wait_key": "automation:auto-0001:wake",
+     "until": null,
+     "resume_to_node": null,
+     "result_key": null,
+     "prompt": null,
+     "choices": null,
+     "allow_free_text": true,
+     "details": null
+    }
+   },
+   "error": null,
+   "started_at": "2026-10-27T10:00:12.000000+00:00",
+   "ended_at": "2026-10-27T10:00:12.000000+00:00",
+   "actor_id": null,
+   "session_id": "sess-synthetic-0001",
+   "attempt": 1,
+   "idempotency_key": "idem-wake-wait",
+   "prev_hash": null,
+   "record_hash": null,
+   "signature": null,
+   "seq": 2
+  }
+ ],
+ "a3a3a3a3-0000-4000-8000-0000000000a3": [
+  {
+   "run_id": "a3a3a3a3-0000-4000-8000-0000000000a3",
+   "step_id": "signal-wait",
+   "node_id": "wait_signal",
+   "status": "started",
+   "effect": {
+    "type": "wait_event",
+    "payload": {
+     "wait_key": "evt:run:a3a3a3a3-0000-4000-8000-0000000000a3:go"
+    }
+   },
+   "result": null,
+   "error": null,
+   "started_at": "2026-10-27T10:00:13.000000+00:00",
+   "ended_at": null,
+   "actor_id": null,
+   "session_id": "sess-synthetic-0001",
+   "attempt": 1,
+   "idempotency_key": "idem-signal-wait",
+   "prev_hash": null,
+   "record_hash": null,
+   "signature": null,
+   "seq": 1
+  },
+  {
+   "run_id": "a3a3a3a3-0000-4000-8000-0000000000a3",
+   "step_id": "signal-wait",
+   "node_id": "wait_signal",
+   "status": "waiting",
+   "effect": {
+    "type": "wait_event",
+    "payload": {
+     "wait_key": "evt:run:a3a3a3a3-0000-4000-8000-0000000000a3:go"
+    }
+   },
+   "result": {
+    "wait": {
+     "reason": "event",
+     "wait_key": "evt:run:a3a3a3a3-0000-4000-8000-0000000000a3:go",
+     "until": null,
+     "resume_to_node": null,
+     "result_key": null,
+     "prompt": null,
+     "choices": null,
+     "allow_free_text": true,
+     "details": null
+    }
+   },
+   "error": null,
+   "started_at": "2026-10-27T10:00:14.000000+00:00",
+   "ended_at": "2026-10-27T10:00:14.000000+00:00",
+   "actor_id": null,
+   "session_id": "sess-synthetic-0001",
+   "attempt": 1,
+   "idempotency_key": "idem-signal-wait",
+   "prev_hash": null,
+   "record_hash": null,
+   "signature": null,
+   "seq": 2
+  }
+ ],
+ "a4a4a4a4-0000-4000-8000-0000000000a4": [
+  {
+   "run_id": "a4a4a4a4-0000-4000-8000-0000000000a4",
+   "step_id": "event-wait",
+   "node_id": "wait_event",
+   "status": "started",
+   "effect": {
+    "type": "wait_event",
+    "payload": {
+     "wait_key": "evt:run:a4a4a4a4-0000-4000-8000-0000000000a4:color",
+     "prompt": "Which colour should the chart use?",
+     "choices": [
+      "red",
+      "blue"
+     ]
+    }
+   },
+   "result": null,
+   "error": null,
+   "started_at": "2026-10-27T10:00:15.000000+00:00",
+   "ended_at": null,
+   "actor_id": null,
+   "session_id": "sess-synthetic-0001",
+   "attempt": 1,
+   "idempotency_key": "idem-event-wait",
+   "prev_hash": null,
+   "record_hash": null,
+   "signature": null,
+   "seq": 1
+  },
+  {
+   "run_id": "a4a4a4a4-0000-4000-8000-0000000000a4",
+   "step_id": "event-wait",
+   "node_id": "wait_event",
+   "status": "waiting",
+   "effect": {
+    "type": "wait_event",
+    "payload": {
+     "wait_key": "evt:run:a4a4a4a4-0000-4000-8000-0000000000a4:color",
+     "prompt": "Which colour should the chart use?",
+     "choices": [
+      "red",
+      "blue"
+     ]
+    }
+   },
+   "result": {
+    "wait": {
+     "reason": "event",
+     "wait_key": "evt:run:a4a4a4a4-0000-4000-8000-0000000000a4:color",
+     "until": null,
+     "resume_to_node": null,
+     "result_key": null,
+     "prompt": "Which colour should the chart use?",
+     "choices": [
+      "red",
+      "blue"
+     ],
+     "allow_free_text": true,
+     "details": null
+    }
+   },
+   "error": null,
+   "started_at": "2026-10-27T10:00:16.000000+00:00",
+   "ended_at": "2026-10-27T10:00:16.000000+00:00",
+   "actor_id": null,
+   "session_id": "sess-synthetic-0001",
+   "attempt": 1,
+   "idempotency_key": "idem-event-wait",
+   "prev_hash": null,
+   "record_hash": null,
+   "signature": null,
+   "seq": 2
+  }
+ ]
+}

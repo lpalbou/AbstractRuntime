@@ -14,11 +14,12 @@ PyPI: a release never ships above an unpublished floor (root ADR 0034). ADR 0011
 
 ### Added
 
-- **Ledger row address**: `LedgerStore.get_record(run_id, seq)` returns one record ready to read (a terminal row's
-  `$slim` markers resolved against its STARTED row, offloaded leaves rehydrated); `list()` records carry `"seq"`;
-  `append()` returns the seq it wrote. `seq` is read-side only (never persisted in the record, excluded from the hash
-  chain). SQLite reads by primary key; the JSON-file backend keeps a per-run line-offset index, so a point read is a
-  seek and one line parse (0.05 ms at 10,000 rows instead of a 58 ms full parse).
+- **Ledger row address** (on 0.14.0's per-run `seq`, ADR 0010): `LedgerStore.get_record(run_id, seq)` returns one
+  record ready to read (a terminal row's `$slim` markers resolved against its STARTED row, offloaded leaves
+  rehydrated); `find_started_record(run_id, step_id, before_seq=)`. SQLite reads by primary key; the JSON-file backend
+  keeps a per-run line-offset index and checks the seq persisted on the line, so a point read is a seek and one line
+  parse (0.05 ms at 10,000 rows instead of a 58 ms full parse), and a rewritten file is read by persisted seq, never
+  by position.
 - **Step context**: an effect handler reads its own step with
   `abstractruntime.core.step_context.current_step_context(run.run_id)`: `run_id`, `step_id`, `seq` of the attempt's
   STARTED row, `node_id`, `attempt`, `effect_type`. Out of band like the progress callback; `None` outside a runtime
@@ -53,12 +54,78 @@ PyPI: a release never ships above an unpublished floor (root ADR 0034). ADR 0011
 
 ### Changed
 
-- **Contract change for ledger readers**: every record `LedgerStore.list(run_id)` returns now carries an additive
-  `"seq"` key (its row address; not in the stored bytes, excluded from the hash chain). A consumer that compares
-  records it reads by other means (a byte-tail reader of the JSON-file ledger, a cached copy) to `list()` output must
-  add or ignore `seq`.
 - `AbstractMemory>=0.4.0` (was `>=0.3.2`).
 - SQLite `find_started_record` reads newest-first with `LIMIT 1` (0.01 ms at 10,000 rows instead of 3.5 ms).
+
+## [0.14.0] - 2026-10-27
+
+Two features: the replay view with a durable per-run ledger cursor, and the session tool policy.
+Upgrade note (one way): hash-chained JSONL ledgers written by 0.14.0 carry `seq` on each line, and
+an older `verify_ledger_chain` reports those lines as tampered. Upgrade writers and verifiers together.
+
+### Added
+
+- **Replay view** (`abstractruntime.replay`, ADR 0010, backlog 0854; framework root 0993). One
+  pure, deterministic reducer turns a run tree's ledger records and snapshots into the view every
+  client renders (`replay_view_v1`).
+  - What the view holds:
+    - the run tree through delegation waits, with the workflow each run executes (bundle,
+      version, flow, the root's entrypoint);
+    - the status;
+    - the person-facing interaction: a delegated child's approval, a question, or a prompted
+      event, with the resume command to send;
+    - verbatim messages with their provenance (run, steps, seqs, artifacts);
+    - one activity per node execution (AbstractFlow's `executionIdFor` rules), with tool calls
+      matched to results;
+    - artifacts and usage.
+  - `$slim` pointers are resolved, and a windowed history is named in `warnings`.
+  - A wait is over when a resume OR a later step of the same run exists.
+  - `ReplayView.apply` folds newer records and returns a delta. `apply_delta` and `diff_views`
+    are the client side. `replay(all)` equals the fold of any chunking.
+  - Wait kinds agree with `automations.attention`. The person-facing kinds are tool_approval,
+    ask_user, and an event that carries a prompt. The non-person-facing kinds are delegation,
+    timer, job, pause, automation_wake and signal. The interaction carries `answer_payload`.
+  - A session tool policy's `abstract.tool_policy_decision` record is an activity
+    (`tool_policy`: allowed or denied by the conversation's policy, its revision and who set it),
+    never an interaction. The tool rows it names carry `decided_by: "session_policy"`.
+  - Every delta carries typed `changes` (status, interaction opened or closed, run, message,
+    activity, artifact, each with its run and seq), for push dispatch.
+  - Cursor tokens name each run by a collision-free prefix that is safe in a header.
+    `resolve_cursor_token` maps a token back.
+  - The conformance cases ship with the package (`abstractruntime.replay.conformance`), so a host
+    or a client port can run them. Guide: `docs/replay.md`.
+- **Durable ledger cursor** (gateway backlog 0082). A JSONL append after a torn last line (a
+  crash mid-write) now starts a new line; before, the fragment and the whole new record were
+  dropped together:
+  - Every ledger store numbers a run's records (`seq`). `JsonlLedgerStore` persists the number
+    on each line, allocated under an advisory file lock, so two processes never take the same
+    seq. Lines written before the field existed read as their position.
+  - `LedgerStore.list_after(run_id=, after=, limit=)` works on every store: an indexed read on
+    SQLite, a byte-offset seek on JSONL. `append()` returns the seq.
+  - `ObservableLedgerStore` passes `seq` to subscribers.
+  - `SqliteLedgerStore.import_records` copies a ledger in and keeps its `seq` values (migration).
+
+- **Session tool policy**: a conversation's standing "approve / deny without asking", applied before any approval
+  wait. `abstractruntime.storage.session_tool_policy` (`SqliteSessionToolPolicyStore`,
+  `InMemorySessionToolPolicyStore`, `session_policy_names`), `Runtime(session_tool_policy_store=...)` /
+  `Runtime.set_session_tool_policy_store()`. The TOOL_CALLS handler reads the run's session row once per batch: an
+  approved call runs with no wait, a denied call is refused with no wait, and each decision writes an
+  `abstract.tool_policy_decision` ledger record (who set the policy, when, which selector matched). It applies to
+  every run of the session (the run tree's root session: delegated children, resumes, restarts); approvals never
+  reach untrusted-input runs or automation occurrences (a deny does, and also wins over an approval that was shown
+  before it); never beyond the run's `allowed_tools`. Before this, "approve all" lived in each
+  client, which answered the wait after it arrived: the gate flashed in every app and in the ledger. See
+  [tool-approval.md](docs/tool-approval.md#session-tool-policy-a-conversations-standing-word).
+
+### Changed
+
+- Hash-chained ledgers: `seq` is persisted on each JSONL line and excluded from the hash by this
+  version's `compute_record_hash`. A verifier from an older version includes it, so it reports
+  every line written by this version as tampered. Upgrade every process that verifies a chain
+  (`verify_ledger_chain`) together with the writers.
+- `LedgerStore.list()` records carry `seq`. A consumer that compared records to `asdict(record)`
+  sees one more key. The hash chain excludes `seq` (it is the store's position, assigned after
+  the hash).
 
 ## [0.13.1] - 2026-10-27
 

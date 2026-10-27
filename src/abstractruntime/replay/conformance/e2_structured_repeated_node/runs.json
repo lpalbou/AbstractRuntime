@@ -1,0 +1,162 @@
+{
+ "67d4a24f-1a23-5390-ba6c-a969a927ce4b": {
+  "run_id": "67d4a24f-1a23-5390-ba6c-a969a927ce4b",
+  "workflow_id": "assist@draft.abstractflow-run-1707d0ee-e543-4b1d-bd11-540b628:8d0e69e8",
+  "status": "running",
+  "current_node": "node-8",
+  "parent_run_id": null,
+  "session_id": "abstractflow-run-753ea44d-6b7e-5f21-acf7-8e5da4d0e41e",
+  "created_at": "2026-10-11T16:42:27.886590+00:00",
+  "updated_at": "2026-10-11T18:01:53.648116+00:00",
+  "waiting": null,
+  "output": null,
+  "error": "txt-8106ec715c91",
+  "vars": {
+   "prompt": "txt-996519d3686e",
+   "context": {
+    "task": "txt-996519d3686e"
+   }
+  }
+ },
+ "44ed2126-ab6d-5bd2-be31-c57132dcb5c7": {
+  "run_id": "44ed2126-ab6d-5bd2-be31-c57132dcb5c7",
+  "workflow_id": "visual_react_agent_assist_draft_abstractflow-run-1707d0ee-e543-4b1d-bd11-540b628_8d0e69e8_node-8",
+  "status": "completed",
+  "current_node": "done",
+  "parent_run_id": "67d4a24f-1a23-5390-ba6c-a969a927ce4b",
+  "session_id": "abstractflow-run-753ea44d-6b7e-5f21-acf7-8e5da4d0e41e",
+  "created_at": "2026-10-11T16:43:04.514622+00:00",
+  "updated_at": "2026-10-11T16:49:29.913685+00:00",
+  "waiting": null,
+  "output": {
+   "answer": "txt-f2946a24dbe2",
+   "report": "txt-be156cf73cf7",
+   "iterations": 3,
+   "messages": [
+    {
+     "role": "txt-39b4b61e5934",
+     "content": "txt-de715f45fe9f",
+     "timestamp": "txt-8f6c964b15b2",
+     "metadata": {
+      "message_id": "txt-634cf2b4629a"
+     }
+    },
+    {
+     "role": "txt-f2007e1175d4",
+     "content": "",
+     "timestamp": "txt-715d37233257",
+     "metadata": {
+      "kind": "txt-6485390faeaf",
+      "cycle": 1,
+      "message_id": "txt-0ec3fd3dc42a"
+     },
+     "tool_calls": [
+      {
+       "type": "txt-fcd5958ff500",
+       "id": "txt-00e8eb120306",
+       "function": {
+        "name": "txt-cdac54f09dea",
+        "arguments": "txt-4257095aaa1c"
+       }
+      }
+     ]
+    },
+    {
+     "role": "txt-544ab3c986ad",
+     "content": "txt-bab7561898b3",
+     "timestamp": "txt-ccb0250dda09",
+     "metadata": {
+      "name": "txt-cdac54f09dea",
+      "call_id": "call_O7X8vxycbQ5WaXFaVoCvbD3X",
+      "success": true,
+      "message_id": "txt-29a37caf38c4"
+     }
+    },
+    {
+     "role": "txt-39b4b61e5934",
+     "content": "txt-b95fc5cd09db",
+     "timestamp": "txt-79d76e1f7ec4",
+     "metadata": {
+      "kind": "txt-eaec414cd420",
+      "message_id": "txt-acf1b654ff81"
+     },
+     "_af_synthetic": "txt-eaec414cd420"
+    },
+    {
+     "role": "txt-f2007e1175d4",
+     "content": "",
+     "timestamp": "txt-58c60f4ef79d",
+     "metadata": {
+      "kind": "txt-6485390faeaf",
+      "cycle": 2,
+      "message_id": "txt-d00beb3de458"
+     },
+     "tool_calls": [
+      {
+       "type": "txt-fcd5958ff500",
+       "id": "txt-7c7b502af134",
+       "function": {
+        "name": "txt-05aa1c28d9a1",
+        "arguments": "txt-3ecbcf27a219"
+       }
+      }
+     ]
+    },
+    {
+     "role": "txt-544ab3c986ad",
+     "content": "txt-01331a30fac3",
+     "timestamp": "txt-b509261c6ca7",
+     "metadata": {
+      "name": "txt-05aa1c28d9a1",
+      "call_id": "call_MnTTuGAX8iHiz3KjcxzbHkkY",
+      "success": true,
+      "message_id": "txt-324814da729b"
+     }
+    },
+    {
+     "role": "txt-39b4b61e5934",
+     "content": "txt-3fdd420ffef9",
+     "timestamp": "txt-22b6d5ef1cd4",
+     "metadata": {
+      "kind": "txt-eaec414cd420",
+      "message_id": "txt-216775cfc245"
+     },
+     "_af_synthetic": "txt-eaec414cd420"
+    },
+    {
+     "role": "txt-f2007e1175d4",
+     "content": "txt-f2946a24dbe2",
+     "timestamp": "txt-04b2983d3f12",
+     "metadata": {
+      "kind": "txt-1313194b4bc8",
+      "message_id": "txt-7a6a07ae2ff2"
+     }
+    }
+   ],
+   "outcome": "txt-1313194b4bc8",
+   "review_skipped": false,
+   "stop_reason": {
+    "code": "txt-1313194b4bc8",
+    "finished": true,
+    "budget_exhausted": false,
+    "iterations": 3,
+    "label": "txt-ab4e339df083",
+    "headline": "",
+    "remedy": ""
+   },
+   "notices": []
+  },
+  "error": null,
+  "vars": {
+   "context": {
+    "task": "txt-3fef30431e99",
+    "messages": [
+     {
+      "role": "user",
+      "content": "txt-3fdd420ffef9"
+     }
+    ]
+   }
+  }
+ }
+}

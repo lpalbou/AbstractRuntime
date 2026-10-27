@@ -1,0 +1,20 @@
+{
+ "adjustments": [],
+ "case": "g_ask_user",
+ "pins": "an ask_user question and its answer: a question message, an answer message (role user), the wait ended by the resume, no open interaction afterwards.",
+ "provenance": "redacted from the operator's gateway data 2026-10-27",
+ "redaction": "free text -> salted HMAC placeholders (txt-<hex>); run/session ids -> salted uuid5; conversation-sized fields the view never reads dropped; $slim markers recomputed against the redacted STARTED payload (see the extraction script's docstring)",
+ "root_run_id": "73c7888f-f6d1-5be9-9f95-254e9eb0ffd9",
+ "slim_markers": {
+  "slim_dropped": 0,
+  "slim_fixed": 0
+ },
+ "source_runs": {
+  "73c7888f-f6d1-5be9-9f95-254e9eb0ffd9": {
+   "cut_after_seq": null,
+   "snapshot": "real",
+   "source_run_id": "sha256:0d63035f0bcc8608",
+   "window_from_seq": null
+  }
+ }
+}

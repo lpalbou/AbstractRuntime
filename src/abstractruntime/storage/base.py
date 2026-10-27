@@ -276,25 +276,47 @@ def coerce_ledger_seq(seq: Any) -> Optional[int]:
 class LedgerStore(ABC):
     """Append-only journal store.
 
-    LEDGER ROW ADDRESS (ADR 0011): one record is addressed by `(run_id, seq)`,
-    `seq` being its 1-based position in the run's ledger. `step_id` is not an
-    address: a step's STARTED row and its terminal row share it. Backends with
-    a stored sequence (SQLite) use it; the JSON-file backend's `seq` is the
-    record's position in its file, i.e. in the order `list()` returns. `seq`
-    is read-side metadata: `list()` adds it to each record it returns, it is
-    never persisted inside the record and the hash chain excludes it.
+    LEDGER ROW ADDRESS (ADR 0011, on the per-run `seq` of ADR 0010): one record
+    is addressed by `(run_id, seq)`, the run's 1-based record number every store
+    assigns at append (SQLite: its key; JSON files: persisted on each line, lines
+    written before the field read as their position). `step_id` is not an
+    address: a step's STARTED row and its terminal row share it. `list()` records
+    carry `seq`; the hash chain excludes it (assigned after the hash).
     """
 
     @abstractmethod
     def append(self, record: StepRecord) -> Optional[int]:
-        """Append one record. Returns the `seq` of the row written when the
-        backend knows it (SQLite, JSON files, in-memory), else None — the
-        runtime hands that seq to the effect handler as its step context and
+        """Append one record. Stores that number records return its per-run `seq` (SQLite, JSON files,
+        in-memory); else None. The runtime hands that seq to the effect handler as its step context and
         never guesses one."""
         ...
 
     @abstractmethod
-    def list(self, run_id: str) -> List[Dict[str, Any]]: ...
+    def list(self, run_id: str) -> List[Dict[str, Any]]:
+        """The run's records in append order. Each carries `seq` (1, 2, ...: the durable cursor,
+        ADR-0010) on the stores that number records (JSONL, SQLite, in-memory)."""
+
+    def list_after(self, *, run_id: str, after: int, limit: int = 1000) -> Tuple[List[Dict[str, Any]], int]:
+        """Records with `seq` > `after` (at most `limit`) and the last seq returned (or `after`).
+
+        `after` is the last seq a reader consumed (0 = from the start). Default: `list()` then
+        filter; JSONL and SQLite override it with incremental reads."""
+        a = max(0, int(after or 0))
+        lim = max(1, int(limit or 1000))
+        out: List[Dict[str, Any]] = []
+        prev = 0
+        for rec in self.list(run_id):
+            if not isinstance(rec, dict):
+                continue
+            seq = rec.get("seq")
+            seq = int(seq) if isinstance(seq, int) and not isinstance(seq, bool) and seq > prev else prev + 1
+            prev = seq
+            if seq <= a:
+                continue
+            if len(out) >= lim:
+                break
+            out.append(rec if rec.get("seq") == seq else {**rec, "seq": seq})
+        return (out, int(out[-1]["seq"]) if out else a)
 
     def get_record_unresolved(self, run_id: str, seq: int) -> Optional[Dict[str, Any]]:
         """The row at `(run_id, seq)` as persisted (`$slim` markers unresolved),

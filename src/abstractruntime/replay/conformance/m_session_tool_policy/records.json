@@ -1,0 +1,672 @@
+{
+ "e0e0e0e0-0000-4000-8000-0000000000e0": [
+  {
+   "run_id": "e0e0e0e0-0000-4000-8000-0000000000e0",
+   "step_id": "r-agent",
+   "node_id": "agent",
+   "status": "started",
+   "effect": {
+    "type": "start_subworkflow",
+    "payload": {
+     "workflow_id": "basic-agent@0.0.5:15f19f7f"
+    },
+    "result_key": "_temp.agent"
+   },
+   "result": null,
+   "error": null,
+   "started_at": "2026-10-27T11:00:01.000000+00:00",
+   "ended_at": null,
+   "actor_id": null,
+   "session_id": "sess-synthetic-policy",
+   "attempt": 1,
+   "idempotency_key": "idem-root-agent",
+   "prev_hash": null,
+   "record_hash": null,
+   "signature": null,
+   "seq": 1
+  },
+  {
+   "run_id": "e0e0e0e0-0000-4000-8000-0000000000e0",
+   "step_id": "r-agent",
+   "node_id": "agent",
+   "status": "waiting",
+   "effect": {
+    "type": "start_subworkflow",
+    "payload": {
+     "workflow_id": "basic-agent@0.0.5:15f19f7f"
+    },
+    "result_key": "_temp.agent"
+   },
+   "result": {
+    "wait": {
+     "reason": "subworkflow",
+     "wait_key": "subworkflow:e1e1e1e1-0000-4000-8000-0000000000e1",
+     "details": {
+      "sub_run_id": "e1e1e1e1-0000-4000-8000-0000000000e1"
+     }
+    }
+   },
+   "error": null,
+   "started_at": "2026-10-27T11:00:02.000000+00:00",
+   "ended_at": "2026-10-27T11:00:02.000000+00:00",
+   "actor_id": null,
+   "session_id": "sess-synthetic-policy",
+   "attempt": 1,
+   "idempotency_key": "idem-root-agent",
+   "prev_hash": null,
+   "record_hash": null,
+   "signature": null,
+   "seq": 2
+  },
+  {
+   "run_id": "e0e0e0e0-0000-4000-8000-0000000000e0",
+   "step_id": "r-resume",
+   "node_id": "agent",
+   "status": "completed",
+   "effect": {
+    "type": "resume",
+    "payload": {
+     "wait_key": "subworkflow:e1e1e1e1-0000-4000-8000-0000000000e1",
+     "payload": {
+      "sub_run_id": "e1e1e1e1-0000-4000-8000-0000000000e1"
+     }
+    }
+   },
+   "result": {
+    "resumed": true
+   },
+   "error": null,
+   "started_at": "2026-10-27T11:00:16.000000+00:00",
+   "ended_at": "2026-10-27T11:00:16.000000+00:00",
+   "actor_id": null,
+   "session_id": "sess-synthetic-policy",
+   "attempt": 1,
+   "idempotency_key": null,
+   "prev_hash": null,
+   "record_hash": null,
+   "signature": null,
+   "seq": 3
+  },
+  {
+   "run_id": "e0e0e0e0-0000-4000-8000-0000000000e0",
+   "step_id": "r-end",
+   "node_id": "end",
+   "status": "completed",
+   "effect": null,
+   "result": {
+    "completed": true,
+    "output": {
+     "response": "Fetched; listing was refused."
+    }
+   },
+   "error": null,
+   "started_at": "2026-10-27T11:00:17.000000+00:00",
+   "ended_at": "2026-10-27T11:00:17.000000+00:00",
+   "actor_id": null,
+   "session_id": "sess-synthetic-policy",
+   "attempt": 1,
+   "idempotency_key": "system:completion:end",
+   "prev_hash": null,
+   "record_hash": null,
+   "signature": null,
+   "seq": 4
+  }
+ ],
+ "e1e1e1e1-0000-4000-8000-0000000000e1": [
+  {
+   "run_id": "e1e1e1e1-0000-4000-8000-0000000000e1",
+   "step_id": "c-llm",
+   "node_id": "reason",
+   "status": "started",
+   "effect": {
+    "type": "llm_call",
+    "payload": {
+     "prompt": "Fetch the page and list the folder",
+     "provider": "lmstudio",
+     "model": "m"
+    },
+    "result_key": "_temp.llm"
+   },
+   "result": null,
+   "error": null,
+   "started_at": "2026-10-27T11:00:03.000000+00:00",
+   "ended_at": null,
+   "actor_id": null,
+   "session_id": "sess-synthetic-policy",
+   "attempt": 1,
+   "idempotency_key": "idem-llm",
+   "prev_hash": null,
+   "record_hash": null,
+   "signature": null,
+   "seq": 1
+  },
+  {
+   "run_id": "e1e1e1e1-0000-4000-8000-0000000000e1",
+   "step_id": "c-llm",
+   "node_id": "reason",
+   "status": "completed",
+   "effect": {
+    "type": "llm_call",
+    "payload": {
+     "prompt": "Fetch the page and list the folder",
+     "provider": "lmstudio",
+     "model": "m"
+    },
+    "result_key": "_temp.llm"
+   },
+   "result": {
+    "content": "",
+    "usage": {
+     "input_tokens": 20,
+     "output_tokens": 5,
+     "total_tokens": 25
+    },
+    "model": "m"
+   },
+   "error": null,
+   "started_at": "2026-10-27T11:00:04.000000+00:00",
+   "ended_at": "2026-10-27T11:00:04.000000+00:00",
+   "actor_id": null,
+   "session_id": "sess-synthetic-policy",
+   "attempt": 1,
+   "idempotency_key": "idem-llm",
+   "prev_hash": null,
+   "record_hash": null,
+   "signature": null,
+   "seq": 2
+  },
+  {
+   "run_id": "e1e1e1e1-0000-4000-8000-0000000000e1",
+   "step_id": "c-act",
+   "node_id": "act",
+   "status": "started",
+   "effect": {
+    "type": "tool_calls",
+    "payload": {
+     "tool_calls": [
+      {
+       "name": "fetch_url",
+       "arguments": {
+        "url": "https://example.invalid/"
+       },
+       "call_id": "c1"
+      },
+      {
+       "name": "execute_command",
+       "arguments": {
+        "command": "ls"
+       },
+       "call_id": "c2"
+      }
+     ]
+    },
+    "result_key": "_temp.tool_results"
+   },
+   "result": null,
+   "error": null,
+   "started_at": "2026-10-27T11:00:05.000000+00:00",
+   "ended_at": null,
+   "actor_id": null,
+   "session_id": "sess-synthetic-policy",
+   "attempt": 1,
+   "idempotency_key": "idem-act",
+   "prev_hash": null,
+   "record_hash": null,
+   "signature": null,
+   "seq": 3
+  },
+  {
+   "run_id": "e1e1e1e1-0000-4000-8000-0000000000e1",
+   "step_id": "c-policy-auto_approved",
+   "node_id": "act",
+   "status": "completed",
+   "effect": {
+    "type": "emit_event",
+    "payload": {
+     "name": "abstract.tool_policy_decision",
+     "scope": "run",
+     "payload": {
+      "decision": "auto_approved",
+      "source": "session_policy",
+      "session_id": "sess-synthetic-policy",
+      "node_id": "act",
+      "tool_calls": [
+       {
+        "call_id": "c1",
+        "name": "fetch_url",
+        "matched": "kind:web"
+       }
+      ],
+      "policy": {
+       "revision": 5,
+       "set_by": {
+        "tenant_id": "default",
+        "user_id": "person-a",
+        "client": "panel-chat"
+       },
+       "set_at": "2026-10-27T10:59:00+00:00"
+      }
+     }
+    }
+   },
+   "result": {
+    "emitted": true,
+    "tool_policy_decision": {
+     "decision": "auto_approved",
+     "count": 1
+    }
+   },
+   "error": null,
+   "started_at": "2026-10-27T11:00:06.000000+00:00",
+   "ended_at": "2026-10-27T11:00:06.000000+00:00",
+   "actor_id": null,
+   "session_id": "sess-synthetic-policy",
+   "attempt": 1,
+   "idempotency_key": "system:tool_policy_decision:e1e1e1e1-0000-4000-8000-0000000000e1:5:auto_approved",
+   "prev_hash": null,
+   "record_hash": null,
+   "signature": null,
+   "seq": 4
+  },
+  {
+   "run_id": "e1e1e1e1-0000-4000-8000-0000000000e1",
+   "step_id": "c-policy-denied",
+   "node_id": "act",
+   "status": "completed",
+   "effect": {
+    "type": "emit_event",
+    "payload": {
+     "name": "abstract.tool_policy_decision",
+     "scope": "run",
+     "payload": {
+      "decision": "denied",
+      "source": "session_policy",
+      "session_id": "sess-synthetic-policy",
+      "node_id": "act",
+      "tool_calls": [
+       {
+        "call_id": "c2",
+        "name": "execute_command",
+        "matched": "tool"
+       }
+      ],
+      "policy": {
+       "revision": 5,
+       "set_by": {
+        "tenant_id": "default",
+        "user_id": "person-a",
+        "client": "panel-chat"
+       },
+       "set_at": "2026-10-27T10:59:00+00:00"
+      }
+     }
+    }
+   },
+   "result": {
+    "emitted": true,
+    "tool_policy_decision": {
+     "decision": "denied",
+     "count": 1
+    }
+   },
+   "error": null,
+   "started_at": "2026-10-27T11:00:07.000000+00:00",
+   "ended_at": "2026-10-27T11:00:07.000000+00:00",
+   "actor_id": null,
+   "session_id": "sess-synthetic-policy",
+   "attempt": 1,
+   "idempotency_key": "system:tool_policy_decision:e1e1e1e1-0000-4000-8000-0000000000e1:5:denied",
+   "prev_hash": null,
+   "record_hash": null,
+   "signature": null,
+   "seq": 5
+  },
+  {
+   "run_id": "e1e1e1e1-0000-4000-8000-0000000000e1",
+   "step_id": "c-act",
+   "node_id": "act",
+   "status": "completed",
+   "effect": {
+    "type": "tool_calls",
+    "payload": {
+     "tool_calls": [
+      {
+       "name": "fetch_url",
+       "arguments": {
+        "url": "https://example.invalid/"
+       },
+       "call_id": "c1"
+      },
+      {
+       "name": "execute_command",
+       "arguments": {
+        "command": "ls"
+       },
+       "call_id": "c2"
+      }
+     ]
+    },
+    "result_key": "_temp.tool_results"
+   },
+   "result": {
+    "mode": "executed",
+    "results": [
+     {
+      "call_id": "c1",
+      "name": "fetch_url",
+      "success": true,
+      "output": "page text"
+     },
+     {
+      "call_id": "c2",
+      "name": "execute_command",
+      "success": false,
+      "output": null,
+      "error": "Denied by this conversation's tool policy"
+     }
+    ]
+   },
+   "error": null,
+   "started_at": "2026-10-27T11:00:08.000000+00:00",
+   "ended_at": "2026-10-27T11:00:08.000000+00:00",
+   "actor_id": null,
+   "session_id": "sess-synthetic-policy",
+   "attempt": 1,
+   "idempotency_key": "idem-act",
+   "prev_hash": null,
+   "record_hash": null,
+   "signature": null,
+   "seq": 6
+  },
+  {
+   "run_id": "e1e1e1e1-0000-4000-8000-0000000000e1",
+   "step_id": "c-policy-auto_approved-replayed",
+   "node_id": "act",
+   "status": "completed",
+   "effect": {
+    "type": "emit_event",
+    "payload": {
+     "name": "abstract.tool_policy_decision",
+     "scope": "run",
+     "payload": {
+      "decision": "auto_approved",
+      "source": "session_policy",
+      "session_id": "sess-synthetic-policy",
+      "node_id": "act",
+      "tool_calls": [
+       {
+        "call_id": "c1",
+        "name": "fetch_url",
+        "matched": "kind:web"
+       }
+      ],
+      "policy": {
+       "revision": 5,
+       "set_by": {
+        "tenant_id": "default",
+        "user_id": "person-a",
+        "client": "panel-chat"
+       },
+       "set_at": "2026-10-27T10:59:00+00:00"
+      }
+     }
+    }
+   },
+   "result": {
+    "emitted": true,
+    "tool_policy_decision": {
+     "decision": "auto_approved",
+     "count": 1
+    }
+   },
+   "error": null,
+   "started_at": "2026-10-27T11:00:09.000000+00:00",
+   "ended_at": "2026-10-27T11:00:09.000000+00:00",
+   "actor_id": null,
+   "session_id": "sess-synthetic-policy",
+   "attempt": 1,
+   "idempotency_key": "system:tool_policy_decision:e1e1e1e1-0000-4000-8000-0000000000e1:5:auto_approved",
+   "prev_hash": null,
+   "record_hash": null,
+   "signature": null,
+   "seq": 7
+  },
+  {
+   "run_id": "e1e1e1e1-0000-4000-8000-0000000000e1",
+   "step_id": "c-act-2",
+   "node_id": "act",
+   "status": "started",
+   "effect": {
+    "type": "tool_calls",
+    "payload": {
+     "tool_calls": [
+      {
+       "name": "write_file",
+       "arguments": {
+        "file_path": "notes.txt",
+        "content": "x"
+       },
+       "call_id": "c3"
+      }
+     ]
+    },
+    "result_key": "_temp.tool_results"
+   },
+   "result": null,
+   "error": null,
+   "started_at": "2026-10-27T11:00:10.000000+00:00",
+   "ended_at": null,
+   "actor_id": null,
+   "session_id": "sess-synthetic-policy",
+   "attempt": 1,
+   "idempotency_key": "idem-act-2",
+   "prev_hash": null,
+   "record_hash": null,
+   "signature": null,
+   "seq": 8
+  },
+  {
+   "run_id": "e1e1e1e1-0000-4000-8000-0000000000e1",
+   "step_id": "c-act-2",
+   "node_id": "act",
+   "status": "waiting",
+   "effect": {
+    "type": "tool_calls",
+    "payload": {
+     "tool_calls": [
+      {
+       "name": "write_file",
+       "arguments": {
+        "file_path": "notes.txt",
+        "content": "x"
+       },
+       "call_id": "c3"
+      }
+     ]
+    },
+    "result_key": "_temp.tool_results"
+   },
+   "result": {
+    "wait": {
+     "reason": "user",
+     "wait_key": "tool_approval:e1e1e1e1-0000-4000-8000-0000000000e1:act:idem-act-2",
+     "details": {
+      "mode": "approval_required",
+      "tool_calls": [
+       {
+        "name": "write_file",
+        "arguments": {
+         "file_path": "notes.txt",
+         "content": "x"
+        },
+        "call_id": "c3"
+       }
+      ]
+     }
+    }
+   },
+   "error": null,
+   "started_at": "2026-10-27T11:00:11.000000+00:00",
+   "ended_at": "2026-10-27T11:00:11.000000+00:00",
+   "actor_id": null,
+   "session_id": "sess-synthetic-policy",
+   "attempt": 1,
+   "idempotency_key": "idem-act-2",
+   "prev_hash": null,
+   "record_hash": null,
+   "signature": null,
+   "seq": 9
+  },
+  {
+   "run_id": "e1e1e1e1-0000-4000-8000-0000000000e1",
+   "step_id": "c-resume-2",
+   "node_id": "act",
+   "status": "completed",
+   "effect": {
+    "type": "resume",
+    "payload": {
+     "wait_key": "tool_approval:e1e1e1e1-0000-4000-8000-0000000000e1:act:idem-act-2",
+     "payload": {
+      "approved": true
+     }
+    }
+   },
+   "result": {
+    "resumed": true
+   },
+   "error": null,
+   "started_at": "2026-10-27T11:00:12.000000+00:00",
+   "ended_at": "2026-10-27T11:00:12.000000+00:00",
+   "actor_id": null,
+   "session_id": "sess-synthetic-policy",
+   "attempt": 1,
+   "idempotency_key": null,
+   "prev_hash": null,
+   "record_hash": null,
+   "signature": null,
+   "seq": 10
+  },
+  {
+   "run_id": "e1e1e1e1-0000-4000-8000-0000000000e1",
+   "step_id": "c-policy-denied-2",
+   "node_id": "act",
+   "status": "completed",
+   "effect": {
+    "type": "emit_event",
+    "payload": {
+     "name": "abstract.tool_policy_decision",
+     "scope": "run",
+     "payload": {
+      "decision": "denied",
+      "source": "session_policy",
+      "session_id": "sess-synthetic-policy",
+      "node_id": "act",
+      "tool_calls": [
+       {
+        "call_id": "c3",
+        "name": "write_file",
+        "matched": "tool"
+       }
+      ],
+      "policy": {
+       "revision": 6,
+       "set_by": {
+        "tenant_id": "default",
+        "user_id": "person-a",
+        "client": "panel-chat"
+       },
+       "set_at": "2026-10-27T10:59:00+00:00"
+      }
+     }
+    }
+   },
+   "result": {
+    "emitted": true,
+    "tool_policy_decision": {
+     "decision": "denied",
+     "count": 1
+    }
+   },
+   "error": null,
+   "started_at": "2026-10-27T11:00:13.000000+00:00",
+   "ended_at": "2026-10-27T11:00:13.000000+00:00",
+   "actor_id": null,
+   "session_id": "sess-synthetic-policy",
+   "attempt": 1,
+   "idempotency_key": "system:tool_policy_decision:e1e1e1e1-0000-4000-8000-0000000000e1:9:denied",
+   "prev_hash": null,
+   "record_hash": null,
+   "signature": null,
+   "seq": 11
+  },
+  {
+   "run_id": "e1e1e1e1-0000-4000-8000-0000000000e1",
+   "step_id": "c-act-2b",
+   "node_id": "act",
+   "status": "completed",
+   "effect": {
+    "type": "tool_calls",
+    "payload": {
+     "tool_calls": [
+      {
+       "name": "write_file",
+       "arguments": {
+        "file_path": "notes.txt",
+        "content": "x"
+       },
+       "call_id": "c3"
+      }
+     ]
+    },
+    "result_key": "_temp.tool_results"
+   },
+   "result": {
+    "mode": "executed",
+    "results": [
+     {
+      "call_id": "c3",
+      "name": "write_file",
+      "success": false,
+      "output": null,
+      "error": "Denied by this conversation's tool policy"
+     }
+    ]
+   },
+   "error": null,
+   "started_at": "2026-10-27T11:00:14.000000+00:00",
+   "ended_at": "2026-10-27T11:00:14.000000+00:00",
+   "actor_id": null,
+   "session_id": "sess-synthetic-policy",
+   "attempt": 1,
+   "idempotency_key": "idem-act-2",
+   "prev_hash": null,
+   "record_hash": null,
+   "signature": null,
+   "seq": 12
+  },
+  {
+   "run_id": "e1e1e1e1-0000-4000-8000-0000000000e1",
+   "step_id": "c-end",
+   "node_id": "done",
+   "status": "completed",
+   "effect": null,
+   "result": {
+    "completed": true,
+    "output": {
+     "answer": "Fetched; listing was refused."
+    }
+   },
+   "error": null,
+   "started_at": "2026-10-27T11:00:15.000000+00:00",
+   "ended_at": "2026-10-27T11:00:15.000000+00:00",
+   "actor_id": null,
+   "session_id": "sess-synthetic-policy",
+   "attempt": 1,
+   "idempotency_key": "system:completion:done",
+   "prev_hash": null,
+   "record_hash": null,
+   "signature": null,
+   "seq": 13
+  }
+ ]
+}

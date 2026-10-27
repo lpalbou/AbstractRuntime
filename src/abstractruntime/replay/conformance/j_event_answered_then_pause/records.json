@@ -1,0 +1,211 @@
+{
+ "b0b0b0b0-0000-4000-8000-0000000000b0": [
+  {
+   "run_id": "b0b0b0b0-0000-4000-8000-0000000000b0",
+   "step_id": "ask-plan",
+   "node_id": "ask",
+   "status": "started",
+   "effect": {
+    "type": "wait_event",
+    "payload": {
+     "wait_key": "evt:run:b0b0b0b0-0000-4000-8000-0000000000b0:approve_plan"
+    }
+   },
+   "result": null,
+   "error": null,
+   "started_at": "2026-10-27T10:00:01.000000+00:00",
+   "ended_at": null,
+   "actor_id": null,
+   "session_id": "sess-synthetic-0001",
+   "attempt": 1,
+   "idempotency_key": "idem-ask",
+   "prev_hash": null,
+   "record_hash": null,
+   "signature": null,
+   "seq": 1
+  },
+  {
+   "run_id": "b0b0b0b0-0000-4000-8000-0000000000b0",
+   "step_id": "ask-plan",
+   "node_id": "ask",
+   "status": "waiting",
+   "effect": {
+    "type": "wait_event",
+    "payload": {
+     "wait_key": "evt:run:b0b0b0b0-0000-4000-8000-0000000000b0:approve_plan"
+    }
+   },
+   "result": {
+    "wait": {
+     "reason": "event",
+     "wait_key": "evt:run:b0b0b0b0-0000-4000-8000-0000000000b0:approve_plan",
+     "until": null,
+     "resume_to_node": "act",
+     "result_key": "_temp.answer",
+     "prompt": "Approve the plan?",
+     "choices": [
+      "yes",
+      "no"
+     ],
+     "allow_free_text": true,
+     "details": null
+    }
+   },
+   "error": null,
+   "started_at": "2026-10-27T10:00:02.000000+00:00",
+   "ended_at": "2026-10-27T10:00:02.000000+00:00",
+   "actor_id": null,
+   "session_id": "sess-synthetic-0001",
+   "attempt": 1,
+   "idempotency_key": "idem-ask",
+   "prev_hash": null,
+   "record_hash": null,
+   "signature": null,
+   "seq": 2
+  },
+  {
+   "run_id": "b0b0b0b0-0000-4000-8000-0000000000b0",
+   "step_id": "resume-plan",
+   "node_id": "ask",
+   "status": "completed",
+   "effect": {
+    "type": "resume",
+    "payload": {
+     "wait_reason": "event",
+     "wait_key": "evt:run:b0b0b0b0-0000-4000-8000-0000000000b0:approve_plan",
+     "resume_to_node": "act",
+     "result_key": "_temp.answer",
+     "payload": {
+      "choice": "yes"
+     }
+    }
+   },
+   "result": {
+    "resumed": true
+   },
+   "error": null,
+   "started_at": "2026-10-27T10:00:03.000000+00:00",
+   "ended_at": "2026-10-27T10:00:03.000000+00:00",
+   "actor_id": null,
+   "session_id": "sess-synthetic-0001",
+   "attempt": 1,
+   "idempotency_key": null,
+   "prev_hash": null,
+   "record_hash": null,
+   "signature": null,
+   "seq": 3
+  },
+  {
+   "run_id": "b0b0b0b0-0000-4000-8000-0000000000b0",
+   "step_id": "say",
+   "node_id": "say",
+   "status": "started",
+   "effect": {
+    "type": "answer_user",
+    "payload": {
+     "message": "Plan approved; pausing until you resume."
+    }
+   },
+   "result": null,
+   "error": null,
+   "started_at": "2026-10-27T10:00:04.000000+00:00",
+   "ended_at": null,
+   "actor_id": null,
+   "session_id": "sess-synthetic-0001",
+   "attempt": 1,
+   "idempotency_key": "idem-say",
+   "prev_hash": null,
+   "record_hash": null,
+   "signature": null,
+   "seq": 4
+  },
+  {
+   "run_id": "b0b0b0b0-0000-4000-8000-0000000000b0",
+   "step_id": "say",
+   "node_id": "say",
+   "status": "completed",
+   "effect": {
+    "type": "answer_user",
+    "payload": {
+     "message": "Plan approved; pausing until you resume."
+    }
+   },
+   "result": {
+    "message": "Plan approved; pausing until you resume."
+   },
+   "error": null,
+   "started_at": "2026-10-27T10:00:05.000000+00:00",
+   "ended_at": "2026-10-27T10:00:05.000000+00:00",
+   "actor_id": null,
+   "session_id": "sess-synthetic-0001",
+   "attempt": 1,
+   "idempotency_key": "idem-say",
+   "prev_hash": null,
+   "record_hash": null,
+   "signature": null,
+   "seq": 5
+  },
+  {
+   "run_id": "b0b0b0b0-0000-4000-8000-0000000000b0",
+   "step_id": "pause",
+   "node_id": "pause",
+   "status": "started",
+   "effect": {
+    "type": "wait_event",
+    "payload": {
+     "wait_key": "pause:b0b0b0b0-0000-4000-8000-0000000000b0"
+    }
+   },
+   "result": null,
+   "error": null,
+   "started_at": "2026-10-27T10:00:06.000000+00:00",
+   "ended_at": null,
+   "actor_id": null,
+   "session_id": "sess-synthetic-0001",
+   "attempt": 1,
+   "idempotency_key": "idem-pause",
+   "prev_hash": null,
+   "record_hash": null,
+   "signature": null,
+   "seq": 6
+  },
+  {
+   "run_id": "b0b0b0b0-0000-4000-8000-0000000000b0",
+   "step_id": "pause",
+   "node_id": "pause",
+   "status": "waiting",
+   "effect": {
+    "type": "wait_event",
+    "payload": {
+     "wait_key": "pause:b0b0b0b0-0000-4000-8000-0000000000b0"
+    }
+   },
+   "result": {
+    "wait": {
+     "reason": "user",
+     "wait_key": "pause:b0b0b0b0-0000-4000-8000-0000000000b0",
+     "until": null,
+     "resume_to_node": null,
+     "result_key": null,
+     "prompt": null,
+     "choices": null,
+     "allow_free_text": true,
+     "details": {
+      "kind": "pause"
+     }
+    }
+   },
+   "error": null,
+   "started_at": "2026-10-27T10:00:07.000000+00:00",
+   "ended_at": "2026-10-27T10:00:07.000000+00:00",
+   "actor_id": null,
+   "session_id": "sess-synthetic-0001",
+   "attempt": 1,
+   "idempotency_key": "idem-pause",
+   "prev_hash": null,
+   "record_hash": null,
+   "signature": null,
+   "seq": 7
+  }
+ ]
+}

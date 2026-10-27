@@ -24,9 +24,10 @@ Every memory the runtime writes can name the ledger row it came from. A row is a
   markers are resolved against the STARTED row of the same `step_id`, and under `OffloadingLedgerStore` offloaded
   leaves are rehydrated. `None` when the row does not exist (deleted ledger, wrong seq).
 - `list(run_id)` records carry `"seq"`; `append(record)` returns the seq it wrote.
-- SQLite uses its primary key. The JSON-file backend's seq is the record's 1-based position in its file; a per-run
-  line-offset index makes `get_record` a seek plus one line parse (see Performance below).
-- `seq` is read-side metadata: it is never written inside the record and the hash chain excludes it.
+- `seq` is the per-run record number of ADR 0010 (runtime 0.14.0): SQLite's key, persisted on each JSON-file line
+  (lines written before it read as their position), excluded from the hash chain and from record digests. A per-run
+  line-offset index (persisted as `ledger_<run_id>.idx`) makes a JSON-file `get_record` a seek plus one line parse,
+  checked against the persisted seq: a rewritten file is read by seq, never by position (see Performance below).
 
 ## The step context
 

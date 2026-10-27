@@ -119,11 +119,8 @@ def test_ledger_record_round_trip_matches_asdict(tmp_path) -> None:
     jsonl.append(rec)
     listed = jsonl.list(run.run_id)
     assert len(listed) == 1
-    # `seq` is the row address the store adds on READ (ADR 0011); the durable
-    # bytes are exactly asdict() and never contain it.
-    assert listed[0]["seq"] == 1
-    assert {k: v for k, v in listed[0].items() if k != "seq"} == json.loads(json.dumps(asdict(rec), ensure_ascii=False))
-    assert '"seq"' not in (tmp_path / f"ledger_{run.run_id}.jsonl").read_text(encoding="utf-8")
+    # The stored record is asdict() plus the store's `seq` (the durable cursor, ADR-0010).
+    assert listed[0] == {**json.loads(json.dumps(asdict(rec), ensure_ascii=False)), "seq": 1}
 
     db = SqliteDatabase(tmp_path / "ledger.sqlite3")
     sq = SqliteLedgerStore(db)

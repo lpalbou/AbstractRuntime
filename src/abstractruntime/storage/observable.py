@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from dataclasses import asdict
 import threading
-from typing import Any, Callable, Dict, List, Optional, Protocol, runtime_checkable
+from typing import Any, Callable, Dict, List, Optional, Protocol, Tuple, runtime_checkable
 
 from .base import LedgerStore
 from .change_ring import ChangeRing
@@ -85,6 +85,8 @@ class ObservableLedgerStore(LedgerStore):
             self._change_ring.note(self._change_seq, str(record.run_id))
 
         payload: LedgerRecordDict = asdict(record)
+        if isinstance(seq, int) and not isinstance(seq, bool):
+            payload["seq"] = seq  # subscribers fold by the durable cursor (ADR-0010)
         with self._lock:
             subscribers = list(self._subscribers)
 
@@ -102,18 +104,15 @@ class ObservableLedgerStore(LedgerStore):
         return self._inner.list(run_id)
 
     def get_record_unresolved(self, run_id: str, seq: int) -> Optional[Dict[str, Any]]:
-        fn = getattr(self._inner, "get_record_unresolved", None)
-        if callable(fn):
-            return fn(run_id, seq)
-        return super().get_record_unresolved(run_id, seq)
+        return self._inner.get_record_unresolved(run_id, seq)
 
     def find_started_record(
         self, run_id: str, step_id: str, *, before_seq: Optional[int] = None
     ) -> Optional[Dict[str, Any]]:
-        fn = getattr(self._inner, "find_started_record", None)
-        if callable(fn):
-            return fn(run_id, step_id, before_seq=before_seq)
-        return super().find_started_record(run_id, step_id, before_seq=before_seq)
+        return self._inner.find_started_record(run_id, step_id, before_seq=before_seq)
+
+    def list_after(self, *, run_id: str, after: int, limit: int = 1000) -> Tuple[List[LedgerRecordDict], int]:
+        return self._inner.list_after(run_id=run_id, after=after, limit=limit)
 
     def find_completed_result(
         self, run_id: str, idempotency_key: str

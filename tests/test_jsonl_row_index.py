@@ -208,3 +208,21 @@ def test_a_fresh_process_loads_the_persisted_index_instead_of_parsing(tmp_path: 
     assert os.path.exists(idx_file)
     JsonlLedgerStore(tmp_path).delete(RID)
     assert not idx_file.exists()  # delete removes the index with the ledger
+
+
+def test_a_rewritten_file_reads_by_persisted_seq_never_by_position(tmp_path: Path) -> None:
+    """The row index finds a record by POSITION; the line carries its persisted `seq` (ADR 0010), which decides.
+    Drop line 2 of a 4-row ledger: seq 3 is now at position 2 and is still found; seq 2 is gone (None, never the
+    row that moved into its place). Mutant: skip the persisted-seq check -> get_record(2) answers the seq-3 row."""
+    store = JsonlLedgerStore(tmp_path)
+    for i in range(1, 5):
+        store.append(_step(i))
+    path = tmp_path / f"ledger_{RID}.jsonl"
+    lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
+    path.write_text(lines[0] + "".join(lines[2:]), encoding="utf-8")
+    for reader in (store, JsonlLedgerStore(tmp_path)):
+        assert reader.get_record_unresolved(RID, 2) is None
+        assert reader.get_record_unresolved(RID, 3)["node_id"] == "n3"
+        assert reader.get_record_unresolved(RID, 4)["node_id"] == "n4"
+        assert reader.find_started_record(RID, "step-3")["seq"] == 3
+        assert [r["seq"] for r in reader.list(RID)] == [1, 3, 4]

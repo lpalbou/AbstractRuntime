@@ -1,0 +1,293 @@
+{
+  "activities": [
+    {
+      "child_run_id": "74808832-e6db-5b9f-a68a-02ef826b4509",
+      "effect_type": "start_subworkflow",
+      "ended_at": null,
+      "execution_id": "5c271b81-3672-5e55-a792-b1f46778bba4",
+      "id": "fd450aa7-f922-5398-b823-7ed8a3f20dfc:5c271b81-3672-5e55-a792-b1f46778bba4",
+      "kind": "subworkflow",
+      "name": "visual_react_agent_basic-agent_0_0_5_81795ea9_node-2",
+      "node_id": "node-2",
+      "order": [
+        "2026-10-11T00:23:17.919642+00:00",
+        "fd450aa7-f922-5398-b823-7ed8a3f20dfc",
+        4
+      ],
+      "run_id": "fd450aa7-f922-5398-b823-7ed8a3f20dfc",
+      "seqs": [
+        4,
+        5
+      ],
+      "started_at": "2026-10-11T00:23:17.919642+00:00",
+      "status": "waiting",
+      "step_ids": [
+        "5c271b81-3672-5e55-a792-b1f46778bba4"
+      ],
+      "wait": {
+        "ended_by": null,
+        "kind": "delegation",
+        "until": null,
+        "wait_key": "subworkflow:74808832-e6db-5b9f-a68a-02ef826b4509"
+      }
+    },
+    {
+      "effect_type": "tool_calls",
+      "ended_at": null,
+      "execution_id": "5ca91c82-fdac-5ea2-b9f5-8c2c0924c9fa",
+      "id": "74808832-e6db-5b9f-a68a-02ef826b4509:5ca91c82-fdac-5ea2-b9f5-8c2c0924c9fa",
+      "kind": "tool",
+      "name": "write_file",
+      "node_id": "act",
+      "order": [
+        "2026-10-11T00:23:57.787698+00:00",
+        "74808832-e6db-5b9f-a68a-02ef826b4509",
+        10
+      ],
+      "run_id": "74808832-e6db-5b9f-a68a-02ef826b4509",
+      "seqs": [
+        10
+      ],
+      "started_at": "2026-10-11T00:23:57.782932+00:00",
+      "status": "waiting",
+      "step_ids": [
+        "5ca91c82-fdac-5ea2-b9f5-8c2c0924c9fa"
+      ],
+      "tool_calls": [
+        {
+          "arguments": {
+            "content": "txt-4bc94c8c6bc3",
+            "file_path": "txt-0103dd11b7b3",
+            "mode": "w"
+          },
+          "id": "rtcall_fe21410a76b14a7c1ca671766b46a5c1_1",
+          "name": "write_file",
+          "status": "waiting"
+        }
+      ],
+      "wait": {
+        "ended_by": null,
+        "kind": "tool_approval",
+        "until": null,
+        "wait_key": "tool_approval:74808832-e6db-5b9f-a68a-02ef826b4509:act:fe21410a76b14a7c1ca671766b46a5c1"
+      }
+    }
+  ],
+  "artifacts": [],
+  "cursor": {
+    "records": 3,
+    "runs": {
+      "74808832-e6db-5b9f-a68a-02ef826b4509": 10,
+      "fd450aa7-f922-5398-b823-7ed8a3f20dfc": 5
+    },
+    "token": "fd450aa7:5.74808832:10~04db0f8265"
+  },
+  "display_status": null,
+  "interaction": {
+    "activity_id": "74808832-e6db-5b9f-a68a-02ef826b4509:5ca91c82-fdac-5ea2-b9f5-8c2c0924c9fa",
+    "allow_free_text": true,
+    "answer_payload": "{approved: true|false}",
+    "choices": null,
+    "command": {
+      "payload": {
+        "wait_key": "tool_approval:74808832-e6db-5b9f-a68a-02ef826b4509:act:fe21410a76b14a7c1ca671766b46a5c1"
+      },
+      "run_id": "74808832-e6db-5b9f-a68a-02ef826b4509",
+      "type": "resume"
+    },
+    "details": {
+      "executor": {
+        "kind": "txt-e09af1275852",
+        "policy": {
+          "auto_approve_tools": [],
+          "require_approval_tools": [
+            "txt-fa856f1ac377",
+            "txt-11edda15bcb4",
+            "txt-0aba041e720c",
+            "txt-558f71721b37",
+            "txt-8d1e9ee4fbc7",
+            "txt-48d393bca9c3",
+            "txt-5e83f5a0ee34",
+            "txt-f8e30cc983ea",
+            "txt-fdd019943862",
+            "txt-a57ff8ed8871",
+            "txt-d7281991d00e",
+            "txt-89d3287c19fb",
+            "txt-f0f34124f4b3",
+            "txt-f5102c04ebed",
+            "txt-df8b79e075b0",
+            "txt-7d24782e6ccf",
+            "txt-cc905bf7f4dc",
+            "txt-6b386660ca8a",
+            "txt-615c95f499f4",
+            "txt-7252873f78e3",
+            "txt-610414d150ad",
+            "txt-96d8d36df1d4",
+            "txt-7d5496c473bb",
+            "txt-766d0f8a3848",
+            "txt-184cb49decbe",
+            "txt-71bd76e0b697",
+            "txt-6eb8d45630ef",
+            "txt-55bf5a29da0b",
+            "txt-5b170355de65",
+            "txt-cecb871e410b",
+            "txt-a11e7959e191",
+            "txt-4df21347488c",
+            "txt-47118b9607a1",
+            "txt-cdac54f09dea",
+            "txt-d436a0f681ea",
+            "txt-ba875bc678f9",
+            "txt-9f018ac3e52f",
+            "txt-05aa1c28d9a1"
+          ]
+        },
+        "policy_source": "txt-54c5e38d0c00"
+      },
+      "mode": "approval_required"
+    },
+    "kind": "tool_approval",
+    "prompt": null,
+    "run_id": "74808832-e6db-5b9f-a68a-02ef826b4509",
+    "seq": 10,
+    "step_id": "5ca91c82-fdac-5ea2-b9f5-8c2c0924c9fa",
+    "tool_calls": [
+      {
+        "arguments": {
+          "content": "txt-4bc94c8c6bc3",
+          "file_path": "txt-0103dd11b7b3",
+          "mode": "w"
+        },
+        "call_id": "call_0bc78da56dbe4ed2b5a6df2ded9a94a7",
+        "name": "write_file",
+        "runtime_call_id": "rtcall_fe21410a76b14a7c1ca671766b46a5c1_1"
+      }
+    ],
+    "wait_key": "tool_approval:74808832-e6db-5b9f-a68a-02ef826b4509:act:fe21410a76b14a7c1ca671766b46a5c1"
+  },
+  "messages": [
+    {
+      "artifact_ids": [],
+      "id": "fd450aa7-f922-5398-b823-7ed8a3f20dfc:input",
+      "kind": "prompt",
+      "order": [
+        "2026-10-11T00:23:17.788735+00:00",
+        "fd450aa7-f922-5398-b823-7ed8a3f20dfc",
+        0
+      ],
+      "role": "user",
+      "run_id": "fd450aa7-f922-5398-b823-7ed8a3f20dfc",
+      "seqs": [],
+      "source": "run_input",
+      "step_ids": [],
+      "text": "txt-110abf0ea5c9"
+    }
+  ],
+  "open_waits": [
+    {
+      "child_run_id": "74808832-e6db-5b9f-a68a-02ef826b4509",
+      "kind": "delegation",
+      "person_facing": false,
+      "run_id": "fd450aa7-f922-5398-b823-7ed8a3f20dfc",
+      "seq": 5,
+      "step_id": "5c271b81-3672-5e55-a792-b1f46778bba4",
+      "until": null,
+      "wait_key": "subworkflow:74808832-e6db-5b9f-a68a-02ef826b4509"
+    },
+    {
+      "child_run_id": null,
+      "kind": "tool_approval",
+      "person_facing": true,
+      "run_id": "74808832-e6db-5b9f-a68a-02ef826b4509",
+      "seq": 10,
+      "step_id": "5ca91c82-fdac-5ea2-b9f5-8c2c0924c9fa",
+      "until": null,
+      "wait_key": "tool_approval:74808832-e6db-5b9f-a68a-02ef826b4509:act:fe21410a76b14a7c1ca671766b46a5c1"
+    }
+  ],
+  "root_run_id": "fd450aa7-f922-5398-b823-7ed8a3f20dfc",
+  "runs": [
+    {
+      "depth": 0,
+      "display_status": null,
+      "first_seq": 4,
+      "holds_interaction": false,
+      "last_seq": 5,
+      "order": [
+        "",
+        "",
+        0,
+        "fd450aa7-f922-5398-b823-7ed8a3f20dfc"
+      ],
+      "parent_run_id": null,
+      "records": 2,
+      "run_id": "fd450aa7-f922-5398-b823-7ed8a3f20dfc",
+      "status": "waiting",
+      "waiting": {
+        "child_run_id": "74808832-e6db-5b9f-a68a-02ef826b4509",
+        "kind": "delegation",
+        "wait_key": "subworkflow:74808832-e6db-5b9f-a68a-02ef826b4509"
+      },
+      "workflow": {
+        "bundle_id": "basic-agent",
+        "bundle_version": "0.0.5",
+        "flow_id": "81795ea9",
+        "id": "basic-agent@0.0.5:81795ea9"
+      },
+      "workflow_id": "basic-agent@0.0.5:81795ea9"
+    },
+    {
+      "depth": 1,
+      "display_status": null,
+      "first_seq": 10,
+      "holds_interaction": true,
+      "last_seq": 10,
+      "order": [
+        "",
+        "",
+        0,
+        "fd450aa7-f922-5398-b823-7ed8a3f20dfc",
+        "2026-10-11T00:23:17.921277+00:00",
+        "74808832-e6db-5b9f-a68a-02ef826b4509",
+        5,
+        "74808832-e6db-5b9f-a68a-02ef826b4509"
+      ],
+      "parent_run_id": "fd450aa7-f922-5398-b823-7ed8a3f20dfc",
+      "records": 1,
+      "run_id": "74808832-e6db-5b9f-a68a-02ef826b4509",
+      "status": "waiting",
+      "waiting": {
+        "child_run_id": null,
+        "kind": "tool_approval",
+        "wait_key": "tool_approval:74808832-e6db-5b9f-a68a-02ef826b4509:act:fe21410a76b14a7c1ca671766b46a5c1"
+      },
+      "workflow": {
+        "bundle_id": null,
+        "bundle_version": null,
+        "flow_id": "visual_react_agent_basic-agent_0_0_5_81795ea9_node-2",
+        "id": "visual_react_agent_basic-agent_0_0_5_81795ea9_node-2"
+      },
+      "workflow_id": "visual_react_agent_basic-agent_0_0_5_81795ea9_node-2"
+    }
+  ],
+  "session_id": "afc84659-dd55-52a6-8e73-32354c00d12f",
+  "status": "waiting",
+  "usage": {
+    "input_tokens": 0,
+    "llm_calls": 0,
+    "output_tokens": 0,
+    "total_tokens": 0
+  },
+  "version": "replay_view_v1",
+  "warnings": [
+    "run 74808832-e6db-5b9f-a68a-02ef826b4509 step 5ca91c82-fdac-5ea2-b9f5-8c2c0924c9fa: `tool_calls` points at a STARTED record that could not be resolved (not folded: a windowed history; or its content did not match the pointer); the field is omitted",
+    "run 74808832-e6db-5b9f-a68a-02ef826b4509: records before seq 10 were not folded (windowed history)",
+    "run fd450aa7-f922-5398-b823-7ed8a3f20dfc: records before seq 4 were not folded (windowed history)"
+  ],
+  "workflow": {
+    "bundle_id": "basic-agent",
+    "bundle_version": "0.0.5",
+    "entrypoint": "81795ea9",
+    "flow_id": "81795ea9",
+    "id": "basic-agent@0.0.5:81795ea9"
+  }
+}

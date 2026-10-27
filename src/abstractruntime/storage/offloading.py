@@ -548,6 +548,10 @@ class OffloadingLedgerStore(LedgerStore):
         persisted = _offload_step_record(record, artifact_store=self._artifact_store, max_inline_bytes=self._max_inline_bytes)
         return self._inner.append(persisted)
 
+    def list_after(self, *, run_id: str, after: int, limit: int = 1000) -> Tuple[List[Dict[str, Any]], int]:
+        """Plain delegation, refs stay refs (as `list`)."""
+        return self._inner.list_after(run_id=run_id, after=after, limit=limit)
+
     def _rehydrate_tree(self, value: Any, *, _depth: int = 0) -> Any:
         """Resolve refs THIS offloader created back into their values.
 
@@ -624,8 +628,7 @@ class OffloadingLedgerStore(LedgerStore):
         and `$slim` verification hashes the bytes the STARTED row held before
         they were offloaded. Single-record read, so the rehydration cost that
         keeps `list()` plain does not apply."""
-        fn = getattr(self._inner, "get_record_unresolved", None)
-        record = fn(run_id, seq) if callable(fn) else super().get_record_unresolved(run_id, seq)
+        record = self._inner.get_record_unresolved(run_id, seq)
         if record is None:
             return None
         rehydrated = self._rehydrate_tree(record)
@@ -634,12 +637,7 @@ class OffloadingLedgerStore(LedgerStore):
     def find_started_record(
         self, run_id: str, step_id: str, *, before_seq: Optional[int] = None
     ) -> Optional[Dict[str, Any]]:
-        fn = getattr(self._inner, "find_started_record", None)
-        record = (
-            fn(run_id, step_id, before_seq=before_seq)
-            if callable(fn)
-            else super().find_started_record(run_id, step_id, before_seq=before_seq)
-        )
+        record = self._inner.find_started_record(run_id, step_id, before_seq=before_seq)
         if record is None:
             return None
         rehydrated = self._rehydrate_tree(record)

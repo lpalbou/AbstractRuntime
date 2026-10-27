@@ -32,7 +32,7 @@ decision 2), and no AbstractMemory facade existed.
 In:
 - `LedgerStore.get_record(run_id, seq)` (base default over `list()`, SQLite by primary key, JSONL by position,
   `OffloadingLedgerStore` rehydrating, the decorators delegating); `$slim` markers resolved against the STARTED row of
-  the same `step_id`; `list()` records carry `"seq"` (added on read, excluded from the record hash); `append()`
+  the same `step_id`; `list()` records carry `"seq"` (ADR 0010's per-run number since 0.14.0, excluded from the record hash); `append()`
   returns the seq it wrote when the backend knows it.
 - `abstractruntime.core.step_context`: the runtime publishes the current step `(run_id, seq, step_id, node_id,
   attempt, effect_type)` to the handler it executes (a `ContextVar`, out of band like the progress callback).
@@ -153,8 +153,9 @@ Notes (not fixed here):
 
 ### Architect pass (2026-10-27)
 Open operator decisions, written in ADR 0011 (Open decisions), not chosen here:
-- JSON-file `seq` durability: (a) persist `seq` in each record at append; (b) SQLite plane ledgers. Until then a
-  JSON-file ledger is append-only by contract; a rewritten one answers `source_gone`, never another row (A2).
+- JSON-file `seq` durability: DECIDED as option (a) by runtime 0.14.0 (ADR 0010, the persisted per-run `seq`); the
+  merge of 0.14.0 into this branch makes `get_record` and the row index read by persisted `seq` (a rewritten file
+  never answers another row).
 - Owner = principal, scope = kind (B1's full fix); the runtime now refuses an `owner_id` the run does not derive.
 
 C3 (persisted JSON-file row index, `ledger_<run_id>.idx`): 100,000-row run (87.5 MB), the architect's

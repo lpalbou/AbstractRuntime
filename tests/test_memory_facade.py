@@ -18,6 +18,7 @@ Mutants this file kills (each checked by hand when it was written):
 from __future__ import annotations
 
 import importlib
+import json
 import os
 import subprocess
 import sys
@@ -454,9 +455,11 @@ def test_a_seq_is_never_truncated_or_guessed() -> None:
 
 
 def test_a_rewritten_jsonl_ledger_never_resolves_a_step_ref_to_another_row(tmp_path: Path) -> None:
-    """Architect A2: a JSON-file seq is a line position. Drop the first line of a run's ledger and `step:<run>#1`
-    lands on the step's own TERMINAL row (same step_id): it must answer source_gone, never `ok`. Mutant: drop the
-    STARTED-status check -> `ok` with the terminal row. (Durable JSONL seqs are an open operator decision, ADR 0011.)"""
+    """Architect A2, with the persisted JSONL seq (ADR 0010; ADR 0011's durable-seq decision, option (a)): drop the
+    first line of a run's ledger and `step:<run>#1` names a row that is gone: source_gone, never the step's own
+    TERMINAL row now at line 1; the terminal row keeps its address (#2). Mutants: index by position without checking
+    the persisted seq -> `ok` (or not-STARTED) with the terminal row; drop the STARTED-status check -> a legacy
+    position-numbered file answers `ok` with the terminal row."""
     from abstractruntime.storage.json_files import JsonFileRunStore, JsonlLedgerStore
 
     run_store, ledger = JsonFileRunStore(tmp_path / "runs"), JsonlLedgerStore(tmp_path / "runs")
@@ -471,7 +474,18 @@ def test_a_rewritten_jsonl_ledger_never_resolves_a_step_ref_to_another_row(tmp_p
     path.write_text("".join(lines[1:]), encoding="utf-8")  # "compaction" dropped the STARTED line
     fresh = MemoryFacade(ledger_store=JsonlLedgerStore(tmp_path / "runs"))  # a new process
     shifted = fresh.reconstruct_source(ref)
-    assert shifted["status"] == "source_gone" and "not the STARTED row" in shifted["reason"], shifted
+    assert shifted["status"] == "source_gone" and "does not exist" in shifted["reason"], shifted
+    terminal = fresh.ledger_store.get_record(run_id, 2)
+    assert terminal is not None and terminal["status"] == "completed" and terminal["step_id"] == started["step_id"]
+
+    # A ledger written before seq was persisted (positions only): the shift lands on the terminal row, which the
+    # STARTED-only rule refuses.
+    legacy = [json.loads(line) for line in lines]
+    for rec in legacy:
+        rec.pop("seq", None)
+    path.write_text("".join(json.dumps(r) + "\n" for r in legacy[1:]), encoding="utf-8")
+    old = MemoryFacade(ledger_store=JsonlLedgerStore(tmp_path / "runs")).reconstruct_source(ref)
+    assert old["status"] == "source_gone" and "not the STARTED row" in old["reason"], old
 
 
 def test_an_offloaded_leaf_whose_artifact_was_purged_is_partial_never_ok(tmp_path: Path) -> None:

@@ -192,3 +192,19 @@ def test_a_voice_refusal_is_not_retried_and_other_media_keep_their_retries() -> 
     assert _llm_error_is_retryable(ValueError("returned no images")) is True
     assert _llm_error_is_retryable(CapabilityUnavailableError(capability="voice", reason="no backend")) is False
     assert _llm_error_is_retryable(RuntimeError("connection reset")) is True
+    assert _is_voice_refusal(ValueError("one_shot too long"), [{"modality": "image"}, voice]) is True
+
+
+def test_a_remote_servers_4xx_refusal_is_not_retried() -> None:
+    class _Response:
+        def __init__(self, status_code):
+            self.status_code = status_code
+
+    class _HTTPStatusError(Exception):
+        def __init__(self, status_code):
+            super().__init__(f"HTTP {status_code}")
+            self.response = _Response(status_code)
+
+    assert _llm_error_is_retryable(_HTTPStatusError(422)) is False
+    assert _llm_error_is_retryable(_HTTPStatusError(429)) is True
+    assert _llm_error_is_retryable(_HTTPStatusError(503)) is True

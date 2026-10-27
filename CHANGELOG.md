@@ -32,6 +32,8 @@ Requires AbstractCore 2.30.0 or newer. Personal voice stores need AbstractVoice 
   `one_shot` over an engine's length limit or an unknown voice id) and a missing capability
   (`CapabilityUnavailableError`) fail the `LLM_CALL` effect at once instead of being retried: one engine call, the same
   message. Other media lanes keep their retries.
+- A remote AbstractCore server's 4xx refusal (other than 408, 409, 425, 429) is no longer retried: the status is read from
+  the HTTP error's response.
 
 ## [0.12.0] - 2026-10-27
 

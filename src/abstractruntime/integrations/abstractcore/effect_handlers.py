@@ -2567,8 +2567,8 @@ def _is_voice_refusal(exc: Exception, output: Any) -> bool:
     media lanes keep their retries (a failed remote job or an empty image can succeed again)."""
     if not (type(exc) is ValueError or type(exc) is KeyError):
         return False
-    spec = output if isinstance(output, dict) else {}
-    return str(spec.get("modality") or "").strip().lower() == "voice"
+    specs = output if isinstance(output, list) else [output]
+    return any(isinstance(spec, dict) and str(spec.get("modality") or "").strip().lower() == "voice" for spec in specs)
 
 
 def _llm_error_is_retryable(exc: Exception) -> bool:
@@ -2633,6 +2633,10 @@ def _llm_error_is_retryable(exc: Exception) -> bool:
         pass
 
     status = getattr(exc, "status_code", None)
+    if not isinstance(status, int):
+        # An HTTP client error (httpx.HTTPStatusError from a remote AbstractCore server) carries
+        # the status on its response: a server's 4xx refusal is not retried either.
+        status = getattr(getattr(exc, "response", None), "status_code", None)
     if isinstance(status, int):
         if 400 <= status < 500 and status not in _TRANSIENT_4XX:
             return False

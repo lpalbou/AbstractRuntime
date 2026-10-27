@@ -1046,7 +1046,8 @@ adapters = facade.list_vision_adapters(
 Local clients run these in process on the same AbstractCore capability registry their synthesis uses (same voice
 manager, settings and voice stores; a model pool uses its media host), AbstractCore 2.30.0+ and AbstractVoice 0.18.2+.
 `clone_voice` answers the stored record, flat, with its `voice_id`, on both sides; `clone_voice(..., language=)` records
-the recording's language (AbstractVoice 0.19.0). The remote client calls the AbstractCore server's `/v1/audio/languages`, `/v1/voice/clones[/{id}]`
+the recording's language in process (AbstractVoice 0.19.0). A remote AbstractCore 2.30.0 server does not take the
+language yet (its clone form has no such field), so a remotely cloned voice's language is identified from its transcript. The remote client calls the AbstractCore server's `/v1/audio/languages`, `/v1/voice/clones[/{id}]`
 (`GET`, `PATCH`, `DELETE`), `/v1/voice/clone` and `/v1/voice/design`, and reads the capability catalog from
 `/v1/audio/voices`; the server's changes need its operator token in the runtime's headers. Every refusal is a
 `VoiceLibraryError` with `status_code` (404 unknown voice, 422 refused input, 401 server token missing, 501 capability

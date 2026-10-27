@@ -243,12 +243,6 @@ def test_i4_a_line_mixing_seq_and_pre_seq_objects_reads_the_same_everywhere(tmp_
     assert store.append(_rec(RUN_B, 4)) == 5
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "JsonlLedgerStore (storage/json_files.py, not this suite's file): a torn last line (a crash "
-    "mid-write) makes the next append land on the same line, and list()/list_after() drop the whole "
-    "line, including the complete record appended after the torn prefix (raw_decode stops at the "
-    "prefix). Fix in the store: start an append on a new line when the file does not end with "
-    "a newline, or resume decoding at the next object. Remove this mark with the fix."))
 def test_i4_a_torn_line_followed_by_a_whole_record_keeps_the_whole_record(tmp_path):
     """A crash mid-write leaves a torn prefix; the next append lands on the same line."""
     base = tmp_path / "led"

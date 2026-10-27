@@ -2505,6 +2505,10 @@ class JsonlLedgerStore(LedgerStore):
                 # lock alone, the pre-seq posture).
                 _flock(f)
                 try:
+                    # A crash mid-write can leave a torn last line (no newline). Appending onto it
+                    # would glue a whole record to the fragment and `list()` would drop both:
+                    # end the fragment first, so it stays alone on its (unreadable) line.
+                    self._terminate_torn_line(record.run_id, p, f)
                     seq = self._head_seq(record.run_id, p) + 1
                     record_dict["seq"] = seq
                     line = dumps_compact(record_dict)
@@ -2521,6 +2525,23 @@ class JsonlLedgerStore(LedgerStore):
                 self._seq_heads.popitem(last=False)
         self._idem_cache_note(record_dict, line)
         return seq
+
+    def _terminate_torn_line(self, run_id: str, p: Path, f: Any) -> None:
+        """Write a newline when the file does not end with one (caller holds the file lock)."""
+        try:
+            size = os.fstat(f.fileno()).st_size
+        except OSError:
+            return
+        cached = self._seq_heads.get(run_id)
+        if size == 0 or (cached is not None and cached[0] == size):
+            return  # empty, or our own last append (which ended with a newline)
+        with p.open("rb") as rf:
+            rf.seek(size - 1)
+            last = rf.read(1)
+        if last != b"\n":
+            logger.warning("JsonlLedgerStore: %s ends with a torn line; it is closed before the next append", p.name)
+            f.write("\n")
+            f.flush()
 
     def _head_seq(self, run_id: str, p: Path) -> int:
         """The run's last seq (0 when it has no records). Caller holds `_seq_lock`."""

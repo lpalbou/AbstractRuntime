@@ -41,6 +41,10 @@ PyPI: a release never ships above an unpublished floor (root ADR 0034). ADR 0009
 
 ### Changed
 
+- **Contract change for ledger readers**: every record `LedgerStore.list(run_id)` returns now carries an additive
+  `"seq"` key (its row address; not in the stored bytes, excluded from the hash chain). A consumer that compares
+  records it reads by other means (a byte-tail reader of the JSON-file ledger, a cached copy) to `list()` output must
+  add or ignore `seq`.
 - `AbstractMemory>=0.4.0` (was `>=0.3.2`).
 - SQLite `find_started_record` reads newest-first with `LIMIT 1` (0.01 ms at 10,000 rows instead of 3.5 ms).
 

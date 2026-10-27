@@ -329,3 +329,47 @@ def test_a_re_run_is_recorded_as_a_re_observation(tmp_path: Path) -> None:
     ids = _effect_result(s1)["assertion_ids"]
     assert sorted(home.facade.derived_from_source({"kind": "step", "run_id": r2, "seq": step2["seq"]})) == sorted(ids)
 
+
+def _retry_after_a_post_apply_crash(tmp_path: Path) -> tuple:
+    from abstractruntime.core.policy import DefaultEffectPolicy
+
+    home = _Home(tmp_path)
+    inner = home.handlers[EffectType.MEMORY_REVISE]
+    calls = {"n": 0}
+
+    def flaky(run: RunState, effect: Effect, nxt: Any = None) -> Any:
+        outcome = inner(run, effect, nxt)
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("crash after the revision was applied")
+        return outcome
+
+    home.handlers[EffectType.MEMORY_REVISE] = flaky
+    spec = compile_visualflow(_flow({"ops": OPS, "scope": "global"}))
+    rt = Runtime(run_store=home.run_store, ledger_store=home.ledger, effect_handlers=home.handlers,
+                 effect_policy=DefaultEffectPolicy(default_max_attempts=3, default_backoff_base=0.0,
+                                                   default_backoff_max=0.0))
+    run_id = rt.start(workflow=spec)
+    state = rt.tick(workflow=spec, run_id=run_id)
+    assert state.status == RunStatus.COMPLETED, state.error
+    return home, run_id, _effect_result(state), _revise_steps(home, run_id)
+
+
+def test_a_replayed_revision_never_reports_the_retry_step_as_the_memorys_source(tmp_path: Path) -> None:
+    """Architect A5: attempt 1 applied the revision and crashed; attempt 2 is a no-op. The outcome must not present
+    attempt 2's step ref as the memory's source. Mutant: keep the stamped sources -> attempt 2's step is reported."""
+    home, run_id, out, (attempt1, attempt2) = _retry_after_a_post_apply_crash(tmp_path)
+    assert out["applied"] is False and out["replayed"] is True
+    assert not any(s.get("seq") == attempt2["seq"] for s in out["sources"])
+    assert any(s.get("seq") == attempt2["seq"] for s in out["attempt_sources"])
+    (rev,), _ = home.facade.graph.revisions()
+    assert [s.seq for s in rev.provenance.sources if s.kind == "step"] == [attempt1["seq"]]
+
+
+@pytest.mark.xfail(strict=True, reason="needs AbstractMemory's RevisionResult carrying the logged ids on a replay "
+                                       "(applied=False today returns assertion_ids=[]); not on the graph worktree yet")
+def test_a_replayed_revision_reports_the_memorys_ids_and_sources(tmp_path: Path) -> None:
+    home, run_id, out, (attempt1, _) = _retry_after_a_post_apply_crash(tmp_path)
+    assert len(out["assertion_ids"]) == 2
+    assert {"kind": "step", "run_id": run_id, "seq": attempt1["seq"], "step_id": attempt1["step_id"]} in out["sources"]
+

@@ -5,7 +5,7 @@ import json
 import os
 import re
 import unicodedata
-from typing import Any, Callable, Dict, Iterable, Optional
+from typing import Any, Callable, Dict, Iterable, List, Optional
 
 from ...core.models import Effect, EffectType, RunState
 from ...core.runtime import EffectHandler, EffectOutcome
@@ -1170,6 +1170,20 @@ def build_memory_kg_effect_handlers(
 
         out: Dict[str, Any] = {"ok": True, **result, "scope": scope, "owner_id": owner_id,
                                "sources": stamped["sources"]}
+        if not result.get("applied"):
+            # The revision was already in the log (a retried attempt after a crash, or a re-run): nothing this attempt
+            # stamped was written. Report what the MEMORY holds (its ids from the log, their sources), never this
+            # attempt's step ref as if it were the memory's source.
+            memory_ids = list(dict.fromkeys([*result.get("assertion_ids", []), *result.get("closed", []),
+                                             *result.get("narrowed", [])]))
+            held: List[Dict[str, Any]] = []
+            for mid in memory_ids:
+                for src in facade.sources_of(mid, transitive=False):
+                    if src not in held:
+                        held.append(src)
+            out["sources"] = held
+            out["replayed"] = True
+            out["attempt_sources"] = stamped["sources"]
         return EffectOutcome.completed(out)
 
     facade = MemoryFacade(graph=memory_graph, run_store=run_store, runtime_id=runtime_id)

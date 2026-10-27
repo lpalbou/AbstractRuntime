@@ -155,7 +155,9 @@ this mind learned it), never a workflow's claim. Result (completed):
  "sources": [{"kind": "step", "run_id": "...", "seq": 7, "step_id": "..."}]}
 ```
 
-`applied` is false when the `revision_id` was already applied. An ungrounded revision (no source and no
+`applied` is false when the `revision_id` was already applied (a retried attempt after a crash, a re-run): then
+`replayed` is true, `sources` are the memory's own sources from the log (never this attempt's step ref, which was
+not written) and `attempt_sources` shows what this attempt would have stamped. An ungrounded revision (no source and no
 `derived_from`, e.g. a handler called outside any run) fails with `MEMORY_REVISE refused (ProvenanceRequired): ...`;
 no ref is invented to pass it.
 

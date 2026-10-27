@@ -216,11 +216,14 @@ class InMemoryLedgerStore(LedgerStore):
     def __init__(self):
         self._records: Dict[str, List[Dict[str, Any]]] = {}
 
-    def append(self, record: StepRecord) -> None:
-        self._records.setdefault(record.run_id, []).append(asdict(record))
+    def append(self, record: StepRecord) -> int:
+        rows = self._records.setdefault(record.run_id, [])
+        rows.append(asdict(record))
+        return len(rows)
 
     def list(self, run_id: str) -> List[Dict[str, Any]]:
-        return list(self._records.get(run_id, []))
+        # `seq` = 1-based position (the row address, ADR 0009), added on read.
+        return [{**rec, "seq": i} for i, rec in enumerate(self._records.get(run_id, []), start=1)]
 
     def delete(self, run_id: str) -> int:
         rid = str(run_id or "").strip()

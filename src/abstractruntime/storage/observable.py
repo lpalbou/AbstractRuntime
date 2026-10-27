@@ -78,8 +78,8 @@ class ObservableLedgerStore(LedgerStore):
         with self._change_lock:
             return self._change_ring.since(seq0)
 
-    def append(self, record: StepRecord) -> None:
-        self._inner.append(record)
+    def append(self, record: StepRecord) -> Optional[int]:
+        seq = self._inner.append(record)
         with self._change_lock:
             self._change_seq += 1
             self._change_ring.note(self._change_seq, str(record.run_id))
@@ -96,9 +96,24 @@ class ObservableLedgerStore(LedgerStore):
             except Exception:
                 # Observability must never compromise durability/execution.
                 continue
+        return seq
 
     def list(self, run_id: str) -> List[LedgerRecordDict]:
         return self._inner.list(run_id)
+
+    def get_record_unresolved(self, run_id: str, seq: int) -> Optional[Dict[str, Any]]:
+        fn = getattr(self._inner, "get_record_unresolved", None)
+        if callable(fn):
+            return fn(run_id, seq)
+        return super().get_record_unresolved(run_id, seq)
+
+    def find_started_record(
+        self, run_id: str, step_id: str, *, before_seq: Optional[int] = None
+    ) -> Optional[Dict[str, Any]]:
+        fn = getattr(self._inner, "find_started_record", None)
+        if callable(fn):
+            return fn(run_id, step_id, before_seq=before_seq)
+        return super().find_started_record(run_id, step_id, before_seq=before_seq)
 
     def find_completed_result(
         self, run_id: str, idempotency_key: str

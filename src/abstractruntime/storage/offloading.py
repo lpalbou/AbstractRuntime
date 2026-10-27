@@ -544,9 +544,9 @@ class OffloadingLedgerStore(LedgerStore):
     def inner(self) -> LedgerStore:
         return self._inner
 
-    def append(self, record: StepRecord) -> None:
+    def append(self, record: StepRecord) -> Optional[int]:
         persisted = _offload_step_record(record, artifact_store=self._artifact_store, max_inline_bytes=self._max_inline_bytes)
-        self._inner.append(persisted)
+        return self._inner.append(persisted)
 
     def _rehydrate_tree(self, value: Any, *, _depth: int = 0) -> Any:
         """Resolve refs THIS offloader created back into their values.
@@ -617,6 +617,33 @@ class OffloadingLedgerStore(LedgerStore):
         correctness requirement, not a convenience.
         """
         return self._inner.list(run_id)
+
+    def get_record_unresolved(self, run_id: str, seq: int) -> Optional[Dict[str, Any]]:
+        """The inner row with THIS offloader's `{"$artifact": id}` leaves
+        rehydrated (ADR 0009): offloading is this decorator's storage detail,
+        and `$slim` verification hashes the bytes the STARTED row held before
+        they were offloaded. Single-record read, so the rehydration cost that
+        keeps `list()` plain does not apply."""
+        fn = getattr(self._inner, "get_record_unresolved", None)
+        record = fn(run_id, seq) if callable(fn) else super().get_record_unresolved(run_id, seq)
+        if record is None:
+            return None
+        rehydrated = self._rehydrate_tree(record)
+        return rehydrated if isinstance(rehydrated, dict) else record
+
+    def find_started_record(
+        self, run_id: str, step_id: str, *, before_seq: Optional[int] = None
+    ) -> Optional[Dict[str, Any]]:
+        fn = getattr(self._inner, "find_started_record", None)
+        record = (
+            fn(run_id, step_id, before_seq=before_seq)
+            if callable(fn)
+            else super().find_started_record(run_id, step_id, before_seq=before_seq)
+        )
+        if record is None:
+            return None
+        rehydrated = self._rehydrate_tree(record)
+        return rehydrated if isinstance(rehydrated, dict) else record
 
     def find_completed_result(
         self, run_id: str, idempotency_key: str

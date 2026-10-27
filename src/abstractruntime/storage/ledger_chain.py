@@ -48,11 +48,15 @@ def compute_record_hash(*, record: Dict[str, Any], prev_hash: Optional[str]) -> 
     Rules:
     - `prev_hash` is included in the hashed payload.
     - `record_hash` and `signature` fields are excluded (to avoid recursion).
+    - `seq` is excluded: it is the row ADDRESS the store adds on read (ADR
+      0009), never persisted inside the record, so verifying records read
+      back from a store hashes the same bytes the append hashed.
     """
 
     clean = dict(record)
     clean.pop("record_hash", None)
     clean.pop("signature", None)
+    clean.pop("seq", None)
 
     clean["prev_hash"] = prev_hash
     return _sha256_hex(_canonical_json(clean))
@@ -96,27 +100,40 @@ class HashChainedLedgerStore(LedgerStore):
             return None
         return records[-1].get("record_hash")
 
-    def append(self, record: StepRecord) -> None:
+    def append(self, record: StepRecord) -> Optional[int]:
         with self._append_lock:
             append_chained = getattr(self._inner, "append_chained", None)
             if callable(append_chained):
                 # Transaction-internal derivation: the store reads the head
                 # under its write lock; the hash policy stays ours.
-                append_chained(
+                return append_chained(
                     record,
                     lambda record_dict, prev: compute_record_hash(
                         record=record_dict, prev_hash=prev
                     ),
                 )
-                return
             prev = self._persisted_head(record.run_id)
             record.prev_hash = prev
             record_dict = steprecord_to_dict(record)
             record.record_hash = compute_record_hash(record=record_dict, prev_hash=prev)
-            self._inner.append(record)
+            return self._inner.append(record)
 
     def list(self, run_id: str) -> List[Dict[str, Any]]:
         return self._inner.list(run_id)
+
+    def get_record_unresolved(self, run_id: str, seq: int) -> Optional[Dict[str, Any]]:
+        fn = getattr(self._inner, "get_record_unresolved", None)
+        if callable(fn):
+            return fn(run_id, seq)
+        return super().get_record_unresolved(run_id, seq)
+
+    def find_started_record(
+        self, run_id: str, step_id: str, *, before_seq: Optional[int] = None
+    ) -> Optional[Dict[str, Any]]:
+        fn = getattr(self._inner, "find_started_record", None)
+        if callable(fn):
+            return fn(run_id, step_id, before_seq=before_seq)
+        return super().find_started_record(run_id, step_id, before_seq=before_seq)
 
     def find_completed_result(
         self, run_id: str, idempotency_key: str

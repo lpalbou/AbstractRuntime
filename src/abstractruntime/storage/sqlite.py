@@ -31,7 +31,7 @@ from ..core.run_attribution import automation_index_fields, filter_values, works
 from ..core.run_identity import verify_run_identity
 from ..core.run_lifecycle import run_lifecycle_index_fields
 from ..core.vars import is_paused_vars
-from .base import LedgerStore, RunStore, mailbox_names_of
+from .base import LedgerStore, RunStore, coerce_ledger_seq, mailbox_names_of
 from .commands import CommandAppendResult, CommandCursorStore, CommandRecord, CommandStore
 from .serialize import dumps_compact, runstate_to_dict, steprecord_to_dict
 
@@ -1189,7 +1189,8 @@ class SqliteLedgerStore(LedgerStore):
     def __init__(self, db: SqliteDatabase) -> None:
         self._db = db
 
-    def append(self, record: StepRecord) -> None:
+    def append(self, record: StepRecord) -> int:
+        """Append one record; returns its `seq` (the ledger row address)."""
         run_id = str(record.run_id or "").strip()
         if not run_id:
             raise ValueError("StepRecord.run_id must be non-empty")
@@ -1197,7 +1198,7 @@ class SqliteLedgerStore(LedgerStore):
         payload = dumps_compact(steprecord_to_dict(record))
         conn = self._db.connection()
         with conn:
-            self._insert_in_txn(conn, run_id, payload, record=record)
+            return self._insert_in_txn(conn, run_id, payload, record=record)
 
     def last_record(self, run_id: str) -> Optional[Dict[str, Any]]:
         """The run's LAST persisted record (cheap indexed tail read) — the
@@ -1263,7 +1264,7 @@ class SqliteLedgerStore(LedgerStore):
             return super().find_completed_result(rid, key)
         return None
 
-    def append_chained(self, record: StepRecord, compute_hash: Any) -> None:
+    def append_chained(self, record: StepRecord, compute_hash: Any) -> int:
         """Append with the hash chain derived INSIDE one write transaction
         (the fork fix, 2026-07-10 adversarial finding): `BEGIN IMMEDIATE`
         takes the database write lock BEFORE the head is read, so two
@@ -1301,8 +1302,9 @@ class SqliteLedgerStore(LedgerStore):
             record.record_hash = compute_hash(record_dict, prev)
             record_dict["record_hash"] = record.record_hash
             payload = dumps_compact(record_dict)
-            self._insert_in_txn(conn, run_id, payload, record=record)
+            seq = self._insert_in_txn(conn, run_id, payload, record=record)
             conn.execute("COMMIT;")
+            return seq
         except BaseException:
             try:
                 conn.execute("ROLLBACK;")
@@ -1317,7 +1319,7 @@ class SqliteLedgerStore(LedgerStore):
         payload: str,
         *,
         record: Optional[StepRecord] = None,
-    ) -> None:
+    ) -> int:
         idem_key: Optional[str] = None
         step_status: Optional[str] = None
         if record is not None:
@@ -1356,6 +1358,23 @@ class SqliteLedgerStore(LedgerStore):
                     self._db.path,
                 )
             raise sqlite3.IntegrityError(f"{msg} (run_id={run_id!r}, seq={seq}, db={self._db.path})") from e
+        return seq
+
+    @staticmethod
+    def _row_record(row: Any) -> Optional[Dict[str, Any]]:
+        """Parse one `(seq, record_json)` row; the record carries its `seq`
+        (added on read — never persisted inside `record_json`)."""
+        try:
+            obj = json.loads(str(row["record_json"] or "{}"))
+        except Exception:
+            return None
+        if not isinstance(obj, dict):
+            return None
+        try:
+            obj["seq"] = int(row["seq"])
+        except Exception:  # pragma: no cover - seq is an INTEGER primary key column
+            pass
+        return obj
 
     def list(self, run_id: str) -> List[Dict[str, Any]]:
         rid = str(run_id or "").strip()
@@ -1363,18 +1382,62 @@ class SqliteLedgerStore(LedgerStore):
             return []
         conn = self._db.connection()
         rows = conn.execute(
-            "SELECT record_json FROM ledger WHERE run_id = ? ORDER BY seq ASC;",
+            "SELECT seq, record_json FROM ledger WHERE run_id = ? ORDER BY seq ASC;",
             (rid,),
         ).fetchall()
         out: List[Dict[str, Any]] = []
         for row in rows or []:
-            try:
-                obj = json.loads(str(row["record_json"] or "{}"))
-            except Exception:
-                continue
-            if isinstance(obj, dict):
+            obj = self._row_record(row)
+            if obj is not None:
                 out.append(obj)
         return out
+
+    def get_record_unresolved(self, run_id: str, seq: int) -> Optional[Dict[str, Any]]:
+        """Point read by primary key `(run_id, seq)`."""
+        rid = str(run_id or "").strip()
+        s = coerce_ledger_seq(seq)
+        if not rid or s is None:
+            return None
+        conn = self._db.connection()
+        row = conn.execute(
+            "SELECT seq, record_json FROM ledger WHERE run_id = ? AND seq = ?;",
+            (rid, s),
+        ).fetchone()
+        return self._row_record(row) if row is not None else None
+
+    def find_started_record(
+        self, run_id: str, step_id: str, *, before_seq: Optional[int] = None
+    ) -> Optional[Dict[str, Any]]:
+        """The STARTED row of `step_id`, read within the run's primary-key range.
+        Rows written before the `step_status` column (backlog 0047) carry NULL
+        there; their parsed status decides."""
+        rid = str(run_id or "").strip()
+        sid = str(step_id or "")
+        if not rid or not sid:
+            return None
+        limit = coerce_ledger_seq(before_seq)
+        sql = (
+            "SELECT seq, record_json FROM ledger WHERE run_id = ? "
+            "AND (step_status = ? OR step_status IS NULL) "
+            "AND json_extract(record_json, '$.step_id') = ?"
+        )
+        params: List[Any] = [rid, StepStatus.STARTED.value, sid]
+        if limit is not None:
+            sql += " AND seq < ?"
+            params.append(limit)
+        sql += " ORDER BY seq ASC;"
+        conn = self._db.connection()
+        try:
+            rows = conn.execute(sql, tuple(params)).fetchall()
+        except sqlite3.OperationalError:
+            # json_extract refuses a row it cannot parse as JSON (e.g. a NaN
+            # leaf) and aborts the whole query: read the run's rows instead.
+            return super().find_started_record(rid, sid, before_seq=limit)
+        for row in rows or []:
+            obj = self._row_record(row)
+            if obj is not None and obj.get("status") == StepStatus.STARTED.value:
+                return obj
+        return None
 
     def delete(self, run_id: str) -> int:
         rid = str(run_id or "").strip()
@@ -1496,11 +1559,8 @@ class SqliteLedgerStore(LedgerStore):
         out: List[Dict[str, Any]] = []
         next_cursor = a
         for row in rows or []:
-            try:
-                obj = json.loads(str(row["record_json"] or "{}"))
-            except Exception:
-                continue
-            if not isinstance(obj, dict):
+            obj = self._row_record(row)
+            if obj is None:
                 continue
             out.append(obj)
             try:

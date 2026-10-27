@@ -2462,19 +2462,45 @@ class JsonlLedgerStore(LedgerStore):
         self._idem_cache_lock = threading.Lock()
         self._idem_cache: "OrderedDict[tuple[str, str], Dict[str, Any]]" = OrderedDict()
         self._idem_cache_max = 512
+        # Row-address cache (ADR 0009): run_id -> (file size after our last
+        # append, records in the file then). `append()` returns the new
+        # record's seq (= its 1-based position in `list()`) without re-reading
+        # the file while the size proves nobody else appended; any other size
+        # (another writer, a cold process) recounts with `list()` once.
+        self._seq_cache_lock = threading.Lock()
+        self._seq_cache: "OrderedDict[str, tuple[int, int]]" = OrderedDict()
+        self._seq_cache_max = 4096
 
     def _path(self, run_id: str) -> Path:
         return self._base / f"ledger_{run_id}.jsonl"
 
-    def append(self, record: StepRecord) -> None:
+    def append(self, record: StepRecord) -> int:
+        """Append one line; returns the record's `seq`: its 1-based position in
+        the file (the order `list()` returns), the JSON-file row address."""
         p = self._path(record.run_id)
         record_dict = steprecord_to_dict(record)
         line = dumps_compact(record_dict)
-        with p.open("a", encoding="utf-8") as f:
-            # Write as a single append operation to reduce the chance of
-            # concurrent writers producing concatenated JSON objects on one line.
-            f.write(line + "\n")
+        run_id = str(record.run_id)
+        with self._seq_cache_lock:
+            with p.open("a", encoding="utf-8") as f:
+                size_before = os.fstat(f.fileno()).st_size
+                cached = self._seq_cache.get(run_id)
+                if cached is not None and cached[0] == size_before:
+                    count_before = cached[1]
+                else:
+                    count_before = len(self.list(run_id)) if size_before > 0 else 0
+                # Write as a single append operation to reduce the chance of
+                # concurrent writers producing concatenated JSON objects on one line.
+                f.write(line + "\n")
+                f.flush()
+                size_after = os.fstat(f.fileno()).st_size
+            seq = count_before + 1
+            self._seq_cache[run_id] = (size_after, seq)
+            self._seq_cache.move_to_end(run_id)
+            while len(self._seq_cache) > self._seq_cache_max:
+                self._seq_cache.popitem(last=False)
         self._idem_cache_note(record_dict, line)
+        return seq
 
     # Records above this size are not cached; the bounded tail read serves
     # them. 512 entries x 64KB caps worst-case cache memory at ~32MB.
@@ -2645,6 +2671,8 @@ class JsonlLedgerStore(LedgerStore):
             return []
         out: List[Dict[str, Any]] = []
         decoder = json.JSONDecoder()
+        # Each record carries `seq` = its 1-based position (the JSON-file row
+        # address, ADR 0009); added on read, never written to the file.
         with p.open("r", encoding="utf-8") as f:
             for line in f:
                 line = line.strip()
@@ -2653,6 +2681,7 @@ class JsonlLedgerStore(LedgerStore):
                 try:
                     record = json.loads(line)
                     if isinstance(record, dict):
+                        record["seq"] = len(out) + 1
                         out.append(record)
                     continue
                 except json.JSONDecodeError:
@@ -2676,6 +2705,9 @@ class JsonlLedgerStore(LedgerStore):
                     if isinstance(obj, dict):
                         recovered.append(obj)
                     i = end
+                for obj in recovered:
+                    obj["seq"] = len(out) + 1
+                    out.append(obj)
 
                 if recovered:
                     logger.warning(
@@ -2683,7 +2715,6 @@ class JsonlLedgerStore(LedgerStore):
                         len(recovered),
                         str(p),
                     )
-                    out.extend(recovered)
         return out
 
     def count(self, run_id: str) -> int:
@@ -2714,4 +2745,6 @@ class JsonlLedgerStore(LedgerStore):
             # same run_id must never see the deleted run's completions.
             for cache_key in [k for k in self._idem_cache if k[0] == rid]:
                 del self._idem_cache[cache_key]
+        with self._seq_cache_lock:
+            self._seq_cache.pop(rid, None)
         return count

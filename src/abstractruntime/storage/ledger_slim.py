@@ -696,3 +696,56 @@ def resolve_slim_tree(value: Any, index: Dict[str, Dict[str, Any]], *, _depth: i
                 out_list[i] = nv
         return out_list if out_list is not None else value
     return value
+
+
+def record_has_slim_markers(record: Any) -> bool:
+    """True when a ledger record carries a marker on a path the runtime slims
+    (a top-level `effect.payload` field, or the two LLM result metadata copies)."""
+    if not isinstance(record, dict):
+        return False
+    eff = record.get("effect")
+    payload = eff.get("payload") if isinstance(eff, dict) else None
+    if isinstance(payload, dict) and any(is_slim_marker(v) for v in payload.values()):
+        return True
+    return result_metadata_has_markers(record.get("result"))
+
+
+def resolve_record_slim_markers(record: Dict[str, Any], started_record: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """Rebuild one terminal record from the STARTED record of the same step
+    (the read half of `slim_terminal_effect` + `slim_result_metadata`).
+
+    TARGETED, like the crash-replay path: only the paths this module writes
+    are resolved (top-level `effect.payload` fields and the two result
+    metadata copies); marker-shaped DATA anywhere else (a tool result echoing
+    a slimmed record) is returned untouched. Verified: a marker whose rebuilt
+    bytes do not hash to the recorded sha256, or whose STARTED record is
+    missing, stays in place. Returns a spine copy when anything resolved,
+    the record itself otherwise.
+    """
+    if not isinstance(record, dict) or not record_has_slim_markers(record):
+        return record
+    index = build_started_payload_index([started_record] if isinstance(started_record, dict) else [])
+    if not index:
+        return record
+    out = dict(record)
+    eff = record.get("effect")
+    payload = eff.get("payload") if isinstance(eff, dict) else None
+    if isinstance(payload, dict):
+        new_payload: Optional[Dict[str, Any]] = None
+        for key, value in payload.items():
+            if not is_slim_marker(value):
+                continue
+            resolved = resolve_slim_value(value, index)
+            if resolved is not value:
+                if new_payload is None:
+                    new_payload = dict(payload)
+                new_payload[key] = resolved
+        if new_payload is not None:
+            new_eff = dict(eff)  # type: ignore[arg-type]
+            new_eff["payload"] = new_payload
+            out["effect"] = new_eff
+    result = record.get("result")
+    resolved_result = resolve_result_metadata_markers(result, index)
+    if resolved_result is not result:
+        out["result"] = resolved_result
+    return out

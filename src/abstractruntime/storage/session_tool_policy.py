@@ -57,6 +57,10 @@ class SessionToolPolicyStore(Protocol):
         """The current policy of the session, or None (no policy / reset)."""
         ...
 
+    def get_with_revision(self, session_id: str) -> Tuple[int, Optional[Dict[str, Any]]]:
+        """(revision, policy) read together: the base of a read-merge-write guarded by `if_revision`."""
+        ...
+
     def put(self, session_id: str, policy: Mapping[str, Any], *, if_revision: Optional[int] = None) -> Dict[str, Any]:
         """Replace the session's policy; returns it with the new `revision` and `session_id`."""
         ...
@@ -170,6 +174,12 @@ class InMemorySessionToolPolicyStore:
         with self._lock:
             return self._revisions.get(str(session_id or "").strip(), 0)
 
+    def get_with_revision(self, session_id: str) -> Tuple[int, Optional[Dict[str, Any]]]:
+        sid = str(session_id or "").strip()
+        with self._lock:
+            row = self._rows.get(sid)
+            return self._revisions.get(sid, 0), (copy.deepcopy(row) if row is not None else None)
+
     def history(self, session_id: str, *, limit: int = 100) -> List[Dict[str, Any]]:
         with self._lock:
             return copy.deepcopy(self._history.get(str(session_id or "").strip(), [])[-max(1, int(limit)):])
@@ -238,6 +248,13 @@ class SqliteSessionToolPolicyStore:
         conn = self._connect()
         try:
             return self._current(conn, sid)[1]
+        finally:
+            conn.close()
+
+    def get_with_revision(self, session_id: str) -> Tuple[int, Optional[Dict[str, Any]]]:
+        conn = self._connect()
+        try:
+            return self._current(conn, str(session_id or "").strip())
         finally:
             conn.close()
 

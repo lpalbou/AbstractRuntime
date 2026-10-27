@@ -363,6 +363,8 @@ def test_store_revisions_conflicts_reset_and_history(tmp_path, factory):
     assert store.put("s1", _policy())["revision"] == 4  # revisions never go back after a reset
     assert [h["action"] for h in store.history("s1")] == ["put", "put", "delete", "put"]
     assert store.get("other") is None
+    assert store.get_with_revision("s1") == (4, store.get("s1"))
+    assert store.get_with_revision("other") == (0, None)
 
 
 def test_policy_names_deny_wins_and_ask_removes():

@@ -97,6 +97,10 @@ _REEXPORTS: Dict[str, str] = {
     "drive_pressure": "abstractmemory",
     "promote_candidate": "abstractmemory",
     "reject_candidate": "abstractmemory",
+    # Diary reads over the graph plane (gateway entities.py: open questions / problems / ideas).
+    "open_questions": "abstractmemory",
+    "open_problems": "abstractmemory",
+    "open_ideas": "abstractmemory",
     # The graph (AbstractMemory 0.4.0+, ADR 0003): typed provenance, revisions, the one write path.
     "SourceRef": "abstractmemory.graph",
     "Provenance": "abstractmemory.graph",

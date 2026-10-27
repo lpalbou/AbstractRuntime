@@ -51,7 +51,7 @@ EXPECTED_GATEWAY_NAMES = (
     "SQLiteJournal", "SQLiteTripleStore", "LanceDBTripleStore", "InMemoryTripleStore", "TripleQuery",
     "TripleAssertion", "ClosureRecord", "cognition_health", "verify_diary_chain", "engram", "sleep_pass",
     "dream_pass", "reembed_store", "read_embedding_pin", "DRIVE_PRESSURE_BOUND", "drive_pressure",
-    "promote_candidate", "reject_candidate",
+    "promote_candidate", "reject_candidate", "open_questions", "open_problems", "open_ideas",
     "SourceRef", "Provenance", "ProvenanceRequired", "InvalidSourceRef", "Revision", "RevisionOp", "RevisionResult",
     "MemoryGraph",
 )
@@ -130,6 +130,11 @@ def test_gateway_names_are_abstractmemorys_own_objects() -> None:
     assert mf.REPLAY_STREAM is replay.REPLAY_STREAM
     assert mf.SELF_FRACTION_FLOOR is seam.SELF_FRACTION_FLOOR
     assert mf.verify_diary_chain is records.verify_diary_chain
+    import abstractmemory.diary as diary
+
+    assert (mf.open_questions, mf.open_problems, mf.open_ideas) == (
+        diary.open_questions, diary.open_problems, diary.open_ideas)
+    assert mf.open_questions is diary.open_questions and mf.open_ideas is diary.open_ideas
     with pytest.raises(AttributeError):
         mf.NotAMemoryName  # noqa: B018 - an unknown name fails loudly
 

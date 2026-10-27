@@ -20,7 +20,7 @@ When you ask "why is it designed this way?", the answer is in an ADR. ADRs are:
 | 0005 | [Runtime Owns AbstractCore Host Discovery Queries](0005_runtime_owns_abstractcore_host_discovery_queries.md) | Accepted | 2026-05-20 | Hosts should ask Runtime for Core discovery/catalog snapshots |
 | 0006 | [Runtime Owns Durable AbstractCore Bloc Prompt-Cache Control](0006_runtime_owns_durable_abstractcore_bloc_prompt_cache.md) | Accepted | 2026-05-20 | Hosts should use Runtime for durable bloc/KV controls and binding-aware execution |
 | 0007 | [Runtime Relays Core-Owned Model Residency Truth](0007_runtime_relays_core_owned_model_residency_truth.md) | Accepted | 2026-05-21 | Runtime reports loaded state only from AbstractCore residency truth |
-| 0008 | [Integration Facades Are the Complete Host Surface](0008_integration_facades_are_the_complete_host_surface.md) | Accepted | 2026-10-27 | Every AbstractCore name a host needs is a runtime facade re-export; a gap is a runtime patch, never a host import |
+| 0008 | [Integration Facades Are the Complete Host Surface](0008_integration_facades_are_the_complete_host_surface.md) | Accepted | 2026-10-27 | Every AbstractCore name or capability a host needs is surfaced by the runtime (facade re-export, typed refusal, backlog); a gap is a runtime patch, never a host import of a lower-level package |
 
 ## Relationship to Backlog
 

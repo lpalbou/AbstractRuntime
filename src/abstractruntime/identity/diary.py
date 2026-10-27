@@ -514,7 +514,7 @@ def build_diary_effect_handlers(
         # Projection is idempotent memory-side (supplied-id dedup), so
         # re-projecting on a replayed chain entry repairs an earlier
         # projection failure instead of duplicating.
-        # The chain's hash of the entry rides the projection's diary_entry ref (ADR 0009 digest); a replayed append
+        # The chain's hash of the entry rides the projection's diary_entry ref (ADR 0011 digest); a replayed append
         # returns the stored entry, whose hash is read back from the chain.
         record_hash = appended.get("record_hash")
         if not record_hash:

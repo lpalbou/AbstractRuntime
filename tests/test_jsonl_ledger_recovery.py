@@ -16,7 +16,7 @@ def test_jsonl_ledger_recovers_concatenated_records(tmp_path, caplog):
     with caplog.at_level(logging.WARNING):
         records = store.list(run_id)
 
-    # Recovered records still get their row address (`seq` = position, added on read; ADR 0009).
+    # Recovered records still get their row address (`seq` = position, added on read; ADR 0011).
     assert [r["seq"] for r in records] == [1, 2]
     stripped = [{k: v for k, v in r.items() if k != "seq"} for r in records]
     assert rec1 in stripped

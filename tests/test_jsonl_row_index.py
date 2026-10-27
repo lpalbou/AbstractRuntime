@@ -1,4 +1,4 @@
-"""The JSON-file ledger's row address is a seek, not a parse of the whole file (ADR 0009; backlog 0853 performance).
+"""The JSON-file ledger's row address is a seek, not a parse of the whole file (ADR 0011; backlog 0856 performance).
 
 `JsonlLedgerStore` keeps a per-run line-offset index (`_JsonlRowIndex`), extended by its own appends (write-through)
 and by reading only the bytes another writer appended since. Every case compares against `list()`, the definition

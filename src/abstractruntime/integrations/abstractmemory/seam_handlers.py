@@ -460,7 +460,7 @@ def build_memory_seam_effect_handlers(
         MemoryRecordInput = _import_record_input()
         warnings: List[str] = []
         inputs = []
-        # Ledger provenance (ADR 0009): every formed record names the MEMORY_FORM step that formed it (when the
+        # Ledger provenance (ADR 0011): every formed record names the MEMORY_FORM step that formed it (when the
         # handler runs inside a runtime step of a real run) and the verbatim artifact it points at.
         facade = MemoryFacade(run_store=run_store, artifact_store=artifact_store, runtime_id=runtime_id)
         for i, raw in enumerate(raw_records):

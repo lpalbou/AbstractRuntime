@@ -222,7 +222,7 @@ class InMemoryLedgerStore(LedgerStore):
         return len(rows)
 
     def list(self, run_id: str) -> List[Dict[str, Any]]:
-        # `seq` = 1-based position (the row address, ADR 0009), added on read.
+        # `seq` = 1-based position (the row address, ADR 0011), added on read.
         return [{**rec, "seq": i} for i, rec in enumerate(self._records.get(run_id, []), start=1)]
 
     def delete(self, run_id: str) -> int:

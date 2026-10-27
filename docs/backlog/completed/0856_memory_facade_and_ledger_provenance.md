@@ -1,10 +1,10 @@
-# 0853 — Memory facade and ledger provenance: the host surface for AbstractMemory, the ledger row address, and a step ref on every memory write
+# 0856 — Memory facade and ledger provenance: the host surface for AbstractMemory, the ledger row address, and a step ref on every memory write
 
-**Status**: completed 2026-10-27 on branch `feat/memory-graph-facade`, UNRELEASED (ships in 0.14.0, which waits for AbstractMemory 0.4.0 on PyPI) · **Priority**: P1 · **Created**: 2026-10-27
+**Status**: completed 2026-10-27 on branch `feat/memory-graph-facade`, UNRELEASED (ships in 0.15.0, after the operator decisions; needs AbstractMemory 0.4.0 on PyPI) · **Priority**: P1 · **Created**: 2026-10-27
 **Cross-package**: AbstractMemory ADR 0003 and backlog 0056 (`abstractmemory.graph`: `SourceRef`, `Provenance`,
 `MemoryGraph`; AbstractMemory 0.4.0), AbstractGateway memory routes (`/api/gateway/memory/*` over this facade) and its
 import-boundary burn-down, AbstractNote thin-client slice (step and artifact refs on note revisions). ADR:
-[0009](../../adr/0009_memory_facade_is_the_complete_host_surface_for_abstractmemory.md).
+[0011](../../adr/0011_memory_facade_is_the_complete_host_surface_for_abstractmemory.md).
 
 ## Why
 Operator goal (2026-10-27, AbstractMemory ADR 0003): every derived memory is tied to the ledger's messages, events
@@ -44,10 +44,10 @@ In:
   `EffectType.MEMORY_REVISE` (host handler in `build_memory_kg_effect_handlers` over `MemoryGraph.apply_revision`)
   and the VisualFlow node `memory_revise`.
 - Performance of the row address on the JSON-file backend (the gateway's default).
-- ADR 0009, docs (`api.md`, `integrations/abstractmemory.md`), CHANGELOG.
+- ADR 0011, docs (`api.md`, `integrations/abstractmemory.md`), CHANGELOG.
 
 Out:
-- Writes outside any effect (world models, tending, the night passes): [0854](../planned/0854_entity_direct_memory_writes_provenance.md).
+- Writes outside any effect (world models, tending, the night passes): [0857](../planned/0857_entity_direct_memory_writes_provenance.md).
 - Moving the memory writers onto `MemoryGraph.apply_revision` (AbstractMemory's convergence track); the gateway
   routes and the gateway's import burn-down (AbstractGateway).
 - A hash chain on conversation ledgers; real runs behind the home-direct entity driver.
@@ -152,7 +152,7 @@ Notes (not fixed here):
   instead of reporting it as lost.
 
 ### Architect pass (2026-10-27)
-Open operator decisions, written in ADR 0009 (Open decisions), not chosen here:
+Open operator decisions, written in ADR 0011 (Open decisions), not chosen here:
 - JSON-file `seq` durability: (a) persist `seq` in each record at append; (b) SQLite plane ledgers. Until then a
   JSON-file ledger is append-only by contract; a rewritten one answers `source_gone`, never another row (A2).
 - Owner = principal, scope = kind (B1's full fix); the runtime now refuses an `owner_id` the run does not derive.

@@ -1,4 +1,4 @@
-"""`LedgerStore.get_record(run_id, seq)`: the ledger row address (ADR 0009).
+"""`LedgerStore.get_record(run_id, seq)`: the ledger row address (ADR 0011).
 
 A step is a STARTED row and a terminal row sharing one `step_id`; the terminal
 row is slimmed (`$slim` markers point at bytes the STARTED row holds) and,

@@ -276,7 +276,7 @@ def coerce_ledger_seq(seq: Any) -> Optional[int]:
 class LedgerStore(ABC):
     """Append-only journal store.
 
-    LEDGER ROW ADDRESS (ADR 0009): one record is addressed by `(run_id, seq)`,
+    LEDGER ROW ADDRESS (ADR 0011): one record is addressed by `(run_id, seq)`,
     `seq` being its 1-based position in the run's ledger. `step_id` is not an
     address: a step's STARTED row and its terminal row share it. Backends with
     a stored sequence (SQLite) use it; the JSON-file backend's `seq` is the
@@ -343,7 +343,7 @@ class LedgerStore(ABC):
         return None
 
     def get_record(self, run_id: str, seq: int) -> Optional[Dict[str, Any]]:
-        """One ledger record by its row address, ready to read (ADR 0009).
+        """One ledger record by its row address, ready to read (ADR 0011).
 
         The record carries `"seq"`; a terminal row's `$slim` markers are
         resolved (verified) against the STARTED row of the same `step_id`

@@ -1,4 +1,4 @@
-"""`MemoryFacade`: the complete host surface for AbstractMemory (ADR 0009).
+"""`MemoryFacade`: the complete host surface for AbstractMemory (ADR 0011).
 
 Real temporary stores throughout (SqliteRunStore, SqliteLedgerStore, FileArtifactStore, DiaryStore over a SQLite
 ledger, JsonFileEventInbox, the SQLite home of `open_mind`); no mocks.
@@ -456,7 +456,7 @@ def test_a_seq_is_never_truncated_or_guessed() -> None:
 def test_a_rewritten_jsonl_ledger_never_resolves_a_step_ref_to_another_row(tmp_path: Path) -> None:
     """Architect A2: a JSON-file seq is a line position. Drop the first line of a run's ledger and `step:<run>#1`
     lands on the step's own TERMINAL row (same step_id): it must answer source_gone, never `ok`. Mutant: drop the
-    STARTED-status check -> `ok` with the terminal row. (Durable JSONL seqs are an open operator decision, ADR 0009.)"""
+    STARTED-status check -> `ok` with the terminal row. (Durable JSONL seqs are an open operator decision, ADR 0011.)"""
     from abstractruntime.storage.json_files import JsonFileRunStore, JsonlLedgerStore
 
     run_store, ledger = JsonFileRunStore(tmp_path / "runs"), JsonlLedgerStore(tmp_path / "runs")

@@ -620,7 +620,7 @@ class OffloadingLedgerStore(LedgerStore):
 
     def get_record_unresolved(self, run_id: str, seq: int) -> Optional[Dict[str, Any]]:
         """The inner row with THIS offloader's `{"$artifact": id}` leaves
-        rehydrated (ADR 0009): offloading is this decorator's storage detail,
+        rehydrated (ADR 0011): offloading is this decorator's storage detail,
         and `$slim` verification hashes the bytes the STARTED row held before
         they were offloaded. Single-record read, so the rehydration cost that
         keeps `list()` plain does not apply."""

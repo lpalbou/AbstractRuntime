@@ -1,4 +1,4 @@
-"""Every memory write the runtime performs names its ledger source (ADR 0009 decisions 3-4; backlog 0853).
+"""Every memory write the runtime performs names its ledger source (ADR 0011 decisions 3-4; backlog 0856).
 
 REAL `Runtime` runs on real temporary stores (SqliteRunStore + SqliteLedgerStore, FileArtifactStore, the SQLite
 AbstractMemory home, a DiaryStore over a SQLite ledger), no mocks. A step ref must resolve through

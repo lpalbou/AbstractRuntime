@@ -21,7 +21,7 @@ When you ask "why is it designed this way?", the answer is in an ADR. ADRs are:
 | 0006 | [Runtime Owns Durable AbstractCore Bloc Prompt-Cache Control](0006_runtime_owns_durable_abstractcore_bloc_prompt_cache.md) | Accepted | 2026-05-20 | Hosts should use Runtime for durable bloc/KV controls and binding-aware execution |
 | 0007 | [Runtime Relays Core-Owned Model Residency Truth](0007_runtime_relays_core_owned_model_residency_truth.md) | Accepted | 2026-05-21 | Runtime reports loaded state only from AbstractCore residency truth |
 | 0008 | [Integration Facades Are the Complete Host Surface](0008_integration_facades_are_the_complete_host_surface.md) | Accepted | 2026-10-27 | Every AbstractCore name or capability a host needs is surfaced by the runtime (facade re-export, typed refusal, backlog); a gap is a runtime patch, never a host import of a lower-level package |
-| 0009 | [The Memory Facade Is the Complete Host Surface for AbstractMemory](0009_memory_facade_is_the_complete_host_surface_for_abstractmemory.md) | Accepted | 2026-10-27 | Hosts reach AbstractMemory only through `memory_facade` and the effect-handler builders; the runtime stamps ledger provenance (step `(run_id, seq)`, artifact, diary entry) on every memory write it performs, never from a synthetic run id; reconstructing a deleted source answers `source_gone`, never raises |
+| 0011 | [The Memory Facade Is the Complete Host Surface for AbstractMemory](0011_memory_facade_is_the_complete_host_surface_for_abstractmemory.md) | Accepted | 2026-10-27 | Hosts reach AbstractMemory only through `memory_facade` and the effect-handler builders; the runtime stamps ledger provenance (step `(run_id, seq)`, artifact, diary entry) on every memory write it performs, never from a synthetic run id; reconstructing a deleted source answers `source_gone`, never raises |
 
 ## Relationship to Backlog
 
@@ -37,7 +37,7 @@ ADRs explain *why*. Backlog items explain *what* and *how*.
 | 0006 | `backlog/completed/027_runtime_durable_bloc_prompt_cache_facade.md` |
 | 0007 | `backlog/completed/0035_model_residency_provider_truth_for_local_http_clients.md`, `backlog/proposed/0036_local_media_residency_bridge_to_core_residency.md` |
 | 0008 | AbstractGateway backlog 1044 (mailbox access) and `tests/test_gateway_import_boundary.py`; runtime 0.13.1 `email_facade.resolve_srv_default` |
-| 0009 | `backlog/completed/0853_memory_facade_and_ledger_provenance.md`, `backlog/planned/0854_entity_direct_memory_writes_provenance.md`; AbstractMemory backlog 0056 |
+| 0011 | `backlog/completed/0856_memory_facade_and_ledger_provenance.md`, `backlog/planned/0857_entity_direct_memory_writes_provenance.md`; AbstractMemory backlog 0056 |
 
 ## Adding New ADRs
 

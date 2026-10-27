@@ -245,7 +245,7 @@ def project_diary_entry(
     )
 
     try:
-        # Ledger provenance (ADR 0009): the diary entry (with its chain) is the ground; a public projection also
+        # Ledger provenance (ADR 0011): the diary entry (with its chain) is the ground; a public projection also
         # names the DIARY_WRITE step of the writing run when it runs inside one. A private projection names the
         # entry only: it carries no origin by design, and the chain entry itself holds it.
         from ...identity.diary import diary_chain_id

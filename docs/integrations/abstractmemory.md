@@ -1,7 +1,7 @@
 # AbstractMemory integration
 
 AbstractRuntime is the only way a host (AbstractGateway, AbstractNote, an entity home) reaches AbstractMemory
-([ADR 0009](../adr/0009_memory_facade_is_the_complete_host_surface_for_abstractmemory.md)). The surface is:
+([ADR 0011](../adr/0011_memory_facade_is_the_complete_host_surface_for_abstractmemory.md)). The surface is:
 
 - `abstractruntime.integrations.abstractmemory.memory_facade`: `MemoryFacade`, `is_real_run`, and the AbstractMemory
   names hosts use, re-exported unchanged (`GATEWAY_NAMES`).
@@ -57,7 +57,7 @@ readers keep working, and ADDS a `sources` list of SourceRef dicts (AbstractMemo
 | `DIARY_WRITE` projection | `diary_entry` ref (`run_id` = `diary:<entity_id>`); for a public entry also the `step` ref of the `DIARY_WRITE` step. A private projection names the entry only (it carries no origin by design; the chain entry holds it) |
 | `MEMORY_REVISE` | `step` ref of the revising step; one `artifact` ref per `artifact_ids` entry; the caller's own artifact/message/event/diary_entry refs |
 
-Rules (ADR 0009 decision 4):
+Rules (ADR 0011 decision 4):
 
 - A synthetic run id never becomes a `run` or `step` ref: `chat-<session_id>` (home-direct entity driver),
   `diary:<entity_id>`, `session_memory_<sid>`, the global memory owner, or (when the facade has a `run_store`) any run
@@ -178,7 +178,7 @@ palette (AbstractFlow) adds the node with exactly these pins.
 ## Performance
 
 `get_record` / `find_started_record` at 10,000 rows (~10 MB JSON-file ledger; Apple Silicon, warm page cache;
-method and script in backlog 0853):
+method and script in backlog 0856):
 
 | | JSON files before | JSON files after | SQLite |
 |---|---|---|---|
@@ -188,7 +188,7 @@ method and script in backlog 0853):
 
 ## See also
 
-- [ADR 0009](../adr/0009_memory_facade_is_the_complete_host_surface_for_abstractmemory.md), backlog
-  [0853](../backlog/completed/0853_memory_facade_and_ledger_provenance.md) and
-  [0854](../backlog/planned/0854_entity_direct_memory_writes_provenance.md).
+- [ADR 0011](../adr/0011_memory_facade_is_the_complete_host_surface_for_abstractmemory.md), backlog
+  [0856](../backlog/completed/0856_memory_facade_and_ledger_provenance.md) and
+  [0857](../backlog/planned/0857_entity_direct_memory_writes_provenance.md).
 - [API reference](../api.md#abstractmemory-bridge-kg-effects).

@@ -1,7 +1,7 @@
-"""Runtime-owned AbstractMemory facade: the complete host surface (ADR 0009).
+"""Runtime-owned AbstractMemory facade: the complete host surface (ADR 0011).
 
 Hosts (AbstractGateway, AbstractNote, ...) reach AbstractMemory through THIS module and the effect-handler builders
-of `abstractruntime.integrations.abstractmemory`, never by importing `abstractmemory` (ADR 0008 decision 2, ADR 0009
+of `abstractruntime.integrations.abstractmemory`, never by importing `abstractmemory` (ADR 0008 decision 2, ADR 0011
 decision 1). A name or capability a host needs and cannot reach here is a runtime defect: add it here and cut a patch
 release; never work around it in the host.
 
@@ -17,7 +17,7 @@ What lives here:
   module `__getattr__`: `GATEWAY_NAMES` lists them (seeded from AbstractGateway's direct imports, audit 2026-10-27).
 
 AbstractMemory is imported lazily, inside functions (`_memory()`, `_graph()`), so importing this module never imports
-AbstractMemory (`tests/test_runtime_install_boundary.py`, ADR 0009 enforcement). `get_record`-backed step
+AbstractMemory (`tests/test_runtime_install_boundary.py`, ADR 0011 enforcement). `get_record`-backed step
 reconstruction and artifact/run/diary/event reconstruction need no AbstractMemory at all.
 AbstractMemory >= 0.4.0 provides `abstractmemory.graph` (SourceRef, Provenance, Revision, MemoryGraph).
 """
@@ -151,7 +151,7 @@ def is_real_run(run_id: Any, *, run_store: Any = None) -> bool:
     `SYNTHETIC_RUN_ID_PREFIXES` compared case-insensitively, plus the configured global memory owner) and, when
     `run_store` is given, that the store loads. WITHOUT a run store only the syntax is checked: any other string
     counts as real (pass the run store wherever one exists). A run id that fails this is never stamped as a `run`
-    or `step` ref (ADR 0009 decision 4)."""
+    or `step` ref (ADR 0011 decision 4)."""
     if not isinstance(run_id, str) or not run_id.strip():
         return False
     rid = run_id.strip()
@@ -255,7 +255,7 @@ def _screen_caller_refs(refs: Any) -> Tuple[List[Dict[str, Any]], List[Dict[str,
 
 
 class MemoryFacade:
-    """The host surface over one mind and the runtime stores that hold its ledger sources (ADR 0009).
+    """The host surface over one mind and the runtime stores that hold its ledger sources (ADR 0011).
 
     Every store is optional: `stamp` needs none of them (a `run_store` makes `is_real_run` check that a run loads),
     the graph reads need `graph`, and `reconstruct_source` answers `unsupported` for a kind whose store is absent.
@@ -495,7 +495,7 @@ class MemoryFacade:
     # -- reconstruction ----------------------------------------------------------------------------------------------
 
     def reconstruct_source(self, ref: Any, *, limit: int = DEFAULT_RUN_LEDGER_LIMIT) -> Dict[str, Any]:
-        """The verbatim a SourceRef points at (ADR 0009 decision 5). Never raises for a missing source:
+        """The verbatim a SourceRef points at (ADR 0011 decision 5). Never raises for a missing source:
         `{"status": "ok", "ref", "kind", "content", "metadata"}`, `{"status": "partial", ..., "unresolved": [paths]}`
         (a step row with a `$slim` marker or an `{"$artifact": id}` leaf whose bytes are not here: content is
         returned with the holes in place), `{"status": "source_gone", "ref", "reason"}`, or

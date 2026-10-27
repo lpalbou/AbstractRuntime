@@ -1,5 +1,5 @@
 """MEMORY_REVISE / the `memory_revise` VisualFlow node: memory capture and reconsideration as a workflow step with
-ledger provenance (ADR 0009; AbstractMemory ADR 0003).
+ledger provenance (ADR 0011; AbstractMemory ADR 0003).
 
 A REAL `Runtime` executes a compiled VisualFlow on real temporary stores (SqliteRunStore + SqliteLedgerStore, the
 SQLite graph home); no mocks.

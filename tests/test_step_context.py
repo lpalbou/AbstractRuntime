@@ -1,4 +1,4 @@
-"""The runtime publishes the executing step to its handler (ADR 0009 decision 3; `core.step_context`).
+"""The runtime publishes the executing step to its handler (ADR 0011 decision 3; `core.step_context`).
 
 Real `Runtime` runs on real temporary stores (SQLite and JSON files), no mocks.
 

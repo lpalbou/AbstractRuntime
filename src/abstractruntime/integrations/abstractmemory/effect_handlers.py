@@ -169,7 +169,7 @@ def derived_owner_ids(run: RunState, *, run_store: RunStore) -> set[str]:
     """The owner partitions a run may write: its own (`run`), its session's (`session`), the plane's (`global`).
     A payload `owner_id` outside this set is another partition (another session, another run) and is refused: a
     workflow names WHICH of its own partitions, never whose (architect B1; the full fix, owner = the principal, is
-    an operator decision, ADR 0009)."""
+    an operator decision, ADR 0011)."""
     out: set[str] = set()
     for scope in ("run", "session", "global"):
         try:
@@ -339,7 +339,7 @@ def build_memory_kg_effect_handlers(
         observed_at = now_iso()
         out_rows: list[Any] = []
         parse_errors: list[str] = []
-        # Ledger provenance (ADR 0009): the MEMORY_KG_ASSERT step that wrote each assertion; `span_id` -> artifact.
+        # Ledger provenance (ADR 0011): the MEMORY_KG_ASSERT step that wrote each assertion; `span_id` -> artifact.
         facade = MemoryFacade(run_store=run_store, runtime_id=runtime_id, artifact_store=artifact_store)
         writer_run_id = str(getattr(run, "run_id", "") or "")
         for a in assertions:
@@ -400,7 +400,7 @@ def build_memory_kg_effect_handlers(
         skipped_duplicates = 0
         # A duplicate row is not written, so the NEW sources of this assertion (its step, its span) are not recorded
         # on the existing row: say so in the outcome instead of dropping them silently. Recording a second source
-        # on an existing memory is the graph's job (a revision that adopts the row), a follow-up of backlog 0853.
+        # on an existing memory is the graph's job (a revision that adopts the row), a follow-up of backlog 0856.
         skipped_rows: list[dict[str, Any]] = []
         to_insert = out_rows
         if dedupe:
@@ -1018,7 +1018,7 @@ def build_memory_kg_effect_handlers(
         return EffectOutcome.completed(result)
 
     def _handle_revise(run: RunState, effect: Effect, default_next_node: Optional[str]) -> EffectOutcome:
-        """One revision of the mind, as a workflow step (ADR 0009; AbstractMemory ADR 0003).
+        """One revision of the mind, as a workflow step (ADR 0011; AbstractMemory ADR 0003).
 
         The payload is a Revision (contract §3) WITHOUT the runtime-owned part of its provenance: `scope` defaults
         to "run" and `owner_id` resolves like the KG lane; `cause` defaults to "ingest"; `occurred_at` to now;

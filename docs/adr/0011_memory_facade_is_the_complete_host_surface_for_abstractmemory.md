@@ -1,4 +1,4 @@
-# ADR 0009: The memory facade is the complete host surface for AbstractMemory
+# ADR 0011: The memory facade is the complete host surface for AbstractMemory
 
 Status: Accepted.
 Date: 2026-10-27
@@ -76,7 +76,7 @@ no rule saying whose job it is to close the gap.
   AbstractMemory at all.
 - Memory written on the home-direct entity path (synthetic `chat-<sid>` runs) carries artifact refs only until that
   path runs as real runs; derived writes outside any effect (world models, tending, the night passes) carry no
-  ledger source until backlog 0854 lands.
+  ledger source until backlog 0857 lands.
 
 ### Neutral
 - `seq` is read-side metadata: persisted bytes, hashes and the diary chain are unchanged.
@@ -119,9 +119,9 @@ no rule saying whose job it is to close the gap.
   `diary_entry` ref; the synthetic chat path carries artifact refs only; `MEMORY_KG_ASSERT` carries the step ref.
 
 ## Backlog links
-- Implementation: [0853](../backlog/completed/0853_memory_facade_and_ledger_provenance.md) (memory facade, ledger row
+- Implementation: [0856](../backlog/completed/0856_memory_facade_and_ledger_provenance.md) (memory facade, ledger row
   address, step context, stamping).
-- Follow-up: [0854](../backlog/planned/0854_entity_direct_memory_writes_provenance.md) (entity writes outside any
+- Follow-up: [0857](../backlog/planned/0857_entity_direct_memory_writes_provenance.md) (entity writes outside any
   effect: world models, tending, the night passes).
 - AbstractMemory backlog 0056 (`abstractmemory.graph`: `SourceRef`, `Provenance`, `MemoryGraph`).
 
@@ -129,5 +129,5 @@ no rule saying whose job it is to close the gap.
 - ADR 0003 (tamper-evident hash chain: `seq` is excluded from the record hash), ADR 0008 (integration facades are the
   complete host surface; this ADR is its AbstractMemory counterpart).
 - AbstractMemory ADR 0002 (AbstractMemory owns the graph), ADR 0003 (one graph, ledger provenance, revisions).
-- Root ADR 0007 (active context vs stored memory), ADR 0009 (`span_id` = `artifact_id`).
+- Root ADR 0007 (active context vs stored memory), ADR 0011 (`span_id` = `artifact_id`).
 - AbstractGateway ADR 0001 (lower-level access through runtime facades).

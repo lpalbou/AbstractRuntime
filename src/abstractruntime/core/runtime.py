@@ -3107,7 +3107,7 @@ class Runtime:
     def _waiting_step_context(
         self, run: RunState, wait: Optional[WaitState], effect_type: EffectType
     ) -> StepContext:
-        """The step context of work a RESUME performs for a step that waited (ADR 0009): the waiting step's
+        """The step context of work a RESUME performs for a step that waited (ADR 0011): the waiting step's
         `step_id` and the seq of ITS STARTED row (`find_started_record`, below the WAITING row). Never guessed:
         when the WAITING row or its STARTED row cannot be found (a wait without a key, a ledger the host
         rewrote), the context carries `seq=None` (and no step id if even the WAITING row is missing), so a
@@ -3283,7 +3283,7 @@ class Runtime:
                                         from ..email.actions import email_use_for_workflow
 
                                         # The approved tools run as the TOOL_CALLS step that waited for
-                                        # approval: publish that step (ADR 0009) so a tool writing memory
+                                        # approval: publish that step (ADR 0011) so a tool writing memory
                                         # names its ledger row, exactly as it would have without the gate.
                                         with email_run_scope(
                                             run,
@@ -3852,7 +3852,7 @@ class Runtime:
             except Exception:  # pragma: no cover - capture must never block execution
                 started_digests = None
             started_seq = self._ledger_store.append(rec)
-            # The handler's own ledger row (ADR 0009): `(run_id, seq)` of this
+            # The handler's own ledger row (ADR 0011): `(run_id, seq)` of this
             # attempt's STARTED record, published out of band like the
             # progress callback. `seq` is what the store reported, never a
             # guess (None when the backend does not know it).

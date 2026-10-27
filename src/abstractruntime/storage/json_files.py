@@ -2481,7 +2481,7 @@ def _jsonl_line_records(line: Any) -> List[Dict[str, Any]]:
 
 
 class _JsonlRowIndex:
-    """Byte offset of the line holding each record of one ledger file (ADR 0009 row address, JSON-file backend).
+    """Byte offset of the line holding each record of one ledger file (ADR 0011 row address, JSON-file backend).
 
     `offsets[seq - 1]` is the offset of the line that holds record `seq`; a concatenated line (several records on
     one line, see `_jsonl_line_records`) repeats its offset, so a record's position inside its line is
@@ -2503,7 +2503,7 @@ _IDX_MAGIC = b"ARLIDX1" + (b"L" if sys.byteorder == "little" else b"B")
 
 
 class JsonlLedgerStore(LedgerStore):
-    # Row-index cache bound (ADR 0009 / backlog 0853 performance): runs whose line offsets are kept (8 bytes per
+    # Row-index cache bound (ADR 0011 / backlog 0856 performance): runs whose line offsets are kept (8 bytes per
     # record), least recently used evicted. A 10k-row ledger costs ~80KB.
     _ROW_INDEX_MAX_RUNS = 128
     # The persisted `.idx` is rewritten (atomically, whole) once the newly indexed ledger bytes reach
@@ -2529,7 +2529,7 @@ class JsonlLedgerStore(LedgerStore):
         self._idem_cache_lock = threading.Lock()
         self._idem_cache: "OrderedDict[tuple[str, str], Dict[str, Any]]" = OrderedDict()
         self._idem_cache_max = 512
-        # Row-address cache (ADR 0009): run_id -> (file size after our last
+        # Row-address cache (ADR 0011): run_id -> (file size after our last
         # append, records in the file then). `append()` returns the new
         # record's seq (= its 1-based position in `list()`) without re-reading
         # the file while the size proves nobody else appended; any other size
@@ -2591,7 +2591,7 @@ class JsonlLedgerStore(LedgerStore):
         self._idem_cache_note(record_dict, line)
         return seq
 
-    # -- row address (ADR 0009) -------------------------------------------------------------------------------
+    # -- row address (ADR 0011) -------------------------------------------------------------------------------
 
     def _row_index_note_append(self, run_id: str, ino: int, size_before: int, size_after: int, seq: int) -> None:
         """Write-through: extend a CURRENT index by the line we just wrote (no read). An index that is not exactly
@@ -2963,7 +2963,7 @@ class JsonlLedgerStore(LedgerStore):
         out: List[Dict[str, Any]] = []
         decoder = json.JSONDecoder()
         # Each record carries `seq` = its 1-based position (the JSON-file row
-        # address, ADR 0009); added on read, never written to the file.
+        # address, ADR 0011); added on read, never written to the file.
         with p.open("r", encoding="utf-8") as f:
             for line in f:
                 line = line.strip()

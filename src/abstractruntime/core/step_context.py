@@ -1,7 +1,7 @@
 """abstractruntime.core.step_context
 
 The OUT-OF-BAND channel that tells an effect handler WHICH LEDGER ROW its own
-step is (ADR 0009).
+step is (ADR 0011).
 
 WHY
 ---

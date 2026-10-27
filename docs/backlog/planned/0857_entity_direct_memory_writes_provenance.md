@@ -1,13 +1,13 @@
-# 0854 — Entity memory written outside any effect carries no ledger source: world models, tending, the night passes
+# 0857 — Entity memory written outside any effect carries no ledger source: world models, tending, the night passes
 
 **Status**: planned · **Priority**: P2 · **Created**: 2026-10-27
 **Cross-package**: AbstractMemory ADR 0003 (every memory is sourced or derived; `MemoryGraph.apply_revision` refuses an
 ungrounded write) and its convergence track (moving writers onto revisions). ADR:
-[0009](../../adr/0009_memory_facade_is_the_complete_host_surface_for_abstractmemory.md) (Consequences, Negative).
-Follows [0853](../completed/0853_memory_facade_and_ledger_provenance.md).
+[0011](../../adr/0011_memory_facade_is_the_complete_host_surface_for_abstractmemory.md) (Consequences, Negative).
+Follows [0856](../completed/0856_memory_facade_and_ledger_provenance.md).
 
 ## Why
-0853 stamps a ledger source on every memory write the runtime performs INSIDE an effect (`MEMORY_FORM`,
+0856 stamps a ledger source on every memory write the runtime performs INSIDE an effect (`MEMORY_FORM`,
 `MEMORY_KG_ASSERT`, the `DIARY_WRITE` projection, `MEMORY_REVISE`). Entity homes also write derived memory by calling
 AbstractMemory engines directly, outside any runtime step, so no step context exists and nothing names a source:
 

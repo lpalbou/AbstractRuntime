@@ -7,10 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.14.0] - unreleased
+## [0.15.0] - unreleased
 
 Requires AbstractMemory 0.4.0 or newer (`abstractmemory.graph`). This release waits for AbstractMemory 0.4.0 on
-PyPI: a release never ships above an unpublished floor (root ADR 0034). ADR 0009, backlog 0853.
+PyPI: a release never ships above an unpublished floor (root ADR 0034). ADR 0011, backlog 0856.
 
 ### Added
 

@@ -448,7 +448,7 @@ class ReplayView:
         `order` (`apply_delta`) gets the same order as `to_json`. (A tree-walk order with a
         per-level `order` disagreed for a grandchild discovered after its uncle and for runs
         whose parent is not yet known; found by the replay invariants.)"""
-        return sorted(self._runs, key=lambda rid: _order_tuple(self._path_order(rid)) + (rid,))
+        return sorted(self._runs, key=lambda rid: (_order_tuple(self._path_order(rid)), rid))
 
     def _path_order(self, rid: str) -> List[Any]:
         """A run row's `order`: the root's `["", "", 0, root]`, then one `[discovered at, run id,
@@ -513,8 +513,12 @@ class ReplayView:
     def _resolve(self, value: Any, run_id: str, step_id: str, field: str) -> Any:
         if not is_slim_marker(value):
             return value
-        payload = self._started.get((run_id, step_id))
-        resolved = resolve_slim_value(value, {step_id: payload}) if isinstance(payload, dict) else value
+        # The marker names the STARTED record it points at. An approved tool call completes under a
+        # NEW step id whose `$slim` points back at the waiting step's STARTED record, so the
+        # record's own step id is not the target (found by the a2/e2 fixtures).
+        target = _s(_obj(value.get("$slim")).get("step_id")) or step_id
+        payload = self._started.get((run_id, target))
+        resolved = resolve_slim_value(value, {target: payload}) if isinstance(payload, dict) else value
         if is_slim_marker(resolved):
             self._warnings[f"slim:{run_id}:{step_id}:{field}"] = (
                 f"run {run_id} step {step_id}: `{field}` points at a STARTED record this view did not fold "
@@ -631,8 +635,9 @@ class ReplayView:
         if status == "waiting":
             wait = _obj(res.get("wait"))
             if wait:
+                # The STARTED payload of a waiting step is kept: the record that ends the wait
+                # (an approved call's completion, under a new step id) points back at it.
                 self._open_wait(r, rec, wait, payload, eff_type, aid, ts, seq, step_id)
-                self._started.pop((run_id, step_id), None)
         elif eff_type == "start_subworkflow":
             child = ""
             for src in (res, raw_payload):
@@ -677,7 +682,10 @@ class ReplayView:
                     act[k] = _s(payload[k])
             if not act.get("model") and _s(res.get("model")):
                 act["model"] = _s(res.get("model"))
-            act["name"] = act.get("model") or act.get("provider") or "llm_call"
+            if act["kind"] == "llm" or not act.get("name"):
+                # An Agent execution (start_subworkflow + its structured-output llm_call) keeps
+                # the name its delegation gave it.
+                act["name"] = act.get("model") or act.get("provider") or "llm_call"
             if status == "completed" and (run_id, step_id) not in self._usage_steps:
                 usage = _extract_usage_from_ledger_record(rec)
                 self._usage_steps.add((run_id, step_id))
@@ -1090,7 +1098,8 @@ def _order_tuple(order: Iterable[Any]) -> Tuple:
 
 
 def _order_key(item: Dict[str, Any]) -> Tuple:
-    return _order_tuple(item.get("order") or ()) + (str(item.get("id") or item.get("run_id")),)
+    # `delta._order_key`: the order tuple compared whole (a prefix first), then the id.
+    return (_order_tuple(item.get("order") or ()), str(item.get("id") or item.get("run_id")))
 
 
 def _sorted_items(items: Mapping[str, Dict[str, Any]]) -> List[Dict[str, Any]]:

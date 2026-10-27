@@ -24,8 +24,10 @@ def _item_id(key: str, item: Dict[str, Any]) -> str:
 
 
 def _order_key(key: str, item: Dict[str, Any]) -> tuple:
+    """Sort by `order` (compared element by element, a prefix first: a run row's `order` is its
+    path from the root, so a parent sorts before its children), then by id."""
     order = item.get("order") or ()
-    return tuple(str(x) if not isinstance(x, int) else f"{x:012d}" for x in order) + (_item_id(key, item),)
+    return (tuple(str(x) if not isinstance(x, int) else f"{x:012d}" for x in order), _item_id(key, item))
 
 
 def apply_delta(view: Dict[str, Any], delta: Dict[str, Any]) -> Dict[str, Any]:

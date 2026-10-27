@@ -194,12 +194,14 @@ def test_a_fresh_process_loads_the_persisted_index_instead_of_parsing(tmp_path: 
     assert JsonlLedgerStore(tmp_path)._row_index_load(RID, path, path.stat()) is None
     _assert_matches_list(JsonlLedgerStore(tmp_path))
 
-    # An index of a previous file (the ledger was recreated: other inode, other rows) is never used.
-    writer2 = _persisting(tmp_path)
-    writer2.get_record_unresolved(RID, 1)  # builds + persists for the current file
+    # An index of a previous file (the ledger was recreated: other inode, other rows) is never used, even when its
+    # indexed size ends on a line break of the new file and its offsets are line starts there.
+    path.write_text("".join(_line(f"a{i}", 200) for i in range(1, 4)), encoding="utf-8")  # offsets 0, 200, 400
+    idx_file.unlink()
+    _persisting(tmp_path).get_record_unresolved(RID, 1)  # builds + persists for this file (size 600)
     keep = tmp_path / "old.jsonl"
     path.rename(keep)  # keeps the old inode alive
-    path.write_text("".join(_line(f"z{i}", 120) for i in range(1, 4)), encoding="utf-8")
+    path.write_text("".join(_line(f"z{i}", 100) for i in range(1, 9)), encoding="utf-8")  # offsets 0, 100, 200, ...
     assert JsonlLedgerStore(tmp_path)._row_index_load(RID, path, path.stat()) is None
     assert JsonlLedgerStore(tmp_path).get_record_unresolved(RID, 2)["node_id"] == "z2"
     _assert_matches_list(JsonlLedgerStore(tmp_path))

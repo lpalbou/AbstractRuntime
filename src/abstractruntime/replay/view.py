@@ -326,6 +326,7 @@ class ReplayView:
         self._dirty: Dict[str, Set[str]] = {"runs": set(), "activities": set(), "messages": set(), "artifacts": set()}
         self._interaction: Optional[Dict[str, Any]] = None
         self._statuses: Dict[str, str] = {}  # run id -> the status the last delta reported
+        self._relinked = False
         self._pending_changes: List[Dict[str, Any]] = []  # interaction opened/closed since the last delta
         self.last_delta: Optional[Dict[str, Any]] = None
         self._run(self.root_run_id)
@@ -422,6 +423,7 @@ class ReplayView:
                 child.parent_run_id = parent_id
                 child.discover_key = discover_key
                 self._dirty["runs"].add(child_id)
+                self._relinked = True  # rows' `order`/`depth` below this run may have moved
 
     def _ledger_workflow(self, run_id: str, workflow_id: str) -> None:
         """A run's workflow as its parent's ledger names it (its own snapshot, when read, wins)."""
@@ -1060,9 +1062,11 @@ class ReplayView:
         delta["changes"] = self._changes(order, delta)
         for k in self._dirty:
             self._dirty[k] = set()
-        # A run row's `order`/`depth` can change when another run is linked; send every row then.
-        if delta["runs"]:
+        # A row's `order`/`depth` follow its ancestors: when a run was (re)linked, every row is
+        # sent; otherwise only the rows that changed (a fold usually touches one run).
+        if self._relinked:
             delta["runs"] = [self._run_row(rid, order) for rid in order]
+            self._relinked = False
         return delta
 
 

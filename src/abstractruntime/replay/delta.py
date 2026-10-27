@@ -32,20 +32,38 @@ def _order_key(key: str, item: Dict[str, Any]) -> tuple:
 
 
 def apply_delta(view: Dict[str, Any], delta: Dict[str, Any]) -> Dict[str, Any]:
-    """Return `view` with `delta` applied (neither argument is modified)."""
-    out = copy.deepcopy(view) if view else {k: [] for k in LIST_KEYS}
+    """Return `view` with `delta` applied (neither argument is modified).
+
+    Cost follows the delta, not the view: the result shares every unchanged item with `view`
+    (items are replaced, never edited in place), copies only the delta's items, and re-sorts a
+    list only when an item is new or moved."""
+    out: Dict[str, Any] = dict(view) if view else {k: [] for k in LIST_KEYS}
     for k in SCALAR_KEYS:
         if k in delta:
             out[k] = copy.deepcopy(delta[k])
     for k in LIST_KEYS:
         items = delta.get(k)
+        current = out.get(k) or []
         if not items:
-            out.setdefault(k, [])
+            out[k] = current
             continue
-        by_id = {_item_id(k, it): it for it in out.get(k) or []}
+        rows = list(current)
+        where = {_item_id(k, it): i for i, it in enumerate(rows)}
+        resort = False
         for it in items:
-            by_id[_item_id(k, it)] = copy.deepcopy(it)
-        out[k] = sorted(by_id.values(), key=lambda it, k=k: _order_key(k, it))
+            new_it = copy.deepcopy(it)
+            i = where.get(_item_id(k, it))
+            if i is None:
+                where[_item_id(k, it)] = len(rows)
+                rows.append(new_it)
+                resort = True
+            else:
+                if rows[i].get("order") != new_it.get("order"):
+                    resort = True
+                rows[i] = new_it
+        if resort:
+            rows.sort(key=lambda it, k=k: _order_key(k, it))
+        out[k] = rows
     return out
 
 

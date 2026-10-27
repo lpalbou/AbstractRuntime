@@ -1,6 +1,6 @@
 # 0853 — Memory facade and ledger provenance: the host surface for AbstractMemory, the ledger row address, and a step ref on every memory write
 
-**Status**: in progress (branch `feat/memory-graph-facade`) · **Priority**: P1 · **Created**: 2026-10-27
+**Status**: completed 2026-10-27 on branch `feat/memory-graph-facade`, UNRELEASED (ships in 0.14.0, which waits for AbstractMemory 0.4.0 on PyPI) · **Priority**: P1 · **Created**: 2026-10-27
 **Cross-package**: AbstractMemory ADR 0003 and backlog 0056 (`abstractmemory.graph`: `SourceRef`, `Provenance`,
 `MemoryGraph`; AbstractMemory 0.4.0), AbstractGateway memory routes (`/api/gateway/memory/*` over this facade) and its
 import-boundary burn-down, AbstractNote thin-client slice (step and artifact refs on note revisions). ADR:
@@ -39,6 +39,11 @@ In:
 - `integrations/abstractmemory/memory_facade.py`: `MemoryFacade` (`open_mind`, `graph`/`store`/`journal`, `stamp`,
   `reconstruct_source`, `history`/`sources_of`/`derived_from_source`), `is_real_run`.
 - Stamping in `MEMORY_FORM`, `MEMORY_KG_ASSERT` and the `DIARY_WRITE` projection.
+- The workflow-native primitive (operator, 2026-10-27: "workflows are the framework's central native primitive; memory
+  capture and reconsideration should be expressible as workflow steps/effects with ledger provenance"):
+  `EffectType.MEMORY_REVISE` (host handler in `build_memory_kg_effect_handlers` over `MemoryGraph.apply_revision`)
+  and the VisualFlow node `memory_revise`.
+- Performance of the row address on the JSON-file backend (the gateway's default).
 - ADR 0009, docs (`api.md`, `integrations/abstractmemory.md`), CHANGELOG.
 
 Out:
@@ -55,3 +60,54 @@ Out:
 - A real `Runtime` run: the episode formed by `MEMORY_FORM` carries a `step` ref that resolves through `get_record` to
   that step; the KG assertion carries one; a diary projection carries a `diary_entry` ref; the synthetic chat path
   carries artifact refs only. Each test fails with the stamping line removed.
+
+## Report (2026-10-27)
+
+Commits on `feat/memory-graph-facade` (after `76b1319` WIP): `de96ede` memory facade, `7b0d031` step context
+installed, `dd9e924` stamping, `2574881` MEMORY_REVISE + node, `09db6f5` row-address performance, `76e9988` docs and
+version, `9eea551` diary reads in `GATEWAY_NAMES`; this report.
+
+What landed:
+- `integrations/abstractmemory/memory_facade.py`: `MemoryFacade` (`open_mind`, `graph`/`store`/`journal`, `stamp`,
+  `stamp_current_step`, `apply_revision`, `history`/`sources_of`/`derived_from_source`, `reconstruct_source`),
+  `is_real_run`, `GATEWAY_NAMES` (43 names: the gateway's direct imports, including the diary reads `open_questions` /
+  `open_problems` / `open_ideas`, + the 8 graph names; every one exists in AbstractMemory, none left out), resolved by module `__getattr__` so the module never imports AbstractMemory at
+  import time.
+- `core/runtime.py` `_execute_effect_with_retry` installs `effect_step_context(StepContext(...))` around the handler,
+  with the seq `append()` returned for the attempt's STARTED row.
+- Stamping: `seam_handlers._handle_form`, `effect_handlers._handle_assert`, `identity_support.project_diary_entry`.
+  A caller `payload_ref` is an artifact ref only when the artifact store holds it (a payload_ref may name an
+  identity-core `.yaml` record). A private diary projection names its entry only (no origin by design).
+- `MEMORY_REVISE` / `memory_revise`: contract in `docs/integrations/abstractmemory.md`. Caller `run`/`step` refs are
+  refused (runtime-owned); unknown payload keys are refused; the default `revision_id` hashes (run, node, scope,
+  owner, cause, ops) so a retried attempt is a no-op.
+
+Performance (10,000 rows, ~10 MB JSON-file ledger, ~1 KB rows, Apple Silicon, warm cache; method:
+fill one run's ledger with 5,000 STARTED/COMPLETED pairs through `append`, then the median of 20 calls each):
+
+| | JSONL before | JSONL after | SQLite before | SQLite after |
+|---|---|---|---|---|
+| `get_record(seq)` | 58 ms | 0.05 ms | 0.02 ms | 0.01 ms |
+| `find_started_record(step, before_seq=terminal)` (the slim-resolve path) | 58-72 ms (full parse) | 0.08 ms | 3.5 ms | 0.01 ms |
+| `find_started_record(step)` unbounded, row in the middle | 72 ms | 12 ms | 11 ms | 3.4 ms |
+| `find_started_record` worst case (first row) / miss | 72 ms | 24 ms / 7 ms | 11 ms | 10 ms |
+| first read in a cold process (index build) | 58 ms | 48 ms | 0.3 ms | 0.3 ms |
+
+JSONL: a per-run line-offset index (`_JsonlRowIndex`, 8 bytes per record, 128 runs LRU), written through by
+`append`, extended by reading only the bytes another writer appended (keyed by inode + indexed size), rebuilt for a
+recreated file; a torn trailing line falls back to the `list()` reading. `append` uses the index (not a full
+`list()`) to count after a foreign write. SQLite: `find_started_record` reads newest-first with `LIMIT 1` (Python's
+cursor prefetch made the unlimited query scan the rest of the run).
+
+Tests: `test_memory_facade.py` (10), `test_step_context.py` (4), `test_memory_step_provenance.py` (7),
+`test_memory_revise.py` (7), `test_jsonl_row_index.py` (6); each docstring lists the mutants checked by hand.
+Full suite (`PYTHONPATH=src:<AbstractMemory graph worktree>/src`): `main` 3763 passed / 46 skipped / 0 failed; this
+branch 3810 passed / 46 skipped / 0 failed (+47: the get_record, facade, step-context, provenance, MEMORY_REVISE and
+row-index tests). `tests/test_packaging_extras.py` pins the new `AbstractMemory>=0.4.0` floor.
+
+Seams and notes:
+- `abstractmemory.graph.Provenance.from_dict` turns a STRING `derived_from` into a tuple of characters
+  (`tuple("m1")`) before validating it (AbstractMemory worktree `feat/memory-graph-provenance`, `8246dac`); reported
+  to the AbstractMemory slice, not worked around here.
+- `llms-full.txt` was not regenerated (coredoc pass at release).
+

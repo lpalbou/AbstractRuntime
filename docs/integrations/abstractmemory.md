@@ -101,6 +101,7 @@ the stores a host has; every one is optional.
 
 Re-exported AbstractMemory names (`facade.X is abstractmemory.X`, resolved on first use): `memory_facade.GATEWAY_NAMES`
 (budgets, replay stream, spark templates, stores and journal, queries, night passes, embeddings pin, drives, disposal,
+diary reads `open_questions` / `open_problems` / `open_ideas`,
 and the graph names `SourceRef`, `Provenance`, `ProvenanceRequired`, `InvalidSourceRef`, `Revision`, `RevisionOp`,
 `RevisionResult`, `MemoryGraph`).
 

@@ -79,6 +79,10 @@ class EffectType(str, Enum):
     MEMORY_KG_ASSERT = "memory_kg_assert"
     MEMORY_KG_QUERY = "memory_kg_query"
     MEMORY_KG_RESOLVE = "memory_kg_resolve"
+    # The workflow-native write path of a mind (AbstractMemory ADR 0003; runtime ADR 0009): one revision
+    # (assert / close / narrow ops) applied atomically through `MemoryGraph.apply_revision`, its provenance stamped
+    # with this step's ledger row. Host-provided handler (`build_memory_kg_effect_handlers`).
+    MEMORY_REVISE = "memory_revise"
 
     # Usage-weighted graph memory (host-provided handlers; abstractmemory seam v1).
     # Stimulus-driven reconstruction of the emergent working set, the Hebbian

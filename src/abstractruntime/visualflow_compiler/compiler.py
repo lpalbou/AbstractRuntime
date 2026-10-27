@@ -20,6 +20,7 @@ from .adapters.effect_adapter import (
     create_memory_kg_assert_handler,
     create_memory_kg_query_handler,
     create_memory_kg_resolve_handler,
+    create_memory_revise_handler,
     create_memory_note_handler,
     create_memory_query_handler,
     create_memory_tag_handler,
@@ -445,6 +446,13 @@ def _create_effect_node_handler(
         )
     elif effect_type == "memory_kg_assert":
         base_handler = create_memory_kg_assert_handler(
+            node_id=node_id,
+            next_node=next_node,
+            input_key=input_key,
+            output_key=output_key,
+        )
+    elif effect_type == "memory_revise":
+        base_handler = create_memory_revise_handler(
             node_id=node_id,
             next_node=next_node,
             input_key=input_key,
@@ -3914,6 +3922,22 @@ def _sync_effect_results_to_node_outputs(run: Any, flow: Flow) -> None:
             else:
                 current["assertion_ids"] = []
                 current["count"] = 0
+                current["ok"] = False
+            current["raw"] = raw
+            mapped_value = current.get("assertion_ids")
+        elif effect_type == "memory_revise":
+            if isinstance(raw, dict):
+                for key in ("assertion_ids", "closed", "narrowed", "skipped", "sources"):
+                    value = raw.get(key)
+                    current[key] = value if isinstance(value, list) else []
+                current["revision_id"] = raw.get("revision_id")
+                current["applied"] = raw.get("applied")
+                current["ok"] = raw.get("ok")
+            else:
+                for key in ("assertion_ids", "closed", "narrowed", "skipped", "sources"):
+                    current[key] = []
+                current["revision_id"] = None
+                current["applied"] = False
                 current["ok"] = False
             current["raw"] = raw
             mapped_value = current.get("assertion_ids")

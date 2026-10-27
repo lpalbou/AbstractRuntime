@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import re
 import unicodedata
@@ -175,17 +176,50 @@ def _import_abstractmemory():
         ) from e
 
 
+# MEMORY_REVISE payload keys (docs/integrations/abstractmemory.md). `type` / `resume_to_node` are VisualFlow
+# transport keys the compiler adds to every pending effect; anything else is refused, never silently dropped.
+_REVISE_KEYS = frozenset({
+    "ops", "scope", "owner_id", "cause", "revision_id", "occurred_at", "recorded_at", "summary", "artifact_ids",
+    "provenance",
+})
+_REVISE_TRANSPORT_KEYS = frozenset({"type", "resume_to_node"})
+# The caller's part of a revision's provenance; `run`/`step` refs are runtime-owned (stamped from the step context).
+_REVISE_PROVENANCE_KEYS = frozenset({"sources", "derived_from", "actor", "reader", "reason", "extra"})
+_RUNTIME_OWNED_REF_KINDS = frozenset({"run", "step"})
+
+
+def _memory_graph_for(store: Any, journal: Any) -> tuple[Any, Optional[str]]:
+    """(MemoryGraph, None) when `store` is a graph home, else (None, why). Built ONCE per builder call: opening a
+    graph creates its tables in the store's file."""
+    from abstractmemory import InMemoryTripleStore, SQLiteTripleStore  # type: ignore
+    from abstractmemory.graph import MemoryGraph  # type: ignore
+
+    if isinstance(store, (SQLiteTripleStore, InMemoryTripleStore)):
+        return MemoryGraph(store, journal), None
+    return None, (
+        f"MEMORY_REVISE needs a graph home (SQLiteTripleStore, or InMemoryTripleStore for tests); this host's KG store "
+        f"is {type(store).__name__}, which has no revision log yet (AbstractMemory backlog 0057: one SQLite home per "
+        "plane)"
+    )
+
+
 def build_memory_kg_effect_handlers(
     *,
     store: Any,
     run_store: RunStore,
     now_iso: Callable[[], str],
+    journal: Any = None,
 ) -> Dict[EffectType, EffectHandler]:
-    """Build effect handlers for `memory_kg_*` effects.
+    """Build effect handlers for `memory_kg_*` effects and `MEMORY_REVISE`.
 
     These are host-provided handlers that bridge VisualFlow nodes to AbstractMemory stores.
+    `MEMORY_REVISE` applies one revision through `abstractmemory.graph.MemoryGraph` over `store` (a graph home:
+    SQLiteTripleStore / InMemoryTripleStore; any other store gets a failed outcome naming AbstractMemory backlog
+    0057). `journal` receives the `ClosureRecord` of each `close` op (None: the revision and the history row still
+    carry the close; ranked retrieval folds closures only from a journal).
     """
     TripleAssertion, TripleQuery = _import_abstractmemory()
+    memory_graph, graph_unavailable = _memory_graph_for(store, journal)
 
     # Avoid `isinstance` checks against Protocols; use duck-typing instead.
     if not callable(getattr(store, "add", None)) or not callable(getattr(store, "query", None)):
@@ -943,8 +977,117 @@ def build_memory_kg_effect_handlers(
             result["warnings"] = [w for w in warnings if str(w).strip()]
         return EffectOutcome.completed(result)
 
+    def _handle_revise(run: RunState, effect: Effect, default_next_node: Optional[str]) -> EffectOutcome:
+        """One revision of the mind, as a workflow step (ADR 0009; AbstractMemory ADR 0003).
+
+        The payload is a Revision (contract §3) WITHOUT the runtime-owned part of its provenance: `scope` defaults
+        to "run" and `owner_id` resolves like the KG lane; `cause` defaults to "ingest"; `occurred_at` to now;
+        `revision_id` to a hash of (run, node, scope, owner, cause, ops) so a retried attempt is a no-op. The runtime
+        stamps the step ref of THIS effect (and an artifact ref per `artifact_ids`); the caller keeps
+        `derived_from` / `actor` / `reader` / `reason` / `extra` and may name artifact / message / event /
+        diary_entry sources, never a `run` or `step` ref. An ungrounded revision (no source, no derived_from, e.g.
+        a handler called outside any run) is refused by the graph (`ProvenanceRequired`) as a failed outcome.
+        """
+        del default_next_node
+        if memory_graph is None:
+            return EffectOutcome.failed(str(graph_unavailable))
+        payload = dict(effect.payload or {})
+        unknown = sorted(set(payload) - _REVISE_KEYS - _REVISE_TRANSPORT_KEYS)
+        if unknown:
+            return EffectOutcome.failed(
+                f"MEMORY_REVISE: unknown payload keys {unknown} (known: {sorted(_REVISE_KEYS)})"
+            )
+        ops = payload.get("ops")
+        if not isinstance(ops, list) or not ops or not all(isinstance(o, dict) for o in ops):
+            return EffectOutcome.failed("MEMORY_REVISE requires payload.ops: a non-empty list of {op, payload}")
+
+        raw_prov = payload.get("provenance")
+        if raw_prov is None:
+            raw_prov = {}
+        if not isinstance(raw_prov, dict):
+            return EffectOutcome.failed("MEMORY_REVISE payload.provenance is an object")
+        prov_unknown = sorted(set(raw_prov) - _REVISE_PROVENANCE_KEYS)
+        if prov_unknown:
+            return EffectOutcome.failed(
+                f"MEMORY_REVISE provenance keys {prov_unknown} are outside the graph shape "
+                f"{sorted(_REVISE_PROVENANCE_KEYS)} (anything else belongs in provenance.extra)"
+            )
+        caller_sources = raw_prov.get("sources") or []
+        if not isinstance(caller_sources, list) or not all(isinstance(r, dict) for r in caller_sources):
+            return EffectOutcome.failed("MEMORY_REVISE provenance.sources is a list of SourceRef objects")
+        owned = sorted({str(r.get("kind")) for r in caller_sources} & _RUNTIME_OWNED_REF_KINDS)
+        if owned:
+            return EffectOutcome.failed(
+                f"MEMORY_REVISE: {owned} refs are runtime-owned (the runtime stamps the executing step); "
+                "name artifacts with payload.artifact_ids"
+            )
+        artifact_ids = payload.get("artifact_ids") or []
+        if isinstance(artifact_ids, str):
+            artifact_ids = [artifact_ids]
+        if not isinstance(artifact_ids, list) or not all(isinstance(a, str) and a.strip() for a in artifact_ids):
+            return EffectOutcome.failed("MEMORY_REVISE payload.artifact_ids is a list of artifact id strings")
+
+        scope = str(payload.get("scope") or "run").strip().lower() or "run"
+        owner_raw = payload.get("owner_id")
+        if isinstance(owner_raw, str) and owner_raw.strip():
+            owner_id = owner_raw.strip()
+        else:
+            try:
+                owner_id = resolve_scope_owner_id(run, scope=scope, run_store=run_store)
+            except Exception as e:
+                return EffectOutcome.failed(
+                    f"MEMORY_REVISE could not resolve owner_id for scope {scope!r} ({e}); pass payload.owner_id"
+                )
+        cause = str(payload.get("cause") or "ingest").strip().lower()
+        run_id = str(getattr(run, "run_id", "") or "")
+        revision_id = payload.get("revision_id")
+        if not (isinstance(revision_id, str) and revision_id.strip()):
+            basis = json.dumps(
+                [run_id, str(getattr(run, "current_node", "") or ""), scope, owner_id, cause, ops],
+                sort_keys=True, ensure_ascii=False, separators=(",", ":"), default=str,
+            )
+            revision_id = "rev_" + hashlib.sha256(basis.encode("utf-8")).hexdigest()[:32]
+
+        try:
+            from abstractmemory.graph import Revision  # type: ignore
+
+            stamped = facade.stamp_current_step(
+                {
+                    "sources": list(caller_sources),
+                    "derived_from": raw_prov.get("derived_from") or [],
+                    "actor": raw_prov.get("actor") or "runtime",
+                    "reader": raw_prov.get("reader"),
+                    "reason": raw_prov.get("reason"),
+                    "extra": raw_prov.get("extra") or {},
+                },
+                run_id=run_id,
+                artifact_ids=artifact_ids,
+            )
+            rev: Dict[str, Any] = {
+                "revision_id": revision_id.strip(),
+                "scope": scope,
+                "owner_id": owner_id,
+                "cause": cause,
+                "occurred_at": str(payload.get("occurred_at") or "").strip() or now_iso(),
+                "ops": ops,
+                "provenance": stamped,
+                "summary": payload.get("summary"),
+            }
+            if isinstance(payload.get("recorded_at"), str) and payload["recorded_at"].strip():
+                rev["recorded_at"] = payload["recorded_at"].strip()
+            result = facade.apply_revision(Revision.from_dict(rev))
+        except ValueError as e:  # ProvenanceRequired, InvalidSourceRef and malformed ops are all ValueErrors
+            return EffectOutcome.failed(f"MEMORY_REVISE refused ({type(e).__name__}): {e}")
+
+        out: Dict[str, Any] = {"ok": True, **result, "scope": scope, "owner_id": owner_id,
+                               "sources": stamped["sources"]}
+        return EffectOutcome.completed(out)
+
+    facade = MemoryFacade(graph=memory_graph, run_store=run_store)
+
     return {
         EffectType.MEMORY_KG_ASSERT: _handle_assert,
         EffectType.MEMORY_KG_QUERY: _handle_query,
         EffectType.MEMORY_KG_RESOLVE: _handle_resolve,
+        EffectType.MEMORY_REVISE: _handle_revise,
     }

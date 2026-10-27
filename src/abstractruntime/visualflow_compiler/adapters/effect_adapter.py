@@ -520,6 +520,60 @@ def create_memory_kg_assert_handler(
     return handler
 
 
+#: The pins of a `memory_revise` node, forwarded verbatim into the MEMORY_REVISE payload (unset pins are dropped so
+#: the handler's defaults apply). This tuple IS the node contract (docs/integrations/abstractmemory.md).
+MEMORY_REVISE_PINS = (
+    "ops",
+    "scope",
+    "owner_id",
+    "cause",
+    "revision_id",
+    "occurred_at",
+    "recorded_at",
+    "summary",
+    "artifact_ids",
+    "provenance",
+)
+
+
+def memory_revise_payload(input_data: Any) -> Dict[str, Any]:
+    """The MEMORY_REVISE payload a `memory_revise` node builds from its resolved pins."""
+    payload: Dict[str, Any] = {}
+    if not isinstance(input_data, dict):
+        return payload
+    for pin in MEMORY_REVISE_PINS:
+        value = input_data.get(pin)
+        if value is None or (isinstance(value, str) and not value.strip()):
+            continue
+        payload[pin] = value.strip() if isinstance(value, str) else value
+    return payload
+
+
+def create_memory_revise_handler(
+    node_id: str,
+    next_node: Optional[str],
+    input_key: Optional[str] = None,
+    output_key: Optional[str] = None,
+) -> Callable:
+    """Create a node handler that applies one memory revision (MEMORY_REVISE; host-provided handler)."""
+    from abstractruntime.core.models import StepPlan, Effect, EffectType
+
+    def handler(run: "RunState", ctx: Any) -> "StepPlan":
+        del ctx
+        input_data = run.vars.get(input_key, {}) if input_key else run.vars
+        return StepPlan(
+            node_id=node_id,
+            effect=Effect(
+                type=EffectType.MEMORY_REVISE,
+                payload=memory_revise_payload(input_data),
+                result_key=output_key or "_temp.memory_revise",
+            ),
+            next_node=next_node,
+        )
+
+    return handler
+
+
 def create_memory_kg_query_handler(
     node_id: str,
     next_node: Optional[str],

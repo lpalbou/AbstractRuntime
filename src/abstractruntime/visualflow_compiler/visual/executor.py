@@ -591,6 +591,7 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
         "memory_kg_assert",
         "memory_kg_query",
         "memory_kg_resolve",
+        "memory_revise",
         # Deterministic camera nodes (fixed-verb TOOL_INVOKE; see
         # CAMERA_TOOL_INVOKE_VERBS at module level).
         *CAMERA_TOOL_INVOKE_VERBS,
@@ -2505,6 +2506,8 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
             return _create_memory_kg_query_handler(data, effect_config)
         if effect_type == "memory_kg_resolve":
             return _create_memory_kg_resolve_handler(data, effect_config)
+        if effect_type == "memory_revise":
+            return _create_memory_revise_handler(data, effect_config)
 
         return lambda x: x
 
@@ -4556,6 +4559,15 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
                     pass
 
             return {"items": [], "count": 0, "_pending_effect": pending}
+
+        return handler
+
+    def _create_memory_revise_handler(data: Dict[str, Any], config: Dict[str, Any]):
+        from ..adapters.effect_adapter import memory_revise_payload
+
+        def handler(input_data):
+            pending: Dict[str, Any] = {"type": "memory_revise", **memory_revise_payload(input_data)}
+            return {"assertion_ids": [], "applied": False, "_pending_effect": pending}
 
         return handler
 

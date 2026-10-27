@@ -69,6 +69,7 @@
 ## Durability & observability
 
 - [Evidence capture](docs/evidence.md): artifact-backed evidence for boundary tools
+- [Replay view](docs/replay.md): one reconstruction of a run tree from its ledger (status, the interaction to answer, messages, one activity per execution, artifacts, usage, the workflow it executes), deltas, the durable cursor (`seq`, `list_after`), conformance cases
 - [Snapshots](docs/snapshots.md): named bookmarks of run state
 - [Provenance](docs/provenance.md): tamper-evident hash-chained ledger
 - [Large run folders](docs/architecture.md#reading-a-large-run-folder-without-scanning-it): `JsonFileRunStore` active index and trusted run index (`trust_index=True` default, `False` = verify with `run_index_stats()["shadow_mismatches"]`, `reconcile_run_index()`), the creation journal's `=<run_id>` line, `change_token()` / `changed_run_ids()` on the run store and `ObservableLedgerStore`, event-wait and mailbox indexes refreshed from another process's saves (at least every 2 s), the active-consumers index (`connections_usage`, `invalidate_active_consumers`, `automation_generation`), `ArtifactStore.list_session_candidates`

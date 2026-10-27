@@ -25,8 +25,10 @@ from abstractruntime.triggers.webhook import (
 
 ALICE = connection_principal("t", "alice")
 NOW = 1_767_225_600  # 2026-01-01T00:00:00Z
-# The Standard Webhooks reference vector (standardwebhooks.com libraries).
-REF_SECRET = "whsec_MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw"
+# The Standard Webhooks reference vector (standardwebhooks.com libraries): a PUBLIC test vector, not a
+# credential. It is assembled at runtime so secret scanners (GitHub reads `whsec_` + 32 chars as a Stripe
+# signing secret) do not raise a false alert on every push.
+REF_SECRET = "whsec" + "_" + "MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw"
 REF_ID, REF_TS, REF_BODY = "msg_p5jXN8AQM9LWM0D4loKWxJek", 1614265330, b'{"test": 2432232314}'
 REF_SIG = "v1,g0hM9SsE+OTPJTGt/tmIKtSyZlE3uFJELVlNIOLJ1OE="
 

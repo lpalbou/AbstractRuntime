@@ -1040,6 +1040,7 @@ class Runtime:
         config: Optional[RuntimeConfig] = None,
         chat_summarizer: Optional[Any] = None,
         steer_store: Optional[Any] = None,
+        session_tool_policy_store: Optional[Any] = None,
     ):
         self._run_store = run_store
         self._ledger_store = ledger_store
@@ -1067,6 +1068,10 @@ class Runtime:
         # only the tick loop DRAINS them into `_runtime.inbox` (single-writer),
         # acking each delivery with a `steer_seen` ledger record.
         self._steer_store = steer_store
+        # Session tool policy (contract v1, `storage/session_tool_policy.py`): a person's standing
+        # "approve / deny without asking" for one conversation. Hosts write it; the TOOL_CALLS
+        # handler reads the run's session row before deciding whether a batch must wait.
+        self._session_tool_policy_store = session_tool_policy_store
         # Best-effort callbacks invoked once per run when it reaches a terminal status
         # (COMPLETED/FAILED/CANCELLED). Used by integrations to release run-scoped,
         # process-local resources (e.g. persistent shell sessions). Never affects
@@ -1268,6 +1273,54 @@ class Runtime:
         self._tool_executor_for_resume = tool_executor
 
     # --- email (framework backlog 0992 WP2) -------------------------------------------
+
+    def _session_denied_for_resume(self, run: RunState, calls: List[Dict[str, Any]]) -> set:
+        """Names of `calls` the run's session policy denies now (an approved wait is re-checked:
+        a deny set after the wait was shown wins). Writes the `denied` record; a store failure
+        denies nothing (the person's explicit approval of this batch stands)."""
+        store = self._session_tool_policy_store
+        if store is None:
+            return set()
+        try:
+            from ..storage.session_tool_policy import (
+                append_tool_policy_record,
+                resolve_session_tool_policy,
+                session_policy_names,
+            )
+
+            policy, _approve_applies = resolve_session_tool_policy(run, store=store, run_store=self._run_store)
+            _approved, deny_map = session_policy_names(policy)
+            hit = [tc for tc in calls if str(tc.get("name") or "").strip() in deny_map]
+            if not hit or policy is None:
+                return set()
+            try:
+                append_tool_policy_record(
+                    self._ledger_store, run, decision="denied", calls=hit, matched=deny_map, policy=policy,
+                    idempotency_suffix=f"resume:{run.waiting.wait_key if run.waiting else ''}",
+                )
+            except Exception as e:  # noqa: BLE001 - the deny stands without its record
+                logger.warning("session tool policy denied record failed for run %s: %s", run.run_id, e)
+            return {str(tc.get("name") or "").strip() for tc in hit}
+        except Exception as e:  # noqa: BLE001
+            logger.warning("session tool policy read failed on resume for run %s: %s", run.run_id, e)
+            return set()
+
+    def set_session_tool_policy_store(self, store: Optional[Any]) -> None:
+        """Install the host's session tool policy store for THIS runtime (None removes it).
+
+        The TOOL_CALLS handler consults `store.get(run.session_id)` BEFORE it decides whether a
+        tool batch must wait for approval (`storage/session_tool_policy.py`): a covered call runs
+        with no wait, a denied call is refused with no wait, and each such decision is recorded
+        in the run's ledger (`abstract.tool_policy_decision`). Runs without a session id,
+        automation occurrences and untrusted-input runs never consult it.
+        """
+        if store is not None and not callable(getattr(store, "get", None)):
+            raise TypeError("set_session_tool_policy_store expects a store with get(session_id)")
+        self._session_tool_policy_store = store
+
+    @property
+    def session_tool_policy_store(self) -> Optional[Any]:
+        return self._session_tool_policy_store
 
     def set_email_context_resolver(self, resolver: Optional[Callable[[Any], Any]]) -> None:
         """Install the host's account resolver for THIS runtime (None removes it).
@@ -2676,6 +2729,7 @@ class Runtime:
                 # run's account through this runtime's resolver; the
                 # automation controller reads the inbox and the binding.
                 setattr(run, "_runtime_email_resolver", self._email_context_resolver)
+                setattr(run, "_runtime_session_tool_policy_store", self._session_tool_policy_store)
                 # Who sends: "action" only for the runtime's own send-email action
                 # (node-function identity), else "agent_tool" (the host applies the
                 # user's "Agent email tools" choice to those).
@@ -3213,9 +3267,13 @@ class Runtime:
                                         # ceiling. Re-read ancestors: the grant may have narrowed
                                         # since this wait was persisted (including legacy waits).
                                         ceiling = resolve_tool_scope(run, run_store=self._run_store)
+                                        # Nor past a deny the conversation set after the wait
+                                        # was shown (session tool policy, contract v1).
+                                        denied = self._session_denied_for_resume(run, calls)
                                         allowed_calls = [
                                             tc for tc in calls
-                                            if ceiling is None or str(tc.get("name") or "").strip() in ceiling
+                                            if (ceiling is None or str(tc.get("name") or "").strip() in ceiling)
+                                            and str(tc.get("name") or "").strip() not in denied
                                         ]
                                         exec_approved = getattr(tools, "execute_approved", None)
                                         # The approved batch runs as THIS run: its email
@@ -3244,10 +3302,14 @@ class Runtime:
                                         if not isinstance(executed_results, list) or len(executed_results) != len(allowed_calls):
                                             raise ValueError("ToolExecutor returned a mismatched result count")
                                         executed_iter = iter(executed_results)
+                                        from ..storage.session_tool_policy import SESSION_POLICY_DENIED_ERROR
+
                                         merged_payload["results"] = [
-                                            next(executed_iter)
-                                            if ceiling is None or str(tc.get("name") or "").strip() in ceiling
-                                            else _err(tc, f"Tool '{tc.get('name', '')}' is not allowed for this run")
+                                            _err(tc, f"Tool '{tc.get('name', '')}' is not allowed for this run")
+                                            if ceiling is not None and str(tc.get("name") or "").strip() not in ceiling
+                                            else _err(tc, SESSION_POLICY_DENIED_ERROR)
+                                            if str(tc.get("name") or "").strip() in denied
+                                            else next(executed_iter)
                                             for tc in calls
                                         ]
                                     except Exception as e:

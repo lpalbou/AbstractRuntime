@@ -31,6 +31,9 @@ Planned as 0.14.0.
   - Wait kinds agree with `automations.attention`. The person-facing kinds are tool_approval,
     ask_user, and an event that carries a prompt. The non-person-facing kinds are delegation,
     timer, job, pause, automation_wake and signal. The interaction carries `answer_payload`.
+  - A session tool policy's `abstract.tool_policy_decision` record is an activity
+    (`tool_policy`: allowed or denied by the conversation's policy, its revision and who set it),
+    never an interaction. The tool rows it names carry `decided_by: "session_policy"`.
   - Every delta carries typed `changes` (status, interaction opened or closed, run, message,
     activity, artifact, each with its run and seq), for push dispatch.
   - Cursor tokens name each run by a collision-free prefix that is safe in a header.

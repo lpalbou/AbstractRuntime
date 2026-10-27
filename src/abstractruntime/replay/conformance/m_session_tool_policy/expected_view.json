@@ -1,0 +1,342 @@
+{
+  "activities": [
+    {
+      "child_run_id": "e1e1e1e1-0000-4000-8000-0000000000e1",
+      "effect_type": "start_subworkflow",
+      "ended_at": "2026-10-27T11:00:10.000000+00:00",
+      "execution_id": "r-agent",
+      "id": "e0e0e0e0-0000-4000-8000-0000000000e0:r-agent",
+      "kind": "subworkflow",
+      "name": "basic-agent@0.0.5:15f19f7f",
+      "node_id": "agent",
+      "order": [
+        "2026-10-27T11:00:01.000000+00:00",
+        "e0e0e0e0-0000-4000-8000-0000000000e0",
+        1
+      ],
+      "run_id": "e0e0e0e0-0000-4000-8000-0000000000e0",
+      "seqs": [
+        1,
+        2,
+        3
+      ],
+      "started_at": "2026-10-27T11:00:01.000000+00:00",
+      "status": "completed",
+      "step_ids": [
+        "r-agent",
+        "r-resume"
+      ],
+      "wait": {
+        "ended_by": "resume",
+        "kind": "delegation",
+        "until": null,
+        "wait_key": "subworkflow:e1e1e1e1-0000-4000-8000-0000000000e1"
+      }
+    },
+    {
+      "effect_type": "llm_call",
+      "ended_at": "2026-10-27T11:00:04.000000+00:00",
+      "execution_id": "c-llm",
+      "id": "e1e1e1e1-0000-4000-8000-0000000000e1:c-llm",
+      "kind": "llm",
+      "model": "m",
+      "name": "m",
+      "node_id": "reason",
+      "order": [
+        "2026-10-27T11:00:03.000000+00:00",
+        "e1e1e1e1-0000-4000-8000-0000000000e1",
+        1
+      ],
+      "provider": "lmstudio",
+      "run_id": "e1e1e1e1-0000-4000-8000-0000000000e1",
+      "seqs": [
+        1,
+        2
+      ],
+      "started_at": "2026-10-27T11:00:03.000000+00:00",
+      "status": "completed",
+      "step_ids": [
+        "c-llm"
+      ],
+      "usage": {
+        "input_tokens": 20,
+        "output_tokens": 5,
+        "total_tokens": 25
+      }
+    },
+    {
+      "effect_type": "tool_calls",
+      "ended_at": "2026-10-27T11:00:08.000000+00:00",
+      "execution_id": "c-act",
+      "id": "e1e1e1e1-0000-4000-8000-0000000000e1:c-act",
+      "kind": "tool",
+      "name": "fetch_url, execute_command",
+      "node_id": "act",
+      "order": [
+        "2026-10-27T11:00:05.000000+00:00",
+        "e1e1e1e1-0000-4000-8000-0000000000e1",
+        3
+      ],
+      "run_id": "e1e1e1e1-0000-4000-8000-0000000000e1",
+      "seqs": [
+        3,
+        6
+      ],
+      "started_at": "2026-10-27T11:00:05.000000+00:00",
+      "status": "completed",
+      "step_ids": [
+        "c-act"
+      ],
+      "tool_calls": [
+        {
+          "arguments": {
+            "url": "https://example.invalid/"
+          },
+          "decided_by": "session_policy",
+          "id": "c1",
+          "name": "fetch_url",
+          "output": "page text",
+          "policy_decision": {
+            "decision": "auto_approved",
+            "revision": 5,
+            "set_at": "2026-10-27T10:59:00+00:00",
+            "set_by": {
+              "client": "panel-chat",
+              "tenant_id": "default",
+              "user_id": "person-a"
+            }
+          },
+          "status": "completed"
+        },
+        {
+          "arguments": {
+            "command": "ls"
+          },
+          "decided_by": "session_policy",
+          "error": "Denied by this conversation's tool policy",
+          "id": "c2",
+          "name": "execute_command",
+          "policy_decision": {
+            "decision": "denied",
+            "revision": 5,
+            "set_at": "2026-10-27T10:59:00+00:00",
+            "set_by": {
+              "client": "panel-chat",
+              "tenant_id": "default",
+              "user_id": "person-a"
+            }
+          },
+          "status": "denied"
+        }
+      ]
+    },
+    {
+      "decision": "auto_approved",
+      "effect_type": "emit_event",
+      "ended_at": "2026-10-27T11:00:06.000000+00:00",
+      "execution_id": null,
+      "id": "e1e1e1e1-0000-4000-8000-0000000000e1:tool_policy:4",
+      "kind": "tool_policy",
+      "name": "Allowed by this conversation's policy",
+      "node_id": "act",
+      "order": [
+        "2026-10-27T11:00:06.000000+00:00",
+        "e1e1e1e1-0000-4000-8000-0000000000e1",
+        4
+      ],
+      "policy": {
+        "revision": 5,
+        "set_at": "2026-10-27T10:59:00+00:00",
+        "set_by": {
+          "client": "panel-chat",
+          "tenant_id": "default",
+          "user_id": "person-a"
+        }
+      },
+      "run_id": "e1e1e1e1-0000-4000-8000-0000000000e1",
+      "seqs": [
+        4
+      ],
+      "source": "session_policy",
+      "started_at": "2026-10-27T11:00:06.000000+00:00",
+      "status": "completed",
+      "step_ids": [
+        "c-policy-auto_approved"
+      ],
+      "tool_calls": [
+        {
+          "id": "c1",
+          "matched": "kind:web",
+          "name": "fetch_url",
+          "status": "completed"
+        }
+      ]
+    },
+    {
+      "decision": "denied",
+      "effect_type": "emit_event",
+      "ended_at": "2026-10-27T11:00:07.000000+00:00",
+      "execution_id": null,
+      "id": "e1e1e1e1-0000-4000-8000-0000000000e1:tool_policy:5",
+      "kind": "tool_policy",
+      "name": "Denied by this conversation's policy",
+      "node_id": "act",
+      "order": [
+        "2026-10-27T11:00:07.000000+00:00",
+        "e1e1e1e1-0000-4000-8000-0000000000e1",
+        5
+      ],
+      "policy": {
+        "revision": 5,
+        "set_at": "2026-10-27T10:59:00+00:00",
+        "set_by": {
+          "client": "panel-chat",
+          "tenant_id": "default",
+          "user_id": "person-a"
+        }
+      },
+      "run_id": "e1e1e1e1-0000-4000-8000-0000000000e1",
+      "seqs": [
+        5
+      ],
+      "source": "session_policy",
+      "started_at": "2026-10-27T11:00:07.000000+00:00",
+      "status": "completed",
+      "step_ids": [
+        "c-policy-denied"
+      ],
+      "tool_calls": [
+        {
+          "id": "c2",
+          "matched": "tool",
+          "name": "execute_command",
+          "status": "denied"
+        }
+      ]
+    }
+  ],
+  "artifacts": [],
+  "cursor": {
+    "records": 11,
+    "runs": {
+      "e0e0e0e0-0000-4000-8000-0000000000e0": 4,
+      "e1e1e1e1-0000-4000-8000-0000000000e1": 7
+    },
+    "token": "e0e0e0e0:4.e1e1e1e1:7"
+  },
+  "display_status": null,
+  "interaction": null,
+  "messages": [
+    {
+      "artifact_ids": [],
+      "id": "e0e0e0e0-0000-4000-8000-0000000000e0:input",
+      "kind": "prompt",
+      "order": [
+        "2026-10-27T11:00:00.000000+00:00",
+        "e0e0e0e0-0000-4000-8000-0000000000e0",
+        0
+      ],
+      "role": "user",
+      "run_id": "e0e0e0e0-0000-4000-8000-0000000000e0",
+      "seqs": [],
+      "source": "run_input",
+      "step_ids": [],
+      "text": "Fetch the page and list the folder"
+    },
+    {
+      "artifact_ids": [],
+      "id": "e0e0e0e0-0000-4000-8000-0000000000e0:final",
+      "kind": "final",
+      "order": [
+        "2026-10-27T11:00:11.000000+00:00",
+        "e0e0e0e0-0000-4000-8000-0000000000e0",
+        4
+      ],
+      "role": "assistant",
+      "run_id": "e0e0e0e0-0000-4000-8000-0000000000e0",
+      "seqs": [
+        4
+      ],
+      "source": "ledger",
+      "step_ids": [
+        "r-end"
+      ],
+      "text": "Fetched; listing was refused."
+    }
+  ],
+  "open_waits": [],
+  "root_run_id": "e0e0e0e0-0000-4000-8000-0000000000e0",
+  "runs": [
+    {
+      "depth": 0,
+      "display_status": null,
+      "first_seq": 1,
+      "holds_interaction": false,
+      "last_seq": 4,
+      "order": [
+        "",
+        "",
+        0,
+        "e0e0e0e0-0000-4000-8000-0000000000e0"
+      ],
+      "parent_run_id": null,
+      "records": 4,
+      "run_id": "e0e0e0e0-0000-4000-8000-0000000000e0",
+      "status": "completed",
+      "waiting": null,
+      "workflow": {
+        "bundle_id": "basic-agent",
+        "bundle_version": "0.0.5",
+        "flow_id": "81795ea9",
+        "id": "basic-agent@0.0.5:81795ea9"
+      },
+      "workflow_id": "basic-agent@0.0.5:81795ea9"
+    },
+    {
+      "depth": 1,
+      "display_status": null,
+      "first_seq": 1,
+      "holds_interaction": false,
+      "last_seq": 7,
+      "order": [
+        "",
+        "",
+        0,
+        "e0e0e0e0-0000-4000-8000-0000000000e0",
+        "2026-10-27T11:00:02.000000+00:00",
+        "e1e1e1e1-0000-4000-8000-0000000000e1",
+        2,
+        "e1e1e1e1-0000-4000-8000-0000000000e1"
+      ],
+      "parent_run_id": "e0e0e0e0-0000-4000-8000-0000000000e0",
+      "records": 7,
+      "run_id": "e1e1e1e1-0000-4000-8000-0000000000e1",
+      "status": "completed",
+      "waiting": null,
+      "workflow": {
+        "bundle_id": "basic-agent",
+        "bundle_version": "0.0.5",
+        "flow_id": "15f19f7f",
+        "id": "basic-agent@0.0.5:15f19f7f"
+      },
+      "workflow_id": "basic-agent@0.0.5:15f19f7f"
+    }
+  ],
+  "session_id": "sess-synthetic-policy",
+  "status": "completed",
+  "usage": {
+    "input_tokens": 20,
+    "llm_calls": 1,
+    "output_tokens": 5,
+    "total_tokens": 25
+  },
+  "version": "replay_view_v1",
+  "warnings": [],
+  "workflow": {
+    "bundle_id": "basic-agent",
+    "bundle_version": "0.0.5",
+    "entrypoint": "81795ea9",
+    "flow_id": "81795ea9",
+    "id": "basic-agent@0.0.5:81795ea9"
+  }
+}

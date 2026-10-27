@@ -56,6 +56,7 @@ Each rule below was once a divergence between clients:
 | What about `$slim` pointers? | They are resolved against the STARTED record of the step they name. An approved tool call completes under a new step id that points back at the waiting step. A pointer that cannot be resolved (a window) is dropped and named in `warnings`. A client never sees one. |
 | What is the final answer? | One message, `<root>:final`, from the root's terminal record (or the snapshot's output when the ledger has none). When it repeats an answer the run already gave, it names that message in `repeats`, and a client shows the text once. |
 | How many steps did a node take? | One activity per node execution, following AbstractFlow's `executionIdFor` rules (`replay/executions.py`): the same step; a resume joins the execution whose wait it answers; a repeated idempotency key; an Agent's structured-output call and the run's terminal record join the node's latest execution; a progress tick reports on its step. |
+| What did a conversation's tool policy decide? | An `abstract.tool_policy_decision` record (session tool policy contract v1) is an activity of kind `tool_policy` (`decision`: `auto_approved` or `denied`, the policy's `revision`, `set_by`, `set_at`), never an interaction: such a call has no wait. The tool rows it names carry `decided_by: "session_policy"`, and a call the policy refused is `denied`, not failed. |
 | What does the run execute? | `workflow_ref(workflow_id)`: `bundle_id@version:flow_id` gives `{bundle_id, bundle_version, flow_id}`. The root's flow is its `entrypoint`. A workflow outside a bundle has `bundle_id: null`. |
 
 ## The view (`to_json()`)
@@ -101,7 +102,7 @@ values (a file-to-SQLite migration), so a cursor a client holds stays valid.
 has its records, its snapshots and the expected view. The cases cover a delegated child
 approval, a timer wait without a resume, a parallel tool batch, a cancellation, Agent
 structured-output steps, a windowed history with `$slim`, a question and its answer, and a
-denied approval, plus every wait kind, an event answered then a pause, nested delegation, and an
+denied approval, a session tool policy's decisions, plus every wait kind, an event answered then a pause, nested delegation, and an
 answer repeated by the completion.
 
 `tests/test_replay_conformance.py` checks each expected view plus hand-written semantic

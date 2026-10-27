@@ -1,0 +1,7 @@
+{
+ "built_with": "abstractruntime StepRecord/RunState appended through InMemoryLedgerStore (scratchpad build_m.py)",
+ "case": "m_session_tool_policy",
+ "pins": "a session tool policy decides tool calls with NO wait (contract v1 section 5): each `abstract.tool_policy_decision` record is an activity (kind tool_policy, auto_approved / denied, policy revision and who set it), the tool rows it names say decided_by session_policy, the denied call is `denied` (not failed), and the view never shows an interaction.",
+ "provenance": "synthetic",
+ "root_run_id": "e0e0e0e0-0000-4000-8000-0000000000e0"
+}

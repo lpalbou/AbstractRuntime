@@ -273,6 +273,16 @@ def _match_results(calls: List[Dict[str, Any]], results: List[Any]) -> Dict[int,
 _RUNTIME_DENIAL_ERROR = "denied by user"
 
 
+# A session tool policy's refusal (session tool policy contract v1, section 4): the call never
+# waits; its result row carries this error, and an `abstract.tool_policy_decision` record names it.
+_POLICY_DENIAL_ERROR = "denied by this conversation's tool policy"
+TOOL_POLICY_EVENT = "abstract.tool_policy_decision"
+
+
+def _is_policy_denial(out: Any) -> bool:
+    return isinstance(out, dict) and out.get("success") is False and _s(out.get("error")).lower() == _POLICY_DENIAL_ERROR
+
+
 def _is_denial(out: Any) -> bool:
     if not isinstance(out, dict) or out.get("success") is not False:
         return False
@@ -327,6 +337,8 @@ class ReplayView:
         self._interaction: Optional[Dict[str, Any]] = None
         self._statuses: Dict[str, str] = {}  # run id -> the status the last delta reported
         self._relinked = False
+        self._tool_rows_by_call: Dict[Tuple[str, str], Tuple[str, str]] = {}  # (run, call id) -> (activity, row)
+        self._policy_by_call: Dict[Tuple[str, str], Dict[str, Any]] = {}  # (run, call id) -> its policy decision
         self._pending_changes: List[Dict[str, Any]] = []  # interaction opened/closed since the last delta
         self.last_delta: Optional[Dict[str, Any]] = None
         self._run(self.root_run_id)
@@ -729,15 +741,23 @@ class ReplayView:
                            "status": "running"}
                     rows.append(row)
                     by_id[cid] = row
+                    for key in sorted({_s(call.get("call_id")), _s(call.get("id")), cid} - {""}):
+                        self._tool_rows_by_call[(run_id, key)] = (act["id"], cid)
+                        decided = self._policy_by_call.get((run_id, key))
+                        if decided is not None:
+                            row["decided_by"] = "session_policy"
+                            row["policy_decision"] = copy.deepcopy(decided)
                 if row["status"] == "denied":
                     continue
                 if status == "waiting":
                     row["status"] = "waiting"
                 elif status in ("completed", "failed"):
                     out = matched.get(i)
-                    if approval and _is_denial(out):
+                    if (approval and _is_denial(out)) or _is_policy_denial(out):
                         row["status"] = "denied"
                         row["error"] = _s(out.get("error"))
+                        if _is_policy_denial(out):
+                            row["decided_by"] = "session_policy"
                         continue
                     failed = status == "failed" or (isinstance(out, dict) and (out.get("success") is False or bool(out.get("error"))))
                     row["status"] = "failed" if failed else "completed"
@@ -883,6 +903,9 @@ class ReplayView:
                 act["progress"] = copy.deepcopy(b)
                 self._dirty["activities"].add(act["id"])
             return
+        if name == TOOL_POLICY_EVENT and _s(rec.get("status")) != "started":
+            self._fold_tool_policy(r, rec, _obj(body), ts, seq, step_id)
+            return
         if name in ("abstract.message", "abstractcode.message") and _s(rec.get("status")) != "started":
             b = _obj(body)
             text = _s(b.get("message")) or _s(b.get("text")) or (_s(body) if isinstance(body, str) else "")
@@ -890,6 +913,47 @@ class ReplayView:
                 self._message(f"{r.run_id}:{step_id}:event", role="system", kind="event", text=text, run_id=r.run_id,
                               step_id=step_id, seq=seq, ts=ts, source="emit_event",
                               extra={"level": _s(b.get("level")) or None})
+
+    def _fold_tool_policy(self, r: _Run, rec: Dict[str, Any], body: Dict[str, Any], ts: str, seq: int,
+                          step_id: str) -> None:
+        """A session tool policy decided tool calls without asking (contract v1, section 5).
+
+        An ACTIVITY, never an interaction: there is no wait and no resume. The tool rows it
+        names (same run, same call id) say `decided_by: "session_policy"`, whichever record is
+        folded first."""
+        decision = _s(body.get("decision")) or "auto_approved"
+        policy = _obj(body.get("policy"))
+        calls = [c for c in body.get("tool_calls") or [] if isinstance(c, dict)]
+        info = {"decision": decision, "revision": policy.get("revision"), "set_by": copy.deepcopy(policy.get("set_by")),
+                "set_at": policy.get("set_at")}
+        aid = f"{r.run_id}:tool_policy:{seq}"
+        label = "Denied by this conversation's policy" if decision == "denied" else "Allowed by this conversation's policy"
+        self._activities[aid] = {
+            "id": aid, "run_id": r.run_id, "execution_id": None,
+            "node_id": _s(body.get("node_id")) or _s(rec.get("node_id")) or None,
+            "kind": "tool_policy", "effect_type": "emit_event", "name": label, "status": "completed",
+            "started_at": _s(rec.get("started_at")) or ts or None, "ended_at": _s(rec.get("ended_at")) or ts or None,
+            "seqs": [seq], "step_ids": [step_id] if step_id else [], "order": [ts, r.run_id, seq],
+            "decision": decision, "source": _s(body.get("source")) or "session_policy",
+            "policy": {k: v for k, v in info.items() if k != "decision"},
+            "tool_calls": [{"id": _s(c.get("call_id")) or f"#{i}", "name": _s(c.get("name")) or None,
+                            "matched": c.get("matched"), "status": "denied" if decision == "denied" else "completed"}
+                           for i, c in enumerate(calls)],
+        }
+        self._dirty["activities"].add(aid)
+        for c in calls:
+            key = _s(c.get("call_id"))
+            if not key:
+                continue
+            self._policy_by_call[(r.run_id, key)] = info
+            hit = self._tool_rows_by_call.get((r.run_id, key))
+            act = self._activities.get(hit[0]) if hit else None
+            if act is not None:
+                for row in act.get("tool_calls") or []:
+                    if row.get("id") == hit[1]:
+                        row["decided_by"] = "session_policy"
+                        row["policy_decision"] = copy.deepcopy(info)
+                self._dirty["activities"].add(act["id"])
 
     # ----------------------------------------------------------------- messages, artifacts
 

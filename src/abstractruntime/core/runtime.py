@@ -48,6 +48,7 @@ from .models import (
 from .spec import WorkflowSpec
 from .policy import DefaultEffectPolicy, EffectPolicy
 from .progress_channel import effect_delta_callback, effect_progress_callback
+from .step_context import StepContext, effect_step_context
 from .live_deltas import LiveDeltaEmitter, LiveDeltaSink
 from .effect_cancellation import (
     EffectKilled,
@@ -57,7 +58,7 @@ from .effect_cancellation import (
     run_cancel_requested,
 )
 from .tool_scope import ToolScopeError, resolve_tool_scope
-from ..storage.base import LedgerStore, RunStore, QueryableRunStore, require_create_if_absent
+from ..storage.base import LedgerStore, RunStore, QueryableRunStore, coerce_ledger_seq, require_create_if_absent
 from .run_identity import creation_digest
 from .run_attribution import SessionAttributionError, session_attribution
 from ..storage.ledger_slim import (
@@ -3788,7 +3789,19 @@ class Runtime:
                 started_digests = capture_started_payload_digests(rec.effect)
             except Exception:  # pragma: no cover - capture must never block execution
                 started_digests = None
-            self._ledger_store.append(rec)
+            started_seq = self._ledger_store.append(rec)
+            # The handler's own ledger row (ADR 0009): `(run_id, seq)` of this
+            # attempt's STARTED record, published out of band like the
+            # progress callback. `seq` is what the store reported, never a
+            # guess (None when the backend does not know it).
+            step_ctx = StepContext(
+                run_id=str(run.run_id),
+                step_id=str(rec.step_id),
+                seq=coerce_ledger_seq(started_seq),
+                node_id=str(node_id),
+                attempt=int(attempt),
+                effect_type=str(getattr(effect.type, "value", effect.type)),
+            )
             # Out of band, never in the payload (core.progress_channel): the
             # handler reads it from the context, the effect it receives stays
             # JSON.
@@ -3837,7 +3850,9 @@ class Runtime:
                     if inflight.cancelled:
                         return EffectOutcome.failed("cancelled before the effect started", retryable=False)
                     try:
-                        with effect_progress_callback(progress_callback), effect_delta_callback(delta_emitter):
+                        with effect_progress_callback(progress_callback), effect_delta_callback(
+                            delta_emitter
+                        ), effect_step_context(step_ctx):
                             return self._execute_effect(run, effect_for_attempt, default_next_node)
                     except Exception as e:
                         return EffectOutcome.failed(f"Effect handler raised exception: {e}")

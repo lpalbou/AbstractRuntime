@@ -41,3 +41,11 @@ Validation: `tests/test_voice_library_facade.py` (settings reach the registry ow
 catalog; absent when unset; deploy 501 remote). Real weights, two local runtimes with personal stores and one library,
 9/9: design through the facade, listed by its runtime only (library and catalog), the other runtime cannot delete it
 (404), deploy, library voice listed by both and read-only (422).
+
+Adversarial review (2026-10-27), fixed before release: the voice library built its own registry from the discovery
+settings (a second voice manager, weights loaded twice, a 5 s remote timeout): it now runs on the client's own
+AbstractCore instance (`llm.capabilities`; a model pool on its media host), the registry synthesis uses. Also: one flat
+record shape for `clone_voice` on both sides, `language` forwarded, remote statuses passed through, `voice_library_dirs`
+as an `os.pathsep` string, empty voice ids refused (422), a created voice whose record cannot be read back is still
+reported created. Real weights rerun with real local clients: 9/9 and 14/14.
+

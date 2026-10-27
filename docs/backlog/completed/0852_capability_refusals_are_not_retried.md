@@ -36,3 +36,9 @@ test sees three calls.
 
 Validation: `tests/test_llm_retry_classification.py::test_a_capability_refusal_is_not_retried` (refusals non-retryable;
 a JSON decode error and a connection error still retried).
+
+Adversarial review (2026-10-27): a plain ValueError is also how other media lanes report failures a retry can fix (a
+failed remote image job, an empty or black image, non-finite music audio), so the rule was narrowed before release:
+plain `ValueError` / `KeyError` are non-retryable only on a `modality: voice` output (`effect_handlers._is_voice_refusal`);
+`CapabilityUnavailableError` stays non-retryable everywhere.
+

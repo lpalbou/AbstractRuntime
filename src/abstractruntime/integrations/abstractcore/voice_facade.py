@@ -113,10 +113,12 @@ class AbstractCoreVoiceFacade:
         reference_text: Optional[str] = None,
         provider: Optional[str] = None,
         model: Optional[str] = None,
+        language: Optional[str] = None,
         **kwargs: Any,
     ) -> Dict[str, Any]:
         """Create a cloned voice from a reference recording (`provider` = the cloning engine, e.g.
-        `qwen3-tts`, `omnivoice`); returns the stored record with its `voice_id`."""
+        `qwen3-tts`, `omnivoice`; `language` = the recording's language, AbstractVoice 0.19.0);
+        returns the stored record, flat, with its `voice_id` (same shape locally and remotely)."""
         return self._call(
             "clone_voice",
             audio=audio,
@@ -126,6 +128,7 @@ class AbstractCoreVoiceFacade:
             reference_text=reference_text,
             provider=provider,
             model=model,
+            language=language,
             **kwargs,
         )
 

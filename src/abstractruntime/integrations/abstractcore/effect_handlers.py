@@ -2542,6 +2542,8 @@ def make_llm_call_handler(*, llm: AbstractCoreLLMClient, artifact_store: Optiona
                 logger.info("LLM_CALL stopped by cancel", detail=str(e))
                 return EffectOutcome.failed(str(e), retryable=False)
             logger.error("LLM_CALL failed", error=str(e))
+            if _is_voice_refusal(e, params.get("output") if isinstance(params, dict) else None):
+                return EffectOutcome.failed(str(e), retryable=False)
             return EffectOutcome.failed(str(e), retryable=_llm_error_is_retryable(e))
 
     return _handler
@@ -2556,6 +2558,17 @@ _HARMONY_ARTIFACT_RE = re.compile(
     r"unexpected tokens remaining in message header|HarmonyError|harmony generation artifact",
     re.IGNORECASE,
 )
+
+
+def _is_voice_refusal(exc: Exception, output: Any) -> bool:
+    """A voice request the voice plugin refused (runtime backlog 0852): AbstractVoice raises a plain
+    ValueError for input it cannot honour (`one_shot` over an engine's limit, an unsupported
+    option) and KeyError for an unknown voice id; both answer the same on every attempt. Other
+    media lanes keep their retries (a failed remote job or an empty image can succeed again)."""
+    if not (type(exc) is ValueError or type(exc) is KeyError):
+        return False
+    spec = output if isinstance(output, dict) else {}
+    return str(spec.get("modality") or "").strip().lower() == "voice"
 
 
 def _llm_error_is_retryable(exc: Exception) -> bool:
@@ -2625,13 +2638,7 @@ def _llm_error_is_retryable(exc: Exception) -> bool:
             return False
         return True
 
-    # A capability plugin's refusal of the request (AbstractVoice, AbstractVision,
-    # AbstractMusic raise ValueError for input they refuse: `one_shot` over an
-    # engine's limit, an unknown voice id, an unsupported parameter) and a capability
-    # that is not installed (CapabilityUnavailableError) answer the same on every
-    # attempt (runtime backlog 0852): one engine call, never three.
-    if type(exc) is ValueError or isinstance(exc, KeyError):
-        return False
+    # A capability that is not installed answers the same on every attempt.
     try:
         from abstractcore.capabilities.errors import CapabilityUnavailableError  # type: ignore
 

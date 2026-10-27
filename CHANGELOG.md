@@ -13,6 +13,10 @@ Requires AbstractCore 2.30.0 or newer. Personal voice stores need AbstractVoice 
 
 ### Added
 
+- The voice library runs on the capability registry the runtime's synthesis uses (same voice manager, settings and
+  stores); a model pool manages voices on its media host. `clone_voice(..., language=)` forwards the recording's language;
+  `clone_voice` answers the stored record, flat, with its `voice_id`, locally and remotely; a remote refusal keeps the
+  server's status (400, 401, 403, 404, 409, 413, 422, 429, 501, 503); an empty voice id is refused (422).
 - **Per-runtime voice stores**: `voice_store_dir` and `voice_library_dirs` in a runtime's AbstractCore client settings give
   it a personal voice store in front of read-only libraries; its synthesis, voice catalog and voice library use the same
   stores. `deploy_voice_to_library(voice_id)` on the voice library facade (local runtimes). See
@@ -24,9 +28,10 @@ Requires AbstractCore 2.30.0 or newer. Personal voice stores need AbstractVoice 
 
 ### Changed
 
-- A capability's refusal of a request (a `ValueError` or `KeyError` from a capability plugin, such as `one_shot` over an
-  engine's length limit or an unknown voice id, and `CapabilityUnavailableError`) fails the `LLM_CALL` effect at once
-  instead of being retried: one engine call, the same message.
+- A voice request the voice plugin refuses (a plain `ValueError` or `KeyError` on a `modality: voice` output, such as
+  `one_shot` over an engine's length limit or an unknown voice id) and a missing capability
+  (`CapabilityUnavailableError`) fail the `LLM_CALL` effect at once instead of being retried: one engine call, the same
+  message. Other media lanes keep their retries.
 
 ## [0.12.0] - 2026-10-27
 

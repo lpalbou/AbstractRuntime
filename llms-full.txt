@@ -3252,12 +3252,15 @@ adapters = facade.list_vision_adapters(
 - `compatibility_catalog()`: per kind, provider, model and surface, the support level of each feature (`native`,
   `emulated`, `conditional`, `unsupported`), e.g. which engines honour `speed` or `one_shot`.
 
-Local clients run these in process through AbstractCore's voice capability (AbstractCore 2.30.0+, AbstractVoice
-0.18.2+). The remote client calls the AbstractCore server's `/v1/audio/languages`, `/v1/voice/clones[/{id}]`
+Local clients run these in process on the same AbstractCore capability registry their synthesis uses (same voice
+manager, settings and voice stores; a model pool uses its media host), AbstractCore 2.30.0+ and AbstractVoice 0.18.2+.
+`clone_voice` answers the stored record, flat, with its `voice_id`, on both sides; `clone_voice(..., language=)` records
+the recording's language (AbstractVoice 0.19.0). The remote client calls the AbstractCore server's `/v1/audio/languages`, `/v1/voice/clones[/{id}]`
 (`GET`, `PATCH`, `DELETE`), `/v1/voice/clone` and `/v1/voice/design`, and reads the capability catalog from
 `/v1/audio/voices`; the server's changes need its operator token in the runtime's headers. Every refusal is a
 `VoiceLibraryError` with `status_code` (404 unknown voice, 422 refused input, 401 server token missing, 501 capability
-or engine runtime missing, 502 remote failure) and `detail`, so a host maps it to its own answer.
+or engine runtime missing; a remote server's own 400, 403, 409, 413, 429 and 503 pass through; 502 for any other remote
+failure) and `detail`, so a host maps it to its own answer.
 
 Cloned voices live in AbstractVoice's store. By default that is one store per machine user, shared by every account a
 host serves. A runtime can instead have its own personal voice store in front of read-only libraries: put

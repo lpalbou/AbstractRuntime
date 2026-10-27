@@ -9357,16 +9357,20 @@ class LocalAbstractCoreLLMClient:
 
     def voice_library(self, op: str, *, voice_openai_api_key: Optional[str] = None, **kwargs: Any) -> Any:
         """Voice library operation in this process (see `voice_facade.AbstractCoreVoiceFacade`), on
-        the voice stores this runtime's synthesis uses (`voice_store_dir`, `voice_library_dirs`)."""
-        from .voice_library import local_voice_library
+        the capability registry this runtime's synthesis uses: the same voice manager, settings and
+        voice stores (`voice_store_dir`, `voice_library_dirs`). `voice_openai_api_key` is unused
+        here: that registry already carries the host's key (AbstractCore config or llm_kwargs)."""
+        from .voice_library import VoiceLibraryError, local_voice_library
 
+        media_host = getattr(self, "_media_host_client", None)
+        if callable(media_host):
+            # A model pool: its media outputs (synthesis included) run on its media host client.
+            return media_host().voice_library(op, voice_openai_api_key=voice_openai_api_key, **kwargs)
         _pop_provider_api_key(kwargs)
-        return local_voice_library(
-            op,
-            kwargs,
-            voice_openai_api_key=voice_openai_api_key,
-            voice_stores=voice_store_settings(getattr(self, "_llm_kwargs", None)),
-        )
+        registry = getattr(getattr(self, "_llm", None), "capabilities", None)
+        if registry is None:
+            raise VoiceLibraryError(503, "This runtime has no AbstractCore instance to manage voices with.")
+        return local_voice_library(op, kwargs, registry=registry)
 
     def list_tts_models(
         self,
@@ -11808,16 +11812,20 @@ class MultiLocalAbstractCoreLLMClient:
 
     def voice_library(self, op: str, *, voice_openai_api_key: Optional[str] = None, **kwargs: Any) -> Any:
         """Voice library operation in this process (see `voice_facade.AbstractCoreVoiceFacade`), on
-        the voice stores this runtime's synthesis uses (`voice_store_dir`, `voice_library_dirs`)."""
-        from .voice_library import local_voice_library
+        the capability registry this runtime's synthesis uses: the same voice manager, settings and
+        voice stores (`voice_store_dir`, `voice_library_dirs`). `voice_openai_api_key` is unused
+        here: that registry already carries the host's key (AbstractCore config or llm_kwargs)."""
+        from .voice_library import VoiceLibraryError, local_voice_library
 
+        media_host = getattr(self, "_media_host_client", None)
+        if callable(media_host):
+            # A model pool: its media outputs (synthesis included) run on its media host client.
+            return media_host().voice_library(op, voice_openai_api_key=voice_openai_api_key, **kwargs)
         _pop_provider_api_key(kwargs)
-        return local_voice_library(
-            op,
-            kwargs,
-            voice_openai_api_key=voice_openai_api_key,
-            voice_stores=voice_store_settings(getattr(self, "_llm_kwargs", None)),
-        )
+        registry = getattr(getattr(self, "_llm", None), "capabilities", None)
+        if registry is None:
+            raise VoiceLibraryError(503, "This runtime has no AbstractCore instance to manage voices with.")
+        return local_voice_library(op, kwargs, registry=registry)
 
     def list_tts_models(
         self,

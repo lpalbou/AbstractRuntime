@@ -96,13 +96,25 @@ def fake_voice(monkeypatch: pytest.MonkeyPatch) -> _FakeVoice:
     return voice
 
 
-def _local_facade() -> AbstractCoreVoiceFacade:
+class _FakeRegistry:
+    """Stands for the AbstractCore instance's capability registry (`llm.capabilities`)."""
+
+    def __init__(self, voice):
+        self.voice = voice
+
+    def get_voice(self):
+        return self.voice
+
+
+def _local_facade(voice=None) -> AbstractCoreVoiceFacade:
     client = LocalAbstractCoreLLMClient.__new__(LocalAbstractCoreLLMClient)  # no model load
+    if voice is not None:
+        client._llm = type("LLM", (), {"capabilities": _FakeRegistry(voice)})()
     return AbstractCoreVoiceFacade(client=client)
 
 
 def test_local_reads(fake_voice: _FakeVoice) -> None:
-    facade = _local_facade()
+    facade = _local_facade(fake_voice)
     assert facade.list_languages(kind="tts")["languages"]["tts"]["qwen3-tts"]["languages"] == ["en", "fr"]
     listed = facade.list_cloned_voices(language="fr")
     assert listed["count"] == 1 and listed["voices"][0]["voice_id"] == "v1"
@@ -112,7 +124,7 @@ def test_local_reads(fake_voice: _FakeVoice) -> None:
 
 
 def test_local_update_checks_before_changing(fake_voice: _FakeVoice) -> None:
-    facade = _local_facade()
+    facade = _local_facade(fake_voice)
     out = facade.update_cloned_voice("v1", name="Grace", reference_text="hello there")
     assert out["name"] == "Grace" and out["reference_text"] == "hello there"
     with pytest.raises(VoiceLibraryError) as unknown:
@@ -128,7 +140,7 @@ def test_local_update_checks_before_changing(fake_voice: _FakeVoice) -> None:
 
 
 def test_local_delete_design_and_clone(fake_voice: _FakeVoice) -> None:
-    facade = _local_facade()
+    facade = _local_facade(fake_voice)
     assert facade.delete_cloned_voice("v1")["deleted"] is True
     with pytest.raises(VoiceLibraryError) as builtin:
         facade.delete_cloned_voice("builtin-ada")
@@ -144,6 +156,12 @@ def test_local_delete_design_and_clone(fake_voice: _FakeVoice) -> None:
     with pytest.raises(VoiceLibraryError) as no_audio:
         facade.clone_voice(b"")
     assert no_audio.value.status_code == 422
+    facade.clone_voice(b"RIFF", provider="qwen3-tts", language="fr")
+    assert [c for c in fake_voice.calls if c[0] == "clone"][-1][2]["language"] == "fr"
+    for missing in (lambda: facade.get_cloned_voice(""), lambda: facade.delete_cloned_voice("  ")):
+        with pytest.raises(VoiceLibraryError) as err:
+            missing()
+        assert err.value.status_code == 422
 
 
 def test_local_capability_errors_map_to_501(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -156,17 +174,23 @@ def test_local_capability_errors_map_to_501(monkeypatch: pytest.MonkeyPatch) -> 
         def list_languages(self, **k):
             raise RuntimeError("Qwen3-TTS is not installed: install it with pip install abstractvoice[qwen3-tts]")
 
-    monkeypatch.setattr(vl, "_local_voice", lambda key, stores=None: _NoVoice())
-    facade = _local_facade()
+    facade = _local_facade(_NoVoice())
     for call in (lambda: facade.design_voice("x"), lambda: facade.list_languages()):
         with pytest.raises(VoiceLibraryError) as err:
             call()
         assert err.value.status_code == 501
 
 
-def test_local_threads_the_host_openai_key(fake_voice: _FakeVoice) -> None:
-    _local_facade().list_languages(voice_openai_api_key="sk-host")
-    assert fake_voice.owner_configs[-1]["voice_openai_api_key"] == "sk-host"  # type: ignore[attr-defined]
+def test_local_operations_run_on_the_synthesis_registry(fake_voice: _FakeVoice) -> None:
+    """The library acts on the AbstractCore instance the runtime synthesises with (same voice
+    manager, settings and stores), never on a second registry built for discovery."""
+    before = len(fake_voice.owner_configs)  # type: ignore[attr-defined]
+    _local_facade(fake_voice).list_languages(voice_openai_api_key="sk-host")
+    assert ("list_languages", None, None) in fake_voice.calls
+    assert len(fake_voice.owner_configs) == before  # type: ignore[attr-defined]
+    with pytest.raises(VoiceLibraryError) as err:
+        _local_facade(None).list_languages()  # no AbstractCore instance: said so
+    assert err.value.status_code == 503
 
 
 def test_unknown_operation_is_refused() -> None:
@@ -266,7 +290,7 @@ def test_remote_changes_use_patch_delete_post_and_multipart() -> None:
             ("PATCH", "/voice/clones/v1"): {"voice_id": "v1", "name": "Grace"},
             ("DELETE", "/voice/clones/v1"): {"voice_id": "v1", "deleted": True},
             ("POST", "/voice/design"): {"voice_id": "d1"},
-            ("POST", "/voice/clone"): {"voice_id": "c1", "ok": True},
+            ("POST", "/voice/clone"): {"ok": True, "id": "c1", "voice_id": "c1", "voice": {"voice_id": "c1", "name": "Mine", "engine": "qwen3-tts"}},
         }
     )
     assert facade.update_cloned_voice("v1", name="Grace")["name"] == "Grace"
@@ -275,10 +299,11 @@ def test_remote_changes_use_patch_delete_post_and_multipart() -> None:
     assert sender.calls[-1][0] == "DELETE"
     facade.design_voice("a warm voice", language="en")
     assert sender.calls[-1][2] == {"description": "a warm voice", "language": "en"}
-    assert facade.clone_voice(b"RIFF", filename="me.wav", name="Mine", provider="qwen3-tts")["voice_id"] == "c1"
+    record = facade.clone_voice(b"RIFF", filename="me.wav", name="Mine", provider="qwen3-tts", language="fr")
+    assert record["voice_id"] == "c1" and record["name"] == "Mine" and record["ok"] is True and "voice" not in record
     method, url, body, _headers = sender.calls[-1]
     assert method == "MULTIPART" and url.endswith("/v1/voice/clone")
-    assert body["data"] == {"name": "Mine", "provider": "qwen3-tts"}
+    assert body["data"] == {"name": "Mine", "provider": "qwen3-tts", "language": "fr"}
     assert body["files"]["file"] == ("me.wav", b"RIFF", "audio/wav")
 
 
@@ -289,7 +314,9 @@ def test_remote_never_sends_the_host_openai_key_and_forwards_the_provider_key() 
     assert "sk-host" not in repr(headers) and "pk-123" in repr(headers)
 
 
-@pytest.mark.parametrize("status,expected", [(401, 401), (404, 404), (422, 422), (501, 501), (500, 502)])
+@pytest.mark.parametrize(
+    "status,expected", [(400, 400), (401, 401), (404, 404), (413, 413), (422, 422), (429, 429), (501, 501), (503, 503), (500, 502)]
+)
 def test_remote_errors_keep_their_status(status: int, expected: int) -> None:
     facade, _sender = _remote({("DELETE", "/voice/clones/v1"): _HTTPError(status, "refused")})
     with pytest.raises(VoiceLibraryError) as err:
@@ -370,16 +397,30 @@ def test_facade_from_runtime_requires_a_wired_client() -> None:
 # ---------------------------------------------------------------------------------------
 
 
-def test_the_voice_library_uses_the_runtimes_voice_stores(fake_voice: _FakeVoice) -> None:
-    client = LocalAbstractCoreLLMClient.__new__(LocalAbstractCoreLLMClient)
-    client._llm_kwargs = {"voice_store_dir": "/data/alice/voices", "voice_library_dirs": ["/data/library"]}
-    AbstractCoreVoiceFacade(client=client).list_cloned_voices()
-    cfg = fake_voice.owner_configs[-1]  # type: ignore[attr-defined]
-    assert cfg["voice_store_dir"] == "/data/alice/voices" and cfg["voice_library_dirs"] == ["/data/library"]
-    plain = LocalAbstractCoreLLMClient.__new__(LocalAbstractCoreLLMClient)
-    plain._llm_kwargs = {}
-    AbstractCoreVoiceFacade(client=plain).list_cloned_voices()
-    assert "voice_store_dir" not in fake_voice.owner_configs[-1]  # type: ignore[attr-defined]
+def test_voice_store_settings_read_lists_and_pathsep_strings() -> None:
+    import os
+
+    assert vl.voice_store_settings({"voice_store_dir": " /a ", "voice_library_dirs": ["/l1", ""]}) == {
+        "voice_store_dir": "/a", "voice_library_dirs": ["/l1"]
+    }
+    assert vl.voice_store_settings({"voice_store_dir": "/a", "voice_library_dirs": f"/l1{os.pathsep}/l2"})["voice_library_dirs"] == ["/l1", "/l2"]
+    assert vl.voice_store_settings(None) == {}
+
+
+def test_a_model_pool_manages_voices_on_its_media_host() -> None:
+    from abstractruntime.integrations.abstractcore import MultiLocalAbstractCoreLLMClient
+
+    calls = []
+
+    class Host:
+        def voice_library(self, op, **kw):
+            calls.append((op, kw))
+            return {"ok": True}
+
+    pool = MultiLocalAbstractCoreLLMClient.__new__(MultiLocalAbstractCoreLLMClient)
+    pool._media_host_client = lambda: Host()
+    AbstractCoreVoiceFacade(client=pool).list_languages(kind="tts")
+    assert calls and calls[0][0] == "list_languages"
 
 
 def test_the_voice_catalog_uses_the_runtimes_voice_stores(fake_voice: _FakeVoice) -> None:

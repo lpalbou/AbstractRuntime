@@ -171,17 +171,24 @@ def test_harmony_generation_artifact_is_retryable_despite_400():
     assert _llm_error_is_retryable(err3) is False
 
 
-def test_a_capability_refusal_is_not_retried() -> None:
-    """Runtime backlog 0852: a capability plugin refuses input it cannot honour with ValueError
-    (AbstractVoice: one_shot over an engine's limit) or KeyError (an unknown voice id), and a
-    missing capability raises CapabilityUnavailableError; each answers the same on every attempt."""
+def test_a_voice_refusal_is_not_retried_and_other_media_keep_their_retries() -> None:
+    """Runtime backlog 0852: AbstractVoice refuses input it cannot honour with a plain ValueError
+    (one_shot over an engine's limit) or KeyError (an unknown voice id); on a voice request that
+    answers the same every time. Other media lanes raise plain ValueErrors for failures a retry
+    can fix (a failed remote image job, an empty image), so they keep their retries; a missing
+    capability (CapabilityUnavailableError) is never retried."""
     import json
 
     from abstractcore.capabilities.errors import CapabilityUnavailableError
 
-    assert _llm_error_is_retryable(ValueError("one_shot synthesis takes at most 1000 characters")) is False
-    assert _llm_error_is_retryable(KeyError("Unknown voice_id: x")) is False
+    from abstractruntime.integrations.abstractcore.effect_handlers import _is_voice_refusal
+
+    voice = {"modality": "voice", "task": "tts"}
+    assert _is_voice_refusal(ValueError("one_shot synthesis takes at most 1000 characters"), voice) is True
+    assert _is_voice_refusal(KeyError("Unknown voice_id: x"), voice) is True
+    assert _is_voice_refusal(ValueError("returned no images"), {"modality": "image"}) is False
+    assert _is_voice_refusal(RuntimeError("engine crashed"), voice) is False
+    assert _is_voice_refusal(json.JSONDecodeError("bad", "x", 0), voice) is False
+    assert _llm_error_is_retryable(ValueError("returned no images")) is True
     assert _llm_error_is_retryable(CapabilityUnavailableError(capability="voice", reason="no backend")) is False
-    # A decoding problem in a provider reply is not a refusal of the request: still retried.
-    assert _llm_error_is_retryable(json.JSONDecodeError("bad", "x", 0)) is True
     assert _llm_error_is_retryable(RuntimeError("connection reset")) is True

@@ -3084,6 +3084,62 @@ class Runtime:
             return run
         return self.tick(workflow=workflow, run_id=run_id, max_steps=max_steps)
 
+    def _waiting_record(
+        self, run_id: str, wait: Optional[WaitState], effect_type: EffectType
+    ) -> Optional[Dict[str, Any]]:
+        """The WAITING ledger row of `effect_type` whose wait key is `wait`'s (newest first), or None."""
+        wait_key = getattr(wait, "wait_key", None)
+        wait_key = wait_key.strip() if isinstance(wait_key, str) else ""
+        if not wait_key:
+            return None
+        for r in reversed(self._ledger_store.list(run_id)):
+            if not isinstance(r, dict) or r.get("status") != StepStatus.WAITING.value:
+                continue
+            rr = r.get("result")
+            w = rr.get("wait") if isinstance(rr, dict) else None
+            if not isinstance(w, dict) or str(w.get("wait_key") or "") != wait_key:
+                continue
+            eff = r.get("effect")
+            if isinstance(eff, dict) and str(eff.get("type") or "") == effect_type.value:
+                return r
+        return None
+
+    def _waiting_step_context(
+        self, run: RunState, wait: Optional[WaitState], effect_type: EffectType
+    ) -> StepContext:
+        """The step context of work a RESUME performs for a step that waited (ADR 0009): the waiting step's
+        `step_id` and the seq of ITS STARTED row (`find_started_record`, below the WAITING row). Never guessed:
+        when the WAITING row or its STARTED row cannot be found (a wait without a key, a ledger the host
+        rewrote), the context carries `seq=None` (and no step id if even the WAITING row is missing), so a
+        writer stamps the run, never a fabricated row."""
+        node_id = str(run.current_node or "")
+        try:
+            waiting = self._waiting_record(run.run_id, wait, effect_type)
+        except Exception:  # noqa: BLE001 - provenance lookup must never block the resume
+            waiting = None
+        if waiting is None:
+            # No WAITING row for this wait key: no step id is known.
+            return StepContext(run_id=str(run.run_id), step_id="", seq=None, node_id=node_id, attempt=1,
+                               effect_type=effect_type.value)
+        step_id = str(waiting.get("step_id") or "")
+        attempt = waiting.get("attempt")
+        started = None
+        try:
+            started = self._ledger_store.find_started_record(
+                run.run_id, step_id, before_seq=waiting.get("seq")
+            ) if step_id else None
+        except Exception:  # noqa: BLE001 - see above
+            started = None
+        # seq=None when the STARTED row is gone: the step is known, its row address is not.
+        return StepContext(
+            run_id=str(run.run_id),
+            step_id=step_id,
+            seq=coerce_ledger_seq(started.get("seq")) if isinstance(started, dict) else None,
+            node_id=str(waiting.get("node_id") or node_id),
+            attempt=int(attempt) if isinstance(attempt, int) and attempt > 0 else 1,
+            effect_type=effect_type.value,
+        )
+
     def _resume_commit(
         self,
         *,
@@ -3225,10 +3281,15 @@ class Runtime:
 
                                         from ..email.actions import email_use_for_workflow
 
+                                        # The approved tools run as the TOOL_CALLS step that waited for
+                                        # approval: publish that step (ADR 0009) so a tool writing memory
+                                        # names its ledger row, exactly as it would have without the gate.
                                         with email_run_scope(
                                             run,
                                             resolver=self._email_context_resolver,
                                             use=email_use_for_workflow(workflow),
+                                        ), effect_step_context(
+                                            self._waiting_step_context(run, wait_before, EffectType.TOOL_CALLS)
                                         ):
                                             out = (
                                                 exec_approved(tool_calls=allowed_calls)

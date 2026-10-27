@@ -122,3 +122,57 @@ def test_child_run_handler_sees_its_own_run_and_the_parent_context_is_restored(t
     assert seen["parent_before"] is not None and seen["parent_after"] == seen["parent_before"]
     parent_row = ledger.get_record(parent_id, seen["parent_after"].seq)
     assert parent_row["status"] == "started" and parent_row["effect"]["payload"]["mode"] == "parent"
+
+
+class _ContextRecordingExecutor:
+    """A tool executor that records the step context its tool runs under (what a memory-writing tool reads)."""
+
+    def __init__(self) -> None:
+        self.seen: List[Any] = []
+
+    def execute(self, *, tool_calls):
+        self.seen.append(current_step_context())
+        return {"mode": "executed", "results": [
+            {"name": tc["name"], "call_id": tc.get("call_id"), "success": True, "output": "ok"} for tc in tool_calls
+        ]}
+
+
+@pytest.mark.parametrize("kind", ["sqlite", "jsonl"])
+def test_a_tool_run_by_an_approval_resume_sees_the_waiting_steps_started_row(kind: str, tmp_path: Path) -> None:
+    """Approved tools run inside `Runtime.resume`, not `_execute_effect_with_retry`: the resume publishes the
+    TOOL_CALLS step that waited (its STARTED row), so a tool writing memory names the same row it would have named
+    without the approval gate. Mutant: drop the `effect_step_context` on the approval path -> the tool sees None."""
+    from abstractruntime.integrations.abstractcore.effect_handlers import make_tool_calls_handler
+    from abstractruntime.integrations.abstractcore.tool_executor import ApprovalToolExecutor, ToolApprovalPolicy
+
+    run_store, ledger = _stores(kind, tmp_path)
+    delegate = _ContextRecordingExecutor()
+    tools = ApprovalToolExecutor(delegate=delegate, policy=ToolApprovalPolicy(
+        auto_approve_tools=set(), require_approval_tools={"note_capture"}))
+    rt = Runtime(run_store=run_store, ledger_store=ledger,
+                 effect_handlers={EffectType.TOOL_CALLS: make_tool_calls_handler(tools=tools)})
+    rt.set_tool_executor_for_resume(tools)
+
+    def tools_node(run: RunState, ctx: Any) -> StepPlan:
+        return StepPlan(node_id="tools", next_node="done", effect=Effect(
+            type=EffectType.TOOL_CALLS, result_key="tool_results",
+            payload={"tool_calls": [{"name": "note_capture", "arguments": {"text": "Met Dana"}, "call_id": "c0"}]}))
+
+    def done_node(run: RunState, ctx: Any) -> StepPlan:
+        return StepPlan(node_id="done", complete_output={"ok": True})
+
+    wf = WorkflowSpec(workflow_id="wf-approval-ctx", entry_node="tools", nodes={"tools": tools_node, "done": done_node})
+    run_id = rt.start(workflow=wf)
+    waiting = rt.tick(workflow=wf, run_id=run_id)
+    assert waiting.status.value == "waiting" and delegate.seen == []
+    done = rt.resume(workflow=wf, run_id=run_id, wait_key=waiting.waiting.wait_key, payload={"approved": True})
+    assert done.status.value == "completed", done.error
+
+    (ctx,) = delegate.seen
+    assert ctx is not None and ctx.run_id == run_id and ctx.effect_type == "tool_calls" and ctx.node_id == "tools"
+    waiting_row = next(r for r in ledger.list(run_id) if r["status"] == "waiting")
+    assert ctx.step_id == waiting_row["step_id"]
+    row = ledger.get_record(run_id, ctx.seq)
+    assert row["status"] == "started" and row["step_id"] == ctx.step_id and row["seq"] < waiting_row["seq"]
+    assert row["effect"]["payload"]["tool_calls"][0]["arguments"] == {"text": "Met Dana"}
+    assert current_step_context() is None

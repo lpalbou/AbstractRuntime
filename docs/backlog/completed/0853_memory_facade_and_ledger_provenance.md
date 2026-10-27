@@ -106,8 +106,19 @@ branch 3810 passed / 46 skipped / 0 failed (+47: the get_record, facade, step-co
 row-index tests). `tests/test_packaging_extras.py` pins the new `AbstractMemory>=0.4.0` floor.
 
 Seams and notes:
-- `abstractmemory.graph.Provenance.from_dict` turns a STRING `derived_from` into a tuple of characters
-  (`tuple("m1")`) before validating it (AbstractMemory worktree `feat/memory-graph-provenance`, `8246dac`); reported
-  to the AbstractMemory slice, not worked around here.
+- `abstractmemory.graph.Provenance.from_dict` turned a STRING `derived_from` into a tuple of characters
+  (`tuple("m1")`); reported, fixed on the AbstractMemory branch (`c2f035f`), not worked around here.
+- Review N1 (AbstractNote review): a tool approved by a human runs inside `Runtime.resume`, outside
+  `_execute_effect_with_retry`, so it saw no step context and its note carried no step ref. Fixed: the approval
+  resume publishes the waiting TOOL_CALLS step (`_waiting_step_context`: the WAITING row's `step_id`, the seq of ITS
+  STARTED row via `find_started_record`, `seq=None` when that row cannot be found, never guessed). Audit of the other
+  paths: WAIT_EVENT / WAIT_UNTIL / ASK_USER / subworkflow resumes only write the payload into vars (no handler or
+  tool runs; the next effect goes through `_execute_effect_with_retry`), terminal hooks are not effect handlers, the
+  publish / schedule handlers are effect handlers, and the tool executor's worker threads copy the context
+  (`contextvars.copy_context`). Test: `test_step_context.py::test_a_tool_run_by_an_approval_resume_sees_the_waiting_steps_started_row`
+  (SQLite and JSONL); the reviewer's AbstractNote proof script now records `ledger_seq` / `ledger_step_id` resolving to
+  the `note_capture` TOOL_CALLS STARTED row.
+- `is_real_run` keeps its own `SYNTHETIC_RUN_PREFIXES`: AbstractMemory's `SYNTHETIC_RUN_ID_PREFIXES` was not on its
+  branch when this landed (follow-up: reuse it, with a test that the two agree).
 - `llms-full.txt` was not regenerated (coredoc pass at release).
 

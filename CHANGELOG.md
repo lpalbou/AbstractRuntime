@@ -7,6 +7,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+Planned as 0.14.0.
+
+### Added
+
+- **Replay view** (`abstractruntime.replay`, ADR 0009, backlog 0853; framework root 0993). One
+  pure, deterministic reducer turns a run tree's ledger records and snapshots into the view every
+  client renders (`replay_view_v1`).
+  - What the view holds:
+    - the run tree through delegation waits, with the workflow each run executes (bundle,
+      version, flow, the root's entrypoint);
+    - the status;
+    - the person-facing interaction: a delegated child's approval, a question, or a prompted
+      event, with the resume command to send;
+    - verbatim messages with their provenance (run, steps, seqs, artifacts);
+    - one activity per node execution (AbstractFlow's `executionIdFor` rules), with tool calls
+      matched to results;
+    - artifacts and usage.
+  - `$slim` pointers are resolved, and a windowed history is named in `warnings`.
+  - A wait is over when a resume OR a later step of the same run exists.
+  - `ReplayView.apply` folds newer records and returns a delta. `apply_delta` and `diff_views`
+    are the client side. `replay(all)` equals the fold of any chunking.
+  - Conformance fixtures are in `tests/fixtures/replay/`. Guide: `docs/replay.md`.
+- **Durable ledger cursor** (gateway backlog 0082):
+  - Every ledger store numbers a run's records (`seq`). `JsonlLedgerStore` persists the number
+    on each line, allocated under an advisory file lock, so two processes never take the same
+    seq. Lines written before the field existed read as their position.
+  - `LedgerStore.list_after(run_id=, after=, limit=)` works on every store: an indexed read on
+    SQLite, a byte-offset seek on JSONL. `append()` returns the seq.
+  - `ObservableLedgerStore` passes `seq` to subscribers.
+  - `SqliteLedgerStore.import_records` copies a ledger in and keeps its `seq` values (migration).
+
+### Changed
+
+- `LedgerStore.list()` records carry `seq`. A consumer that compared records to `asdict(record)`
+  sees one more key. The hash chain excludes `seq` (it is the store's position, assigned after
+  the hash).
+
 ## [0.13.1] - 2026-10-27
 
 ### Added

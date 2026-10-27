@@ -151,3 +151,9 @@ Notes (not fixed here):
 - Follow-up (R11): record a second source on an existing memory (a revision adopting the row with the new refs)
   instead of reporting it as lost.
 
+### Architect pass (2026-10-27)
+Open operator decisions, written in ADR 0009 (Open decisions), not chosen here:
+- JSON-file `seq` durability: (a) persist `seq` in each record at append; (b) SQLite plane ledgers. Until then a
+  JSON-file ledger is append-only by contract; a rewritten one answers `source_gone`, never another row (A2).
+- Owner = principal, scope = kind (B1's full fix); the runtime now refuses an `owner_id` the run does not derive.
+

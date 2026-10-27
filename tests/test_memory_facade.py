@@ -226,15 +226,16 @@ def test_reconstruct_step_returns_the_slimmed_rows_payload_verbatim(tmp_path: Pa
     assert contains_slim_marker(terminal["effect"]), "precondition: the terminal row is slimmed"
     facade = MemoryFacade(ledger_store=ledger, run_store=run_store)
 
-    got = facade.reconstruct_source({"kind": "step", "run_id": run_id, "seq": terminal["seq"],
-                                     "step_id": started["step_id"]})
-    assert got["status"] == "ok" and got["kind"] == "step"
-    assert got["content"]["effect"]["payload"] == started["effect"]["payload"]
-    assert got["content"]["effect"]["payload"]["tool_calls"][0]["arguments"] == BIG_CALLS[0]["arguments"]
-    assert got["metadata"]["status"] == "completed" and got["metadata"]["effect_type"] == "tool_calls"
+    start = facade.reconstruct_source({"kind": "step", "run_id": run_id, "seq": started["seq"],
+                                       "step_id": started["step_id"]})
+    assert start["status"] == "ok" and start["kind"] == "step" and start["content"]["effect"] == started["effect"]
+    assert start["content"]["effect"]["payload"]["tool_calls"][0]["arguments"] == BIG_CALLS[0]["arguments"]
+    assert start["metadata"]["status"] == "started" and start["metadata"]["effect_type"] == "tool_calls"
 
-    start = facade.reconstruct_source({"kind": "step", "run_id": run_id, "seq": started["seq"]})
-    assert start["status"] == "ok" and start["content"]["effect"] == started["effect"]
+    # A step ref addresses the STARTED row only: the terminal row of the same step (same step_id) is not its source.
+    term = facade.reconstruct_source({"kind": "step", "run_id": run_id, "seq": terminal["seq"],
+                                      "step_id": started["step_id"]})
+    assert term["status"] == "source_gone" and "not the STARTED row" in term["reason"]
 
     wrong_step = facade.reconstruct_source({"kind": "step", "run_id": run_id, "seq": started["seq"], "step_id": "x"})
     assert wrong_step["status"] == "source_gone"
@@ -452,24 +453,22 @@ def test_a_seq_is_never_truncated_or_guessed() -> None:
     assert f.source_refs(run_id="real-run-1", seq="4")[0]["seq"] == 4
 
 
-def test_a_step_whose_started_row_is_gone_names_its_unresolved_markers(tmp_path: Path) -> None:
-    """Review 3a R14: the terminal row of a slimmed step reads back `ok`, but when its STARTED row is gone the markers
-    cannot be verified and stay in place; `metadata.unresolved_markers` lists their paths ([] when everything
-    resolved). Mutant: drop the field -> the reader cannot tell the payload bytes are missing."""
-    import sqlite3
+def test_a_rewritten_jsonl_ledger_never_resolves_a_step_ref_to_another_row(tmp_path: Path) -> None:
+    """Architect A2: a JSON-file seq is a line position. Drop the first line of a run's ledger and `step:<run>#1`
+    lands on the step's own TERMINAL row (same step_id): it must answer source_gone, never `ok`. Mutant: drop the
+    STARTED-status check -> `ok` with the terminal row. (Durable JSONL seqs are an open operator decision, ADR 0009.)"""
+    from abstractruntime.storage.json_files import JsonFileRunStore, JsonlLedgerStore
 
-    run_store, ledger = _stores(tmp_path)
+    run_store, ledger = JsonFileRunStore(tmp_path / "runs"), JsonlLedgerStore(tmp_path / "runs")
     run_id = _run_slimmed_step(run_store, ledger)
     rows = ledger.list(run_id)
     started = next(r for r in rows if r["status"] == "started")
-    terminal = next(r for r in rows if r["status"] == "completed" and r["step_id"] == started["step_id"])
-    facade = MemoryFacade(ledger_store=ledger)
-    ref = {"kind": "step", "run_id": run_id, "seq": terminal["seq"]}
-    intact = facade.reconstruct_source(ref)
-    assert intact["status"] == "ok" and intact["metadata"]["unresolved_markers"] == []
-    with sqlite3.connect(tmp_path / "runtime.sqlite3") as conn:  # the STARTED row is lost (pruning, partial restore)
-        conn.execute("DELETE FROM ledger WHERE run_id = ? AND seq = ?", (run_id, started["seq"]))
-    partial = facade.reconstruct_source(ref)
-    assert partial["status"] == "ok"
-    assert "effect.payload.tool_calls" in partial["metadata"]["unresolved_markers"], partial["metadata"]
-
+    ref = {"kind": "step", "run_id": run_id, "seq": started["seq"], "step_id": started["step_id"]}
+    assert MemoryFacade(ledger_store=ledger).reconstruct_source(ref)["status"] == "ok"
+    path = tmp_path / "runs" / f"ledger_{run_id}.jsonl"
+    lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
+    assert started["seq"] == 1
+    path.write_text("".join(lines[1:]), encoding="utf-8")  # "compaction" dropped the STARTED line
+    fresh = MemoryFacade(ledger_store=JsonlLedgerStore(tmp_path / "runs"))  # a new process
+    shifted = fresh.reconstruct_source(ref)
+    assert shifted["status"] == "source_gone" and "not the STARTED row" in shifted["reason"], shifted

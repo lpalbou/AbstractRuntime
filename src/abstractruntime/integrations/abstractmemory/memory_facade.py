@@ -505,9 +505,16 @@ class MemoryFacade:
                 f"ledger row {run_id}#{seq} holds step {record.get('step_id')!r}, not {want.strip()!r} "
                 "(the ledger was rewritten)",
             )
+        # A step ref addresses the STARTED row (the one that holds the effect payload verbatim; the runtime stamps
+        # its seq). Any other row at that seq means the ledger was rewritten (a JSON-file ledger whose line was
+        # dropped shifts every seq, and the next row may be the same step's terminal row, same step_id).
+        if _status(record.get("status")) != "started":
+            return _gone(
+                ref,
+                f"row at seq {seq} is not the STARTED row of step {record.get('step_id')!r} (it is "
+                f"{_status(record.get('status')) or 'unknown'}): the ledger was rewritten",
+            )
         effect = record.get("effect") if isinstance(record.get("effect"), dict) else {}
-        # A `$slim` marker get_record could not verify against the STARTED row (that row is gone) stays in place:
-        # the answer is still `ok` (the row exists) but names the paths whose bytes are not here.
         unresolved = _slim_marker_paths(record)
         return _ok(ref, "step", record, {
             "unresolved_markers": unresolved,

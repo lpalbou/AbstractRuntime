@@ -12,10 +12,12 @@ If you are new to the project, start with `../README.md` and `../architecture.md
 
 ## Counts
 
-- Planned: 32
+2026-10-28: recounted from disk (deprecated was 13 in this block, 14 on disk); +1 planned for 0858 (root 1063, typed runs).
+
+- Planned: 33
 - Proposed: 14
 - Completed: 39
-- Deprecated: 13
+- Deprecated: 14
 - Recurrent: 0
 
 2026-09-20: counts reconciled to disk (28 planned and 12 proposed before this
@@ -149,6 +151,7 @@ mtime). The anticipated ADR ("an automation is its controller root run") is not 
 | 0853 | `planned/0853_session_tool_policy_before_the_approval_wait.md` (P1; abstractruntime 0.14.0: a conversation's approve/deny stored per session and applied before any approval wait, with an `abstract.tool_policy_decision` ledger record; gateway routes and client wiring remain) |
 | 0854 | `planned/0854_replay_view.md` (P0; abstractruntime 0.14.0 carries the reducer, the durable per-run `seq` cursor and the conformance cases; gateway routes and client migration remain; ADR 0010) |
 | 0857 | `planned/0857_entity_direct_memory_writes_provenance.md` (P2; entity memory written outside any effect: world models, tending, night passes; follows 0856) |
+| 0858 | `planned/0858_typed_runs_run_type_stamped_at_start.md` (P1; one `run_type` + `origin.surface` stamped at start, indexed, in `replay_view_v1`; root 1063, gateway 0951) |
 | 0044 | `planned/runtime_systemic_reliability/0044_meta_analysis_record.md` (track source record) |
 | 0045 | `planned/runtime_systemic_reliability/0045_crash_replay_harness_and_ordering_invariant.md` |
 | 0046 | `planned/runtime_systemic_reliability/0046_per_run_driver_exclusion.md` |

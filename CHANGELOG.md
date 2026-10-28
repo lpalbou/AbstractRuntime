@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.2] - 2026-10-28
+
+### Fixed
+
+- **An index build no longer loses a run another store object creates during it** (`JsonFileRunStore`, backlog 0863).
+  A new run's `+` journal line is written before its file is published; a session/children/active index build that
+  marked the journal between the two and scanned the folder before the file landed missed the run: the listing until
+  the next reconciliation, the session and children indexes for the life of the store object (the reconciliation
+  repaired only the listing). Seen as a gateway that answered 404 `session_not_found` when archiving a session written
+  while it booted (AbstractGateway backlog 0963); a split-mode runner creating a run during the API process's boot
+  hit the same window. The first sync after a build now re-applies the journal's last 16 KiB before the build's mark
+  (`JOURNAL_REPLAY_TAIL_BYTES`; idempotent, once per build), and the reconciliation re-files a run it repairs into
+  the session and children indexes too (and drops a vanished one from them).
+
 ## [0.15.1] - 2026-10-28
 
 ### Changed

@@ -4,9 +4,15 @@
 
 It is designed for long-running workflows that must survive restarts and explicitly model blocking (human input, timers, external events, subworkflows) without keeping Python stacks alive.
 
-**Version:** 0.15.1 • **Python:** 3.10+
+**Version:** 0.15.2 • **Python:** 3.10+
 
 **Status:** pre-1.0 (API may evolve). For production use, pin versions and follow `CHANGELOG.md`.
+
+## What's new in 0.15.2
+
+- **Run index builds never lose a run created during them**: a run another process (or store object) wrote while
+  this store built its indexes is in the session and children indexes and the listing at once (before, the session
+  index could miss it for the life of the store object; backlog 0863).
 
 ## What's new in 0.15.1
 

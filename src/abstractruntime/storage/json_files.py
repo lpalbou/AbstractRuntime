@@ -845,14 +845,26 @@ class JsonFileRunStore(RunStore):
         self._apply_journal_entries(entries, replayed=replayed)
 
     def _filed_unchanged(self, rid: str, p: Path) -> bool:
-        """True when the scan memo already holds this run's file at its current identity token."""
+        """True when this run's file, as it is now, is already filed: the scan memo holds it at its current
+        identity token AND every built index that should hold the run does (the memo alone is not enough:
+        a `load()` memoizes a file the build's scan never saw)."""
         try:
             token = self._stat_token(p.stat())
         except Exception:
             return False
         with self._scan_memo_lock:
             cached = self._scan_memo.get(rid)
-        return cached is not None and tuple(cached[0]) == token and not cached[1].get("__unparseable")
+        if cached is None or tuple(cached[0]) != token or cached[1].get("__unparseable"):
+            return False
+        fields = cached[1]
+        with self._index_lock:
+            if self._children_index is not None and rid not in self._run_parent_index:
+                return False
+        sid = str(fields.get("session_id") or "").strip()
+        with self._session_index_lock:
+            if self._session_index is not None and sid and rid not in (self._session_index.get(sid) or {}):
+                return False
+        return True
 
     def _apply_journal_entries(self, entries: Any, *, replayed: Any = frozenset()) -> None:
         cutoff = time.time() - float(self.STALE_TEMP_AGE_S)

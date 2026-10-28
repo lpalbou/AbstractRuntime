@@ -16,7 +16,9 @@ it had already decided. The 0.15.2 review recorded the burst as low; the gateway
 `_sync_indexes` marks the records that lie before the build's mark (`_journal_replay_end`, set by
 `_mark_journal_start` when it rewinds); `_apply_journal_entries(replayed=...)` skips such a record (no index write,
 no change note, its pending entry dropped) when the scan memo holds the run's file at its current identity token
-(`_filed_unchanged`): the build already filed exactly that file. A run the scan did not see (the 0.15.2 race: file
+AND the built children and session indexes hold the run (`_filed_unchanged`): the build already filed exactly that
+file. Index membership is required because the memo alone is not proof: a `load()` memoizes a file the build's scan
+never saw. A run the scan did not see (the 0.15.2 race: file
 published after the scan) has no memo entry, so it is filed and signalled as before.
 
 ## Evidence
@@ -24,5 +26,7 @@ published after the scan) has no memo entry, so it is filed and signalled as bef
   50 runs saved by the same store object (the gateway's case) and by another one; the builds of the session,
   children and listing indexes leave `changed_run_ids(token_before)` empty. Red with 0.15.2's `json_files.py`
   (50 ids); green now. The three 0.15.2 race tests still pass (20/20 runs).
+- `test_a_run_the_build_missed_is_filed_even_when_another_read_memoized_it`: a `load()` between the publication and
+  the first sync; the run is still in the session index (red with a memo-only skip).
 - AbstractGateway `tests/test_mail_collector_change_driven.py`: 5 passed with this change (1 failed with 0.15.2).
 - Full suite: 4043 passed.

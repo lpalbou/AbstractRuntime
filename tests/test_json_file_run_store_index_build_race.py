@@ -108,3 +108,13 @@ def test_the_replayed_tail_signals_no_change_for_runs_the_build_already_filed(tm
         service.list_children(parent_run_id="done-001")
         service.list_run_index(limit=100)
         assert not service.changed_run_ids(t0), own
+
+
+def test_a_run_the_build_missed_is_filed_even_when_another_read_memoized_it(tmp_path: Path) -> None:
+    """The replay's skip needs the run IN the built indexes, not only in the scan memo: a `load()` between the
+    publication and the sync memoizes the file the build never saw."""
+    service = JsonFileRunStore(tmp_path)
+    foreign = _foreign_with_build_in_the_window(tmp_path, service)
+    foreign.save(_run("root-s9", "s9"))
+    service.load("root-s9")  # memoizes the file before the first sync
+    assert [r["run_id"] if isinstance(r, dict) else getattr(r, "run_id", r) for r in service.list_run_index(session_id="s9", limit=5)] == ["root-s9"]

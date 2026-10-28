@@ -27,6 +27,7 @@ published after the scan) has no memo entry, so it is filed and signalled as bef
   children and listing indexes leave `changed_run_ids(token_before)` empty. Red with 0.15.2's `json_files.py`
   (50 ids); green now. The three 0.15.2 race tests still pass (20/20 runs).
 - `test_a_run_the_build_missed_is_filed_even_when_another_read_memoized_it`: a `load()` between the publication and
-  the first sync; the run is still in the session index (red with a memo-only skip).
+  the first sync; the run is still in the session index (a guard: it also passes with a memo-only skip, the load path
+  here does not memoize ahead of the sync).
 - AbstractGateway `tests/test_mail_collector_change_driven.py`: 5 passed with this change (1 failed with 0.15.2).
 - Full suite: 4043 passed.

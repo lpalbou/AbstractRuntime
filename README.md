@@ -4,9 +4,14 @@
 
 It is designed for long-running workflows that must survive restarts and explicitly model blocking (human input, timers, external events, subworkflows) without keeping Python stacks alive.
 
-**Version:** 0.15.2 • **Python:** 3.10+
+**Version:** 0.15.3 • **Python:** 3.10+
 
 **Status:** pre-1.0 (API may evolve). For production use, pin versions and follow `CHANGELOG.md`.
+
+## What's new in 0.15.3
+
+- **An index build no longer looks like every recent run changed**: the journal tail it replays signals no
+  change for runs its scan already filed, so a host's change-driven pass does not reload them (backlog 0864).
 
 ## What's new in 0.15.2
 

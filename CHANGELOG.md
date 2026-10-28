@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.3] - 2026-10-28
+
+### Fixed
+
+- **An index build's journal replay signals no change for runs its scan already filed** (`JsonFileRunStore`, backlog
+  0864, a 0.15.2 regression). The 0.15.2 replay of the journal's last 16 KiB re-applied records for runs the build had
+  just read, and each bumped the change signal (`change_token`, `changed_run_ids`): once per build a host's
+  change-driven pass saw every recent run as changed (AbstractGateway's mail notifications re-loaded 400 finished
+  runs). A replayed record is now skipped only when the scan memo holds the run's file at its current identity token
+  AND the built children and session indexes hold the run AND the active index agrees with its status; a run the
+  scan missed (the 0.15.2 race, also when another read memoized its file first) or a re-opened run is still filed
+  and signalled.
+
 ## [0.15.2] - 2026-10-28
 
 ### Fixed

@@ -91,3 +91,81 @@ def test_the_reconciliation_refiles_a_run_the_session_and_children_indexes_misse
         service._scan_memo.pop("root-s3", None)
     service.rescan_active_index()
     assert "root-s3" in (service._session_index or {}).get("s3", {})
+
+
+def test_the_replayed_tail_signals_no_change_for_runs_the_build_already_filed(tmp_path: Path) -> None:
+    """0.15.2 review / gateway suite: the replay re-applied ~400 records the build's scan had just filed and
+    bumped the change signal for each, so a host's change-driven pass (the gateway's mail notifications)
+    re-loaded 400 finished runs once per build. Records whose file the scan filed as it is stay silent."""
+    for own in (True, False):  # the runs saved by this store object (the gateway's case) or another one
+        base = tmp_path / ("own" if own else "foreign")
+        writer = JsonFileRunStore(base)
+        for i in range(50):
+            writer.save(_run(f"done-{i:03d}", f"s{i}"))
+        service = writer if own else JsonFileRunStore(base)
+        t0 = service.change_token()
+        service.list_run_index(session_id="s7", limit=5)  # builds the session index (and replays the tail)
+        service.list_children(parent_run_id="done-001")
+        service.list_run_index(limit=100)
+        assert not service.changed_run_ids(t0), own
+
+
+
+def _publish_foreign(base: Path, run: RunState) -> None:
+    """Another writer's file landing (atomic replace), without its journal line (written earlier)."""
+    import os
+    import shutil
+    import tempfile
+
+    side = Path(tempfile.mkdtemp())
+    JsonFileRunStore(side).save(run)
+    os.replace(side / f"run_{run.run_id}.json", base / f"run_{run.run_id}.json")
+    shutil.rmtree(side)
+
+
+def _before_first_sync(service: JsonFileRunStore, action) -> None:
+    real = service._sync_indexes
+    state = {"done": False}
+
+    def wrapped() -> None:
+        if not state["done"] and service._journal_offset is not None:
+            state["done"] = True
+            action()
+        return real()
+
+    service._sync_indexes = wrapped  # type: ignore[method-assign]
+
+
+def test_a_run_the_build_missed_is_filed_even_when_another_read_memoized_it(tmp_path: Path) -> None:
+    """The replay's skip needs the run IN the built indexes, not only in the scan memo: a `load()` between the
+    publication (after the build's scan) and the first sync memoizes a file the build never saw."""
+    JsonFileRunStore(tmp_path).save(_run("parent", "s1"))
+    JsonFileRunStore(tmp_path)._journal_append("+late")  # another writer's `+`, before the mark (J53-1 order)
+    service = JsonFileRunStore(tmp_path)
+
+    def publish_and_load() -> None:
+        late = RunState(run_id="late", workflow_id="chat", status=RunStatus.COMPLETED, current_node="n", vars={},
+                        session_id="s1", parent_run_id="parent")
+        _publish_foreign(tmp_path, late)
+        assert service.load("late") is not None  # any other read path memoizes the file
+
+    _before_first_sync(service, publish_and_load)
+    assert "late" in {r["run_id"] if isinstance(r, dict) else getattr(r, "run_id", r) for r in service.list_run_index(session_id="s1", limit=10)}
+    assert "late" in {getattr(k, "run_id", k) for k in service.list_children(parent_run_id="parent")}
+
+
+def test_a_replayed_reopen_reaches_the_active_index(tmp_path: Path) -> None:
+    """A finished run re-opened by another writer (`~` before the mark, RUNNING file after the scan) is active."""
+    JsonFileRunStore(tmp_path).save(_run("X", "s2"))
+    JsonFileRunStore(tmp_path)._journal_append("~X")
+    service = JsonFileRunStore(tmp_path)
+
+    def publish_and_load() -> None:
+        _publish_foreign(tmp_path, RunState(run_id="X", workflow_id="chat", status=RunStatus.RUNNING, current_node="n",
+                                            vars={}, session_id="s2"))
+        assert service.load("X").status == RunStatus.RUNNING
+
+    _before_first_sync(service, publish_and_load)
+    service._ensure_active_index()
+    e = service._active.get("X")
+    assert e is not None and e.active

@@ -547,6 +547,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#abstractmemory-facade-host-surface" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        AbstractMemory facade (host surface)
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -1499,6 +1510,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#abstractmemory-facade-host-surface" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        AbstractMemory facade (host surface)
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -1932,7 +1954,26 @@ from Core route resolution and persisted from <code>LLM_CALL</code> results.</p>
 <p>Docs: <code>integrations/abstractcore.md</code>.</p>
 <h3 id="abstractmemory-bridge-kg-effects">AbstractMemory bridge (KG effects)<a class="headerlink" href="#abstractmemory-bridge-kg-effects" title="Permanent link">&para;</a></h3>
 <p>Implementation: <code>src/abstractruntime/integrations/abstractmemory/effect_handlers.py</code>.</p>
-<p>This provides handlers for <code>MEMORY_KG_*</code> effects (opt-in wiring layer).</p>
+<p>This provides handlers for <code>MEMORY_KG_*</code> effects and <code>MEMORY_REVISE</code> (opt-in wiring layer):
+<code>build_memory_kg_effect_handlers(store=, run_store=, now_iso=, journal=None)</code>. <code>MEMORY_REVISE</code> applies one revision of
+a mind (assert / close / narrow ops) through <code>abstractmemory.graph.MemoryGraph</code>, stamped with the step that applied it;
+VisualFlow node type <code>memory_revise</code>. Payload and result: <a href="../integrations/abstractmemory/#memory_revise-memory-reconsideration-as-a-workflow-step">MEMORY_REVISE</a>.</p>
+<h3 id="abstractmemory-facade-host-surface">AbstractMemory facade (host surface)<a class="headerlink" href="#abstractmemory-facade-host-surface" title="Permanent link">&para;</a></h3>
+<p><code>abstractruntime.integrations.abstractmemory.memory_facade</code> is the only way a host reaches AbstractMemory (ADR 0011;
+AbstractMemory 0.4.0+):</p>
+<ul>
+<li><code>MemoryFacade.open_mind(path, *, embedder=None, **stores)</code>; <code>MemoryFacade(graph=, ledger_store=, run_store=,
+  artifact_store=, diary_store=, event_inbox=, runtime_id=)</code>; <code>.graph</code>, <code>.store</code>, <code>.journal</code></li>
+<li><code>stamp(provenance, *, run_id, seq=None, step_id=None, artifact_ids=(), runtime_id=None) -&gt; dict</code> and
+  <code>stamp_current_step(provenance, *, run_id, artifact_ids=())</code>: add <code>step</code> / <code>run</code> / <code>artifact</code> SourceRefs, never for a
+  synthetic run id (<code>is_real_run</code>), never a guessed seq</li>
+<li><code>reconstruct_source(ref) -&gt; {"status": "ok" | "source_gone" | "unsupported", ...}</code>; never raises for a missing source</li>
+<li><code>history(memory_id)</code>, <code>sources_of(memory_id)</code>, <code>derived_from_source(ref)</code>, <code>apply_revision(revision)</code></li>
+<li><code>GATEWAY_NAMES</code>: AbstractMemory names re-exported unchanged (<code>memory_facade.X is abstractmemory.X</code>), resolved lazily</li>
+</ul>
+<p>Ledger row address: <code>LedgerStore.get_record(run_id, seq)</code> (slim markers resolved, offloaded leaves rehydrated),
+<code>list()</code> records carry <code>"seq"</code>, <code>append()</code> returns it. Step context: <code>abstractruntime.core.step_context.current_step_context(run_id)</code>
+inside an effect handler. Details: <a href="../integrations/abstractmemory/">integrations/abstractmemory.md</a>.</p>
 <h2 id="utilities-host-ux">Utilities (host UX)<a class="headerlink" href="#utilities-host-ux" title="Permanent link">&para;</a></h2>
 <ul>
 <li>Rendering helpers: <code>abstractruntime.rendering.stringify_json(...)</code> and <code>abstractruntime.rendering.render_agent_trace_markdown(...)</code> (<code>src/abstractruntime/rendering/*</code>)</li>
@@ -1945,6 +1986,7 @@ from Core route resolution and persisted from <code>LLM_CALL</code> results.</p>
 <li><code>architecture.md</code> — component map + durability invariants</li>
 <li><code>faq.md</code> — common questions and gotchas</li>
 <li><code>integrations/abstractcore.md</code> — <code>LLM_CALL</code> / <code>TOOL_CALLS</code> wiring</li>
+<li><code>integrations/abstractmemory.md</code> — memory facade, provenance stamping, <code>MEMORY_REVISE</code></li>
 </ul>
 <h3 id="host-asgi-serving">Host ASGI serving<a class="headerlink" href="#host-asgi-serving" title="Permanent link">&para;</a></h3>
 <p><code>abstractruntime.integrations.abstractcore.server_facade.serve_core_request(scope, receive, send, *, token: str, allow_unauthenticated: bool = False)</code> delegates host-admitted ASGI requests with request-scoped Core authentication. See <a href="../integrations/abstractcore/#host-managed-serving">host-managed serving</a> for network and credential responsibilities.</p>

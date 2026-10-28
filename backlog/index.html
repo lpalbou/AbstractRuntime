@@ -1091,9 +1091,9 @@
 <p>If you are new to the project, start with <code>../README.md</code> and <code>../architecture.md</code> instead.</p>
 <h2 id="counts">Counts<a class="headerlink" href="#counts" title="Permanent link">&para;</a></h2>
 <ul>
-<li>Planned: 31</li>
+<li>Planned: 32</li>
 <li>Proposed: 14</li>
-<li>Completed: 37</li>
+<li>Completed: 39</li>
 <li>Deprecated: 13</li>
 <li>Recurrent: 0</li>
 </ul>
@@ -1174,6 +1174,10 @@ mtime). The anticipated ADR ("an automation is its controller root run") is not 
 </tr>
 </thead>
 <tbody>
+<tr>
+<td>0856</td>
+<td><a href="completed/0856_memory_facade_and_ledger_provenance/">Memory facade and ledger provenance</a>: completed 2026-10-27, released in abstractruntime 0.15.0 (2026-10-28, PR #6 merge <code>88a584b</code>; floor AbstractMemory&gt;=0.4.0); ADR 0011: <code>MemoryFacade</code> (open a mind, stamp, reconstruct a source), <code>LedgerStore.get_record(run_id, seq)</code> (JSON-file line-offset index), the step context, a <code>step</code> ref on every memory write the runtime performs, <code>MEMORY_REVISE</code> / node <code>memory_revise</code>. Follow-up 0857.</td>
+</tr>
 <tr>
 <td>0851</td>
 <td><a href="completed/0851_per_account_voice_stores/">Per-account voice stores</a>: completed 2026-10-27 (0.13.0); the runtime's voice catalog and voice library use its <code>voice_store_dir</code> / <code>voice_library_dirs</code>; real-weights E2E 9/9.</td>
@@ -1380,6 +1384,10 @@ mtime). The anticipated ADR ("an automation is its controller root run") is not 
 <tr>
 <td>0854</td>
 <td><code>planned/0854_replay_view.md</code> (P0; abstractruntime 0.14.0 carries the reducer, the durable per-run <code>seq</code> cursor and the conformance cases; gateway routes and client migration remain; ADR 0010)</td>
+</tr>
+<tr>
+<td>0857</td>
+<td><code>planned/0857_entity_direct_memory_writes_provenance.md</code> (P2; entity memory written outside any effect: world models, tending, night passes; follows 0856)</td>
 </tr>
 <tr>
 <td>0044</td>

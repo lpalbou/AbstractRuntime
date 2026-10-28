@@ -1,0 +1,1336 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Durable workflow execution, checkpoints, resumable waits, and AbstractCore integration.">
+      
+      
+      
+        <link rel="canonical" href="https://www.lpalbou.info/AbstractRuntime/backlog/completed/0856_memory_facade_and_ledger_provenance/">
+      
+      
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.8.0">
+    
+    
+      
+        <title>0856 — Memory facade and ledger provenance: the host surface for AbstractMemory, the ledger row address, and a step ref on every memory write - AbstractRuntime</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../../assets/stylesheets/main.57a0d79d.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("../../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    <body dir="ltr">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#0856-memory-facade-and-ledger-provenance-the-host-surface-for-abstractmemory-the-ledger-row-address-and-a-step-ref-on-every-memory-write" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../../.." title="AbstractRuntime" class="md-header__button md-logo" aria-label="AbstractRuntime" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            AbstractRuntime
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              0856 — Memory facade and ledger provenance: the host surface for AbstractMemory, the ledger row address, and a step ref on every memory write
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/lpalbou/abstractruntime" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    lpalbou/abstractruntime
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../../.." title="AbstractRuntime" class="md-nav__button md-logo" aria-label="AbstractRuntime" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    AbstractRuntime
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/lpalbou/abstractruntime" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    lpalbou/abstractruntime
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../getting-started/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Getting Started
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../api/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    API Reference
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../architecture/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../integrations/abstractcore/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    AbstractCore Integration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../troubleshooting/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Troubleshooting
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../artifacts/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Artifacts
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../tool-approval/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tool Approval
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../entity-runtime/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Entity Runtime
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../tools-comms/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tools and Comms
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../email/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Email
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../automations/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Automations
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../mcp-worker/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    MCP Worker
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../workflow-bundles/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Workflow Bundles
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../snapshots/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Snapshots
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../provenance/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Provenance
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../evidence/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Evidence
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../limits/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Limits
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../faq/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    FAQ
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../manual_testing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Manual Testing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_21" >
+        
+          
+          <label class="md-nav__link" for="__nav_21" id="__nav_21_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Design
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_21_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_21">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Design
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../proposal/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../adr/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR Index
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../adr/0001_layered_coupling_with_abstractcore/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Layered Coupling
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../adr/0002_execution_modes_local_remote_hybrid/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Execution Modes
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../adr/0003_provenance_tamper_evident_hash_chain/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Hash-Chained Ledger
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#why" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Why
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#current-code-reality-2026-10-27-main-93c45b4" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Current code reality (2026-10-27, main 93c45b4)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#scope" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Scope
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#validation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Validation
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#report-2026-10-27" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Report (2026-10-27)
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Report (2026-10-27)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#review-fixes-2026-10-27-gateway-review-r5r6-runtime-review-3a" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Review fixes (2026-10-27: gateway review R5/R6, runtime review 3a)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#architect-pass-2026-10-27" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Architect pass (2026-10-27)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="0856-memory-facade-and-ledger-provenance-the-host-surface-for-abstractmemory-the-ledger-row-address-and-a-step-ref-on-every-memory-write">0856 — Memory facade and ledger provenance: the host surface for AbstractMemory, the ledger row address, and a step ref on every memory write<a class="headerlink" href="#0856-memory-facade-and-ledger-provenance-the-host-surface-for-abstractmemory-the-ledger-row-address-and-a-step-ref-on-every-memory-write" title="Permanent link">&para;</a></h1>
+<p><strong>Status</strong>: completed 2026-10-27, released in abstractruntime 0.15.0 (2026-10-28, PR #6 merge <code>88a584b</code>; floor AbstractMemory&gt;=0.4.0) · <strong>Priority</strong>: P1 · <strong>Created</strong>: 2026-10-27
+<strong>Cross-package</strong>: AbstractMemory ADR 0003 and backlog 0056 (<code>abstractmemory.graph</code>: <code>SourceRef</code>, <code>Provenance</code>,
+<code>MemoryGraph</code>; AbstractMemory 0.4.0), AbstractGateway memory routes (<code>/api/gateway/memory/*</code> over this facade) and its
+import-boundary burn-down, AbstractNote thin-client slice (step and artifact refs on note revisions). ADR:
+<a href="../../../adr/0011_memory_facade_is_the_complete_host_surface_for_abstractmemory/">0011</a>.</p>
+<h2 id="why">Why<a class="headerlink" href="#why" title="Permanent link">&para;</a></h2>
+<p>Operator goal (2026-10-27, AbstractMemory ADR 0003): every derived memory is tied to the ledger's messages, events
+and artifacts, so the verbatim source of any understanding, or of any change of understanding, can be reconstructed.
+AbstractMemory stores references; resolving them is the runtime's job, because the runtime owns the ledger, the
+artifacts, the diary chain and the event inbox. Hosts must reach AbstractMemory through the runtime (ADR 0008
+decision 2), and no AbstractMemory facade existed.</p>
+<h2 id="current-code-reality-2026-10-27-main-93c45b4">Current code reality (2026-10-27, <code>main</code> 93c45b4)<a class="headerlink" href="#current-code-reality-2026-10-27-main-93c45b4" title="Permanent link">&para;</a></h2>
+<ul>
+<li><code>storage/base.py</code> <code>LedgerStore</code>: <code>append</code>, <code>list(run_id)</code>, <code>find_completed_result</code>; no read by address. SQLite
+  (<code>storage/sqlite.py</code>) has a <code>seq</code> primary key that <code>list()</code> does not return; JSONL has positions only.</li>
+<li>A step is a STARTED row and a terminal row sharing one <code>step_id</code> (<code>core/runtime.py</code>, <code>_execute_effect_with_retry</code>);
+  the terminal row is slimmed (<code>storage/ledger_slim.py</code>: <code>$slim</code> markers resolved against the STARTED payload);
+  oversized leaves are offloaded (<code>storage/offloading.py</code>, rehydrated only by <code>find_completed_result</code>).</li>
+<li>Effect handlers receive <code>(run, effect, default_next_node)</code>; nothing tells them their own ledger row. The publish
+  handler gets <code>step_id</code> as an extra argument.</li>
+<li>Memory provenance written today (audit 2026-10-27, <code>untracked/memory-transition/audit/abstractruntime_entity.md</code>
+  §2): <code>MEMORY_FORM</code> <code>run_id</code>/<code>turn_id</code> + the verbatim artifact as <code>payload_ref</code> (<code>seam_handlers._handle_form</code>),
+  <code>MEMORY_KG_ASSERT</code> <code>writer_run_id</code>/<code>writer_workflow_id</code>/<code>span_id</code> (<code>effect_handlers._handle_assert</code>), diary
+  projections <code>{source, entry_id}</code> + <code>origin</code> (<code>identity_support.project_diary_entry</code>). No ledger row address; on the
+  home-direct entity path the <code>run_id</code> is the synthetic <code>chat-&lt;session_id&gt;</code>.</li>
+<li>AbstractGateway imports <code>abstractmemory</code> directly in 34 lines across 8 files.</li>
+</ul>
+<h2 id="scope">Scope<a class="headerlink" href="#scope" title="Permanent link">&para;</a></h2>
+<p>In:
+- <code>LedgerStore.get_record(run_id, seq)</code> (base default over <code>list()</code>, SQLite by primary key, JSONL by position,
+  <code>OffloadingLedgerStore</code> rehydrating, the decorators delegating); <code>$slim</code> markers resolved against the STARTED row of
+  the same <code>step_id</code>; <code>list()</code> records carry <code>"seq"</code> (ADR 0010's per-run number since 0.14.0, excluded from the record hash); <code>append()</code>
+  returns the seq it wrote when the backend knows it.
+- <code>abstractruntime.core.step_context</code>: the runtime publishes the current step <code>(run_id, seq, step_id, node_id,
+  attempt, effect_type)</code> to the handler it executes (a <code>ContextVar</code>, out of band like the progress callback).
+- <code>integrations/abstractmemory/memory_facade.py</code>: <code>MemoryFacade</code> (<code>open_mind</code>, <code>graph</code>/<code>store</code>/<code>journal</code>, <code>stamp</code>,
+  <code>reconstruct_source</code>, <code>history</code>/<code>sources_of</code>/<code>derived_from_source</code>), <code>is_real_run</code>.
+- Stamping in <code>MEMORY_FORM</code>, <code>MEMORY_KG_ASSERT</code> and the <code>DIARY_WRITE</code> projection.
+- The workflow-native primitive (operator, 2026-10-27: "workflows are the framework's central native primitive; memory
+  capture and reconsideration should be expressible as workflow steps/effects with ledger provenance"):
+  <code>EffectType.MEMORY_REVISE</code> (host handler in <code>build_memory_kg_effect_handlers</code> over <code>MemoryGraph.apply_revision</code>)
+  and the VisualFlow node <code>memory_revise</code>.
+- Performance of the row address on the JSON-file backend (the gateway's default).
+- ADR 0011, docs (<code>api.md</code>, <code>integrations/abstractmemory.md</code>), CHANGELOG.</p>
+<p>Out:
+- Writes outside any effect (world models, tending, the night passes): <a href="../../planned/0857_entity_direct_memory_writes_provenance/">0857</a>.
+- Moving the memory writers onto <code>MemoryGraph.apply_revision</code> (AbstractMemory's convergence track); the gateway
+  routes and the gateway's import burn-down (AbstractGateway).
+- A hash chain on conversation ledgers; real runs behind the home-direct entity driver.</p>
+<h2 id="validation">Validation<a class="headerlink" href="#validation" title="Permanent link">&para;</a></h2>
+<ul>
+<li>Both backends (and the offloading decorator): <code>get_record</code> of a slimmed terminal row returns the STARTED payload
+  bytes; a mutant that returns the slimmed row unresolved fails; <code>list()</code> carries <code>seq</code>; the diary chain verifies.</li>
+<li><code>reconstruct_source</code> on real temporary stores (<code>SqliteRunStore</code>, <code>SqliteLedgerStore</code>, <code>FileArtifactStore</code>,
+  <code>DiaryStore</code>, <code>JsonFileEventInbox</code>): ok / <code>source_gone</code> after deletion / <code>unsupported</code>.</li>
+<li>A real <code>Runtime</code> run: the episode formed by <code>MEMORY_FORM</code> carries a <code>step</code> ref that resolves through <code>get_record</code> to
+  that step; the KG assertion carries one; a diary projection carries a <code>diary_entry</code> ref; the synthetic chat path
+  carries artifact refs only. Each test fails with the stamping line removed.</li>
+</ul>
+<h2 id="report-2026-10-27">Report (2026-10-27)<a class="headerlink" href="#report-2026-10-27" title="Permanent link">&para;</a></h2>
+<p>Commits on <code>feat/memory-graph-facade</code> (after <code>76b1319</code> WIP): <code>de96ede</code> memory facade, <code>7b0d031</code> step context
+installed, <code>dd9e924</code> stamping, <code>2574881</code> MEMORY_REVISE + node, <code>09db6f5</code> row-address performance, <code>76e9988</code> docs and
+version, <code>9eea551</code> diary reads in <code>GATEWAY_NAMES</code>; this report.</p>
+<p>What landed:
+- <code>integrations/abstractmemory/memory_facade.py</code>: <code>MemoryFacade</code> (<code>open_mind</code>, <code>graph</code>/<code>store</code>/<code>journal</code>, <code>stamp</code>,
+  <code>stamp_current_step</code>, <code>apply_revision</code>, <code>history</code>/<code>sources_of</code>/<code>derived_from_source</code>, <code>reconstruct_source</code>),
+  <code>is_real_run</code>, <code>GATEWAY_NAMES</code> (43 names: the gateway's direct imports, including the diary reads <code>open_questions</code> /
+  <code>open_problems</code> / <code>open_ideas</code>, + the 8 graph names; every one exists in AbstractMemory, none left out), resolved by module <code>__getattr__</code> so the module never imports AbstractMemory at
+  import time.
+- <code>core/runtime.py</code> <code>_execute_effect_with_retry</code> installs <code>effect_step_context(StepContext(...))</code> around the handler,
+  with the seq <code>append()</code> returned for the attempt's STARTED row.
+- Stamping: <code>seam_handlers._handle_form</code>, <code>effect_handlers._handle_assert</code>, <code>identity_support.project_diary_entry</code>.
+  A caller <code>payload_ref</code> is an artifact ref only when the artifact store holds it (a payload_ref may name an
+  identity-core <code>.yaml</code> record). A private diary projection names its entry only (no origin by design).
+- <code>MEMORY_REVISE</code> / <code>memory_revise</code>: contract in <code>docs/integrations/abstractmemory.md</code>. Caller <code>run</code>/<code>step</code> refs are
+  refused (runtime-owned); unknown payload keys are refused; the default <code>revision_id</code> hashes (run, node, scope,
+  owner, cause, ops) so a retried attempt is a no-op.</p>
+<p>Performance (10,000 rows, ~10 MB JSON-file ledger, ~1 KB rows, Apple Silicon, warm cache; method:
+fill one run's ledger with 5,000 STARTED/COMPLETED pairs through <code>append</code>, then the median of 20 calls each):</p>
+<table>
+<thead>
+<tr>
+<th></th>
+<th>JSONL before</th>
+<th>JSONL after</th>
+<th>SQLite before</th>
+<th>SQLite after</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>get_record(seq)</code></td>
+<td>58 ms</td>
+<td>0.05 ms</td>
+<td>0.02 ms</td>
+<td>0.01 ms</td>
+</tr>
+<tr>
+<td><code>find_started_record(step, before_seq=terminal)</code> (the slim-resolve path)</td>
+<td>58-72 ms (full parse)</td>
+<td>0.08 ms</td>
+<td>3.5 ms</td>
+<td>0.01 ms</td>
+</tr>
+<tr>
+<td><code>find_started_record(step)</code> unbounded, row in the middle</td>
+<td>72 ms</td>
+<td>12 ms</td>
+<td>11 ms</td>
+<td>3.4 ms</td>
+</tr>
+<tr>
+<td><code>find_started_record</code> worst case (first row) / miss</td>
+<td>72 ms</td>
+<td>24 ms / 7 ms</td>
+<td>11 ms</td>
+<td>10 ms</td>
+</tr>
+<tr>
+<td>first read in a cold process (index build)</td>
+<td>58 ms</td>
+<td>48 ms</td>
+<td>0.3 ms</td>
+<td>0.3 ms</td>
+</tr>
+</tbody>
+</table>
+<p>JSONL: a per-run line-offset index (<code>_JsonlRowIndex</code>, 8 bytes per record, 128 runs LRU), written through by
+<code>append</code>, extended by reading only the bytes another writer appended (keyed by inode + indexed size), rebuilt for a
+recreated file; a torn trailing line falls back to the <code>list()</code> reading. <code>append</code> uses the index (not a full
+<code>list()</code>) to count after a foreign write. SQLite: <code>find_started_record</code> reads newest-first with <code>LIMIT 1</code> (Python's
+cursor prefetch made the unlimited query scan the rest of the run).</p>
+<p>Tests: <code>test_memory_facade.py</code> (10), <code>test_step_context.py</code> (4), <code>test_memory_step_provenance.py</code> (7),
+<code>test_memory_revise.py</code> (7), <code>test_jsonl_row_index.py</code> (6); each docstring lists the mutants checked by hand.
+Full suite (<code>PYTHONPATH=src:&lt;AbstractMemory graph worktree&gt;/src</code>): <code>main</code> 3763 passed / 46 skipped / 0 failed; this
+branch 3810 passed / 46 skipped / 0 failed (+47: the get_record, facade, step-context, provenance, MEMORY_REVISE and
+row-index tests). <code>tests/test_packaging_extras.py</code> pins the new <code>AbstractMemory&gt;=0.4.0</code> floor.</p>
+<p>Seams and notes:
+- <code>abstractmemory.graph.Provenance.from_dict</code> turned a STRING <code>derived_from</code> into a tuple of characters
+  (<code>tuple("m1")</code>); reported, fixed on the AbstractMemory branch (<code>c2f035f</code>), not worked around here.
+- Review N1 (AbstractNote review): a tool approved by a human runs inside <code>Runtime.resume</code>, outside
+  <code>_execute_effect_with_retry</code>, so it saw no step context and its note carried no step ref. Fixed: the approval
+  resume publishes the waiting TOOL_CALLS step (<code>_waiting_step_context</code>: the WAITING row's <code>step_id</code>, the seq of ITS
+  STARTED row via <code>find_started_record</code>, <code>seq=None</code> when that row cannot be found, never guessed). Audit of the other
+  paths: WAIT_EVENT / WAIT_UNTIL / ASK_USER / subworkflow resumes only write the payload into vars (no handler or
+  tool runs; the next effect goes through <code>_execute_effect_with_retry</code>), terminal hooks are not effect handlers, the
+  publish / schedule handlers are effect handlers, and the tool executor's worker threads copy the context
+  (<code>contextvars.copy_context</code>). Test: <code>test_step_context.py::test_a_tool_run_by_an_approval_resume_sees_the_waiting_steps_started_row</code>
+  (SQLite and JSONL); the reviewer's AbstractNote proof script now records <code>ledger_seq</code> / <code>ledger_step_id</code> resolving to
+  the <code>note_capture</code> TOOL_CALLS STARTED row.
+- <code>is_real_run</code> reuses AbstractMemory's <code>is_synthetic_run_id</code> / <code>SYNTHETIC_RUN_ID_PREFIXES</code> (9e2c231), compared
+  case-insensitively, plus the configured global memory owner; a test pins that the two packages agree.
+- <code>llms-full.txt</code> was not regenerated (coredoc pass at release).</p>
+<h3 id="review-fixes-2026-10-27-gateway-review-r5r6-runtime-review-3a">Review fixes (2026-10-27: gateway review R5/R6, runtime review 3a)<a class="headerlink" href="#review-fixes-2026-10-27-gateway-review-r5r6-runtime-review-3a" title="Permanent link">&para;</a></h3>
+<ul>
+<li>R1 <code>1779fa9</code>: MEMORY_REVISE normalizes caller ref kinds through <code>SourceRef</code> before refusing <code>run</code>/<code>step</code> ("STEP").</li>
+<li>R2 <code>7bd49ab</code>: a caller ref's <code>run_id</code> must be the executing run or absent.</li>
+<li>R3 <code>860eac7</code>: named artifacts must exist in the builder's new <code>artifact_store</code>; without one, a revision naming
+  artifacts is refused.</li>
+<li>R4 <code>e184633</code>: the default <code>revision_id</code> also hashes the caller's sources, derived_from, artifact_ids, occurred_at.</li>
+<li>R5 <code>e84be06</code>, <code>12b61c7</code>: <code>runtime_id</code> on the facade (<code>open_mind</code>, the KG / seam builders); a ref naming another
+  runtime (or any runtime, on a facade without one) is <code>unsupported</code>; lifted refs carry the facade's runtime_id.</li>
+<li>R6 <code>e84be06</code>: a <code>run</code> source's ledger is bounded (<code>limit</code> default 200, max 1000, <code>ledger_left_out</code>, <code>truncated</code>).</li>
+<li>R7 + R13 <code>af2ba20</code>: <code>stamp</code> screens caller refs (run/step dropped, synthetic run ids stripped, invalid refs
+  rejected, a flat run_id other than the stamped run never lifted; <code>rejected_sources</code> records each; never raises);
+  <code>is_real_run</code> reuses AbstractMemory's <code>is_synthetic_run_id</code>, case-insensitively.</li>
+<li>R8 <code>69fcccc</code>: parity test: every stamped dict reads back through <code>Provenance.from_legacy</code> (AbstractMemory 4c821b2).</li>
+<li>R9 <code>630b2ef</code>: the JSONL append ends a torn last line first.</li>
+<li>R10 <code>11630a9</code>: <code>coerce_ledger_seq</code> never truncates (3.9 is refused); seq is 1-based (a step ref's seq &gt;= 1).</li>
+<li>R11 <code>a38324b</code>: a duplicate KG assertion's unrecorded sources are reported (<code>skipped_duplicate_rows[].lost_sources</code>).</li>
+<li>R14 <code>6f44bf1</code>: <code>metadata.unresolved_markers</code> on a step whose STARTED row is gone.</li>
+</ul>
+<p>Notes (not fixed here):
+- R12: the step context is a <code>ContextVar</code>. A handler that starts a plain <code>threading.Thread</code> gives that thread no
+  context (the thread sees None and stamps no step ref); the tool executor copies the context into its workers
+  (<code>contextvars.copy_context</code>), and a handler that spawns its own threads must do the same.
+- R15: rows written by <code>MEMORY_KG_ASSERT</code> (and the seam writers) go through <code>store.add</code>, not through the graph, so
+  <code>MemoryGraph</code> does not know them until a revision adopts them (an <code>import</code>/<code>migration</code> revision); a <code>close</code> or
+  <code>narrow</code> revision on such a row needs that adoption first. Moving the writers onto <code>apply_revision</code> is the
+  convergence track (Out, above).
+- Follow-up (R11): record a second source on an existing memory (a revision adopting the row with the new refs)
+  instead of reporting it as lost.</p>
+<h3 id="architect-pass-2026-10-27">Architect pass (2026-10-27)<a class="headerlink" href="#architect-pass-2026-10-27" title="Permanent link">&para;</a></h3>
+<p>Open operator decisions, written in ADR 0011 (Open decisions), not chosen here:
+- JSON-file <code>seq</code> durability: DECIDED as option (a) by runtime 0.14.0 (ADR 0010, the persisted per-run <code>seq</code>); the
+  merge of 0.14.0 into this branch makes <code>get_record</code> and the row index read by persisted <code>seq</code> (a rewritten file
+  never answers another row).
+- Owner = principal, scope = kind (B1's full fix); the runtime now refuses an <code>owner_id</code> the run does not derive.</p>
+<p>C3 (persisted JSON-file row index, <code>ledger_&lt;run_id&gt;.idx</code>): 100,000-row run (87.5 MB), the architect's
+<code>c_jsonl_ledger.py</code>, this machine: first <code>get_record</code> in a fresh process 320 ms -&gt; 39 ms (the persisted index plus at
+most 1/8 of the ledger's tail parsed); after 129 other runs evicted it from the 128-run cache 305 ms -&gt; 42 ms; warm
+point read 0.03 ms (unchanged); 100k appends 5.0-5.2 s -&gt; 6.0 s (the index rewrites, a small multiple of its final
+800 KB in total). The index is validated against the ledger (inode, indexed size inside the file and ending on a line
+break, row count) and rebuilt otherwise; <code>delete</code> removes it.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../../..", "features": ["navigation.instant", "navigation.tracking", "navigation.top", "content.code.copy"], "search": "../../../assets/javascripts/workers/search.a7633da7.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../../../assets/javascripts/bundle.c21346df.min.js"></script>
+      
+    
+  </body>
+</html>

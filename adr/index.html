@@ -1216,6 +1216,13 @@
 <td>2026-10-27</td>
 <td><code>abstractruntime.replay</code> is the only reconstruction of run state from the ledger; hosts serve its view, clients render it; the per-run ledger <code>seq</code> is the durable cursor</td>
 </tr>
+<tr>
+<td>0011</td>
+<td><a href="0011_memory_facade_is_the_complete_host_surface_for_abstractmemory/">The Memory Facade Is the Complete Host Surface for AbstractMemory</a></td>
+<td>Accepted</td>
+<td>2026-10-27</td>
+<td>Hosts reach AbstractMemory only through <code>memory_facade</code> and the effect-handler builders; the runtime stamps ledger provenance (step <code>(run_id, seq)</code>, artifact, diary entry) on every memory write it performs, never from a synthetic run id; reconstructing a deleted source answers <code>source_gone</code>, never raises</td>
+</tr>
 </tbody>
 </table>
 <h2 id="relationship-to-backlog">Relationship to Backlog<a class="headerlink" href="#relationship-to-backlog" title="Permanent link">&para;</a></h2>
@@ -1263,6 +1270,10 @@
 <tr>
 <td>0010</td>
 <td><code>backlog/planned/0854_replay_view.md</code>; AbstractGateway backlog 0943 (view routes), 0082 (durable cursor); framework root 0993</td>
+</tr>
+<tr>
+<td>0011</td>
+<td><code>backlog/completed/0856_memory_facade_and_ledger_provenance.md</code>, <code>backlog/planned/0857_entity_direct_memory_writes_provenance.md</code>; AbstractMemory backlog 0056</td>
 </tr>
 </tbody>
 </table>

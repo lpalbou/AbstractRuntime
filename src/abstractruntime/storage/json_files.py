@@ -846,8 +846,8 @@ class JsonFileRunStore(RunStore):
 
     def _filed_unchanged(self, rid: str, p: Path) -> bool:
         """True when this run's file, as it is now, is already filed: the scan memo holds it at its current
-        identity token AND every built index that should hold the run does (the memo alone is not enough:
-        a `load()` memoizes a file the build's scan never saw)."""
+        identity token AND every built index that should hold the run does, and the active index agrees with
+        its status (the memo alone is not enough: a `load()` memoizes a file the build's scan never saw)."""
         try:
             token = self._stat_token(p.stat())
         except Exception:
@@ -864,6 +864,11 @@ class JsonFileRunStore(RunStore):
         with self._session_index_lock:
             if self._session_index is not None and sid and rid not in (self._session_index.get(sid) or {}):
                 return False
+        # ... and the active index agrees with the file (a `~` replayed for a re-opened run must be applied).
+        with self._active_lock:
+            e = self._active.get(rid)
+        if self._is_active_status(fields.get("status")) != bool(e is not None and e.active):
+            return False
         return True
 
     def _apply_journal_entries(self, entries: Any, *, replayed: Any = frozenset()) -> None:

@@ -1,6 +1,6 @@
 # 0864 — An index build's journal replay signals no change for runs its scan already filed
 
-**Status**: completed 2026-10-28, released in abstractruntime 0.15.3 · **Priority**: P1 · **Created**: 2026-10-28
+**Status**: fixed on branch fix/replay-no-change-burst (PR #19), NOT released (paused 2026-10-28; target 0.15.3) · **Priority**: P1 · **Created**: 2026-10-28
 **Cross-package**: follow-up of [0863](0863_index_build_never_loses_a_run_created_during_it.md) (0.15.2); found by
 AbstractGateway's suite (`tests/test_mail_collector_change_driven.py::test_400_finished_runs_a_change_to_one_loads_exactly_one`:
 `assert 400 == 0` with 0.15.2), gateway backlog 0966.

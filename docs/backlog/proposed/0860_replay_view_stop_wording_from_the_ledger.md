@@ -1,4 +1,4 @@
-# 0859 — Replay view: a forced stop reads "Stopped" (the stop's wording is not in the view)
+# 0860 — Replay view: a forced stop reads "Stopped" (the stop's wording is not in the view)
 
 **Status**: proposed · **Priority**: P2 · **Created**: 2026-10-28
 **Package**: abstractruntime (`replay/view.py`) · **Slice**: abstractgateway (`discovery/capabilities`)

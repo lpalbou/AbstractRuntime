@@ -1,4 +1,4 @@
-# 0860 — Replay view activities: the tool sandbox and per-call model timings
+# 0861 — Replay view activities: the tool sandbox and per-call model timings
 
 **Status**: proposed · **Priority**: P2 · **Created**: 2026-10-28
 **Package**: abstractruntime (`replay/view.py` `_fill_activity`)

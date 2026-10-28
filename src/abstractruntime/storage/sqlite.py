@@ -31,7 +31,7 @@ from ..core.run_attribution import automation_index_fields, filter_values, works
 from ..core.run_identity import verify_run_identity
 from ..core.run_lifecycle import run_lifecycle_index_fields
 from ..core.vars import is_paused_vars
-from .base import LedgerStore, RunStore, mailbox_names_of
+from .base import LedgerStore, RunStore, coerce_ledger_seq, mailbox_names_of
 from .commands import CommandAppendResult, CommandCursorStore, CommandRecord, CommandStore
 from .serialize import dumps_compact, runstate_to_dict, steprecord_to_dict
 
@@ -1190,6 +1190,7 @@ class SqliteLedgerStore(LedgerStore):
         self._db = db
 
     def append(self, record: StepRecord) -> Optional[int]:
+        """Append one record; returns its per-run `seq` (the durable cursor, ADR 0010; the row address, ADR 0011)."""
         run_id = str(record.run_id or "").strip()
         if not run_id:
             raise ValueError("StepRecord.run_id must be non-empty")
@@ -1398,6 +1399,21 @@ class SqliteLedgerStore(LedgerStore):
             raise sqlite3.IntegrityError(f"{msg} (run_id={run_id!r}, seq={seq}, db={self._db.path})") from e
         return seq
 
+    @staticmethod
+    def _row_record(row: Any) -> Optional[Dict[str, Any]]:
+        """Parse one `(seq, record_json)` row; the record carries the row's `seq` (the key column, ADR 0010)."""
+        try:
+            obj = json.loads(str(row["record_json"] or "{}"))
+        except Exception:
+            return None
+        if not isinstance(obj, dict):
+            return None
+        try:
+            obj["seq"] = int(row["seq"])
+        except Exception:  # pragma: no cover - seq is an INTEGER primary key column
+            pass
+        return obj
+
     def list(self, run_id: str) -> List[Dict[str, Any]]:
         rid = str(run_id or "").strip()
         if not rid:
@@ -1409,14 +1425,59 @@ class SqliteLedgerStore(LedgerStore):
         ).fetchall()
         out: List[Dict[str, Any]] = []
         for row in rows or []:
-            try:
-                obj = json.loads(str(row["record_json"] or "{}"))
-            except Exception:
-                continue
-            if isinstance(obj, dict):
-                obj["seq"] = int(row["seq"])  # the durable cursor (ADR-0010)
+            obj = self._row_record(row)
+            if obj is not None:
                 out.append(obj)
         return out
+
+    def get_record_unresolved(self, run_id: str, seq: int) -> Optional[Dict[str, Any]]:
+        """Point read by primary key `(run_id, seq)`."""
+        rid = str(run_id or "").strip()
+        s = coerce_ledger_seq(seq)
+        if not rid or s is None:
+            return None
+        conn = self._db.connection()
+        row = conn.execute(
+            "SELECT seq, record_json FROM ledger WHERE run_id = ? AND seq = ?;",
+            (rid, s),
+        ).fetchone()
+        return self._row_record(row) if row is not None else None
+
+    def find_started_record(
+        self, run_id: str, step_id: str, *, before_seq: Optional[int] = None
+    ) -> Optional[Dict[str, Any]]:
+        """The STARTED row of `step_id`, read within the run's primary-key range.
+        Rows written before the `step_status` column (backlog 0047) carry NULL
+        there; their parsed status decides."""
+        rid = str(run_id or "").strip()
+        sid = str(step_id or "")
+        if not rid or not sid:
+            return None
+        limit = coerce_ledger_seq(before_seq)
+        sql = (
+            "SELECT seq, record_json FROM ledger WHERE run_id = ? "
+            "AND (step_status = ? OR (step_status IS NULL AND json_extract(record_json, '$.status') = ?)) "
+            "AND json_extract(record_json, '$.step_id') = ?"
+        )
+        params: List[Any] = [rid, StepStatus.STARTED.value, StepStatus.STARTED.value, sid]
+        if limit is not None:
+            sql += " AND seq < ?"
+            params.append(limit)
+        # Newest first, ONE row: the STARTED row of a terminal row is normally a few rows above it, so the scan
+        # stops there (a step has exactly one STARTED row). The whole predicate is in SQL so LIMIT 1 is exact
+        # (Python's cursor prefetches the next row, which without a LIMIT would scan the rest of the run).
+        sql += " ORDER BY seq DESC LIMIT 1;"
+        conn = self._db.connection()
+        try:
+            for row in conn.execute(sql, tuple(params)).fetchall():
+                obj = self._row_record(row)
+                if obj is not None and obj.get("status") == StepStatus.STARTED.value:
+                    return obj
+        except sqlite3.OperationalError:
+            # json_extract refuses a row it cannot parse as JSON (e.g. a NaN
+            # leaf) and aborts the whole query: read the run's rows instead.
+            return super().find_started_record(rid, sid, before_seq=limit)
+        return None
 
     def delete(self, run_id: str) -> int:
         rid = str(run_id or "").strip()
@@ -1538,11 +1599,8 @@ class SqliteLedgerStore(LedgerStore):
         out: List[Dict[str, Any]] = []
         next_cursor = a
         for row in rows or []:
-            try:
-                obj = json.loads(str(row["record_json"] or "{}"))
-            except Exception:
-                continue
-            if not isinstance(obj, dict):
+            obj = self._row_record(row)
+            if obj is None:
                 continue
             obj["seq"] = int(row["seq"])  # the durable cursor (ADR-0010)
             out.append(obj)

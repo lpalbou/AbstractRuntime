@@ -44,7 +44,7 @@ from __future__ import annotations
 
 import dataclasses
 import json
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from ..core.models import RunState, StepRecord
 
@@ -54,6 +54,23 @@ __all__ = [
     "steprecord_to_dict",
     "dumps_compact",
 ]
+
+
+def record_digest(record: Any) -> Optional[str]:
+    """sha256 (hex) of a ledger record's canonical JSON (sorted keys, compact, `seq` excluded: the store assigns it
+    after the record is built, ADR 0010). The digest of what a row SAYS, stable across backends (SQLite, JSON files) and across offloading
+    (rehydrated leaves digest like the originals): a memory stamps it on its `step` ref and reconstruction verifies
+    it (ADR 0011). None when the record is not JSON-representable (raw bytes): no digest is better than a wrong one."""
+    import hashlib
+
+    try:
+        data = steprecord_to_dict(record) if isinstance(record, StepRecord) else dict(record)
+        data.pop("seq", None)
+        text = json.dumps(data, sort_keys=True, ensure_ascii=False, separators=(",", ":"),
+                          default=dataclass_json_default, allow_nan=False)
+    except (TypeError, ValueError):
+        return None
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
 def dataclass_json_default(obj: Any) -> Any:

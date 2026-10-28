@@ -249,12 +249,47 @@ class DeletableRunStore(Protocol):
 IDEMPOTENCY_TAIL_WINDOW = 256
 
 
+def coerce_ledger_seq(seq: Any) -> Optional[int]:
+    """A ledger row address component: an integer >= 1 (seq is 1-based), else None.
+
+    Accepted: an int, an integral float (`3.0`), a string of digits (`"7"`, `" 8 "`: a seq read from a URL or a
+    JSON key). Refused (None, never truncated or guessed): a bool, a float with a fraction (`3.9`), any other
+    string, 0 and negatives."""
+    if isinstance(seq, bool):
+        return None
+    if isinstance(seq, int):
+        value = seq
+    elif isinstance(seq, float):
+        if not seq.is_integer():
+            return None
+        value = int(seq)
+    elif isinstance(seq, str):
+        text = seq.strip()
+        if not text.isdigit() or not text.isascii():
+            return None
+        value = int(text)
+    else:
+        return None
+    return value if value >= 1 else None
+
+
 class LedgerStore(ABC):
-    """Append-only journal store."""
+    """Append-only journal store.
+
+    LEDGER ROW ADDRESS (ADR 0011, on the per-run `seq` of ADR 0010): one record
+    is addressed by `(run_id, seq)`, the run's 1-based record number every store
+    assigns at append (SQLite: its key; JSON files: persisted on each line, lines
+    written before the field read as their position). `step_id` is not an
+    address: a step's STARTED row and its terminal row share it. `list()` records
+    carry `seq`; the hash chain excludes it (assigned after the hash).
+    """
 
     @abstractmethod
     def append(self, record: StepRecord) -> Optional[int]:
-        """Append one record. Stores that number records return its per-run `seq`."""
+        """Append one record. Stores that number records return its per-run `seq` (SQLite, JSON files,
+        in-memory); else None. The runtime hands that seq to the effect handler as its step context and
+        never guesses one."""
+        ...
 
     @abstractmethod
     def list(self, run_id: str) -> List[Dict[str, Any]]:
@@ -282,6 +317,76 @@ class LedgerStore(ABC):
                 break
             out.append(rec if rec.get("seq") == seq else {**rec, "seq": seq})
         return (out, int(out[-1]["seq"]) if out else a)
+
+    def get_record_unresolved(self, run_id: str, seq: int) -> Optional[Dict[str, Any]]:
+        """The row at `(run_id, seq)` as persisted (`$slim` markers unresolved),
+        carrying `"seq"`; None when there is no such row.
+
+        Default: a scan of `list()` matching each record's `seq` (or, for a
+        backend whose records carry none, its 1-based position). Backends
+        override with a point read."""
+        s = coerce_ledger_seq(seq)
+        if s is None:
+            return None
+        for position, rec in enumerate(self.list(run_id), start=1):
+            if not isinstance(rec, dict):
+                continue
+            rec_seq = coerce_ledger_seq(rec.get("seq")) or position
+            if rec_seq == s:
+                out = dict(rec)
+                out["seq"] = s
+                return out
+        return None
+
+    def find_started_record(
+        self, run_id: str, step_id: str, *, before_seq: Optional[int] = None
+    ) -> Optional[Dict[str, Any]]:
+        """The STARTED row of `step_id` (below `before_seq` when given),
+        carrying `"seq"`; None when absent. A step has exactly one STARTED row
+        (`StepRecord.start` mints the step id), so backends may search from
+        either end (SQLite and JSON files search backwards from `before_seq`).
+        Default: a scan of `list()`."""
+        sid = str(step_id or "")
+        if not sid:
+            return None
+        limit = coerce_ledger_seq(before_seq)
+        for position, rec in enumerate(self.list(run_id), start=1):
+            if not isinstance(rec, dict):
+                continue
+            rec_seq = coerce_ledger_seq(rec.get("seq")) or position
+            if limit is not None and rec_seq >= limit:
+                break
+            status = rec.get("status")
+            status = getattr(status, "value", status)
+            if str(rec.get("step_id") or "") == sid and status == StepStatus.STARTED.value:
+                out = dict(rec)
+                out["seq"] = rec_seq
+                return out
+        return None
+
+    def get_record(self, run_id: str, seq: int) -> Optional[Dict[str, Any]]:
+        """One ledger record by its row address, ready to read (ADR 0011).
+
+        The record carries `"seq"`; a terminal row's `$slim` markers are
+        resolved (verified) against the STARTED row of the same `step_id`
+        (`ledger_slim.resolve_record_slim_markers`), so the payload bytes the
+        terminal row dropped come back. A marker that cannot be verified stays
+        in place, never a silently-wrong payload. `OffloadingLedgerStore`
+        also rehydrates its offloaded leaves. None when the row does not exist
+        (deleted ledger, wrong seq).
+        """
+        from .ledger_slim import record_has_slim_markers, resolve_record_slim_markers
+
+        record = self.get_record_unresolved(run_id, seq)
+        if record is None:
+            return None
+        if not record_has_slim_markers(record):
+            return record
+        started = self.find_started_record(
+            run_id, str(record.get("step_id") or ""), before_seq=record.get("seq")
+        )
+        resolved = resolve_record_slim_markers(record, started)
+        return resolved
 
     def find_completed_result(
         self, run_id: str, idempotency_key: str

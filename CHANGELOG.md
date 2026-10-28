@@ -7,6 +7,56 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.0] - unreleased
+
+Requires AbstractMemory 0.4.0 or newer (`abstractmemory.graph`). This release waits for AbstractMemory 0.4.0 on
+PyPI: a release never ships above an unpublished floor (root ADR 0034). ADR 0011, backlog 0856.
+
+### Added
+
+- **Ledger row address** (on 0.14.0's per-run `seq`, ADR 0010): `LedgerStore.get_record(run_id, seq)` returns one
+  record ready to read (a terminal row's `$slim` markers resolved against its STARTED row, offloaded leaves
+  rehydrated); `find_started_record(run_id, step_id, before_seq=)`. SQLite reads by primary key; the JSON-file backend
+  keeps a per-run line-offset index and checks the seq persisted on the line, so a point read is a seek and one line
+  parse (0.05 ms at 10,000 rows instead of a 58 ms full parse), and a rewritten file is read by persisted seq, never
+  by position.
+- **Step context**: an effect handler reads its own step with
+  `abstractruntime.core.step_context.current_step_context(run.run_id)`: `run_id`, `step_id`, `seq` of the attempt's
+  STARTED row, `node_id`, `attempt`, `effect_type`. Out of band like the progress callback; `None` outside a runtime
+  step; a nested runtime shadows it.
+- **Memory facade** (`abstractruntime.integrations.abstractmemory.memory_facade`): `MemoryFacade` (`open_mind`, `stamp`,
+  `stamp_current_step`, `reconstruct_source`, `history`, `sources_of`, `derived_from_source`, `apply_revision`),
+  `is_real_run`, and the AbstractMemory names hosts use re-exported unchanged (`GATEWAY_NAMES`). Hosts no longer import
+  `abstractmemory`. `reconstruct_source` answers `ok`, `source_gone` or `unsupported`, never raises for a missing
+  source. See [AbstractMemory integration](docs/integrations/abstractmemory.md).
+- **Provenance stamping**: `MEMORY_FORM`, `MEMORY_KG_ASSERT` and the `DIARY_WRITE` graph projection add a `sources`
+  list to the provenance they write: the `step` ref `(run_id, seq, step_id)` of the writing effect, an `artifact` ref
+  for the verbatim / `span_id`, a `diary_entry` ref for a projection. The legacy flat keys stay. A synthetic run id
+  (`chat-<session_id>`, `diary:<entity_id>`, ...) is never a `run`/`step` ref: the home-direct chat path carries
+  artifact or diary-entry refs only.
+- **`MEMORY_REVISE`** (`EffectType.MEMORY_REVISE`, VisualFlow node `memory_revise`): one revision of a mind (assert /
+  close / narrow ops) applied atomically through `MemoryGraph.apply_revision` as a workflow step, its provenance
+  stamped with the step that applied it. Handler from `build_memory_kg_effect_handlers` (new optional `journal=`); a
+  store that is not a graph home answers a failed outcome naming AbstractMemory backlog 0057; an ungrounded revision
+  fails with `ProvenanceRequired`.
+
+- **Source integrity** (architect pass): every ref the runtime stamps carries a `digest` (step: sha256 of the STARTED
+  record as written, also on the step context; artifact: the sha256 of its bytes; diary entry: the chain
+  `record_hash`), and `reconstruct_source` verifies it: new statuses `mismatch` (the bytes changed since the memory
+  named them) and `partial` (a `$slim` marker or an `{"$artifact": id}` leaf whose artifact is gone or uncheckable;
+  never `ok` with a hole). A step ref resolves only to its STARTED row (a rewritten JSON-file ledger answers
+  `source_gone`, never another row).
+- **Owner partitions**: `MEMORY_REVISE` and `MEMORY_KG_ASSERT` write only the run's own owners (its run, its session,
+  the global owner); `MEMORY_REVISE` refuses `recorded_at` (record time is the store's); a replayed revision reports
+  the memory's sources, not the retry's step.
+- **Persisted JSON-file row index** (`ledger_<run_id>.idx` beside the ledger): a fresh process reads a 100,000-row
+  ledger's row in 39 ms instead of 320 ms.
+
+### Changed
+
+- `AbstractMemory>=0.4.0` (was `>=0.3.2`).
+- SQLite `find_started_record` reads newest-first with `LIMIT 1` (0.01 ms at 10,000 rows instead of 3.5 ms).
+
 ## [0.14.0] - 2026-10-27
 
 Two features: the replay view with a durable per-run ledger cursor, and the session tool policy.

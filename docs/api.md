@@ -435,7 +435,28 @@ Docs: `integrations/abstractcore.md`.
 
 Implementation: `src/abstractruntime/integrations/abstractmemory/effect_handlers.py`.
 
-This provides handlers for `MEMORY_KG_*` effects (opt-in wiring layer).
+This provides handlers for `MEMORY_KG_*` effects and `MEMORY_REVISE` (opt-in wiring layer):
+`build_memory_kg_effect_handlers(store=, run_store=, now_iso=, journal=None)`. `MEMORY_REVISE` applies one revision of
+a mind (assert / close / narrow ops) through `abstractmemory.graph.MemoryGraph`, stamped with the step that applied it;
+VisualFlow node type `memory_revise`. Payload and result: [MEMORY_REVISE](integrations/abstractmemory.md#memory_revise-memory-reconsideration-as-a-workflow-step).
+
+### AbstractMemory facade (host surface)
+
+`abstractruntime.integrations.abstractmemory.memory_facade` is the only way a host reaches AbstractMemory (ADR 0011;
+AbstractMemory 0.4.0+):
+
+- `MemoryFacade.open_mind(path, *, embedder=None, **stores)`; `MemoryFacade(graph=, ledger_store=, run_store=,
+  artifact_store=, diary_store=, event_inbox=, runtime_id=)`; `.graph`, `.store`, `.journal`
+- `stamp(provenance, *, run_id, seq=None, step_id=None, artifact_ids=(), runtime_id=None) -> dict` and
+  `stamp_current_step(provenance, *, run_id, artifact_ids=())`: add `step` / `run` / `artifact` SourceRefs, never for a
+  synthetic run id (`is_real_run`), never a guessed seq
+- `reconstruct_source(ref) -> {"status": "ok" | "source_gone" | "unsupported", ...}`; never raises for a missing source
+- `history(memory_id)`, `sources_of(memory_id)`, `derived_from_source(ref)`, `apply_revision(revision)`
+- `GATEWAY_NAMES`: AbstractMemory names re-exported unchanged (`memory_facade.X is abstractmemory.X`), resolved lazily
+
+Ledger row address: `LedgerStore.get_record(run_id, seq)` (slim markers resolved, offloaded leaves rehydrated),
+`list()` records carry `"seq"`, `append()` returns it. Step context: `abstractruntime.core.step_context.current_step_context(run_id)`
+inside an effect handler. Details: [integrations/abstractmemory.md](integrations/abstractmemory.md).
 
 ## Utilities (host UX)
 
@@ -449,6 +470,7 @@ This provides handlers for `MEMORY_KG_*` effects (opt-in wiring layer).
 - `architecture.md` — component map + durability invariants
 - `faq.md` — common questions and gotchas
 - `integrations/abstractcore.md` — `LLM_CALL` / `TOOL_CALLS` wiring
+- `integrations/abstractmemory.md` — memory facade, provenance stamping, `MEMORY_REVISE`
 
 ### Host ASGI serving
 

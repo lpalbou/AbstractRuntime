@@ -103,6 +103,14 @@ class ObservableLedgerStore(LedgerStore):
     def list(self, run_id: str) -> List[LedgerRecordDict]:
         return self._inner.list(run_id)
 
+    def get_record_unresolved(self, run_id: str, seq: int) -> Optional[Dict[str, Any]]:
+        return self._inner.get_record_unresolved(run_id, seq)
+
+    def find_started_record(
+        self, run_id: str, step_id: str, *, before_seq: Optional[int] = None
+    ) -> Optional[Dict[str, Any]]:
+        return self._inner.find_started_record(run_id, step_id, before_seq=before_seq)
+
     def list_after(self, *, run_id: str, after: int, limit: int = 1000) -> Tuple[List[LedgerRecordDict], int]:
         return self._inner.list_after(run_id=run_id, after=after, limit=limit)
 

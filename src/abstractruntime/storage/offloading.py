@@ -622,6 +622,27 @@ class OffloadingLedgerStore(LedgerStore):
         """
         return self._inner.list(run_id)
 
+    def get_record_unresolved(self, run_id: str, seq: int) -> Optional[Dict[str, Any]]:
+        """The inner row with THIS offloader's `{"$artifact": id}` leaves
+        rehydrated (ADR 0011): offloading is this decorator's storage detail,
+        and `$slim` verification hashes the bytes the STARTED row held before
+        they were offloaded. Single-record read, so the rehydration cost that
+        keeps `list()` plain does not apply."""
+        record = self._inner.get_record_unresolved(run_id, seq)
+        if record is None:
+            return None
+        rehydrated = self._rehydrate_tree(record)
+        return rehydrated if isinstance(rehydrated, dict) else record
+
+    def find_started_record(
+        self, run_id: str, step_id: str, *, before_seq: Optional[int] = None
+    ) -> Optional[Dict[str, Any]]:
+        record = self._inner.find_started_record(run_id, step_id, before_seq=before_seq)
+        if record is None:
+            return None
+        rehydrated = self._rehydrate_tree(record)
+        return rehydrated if isinstance(rehydrated, dict) else record
+
     def find_completed_result(
         self, run_id: str, idempotency_key: str
     ) -> Optional[Dict[str, Any]]:

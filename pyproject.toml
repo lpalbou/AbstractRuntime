@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "AbstractRuntime"
-version = "0.14.0"
+version = "0.15.0"
 description = "AbstractRuntime: a durable graph runner designed to pair with AbstractCore."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -46,7 +46,10 @@ dependencies = [
   # Required for the Runtime-owned MEMORY_KG_* effect contract and TripleStore
   # model types. Durable/vector backend dependencies such as LanceDB remain
   # package extras owned by AbstractMemory and selected by hosts such as Gateway.
-  "AbstractMemory>=0.3.2",
+  # 0.4.0: `abstractmemory.graph` (SourceRef, Provenance, Revision, MemoryGraph):
+  # the memory facade, provenance stamping and MEMORY_REVISE (ADR 0011). The
+  # runtime release waits for AbstractMemory 0.4.0 on PyPI (root ADR 0034).
+  "AbstractMemory>=0.4.0",
   # Runtime's base install is the remote-light workflow host: LLM/tool effects,
   # MCP worker support, and multimodal routing come with AbstractCore's light
   # install (remote providers, built-in tools, media inputs, voice/vision/music

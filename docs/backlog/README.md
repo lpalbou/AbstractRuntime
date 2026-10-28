@@ -12,9 +12,9 @@ If you are new to the project, start with `../README.md` and `../architecture.md
 
 ## Counts
 
-- Planned: 31
+- Planned: 32
 - Proposed: 14
-- Completed: 38
+- Completed: 39
 - Deprecated: 13
 - Recurrent: 0
 
@@ -93,6 +93,7 @@ mtime). The anticipated ADR ("an automation is its controller root run") is not 
 
 | ID | Item |
 |----|------|
+| 0856 | [Memory facade and ledger provenance](completed/0856_memory_facade_and_ledger_provenance.md): completed 2026-10-27 on branch `feat/memory-graph-facade`, UNRELEASED (ships in 0.15.0 after the operator decisions; needs AbstractMemory 0.4.0 on PyPI); ADR 0011: `MemoryFacade` (open a mind, stamp, reconstruct a source), `LedgerStore.get_record(run_id, seq)` (JSON-file line-offset index), the step context, a `step` ref on every memory write the runtime performs, `MEMORY_REVISE` / node `memory_revise`. Follow-up 0857. |
 | 0851 | [Per-account voice stores](completed/0851_per_account_voice_stores.md): completed 2026-10-27 (0.13.0); the runtime's voice catalog and voice library use its `voice_store_dir` / `voice_library_dirs`; real-weights E2E 9/9. |
 | 0852 | [Capability refusals are not retried](completed/0852_capability_refusals_are_not_retried.md): completed 2026-10-27 (0.13.0); one engine call for a refused request. |
 | 0847 | [Automations v1: controller, contracts, occurrences, triggers](completed/0847_automations_v1_controller_contracts_occurrences_triggers.md): completed 2026-09-27, moved from planned; UNRELEASED; `79d9bf6`…`d02578a`, 2957 passed / 26 skipped; reviews GO after fixes; E2E 9/9. |
@@ -147,6 +148,7 @@ mtime). The anticipated ADR ("an automation is its controller root run") is not 
 | 0848 | `planned/0848_automations_v2_external_event_inbox_and_run_triggers.md` (P2, after 0847's release; contracts pass 2026-09-27) |
 | 0853 | `planned/0853_session_tool_policy_before_the_approval_wait.md` (P1; abstractruntime 0.14.0: a conversation's approve/deny stored per session and applied before any approval wait, with an `abstract.tool_policy_decision` ledger record; gateway routes and client wiring remain) |
 | 0854 | `planned/0854_replay_view.md` (P0; abstractruntime 0.14.0 carries the reducer, the durable per-run `seq` cursor and the conformance cases; gateway routes and client migration remain; ADR 0010) |
+| 0857 | `planned/0857_entity_direct_memory_writes_provenance.md` (P2; entity memory written outside any effect: world models, tending, night passes; follows 0856) |
 | 0044 | `planned/runtime_systemic_reliability/0044_meta_analysis_record.md` (track source record) |
 | 0045 | `planned/runtime_systemic_reliability/0045_crash_replay_harness_and_ordering_invariant.md` |
 | 0046 | `planned/runtime_systemic_reliability/0046_per_run_driver_exclusion.md` |

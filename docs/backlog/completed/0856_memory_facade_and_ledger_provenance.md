@@ -1,0 +1,167 @@
+# 0856 — Memory facade and ledger provenance: the host surface for AbstractMemory, the ledger row address, and a step ref on every memory write
+
+**Status**: completed 2026-10-27 on branch `feat/memory-graph-facade`, UNRELEASED (ships in 0.15.0, after the operator decisions; needs AbstractMemory 0.4.0 on PyPI) · **Priority**: P1 · **Created**: 2026-10-27
+**Cross-package**: AbstractMemory ADR 0003 and backlog 0056 (`abstractmemory.graph`: `SourceRef`, `Provenance`,
+`MemoryGraph`; AbstractMemory 0.4.0), AbstractGateway memory routes (`/api/gateway/memory/*` over this facade) and its
+import-boundary burn-down, AbstractNote thin-client slice (step and artifact refs on note revisions). ADR:
+[0011](../../adr/0011_memory_facade_is_the_complete_host_surface_for_abstractmemory.md).
+
+## Why
+Operator goal (2026-10-27, AbstractMemory ADR 0003): every derived memory is tied to the ledger's messages, events
+and artifacts, so the verbatim source of any understanding, or of any change of understanding, can be reconstructed.
+AbstractMemory stores references; resolving them is the runtime's job, because the runtime owns the ledger, the
+artifacts, the diary chain and the event inbox. Hosts must reach AbstractMemory through the runtime (ADR 0008
+decision 2), and no AbstractMemory facade existed.
+
+## Current code reality (2026-10-27, `main` 93c45b4)
+- `storage/base.py` `LedgerStore`: `append`, `list(run_id)`, `find_completed_result`; no read by address. SQLite
+  (`storage/sqlite.py`) has a `seq` primary key that `list()` does not return; JSONL has positions only.
+- A step is a STARTED row and a terminal row sharing one `step_id` (`core/runtime.py`, `_execute_effect_with_retry`);
+  the terminal row is slimmed (`storage/ledger_slim.py`: `$slim` markers resolved against the STARTED payload);
+  oversized leaves are offloaded (`storage/offloading.py`, rehydrated only by `find_completed_result`).
+- Effect handlers receive `(run, effect, default_next_node)`; nothing tells them their own ledger row. The publish
+  handler gets `step_id` as an extra argument.
+- Memory provenance written today (audit 2026-10-27, `untracked/memory-transition/audit/abstractruntime_entity.md`
+  §2): `MEMORY_FORM` `run_id`/`turn_id` + the verbatim artifact as `payload_ref` (`seam_handlers._handle_form`),
+  `MEMORY_KG_ASSERT` `writer_run_id`/`writer_workflow_id`/`span_id` (`effect_handlers._handle_assert`), diary
+  projections `{source, entry_id}` + `origin` (`identity_support.project_diary_entry`). No ledger row address; on the
+  home-direct entity path the `run_id` is the synthetic `chat-<session_id>`.
+- AbstractGateway imports `abstractmemory` directly in 34 lines across 8 files.
+
+## Scope
+In:
+- `LedgerStore.get_record(run_id, seq)` (base default over `list()`, SQLite by primary key, JSONL by position,
+  `OffloadingLedgerStore` rehydrating, the decorators delegating); `$slim` markers resolved against the STARTED row of
+  the same `step_id`; `list()` records carry `"seq"` (ADR 0010's per-run number since 0.14.0, excluded from the record hash); `append()`
+  returns the seq it wrote when the backend knows it.
+- `abstractruntime.core.step_context`: the runtime publishes the current step `(run_id, seq, step_id, node_id,
+  attempt, effect_type)` to the handler it executes (a `ContextVar`, out of band like the progress callback).
+- `integrations/abstractmemory/memory_facade.py`: `MemoryFacade` (`open_mind`, `graph`/`store`/`journal`, `stamp`,
+  `reconstruct_source`, `history`/`sources_of`/`derived_from_source`), `is_real_run`.
+- Stamping in `MEMORY_FORM`, `MEMORY_KG_ASSERT` and the `DIARY_WRITE` projection.
+- The workflow-native primitive (operator, 2026-10-27: "workflows are the framework's central native primitive; memory
+  capture and reconsideration should be expressible as workflow steps/effects with ledger provenance"):
+  `EffectType.MEMORY_REVISE` (host handler in `build_memory_kg_effect_handlers` over `MemoryGraph.apply_revision`)
+  and the VisualFlow node `memory_revise`.
+- Performance of the row address on the JSON-file backend (the gateway's default).
+- ADR 0011, docs (`api.md`, `integrations/abstractmemory.md`), CHANGELOG.
+
+Out:
+- Writes outside any effect (world models, tending, the night passes): [0857](../planned/0857_entity_direct_memory_writes_provenance.md).
+- Moving the memory writers onto `MemoryGraph.apply_revision` (AbstractMemory's convergence track); the gateway
+  routes and the gateway's import burn-down (AbstractGateway).
+- A hash chain on conversation ledgers; real runs behind the home-direct entity driver.
+
+## Validation
+- Both backends (and the offloading decorator): `get_record` of a slimmed terminal row returns the STARTED payload
+  bytes; a mutant that returns the slimmed row unresolved fails; `list()` carries `seq`; the diary chain verifies.
+- `reconstruct_source` on real temporary stores (`SqliteRunStore`, `SqliteLedgerStore`, `FileArtifactStore`,
+  `DiaryStore`, `JsonFileEventInbox`): ok / `source_gone` after deletion / `unsupported`.
+- A real `Runtime` run: the episode formed by `MEMORY_FORM` carries a `step` ref that resolves through `get_record` to
+  that step; the KG assertion carries one; a diary projection carries a `diary_entry` ref; the synthetic chat path
+  carries artifact refs only. Each test fails with the stamping line removed.
+
+## Report (2026-10-27)
+
+Commits on `feat/memory-graph-facade` (after `76b1319` WIP): `de96ede` memory facade, `7b0d031` step context
+installed, `dd9e924` stamping, `2574881` MEMORY_REVISE + node, `09db6f5` row-address performance, `76e9988` docs and
+version, `9eea551` diary reads in `GATEWAY_NAMES`; this report.
+
+What landed:
+- `integrations/abstractmemory/memory_facade.py`: `MemoryFacade` (`open_mind`, `graph`/`store`/`journal`, `stamp`,
+  `stamp_current_step`, `apply_revision`, `history`/`sources_of`/`derived_from_source`, `reconstruct_source`),
+  `is_real_run`, `GATEWAY_NAMES` (43 names: the gateway's direct imports, including the diary reads `open_questions` /
+  `open_problems` / `open_ideas`, + the 8 graph names; every one exists in AbstractMemory, none left out), resolved by module `__getattr__` so the module never imports AbstractMemory at
+  import time.
+- `core/runtime.py` `_execute_effect_with_retry` installs `effect_step_context(StepContext(...))` around the handler,
+  with the seq `append()` returned for the attempt's STARTED row.
+- Stamping: `seam_handlers._handle_form`, `effect_handlers._handle_assert`, `identity_support.project_diary_entry`.
+  A caller `payload_ref` is an artifact ref only when the artifact store holds it (a payload_ref may name an
+  identity-core `.yaml` record). A private diary projection names its entry only (no origin by design).
+- `MEMORY_REVISE` / `memory_revise`: contract in `docs/integrations/abstractmemory.md`. Caller `run`/`step` refs are
+  refused (runtime-owned); unknown payload keys are refused; the default `revision_id` hashes (run, node, scope,
+  owner, cause, ops) so a retried attempt is a no-op.
+
+Performance (10,000 rows, ~10 MB JSON-file ledger, ~1 KB rows, Apple Silicon, warm cache; method:
+fill one run's ledger with 5,000 STARTED/COMPLETED pairs through `append`, then the median of 20 calls each):
+
+| | JSONL before | JSONL after | SQLite before | SQLite after |
+|---|---|---|---|---|
+| `get_record(seq)` | 58 ms | 0.05 ms | 0.02 ms | 0.01 ms |
+| `find_started_record(step, before_seq=terminal)` (the slim-resolve path) | 58-72 ms (full parse) | 0.08 ms | 3.5 ms | 0.01 ms |
+| `find_started_record(step)` unbounded, row in the middle | 72 ms | 12 ms | 11 ms | 3.4 ms |
+| `find_started_record` worst case (first row) / miss | 72 ms | 24 ms / 7 ms | 11 ms | 10 ms |
+| first read in a cold process (index build) | 58 ms | 48 ms | 0.3 ms | 0.3 ms |
+
+JSONL: a per-run line-offset index (`_JsonlRowIndex`, 8 bytes per record, 128 runs LRU), written through by
+`append`, extended by reading only the bytes another writer appended (keyed by inode + indexed size), rebuilt for a
+recreated file; a torn trailing line falls back to the `list()` reading. `append` uses the index (not a full
+`list()`) to count after a foreign write. SQLite: `find_started_record` reads newest-first with `LIMIT 1` (Python's
+cursor prefetch made the unlimited query scan the rest of the run).
+
+Tests: `test_memory_facade.py` (10), `test_step_context.py` (4), `test_memory_step_provenance.py` (7),
+`test_memory_revise.py` (7), `test_jsonl_row_index.py` (6); each docstring lists the mutants checked by hand.
+Full suite (`PYTHONPATH=src:<AbstractMemory graph worktree>/src`): `main` 3763 passed / 46 skipped / 0 failed; this
+branch 3810 passed / 46 skipped / 0 failed (+47: the get_record, facade, step-context, provenance, MEMORY_REVISE and
+row-index tests). `tests/test_packaging_extras.py` pins the new `AbstractMemory>=0.4.0` floor.
+
+Seams and notes:
+- `abstractmemory.graph.Provenance.from_dict` turned a STRING `derived_from` into a tuple of characters
+  (`tuple("m1")`); reported, fixed on the AbstractMemory branch (`c2f035f`), not worked around here.
+- Review N1 (AbstractNote review): a tool approved by a human runs inside `Runtime.resume`, outside
+  `_execute_effect_with_retry`, so it saw no step context and its note carried no step ref. Fixed: the approval
+  resume publishes the waiting TOOL_CALLS step (`_waiting_step_context`: the WAITING row's `step_id`, the seq of ITS
+  STARTED row via `find_started_record`, `seq=None` when that row cannot be found, never guessed). Audit of the other
+  paths: WAIT_EVENT / WAIT_UNTIL / ASK_USER / subworkflow resumes only write the payload into vars (no handler or
+  tool runs; the next effect goes through `_execute_effect_with_retry`), terminal hooks are not effect handlers, the
+  publish / schedule handlers are effect handlers, and the tool executor's worker threads copy the context
+  (`contextvars.copy_context`). Test: `test_step_context.py::test_a_tool_run_by_an_approval_resume_sees_the_waiting_steps_started_row`
+  (SQLite and JSONL); the reviewer's AbstractNote proof script now records `ledger_seq` / `ledger_step_id` resolving to
+  the `note_capture` TOOL_CALLS STARTED row.
+- `is_real_run` reuses AbstractMemory's `is_synthetic_run_id` / `SYNTHETIC_RUN_ID_PREFIXES` (9e2c231), compared
+  case-insensitively, plus the configured global memory owner; a test pins that the two packages agree.
+- `llms-full.txt` was not regenerated (coredoc pass at release).
+
+### Review fixes (2026-10-27: gateway review R5/R6, runtime review 3a)
+- R1 `1779fa9`: MEMORY_REVISE normalizes caller ref kinds through `SourceRef` before refusing `run`/`step` ("STEP").
+- R2 `7bd49ab`: a caller ref's `run_id` must be the executing run or absent.
+- R3 `860eac7`: named artifacts must exist in the builder's new `artifact_store`; without one, a revision naming
+  artifacts is refused.
+- R4 `e184633`: the default `revision_id` also hashes the caller's sources, derived_from, artifact_ids, occurred_at.
+- R5 `e84be06`, `12b61c7`: `runtime_id` on the facade (`open_mind`, the KG / seam builders); a ref naming another
+  runtime (or any runtime, on a facade without one) is `unsupported`; lifted refs carry the facade's runtime_id.
+- R6 `e84be06`: a `run` source's ledger is bounded (`limit` default 200, max 1000, `ledger_left_out`, `truncated`).
+- R7 + R13 `af2ba20`: `stamp` screens caller refs (run/step dropped, synthetic run ids stripped, invalid refs
+  rejected, a flat run_id other than the stamped run never lifted; `rejected_sources` records each; never raises);
+  `is_real_run` reuses AbstractMemory's `is_synthetic_run_id`, case-insensitively.
+- R8 `69fcccc`: parity test: every stamped dict reads back through `Provenance.from_legacy` (AbstractMemory 4c821b2).
+- R9 `630b2ef`: the JSONL append ends a torn last line first.
+- R10 `11630a9`: `coerce_ledger_seq` never truncates (3.9 is refused); seq is 1-based (a step ref's seq >= 1).
+- R11 `a38324b`: a duplicate KG assertion's unrecorded sources are reported (`skipped_duplicate_rows[].lost_sources`).
+- R14 `6f44bf1`: `metadata.unresolved_markers` on a step whose STARTED row is gone.
+
+Notes (not fixed here):
+- R12: the step context is a `ContextVar`. A handler that starts a plain `threading.Thread` gives that thread no
+  context (the thread sees None and stamps no step ref); the tool executor copies the context into its workers
+  (`contextvars.copy_context`), and a handler that spawns its own threads must do the same.
+- R15: rows written by `MEMORY_KG_ASSERT` (and the seam writers) go through `store.add`, not through the graph, so
+  `MemoryGraph` does not know them until a revision adopts them (an `import`/`migration` revision); a `close` or
+  `narrow` revision on such a row needs that adoption first. Moving the writers onto `apply_revision` is the
+  convergence track (Out, above).
+- Follow-up (R11): record a second source on an existing memory (a revision adopting the row with the new refs)
+  instead of reporting it as lost.
+
+### Architect pass (2026-10-27)
+Open operator decisions, written in ADR 0011 (Open decisions), not chosen here:
+- JSON-file `seq` durability: DECIDED as option (a) by runtime 0.14.0 (ADR 0010, the persisted per-run `seq`); the
+  merge of 0.14.0 into this branch makes `get_record` and the row index read by persisted `seq` (a rewritten file
+  never answers another row).
+- Owner = principal, scope = kind (B1's full fix); the runtime now refuses an `owner_id` the run does not derive.
+
+C3 (persisted JSON-file row index, `ledger_<run_id>.idx`): 100,000-row run (87.5 MB), the architect's
+`c_jsonl_ledger.py`, this machine: first `get_record` in a fresh process 320 ms -> 39 ms (the persisted index plus at
+most 1/8 of the ledger's tail parsed); after 129 other runs evicted it from the 128-run cache 305 ms -> 42 ms; warm
+point read 0.03 ms (unchanged); 100k appends 5.0-5.2 s -> 6.0 s (the index rewrites, a small multiple of its final
+800 KB in total). The index is validated against the ledger (inode, indexed size inside the file and ending on a line
+break, row count) and rebuilt otherwise; `delete` removes it.
+

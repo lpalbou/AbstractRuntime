@@ -9,8 +9,11 @@ This is meant as a straightforward MVP backend.
 
 from __future__ import annotations
 
+import bisect
 import contextlib
 import logging
+import sys
+from array import array
 import json
 import os
 import threading
@@ -20,7 +23,7 @@ import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from .base import IDEMPOTENCY_TAIL_WINDOW, LedgerStore, RunStore, mailbox_names_of
+from .base import IDEMPOTENCY_TAIL_WINDOW, LedgerStore, RunStore, coerce_ledger_seq, mailbox_names_of
 from .serialize import dumps_compact, runstate_to_dict, steprecord_to_dict
 from .change_ring import ChangeRing as _ChangeRing
 from ..core.models import RunState, StepRecord, RunStatus, StepStatus, WaitState, WaitReason
@@ -2468,7 +2471,71 @@ class JsonFileRunStore(RunStore):
         return results
 
 
+def _jsonl_line_records(line: Any) -> List[Dict[str, Any]]:
+    """The records one ledger line holds, exactly as `JsonlLedgerStore.list` reads it: one JSON object per line,
+    or (crash / manual concatenation) several objects recovered with `raw_decode`; a non-object or unparseable
+    line holds none."""
+    text = line.decode("utf-8", errors="replace") if isinstance(line, (bytes, bytearray)) else str(line)
+    text = text.strip()
+    if not text:
+        return []
+    try:
+        record = json.loads(text)
+        return [record] if isinstance(record, dict) else []
+    except json.JSONDecodeError:
+        pass
+    decoder = json.JSONDecoder()
+    recovered: List[Dict[str, Any]] = []
+    i = 0
+    while i < len(text):
+        while i < len(text) and text[i].isspace():
+            i += 1
+        if i >= len(text):
+            break
+        try:
+            obj, end = decoder.raw_decode(text, idx=i)
+        except json.JSONDecodeError:
+            break
+        if isinstance(obj, dict):
+            recovered.append(obj)
+        i = end
+    return recovered
+
+
+class _JsonlRowIndex:
+    """Byte offset of the line holding each record of one ledger file (ADR 0011 row address, JSON-file backend).
+
+    `offsets[seq - 1]` is the offset of the line that holds record `seq`; a concatenated line (several records on
+    one line, see `_jsonl_line_records`) repeats its offset, so a record's position inside its line is
+    `seq - 1 - bisect_left(offsets, offset)`. `size` is the byte length indexed (newline-terminated lines only);
+    `ino` the file's inode, so a deleted-and-recreated ledger is re-indexed from scratch."""
+
+    __slots__ = ("ino", "size", "offsets", "persisted_size")
+
+    def __init__(self, ino: int) -> None:
+        self.ino = ino
+        self.size = 0
+        self.offsets = array("q")
+        self.persisted_size = 0  # the indexed size the `.idx` file on disk covers
+
+
+# Persisted row index (`ledger_<run_id>.idx`, beside the ledger): magic, then (inode, indexed size, row count) as
+# native int64s, then the offsets. Byte order is in the magic, so a file moved across architectures is rebuilt.
+_IDX_MAGIC = b"ARLIDX1" + (b"L" if sys.byteorder == "little" else b"B")
+
+
 class JsonlLedgerStore(LedgerStore):
+    # Row-index cache bound (ADR 0011 / backlog 0856 performance): runs whose line offsets are kept (8 bytes per
+    # record), least recently used evicted. A 10k-row ledger costs ~80KB.
+    _ROW_INDEX_MAX_RUNS = 128
+    # The persisted `.idx` is rewritten (atomically, whole) once the newly indexed ledger bytes reach
+    # max(_ROW_INDEX_PERSIST_BYTES, 1/_ROW_INDEX_PERSIST_FRACTION of the ledger): a fresh process then parses at most
+    # that tail instead of the whole file, and the rewrites total a small multiple of the final index size.
+    _ROW_INDEX_PERSIST_BYTES = 256 * 1024
+    _ROW_INDEX_PERSIST_FRACTION = 8
+    # First backward window of `find_started_record` (doubles until the STARTED row is found or the file start).
+    _STARTED_SCAN_WINDOW_BYTES = 65536
+
     def __init__(self, base_dir: str | Path):
         self._base = Path(base_dir)
         self._base.mkdir(parents=True, exist_ok=True)
@@ -2500,6 +2567,11 @@ class JsonlLedgerStore(LedgerStore):
         # and only when it points just after a newline (a line start).
         self._offsets: "OrderedDict[str, tuple[int, int, int]]" = OrderedDict()
         self._offsets_max = 4096
+        # Line-offset index per run (`_JsonlRowIndex`), kept current by our own appends (write-through) and
+        # extended by reading ONLY the bytes another writer appended since (keyed by inode + indexed size), so a
+        # row-address read is a seek + one line parse instead of a full `list()` parse per call.
+        self._row_index_lock = threading.Lock()
+        self._row_index: "OrderedDict[str, _JsonlRowIndex]" = OrderedDict()
 
     def _path(self, run_id: str) -> Path:
         return self._base / f"ledger_{run_id}.jsonl"
@@ -2523,6 +2595,7 @@ class JsonlLedgerStore(LedgerStore):
                     seq = self._head_seq(record.run_id, p) + 1
                     record_dict["seq"] = seq
                     line = dumps_compact(record_dict)
+                    start = f.tell()  # where this record's line begins (after any torn-line newline)
                     # Write as a single append operation to reduce the chance of
                     # concurrent writers producing concatenated JSON objects on one line.
                     f.write(line + "\n")
@@ -2531,6 +2604,7 @@ class JsonlLedgerStore(LedgerStore):
                     ino = _inode_of(f)
                 finally:
                     _funlock(f)
+            self._row_index_note_append(record.run_id, ino, start, size)
             self._seq_heads[record.run_id] = (size, seq, ino)
             self._seq_heads.move_to_end(record.run_id)
             while len(self._seq_heads) > self._seq_heads_max:
@@ -2593,6 +2667,219 @@ class JsonlLedgerStore(LedgerStore):
                 prev += 1
                 rec["seq"] = prev
         return records
+
+    # -- row address (ADR 0011) -------------------------------------------------------------------------------
+
+    def _row_index_note_append(self, run_id: str, ino: int, line_start: int, size_after: int) -> None:
+        """Write-through: extend a CURRENT index by the line we just wrote (no read). An index that is not exactly
+        at `line_start` (another writer appended, a torn line was closed, or none exists yet) is left alone: the
+        next read extends it from its own size."""
+        with self._row_index_lock:
+            idx = self._row_index.get(run_id)
+            if idx is None and line_start == 0:  # a new ledger: indexed from birth, for free
+                idx = _JsonlRowIndex(ino)
+                self._row_index[run_id] = idx
+                while len(self._row_index) > self._ROW_INDEX_MAX_RUNS:
+                    self._row_index.popitem(last=False)
+            if idx is None or idx.ino != ino or idx.size != line_start:
+                return
+            idx.offsets.append(line_start)
+            idx.size = size_after
+            self._row_index_maybe_persist(run_id, idx)
+
+    def _row_index_current(self, run_id: str) -> Optional[_JsonlRowIndex]:
+        """The run's line-offset index, extended to the file's current newline-terminated end; None when the
+        ledger file does not exist."""
+        p = self._path(run_id)
+        try:
+            st = p.stat()
+        except FileNotFoundError:
+            with self._row_index_lock:
+                self._row_index.pop(run_id, None)
+            return None
+        with self._row_index_lock:
+            idx = self._row_index.get(run_id)
+            if idx is None or idx.ino != st.st_ino or st.st_size < idx.size:
+                # A fresh process, an evicted run, or a recreated file: the persisted index, when it still matches
+                # this file, saves the full parse (C3); else rebuild from byte 0.
+                idx = self._row_index_load(run_id, p, st) or _JsonlRowIndex(st.st_ino)
+            if st.st_size > idx.size:
+                self._row_index_extend(p, idx)
+                self._row_index_maybe_persist(run_id, idx)
+            self._row_index[run_id] = idx
+            self._row_index.move_to_end(run_id)
+            while len(self._row_index) > self._ROW_INDEX_MAX_RUNS:
+                self._row_index.popitem(last=False)
+            return idx
+
+    def _idx_path(self, run_id: str) -> Path:
+        return self._base / f"ledger_{run_id}.idx"
+
+    def _row_index_load(self, run_id: str, p: Path, st: os.stat_result) -> Optional[_JsonlRowIndex]:
+        """The persisted index when it describes THIS file (same inode, a size within it ending on a line break);
+        None otherwise (it is then rebuilt and rewritten)."""
+        try:
+            data = self._idx_path(run_id).read_bytes()
+        except OSError:
+            return None
+        head = len(_IDX_MAGIC) + 24
+        if len(data) < head or data[: len(_IDX_MAGIC)] != _IDX_MAGIC:
+            return None
+        meta = array("q")
+        meta.frombytes(data[len(_IDX_MAGIC):head])
+        ino, size, count = meta
+        if ino != st.st_ino or size > st.st_size or size < 0 or len(data) != head + 8 * count:
+            return None
+        if size:
+            with p.open("rb") as f:
+                f.seek(size - 1)
+                if f.read(1) != b"\n":
+                    return None
+        idx = _JsonlRowIndex(st.st_ino)
+        idx.offsets.frombytes(data[head:])
+        if idx.offsets and not (0 <= idx.offsets[-1] < size):
+            return None
+        idx.size = idx.persisted_size = size
+        return idx
+
+    def _row_index_maybe_persist(self, run_id: str, idx: _JsonlRowIndex) -> None:
+        due = max(self._ROW_INDEX_PERSIST_BYTES, idx.size // self._ROW_INDEX_PERSIST_FRACTION)
+        if idx.size - idx.persisted_size >= due:
+            self._row_index_persist(run_id, idx)
+
+    def _row_index_persist(self, run_id: str, idx: _JsonlRowIndex) -> None:
+        """Write the index atomically beside the ledger (best effort: a failure only costs a re-parse later)."""
+        target = self._idx_path(run_id)
+        tmp = target.with_name(f"{target.name}.{uuid.uuid4().hex}.tmp")
+        try:
+            meta = array("q", [idx.ino, idx.size, len(idx.offsets)])
+            tmp.write_bytes(_IDX_MAGIC + meta.tobytes() + idx.offsets.tobytes())
+            os.replace(tmp, target)
+            idx.persisted_size = idx.size
+        except OSError:
+            with contextlib.suppress(OSError):
+                tmp.unlink()
+
+    @staticmethod
+    def _row_index_extend(p: Path, idx: _JsonlRowIndex) -> None:
+        """Index the complete lines appended after `idx.size` (parsing each once, as `list()` would)."""
+        with p.open("rb") as f:
+            f.seek(idx.size)
+            data = f.read()
+        pos = 0
+        while True:
+            nl = data.find(b"\n", pos)
+            if nl < 0:
+                break  # a trailing line without its newline is still being written: indexed next time
+            for _ in _jsonl_line_records(data[pos:nl]):
+                idx.offsets.append(idx.size + pos)
+            pos = nl + 1
+        idx.size += pos
+
+    def _row_index_drop(self, run_id: str) -> None:
+        with self._row_index_lock:
+            self._row_index.pop(run_id, None)
+
+    def get_record_unresolved(self, run_id: str, seq: int) -> Optional[Dict[str, Any]]:
+        """Point read through the line-offset index: one seek + one line parse at the record's POSITION, verified
+        against the seq persisted on the line (ADR 0010). Positions and seqs agree on a ledger written by this
+        store (a line without a persisted seq reads as its position); when they do not (a rewritten file, an
+        import with gaps) the read falls back to a scan by persisted seq, never answers another row."""
+        rid = str(run_id or "")
+        s = coerce_ledger_seq(seq)
+        if not rid or s is None:
+            return None
+        idx = self._row_index_current(rid)
+        if idx is None:
+            return None
+        if s > len(idx.offsets):
+            # Beyond the newline-terminated rows: only a trailing line still being written can be there.
+            return super().get_record_unresolved(rid, s)
+        offset = idx.offsets[s - 1]
+        first = bisect.bisect_left(idx.offsets, offset)
+        with self._path(rid).open("rb") as f:
+            if offset > 0:
+                f.seek(offset - 1)
+                boundary = f.read(1) == b"\n"
+            else:
+                boundary = True
+            f.seek(offset)
+            records = _jsonl_line_records(f.readline()) if boundary else []
+        k = (s - 1) - first
+        if k >= len(records):  # the file no longer matches the index (rewritten in place): re-read honestly
+            self._row_index_drop(rid)
+            return super().get_record_unresolved(rid, s)
+        out = dict(records[k])
+        persisted = out.get("seq")
+        if isinstance(persisted, int) and not isinstance(persisted, bool) and persisted != s:
+            # The row at this position carries another seq: find the row whose persisted seq is `s`.
+            return super().get_record_unresolved(rid, s)
+        out["seq"] = s
+        return out
+
+    def find_started_record(
+        self, run_id: str, step_id: str, *, before_seq: Optional[int] = None
+    ) -> Optional[Dict[str, Any]]:
+        """The STARTED row of `step_id`, searched BACKWARDS from `before_seq` in doubling byte windows (the
+        STARTED row of a terminal row is normally a few rows above it); a line is parsed only when its bytes
+        contain the step id. A step has exactly one STARTED row (`StepRecord.start` mints the step id)."""
+        rid = str(run_id or "")
+        sid = str(step_id or "")
+        if not rid or not sid:
+            return None
+        idx = self._row_index_current(rid)
+        if idx is None:
+            return None
+        offsets = idx.offsets
+        limit = coerce_ledger_seq(before_seq)
+        upper = len(offsets) if limit is None else min(limit - 1, len(offsets))  # last candidate seq
+        if upper < 1:
+            return None
+        needle = json.dumps(sid, ensure_ascii=False).encode("utf-8")
+        # End of the line holding row `upper`: the next distinct line offset, else the indexed end.
+        nxt = bisect.bisect_right(offsets, offsets[upper - 1])
+        hi = offsets[nxt] if nxt < len(offsets) else idx.size
+        window = int(self._STARTED_SCAN_WINDOW_BYTES)
+        floor = offsets[0]  # the first record's line (a file may start with blank or corrupt lines)
+        with self._path(rid).open("rb") as f:
+            while hi > floor:
+                row = max(0, bisect.bisect_left(offsets, max(0, hi - window)))
+                lo = offsets[row] if row < len(offsets) and offsets[row] < hi else hi
+                if lo >= hi:  # the window is smaller than one line: take the whole line ending at hi
+                    lo = offsets[max(0, bisect.bisect_left(offsets, hi) - 1)]
+                if lo >= hi:  # pragma: no cover - offsets below hi always exist while hi > floor
+                    break
+                f.seek(lo)
+                data = f.read(hi - lo)
+                end = len(data)
+                while True:
+                    pos = data.rfind(needle, 0, end)
+                    if pos < 0:
+                        break
+                    line_off = offsets[bisect.bisect_right(offsets, lo + pos) - 1]
+                    first = bisect.bisect_left(offsets, line_off)
+                    nl = data.find(b"\n", line_off - lo)
+                    line = data[line_off - lo: nl if nl >= 0 else len(data)]
+                    for k, rec in reversed(list(enumerate(_jsonl_line_records(line)))):
+                        position = first + k + 1
+                        persisted = rec.get("seq")
+                        seq = persisted if isinstance(persisted, int) and not isinstance(persisted, bool) else position
+                        # seq >= position (seqs only grow), so rows past `upper` are never candidates; the
+                        # persisted seq decides against `before_seq`.
+                        if position > upper or (limit is not None and seq >= limit):
+                            continue
+                        status = rec.get("status")
+                        status = getattr(status, "value", status)
+                        if str(rec.get("step_id") or "") == sid and status == StepStatus.STARTED.value:
+                            out = dict(rec)
+                            out["seq"] = seq
+                            return out
+                    end = min(line_off - lo, pos)  # strictly decreasing: the search always terminates
+                    if end <= 0:
+                        break
+                hi = lo
+                window *= 2
+        return None
 
     # Records above this size are not cached; the bounded tail read serves
     # them. 512 entries x 64KB caps worst-case cache memory at ~32MB.
@@ -2913,4 +3200,7 @@ class JsonlLedgerStore(LedgerStore):
             # same run_id must never see the deleted run's completions.
             for cache_key in [k for k in self._idem_cache if k[0] == rid]:
                 del self._idem_cache[cache_key]
+        self._row_index_drop(rid)
+        with contextlib.suppress(OSError):
+            self._idx_path(rid).unlink()
         return count

@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.1] - 2026-10-28
+
+### Changed
+
+- **Is Empty (`is_empty_string`) accepts lists.** Nothing (unset / `None`), an empty text, and a list, tuple, set or object with no elements are empty; whitespace, `0`, `False` and a list with any element are not. Before, a list was turned into text (`"[]"`) and was never empty, so a flow checking a list variable needed Array Length + Compare (operator QA 2026-10-28, the email-triage flow). Backlog 0857. AbstractFlow lets the node take a list once this is released.
+
 ## [0.15.0] - 2026-10-28
 
 Requires AbstractMemory 0.4.0 or newer (`abstractmemory.graph`). ADR 0011, backlog 0856.

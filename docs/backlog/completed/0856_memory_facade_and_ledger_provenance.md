@@ -1,6 +1,6 @@
 # 0856 — Memory facade and ledger provenance: the host surface for AbstractMemory, the ledger row address, and a step ref on every memory write
 
-**Status**: completed 2026-10-27 on branch `feat/memory-graph-facade`, UNRELEASED (ships in 0.15.0, after the operator decisions; needs AbstractMemory 0.4.0 on PyPI) · **Priority**: P1 · **Created**: 2026-10-27
+**Status**: completed 2026-10-27, released in abstractruntime 0.15.0 (2026-10-28, PR #6 merge `88a584b`; floor AbstractMemory>=0.4.0) · **Priority**: P1 · **Created**: 2026-10-27
 **Cross-package**: AbstractMemory ADR 0003 and backlog 0056 (`abstractmemory.graph`: `SourceRef`, `Provenance`,
 `MemoryGraph`; AbstractMemory 0.4.0), AbstractGateway memory routes (`/api/gateway/memory/*` over this facade) and its
 import-boundary burn-down, AbstractNote thin-client slice (step and artifact refs on note revisions). ADR:

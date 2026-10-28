@@ -12,9 +12,9 @@ If you are new to the project, start with `../README.md` and `../architecture.md
 
 ## Counts
 
-2026-10-28: recounted from disk (deprecated was 13 in this block, 14 on disk); +1 planned for 0858 (root 1063, typed runs).
+2026-10-28: recounted from disk (deprecated was 13 in this block, 14 on disk); +1 planned for 0858 (root 1063, typed runs); +1 planned for 0859 (ephemeral live-text deltas on the view stream, gateway 0954).
 
-- Planned: 33
+- Planned: 34
 - Proposed: 14
 - Completed: 39
 - Deprecated: 14
@@ -152,6 +152,7 @@ mtime). The anticipated ADR ("an automation is its controller root run") is not 
 | 0854 | `planned/0854_replay_view.md` (P0; abstractruntime 0.14.0 carries the reducer, the durable per-run `seq` cursor and the conformance cases; gateway routes and client migration remain; ADR 0010) |
 | 0857 | `planned/0857_entity_direct_memory_writes_provenance.md` (P2; entity memory written outside any effect: world models, tending, night passes; follows 0856) |
 | 0858 | `planned/0858_typed_runs_run_type_stamped_at_start.md` (P1; one `run_type` + `origin.surface` stamped at start, indexed, in `replay_view_v1`; root 1063, gateway 0951) |
+| 0859 | `planned/0859_replay_view_ephemeral_text_deltas.md` (P1; live token text on `/view/stream` as ephemeral `text` deltas the reducer ignores; gateway 0954; regression found by the Assistant desktop migration) |
 | 0044 | `planned/runtime_systemic_reliability/0044_meta_analysis_record.md` (track source record) |
 | 0045 | `planned/runtime_systemic_reliability/0045_crash_replay_harness_and_ordering_invariant.md` |
 | 0046 | `planned/runtime_systemic_reliability/0046_per_run_driver_exclusion.md` |

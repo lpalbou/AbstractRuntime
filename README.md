@@ -4,9 +4,24 @@
 
 It is designed for long-running workflows that must survive restarts and explicitly model blocking (human input, timers, external events, subworkflows) without keeping Python stacks alive.
 
-**Version:** 0.14.0 • **Python:** 3.10+
+**Version:** 0.15.0 • **Python:** 3.10+
 
 **Status:** pre-1.0 (API may evolve). For production use, pin versions and follow `CHANGELOG.md`.
+
+## What's new in 0.15.0
+
+- **Memory facade** (`abstractruntime.integrations.abstractmemory.memory_facade.MemoryFacade`): the one
+  host surface for AbstractMemory 0.4.0's memory graph (open a mind, stamp provenance, reconstruct a
+  source, history, revisions); hosts no longer import `abstractmemory`. ADR 0011. See
+  [docs/integrations/abstractmemory.md](docs/integrations/abstractmemory.md).
+- **`MEMORY_REVISE`** effect and `memory_revise` VisualFlow node: one atomic revision of a mind
+  (assert / close / narrow) as a workflow step, stamped with the step that applied it.
+- **Ledger provenance**: `LedgerStore.get_record(run_id, seq)` point reads, a step context for
+  effect handlers, and a digested `step` / `artifact` / `diary_entry` source ref on every memory
+  write the runtime performs (`reconstruct_source` answers `ok`, `partial`, `mismatch`,
+  `source_gone` or `unsupported`).
+- Upgrade note: requires AbstractMemory 0.4.0, whose vector re-encoding is one-way; move every
+  process sharing a memory home together.
 
 ## What's new in 0.14.0
 

@@ -30,6 +30,7 @@ DOCUMENTS = [
     "docs/faq.md",
     "docs/troubleshooting.md",
     "docs/integrations/abstractcore.md",
+    "docs/integrations/abstractmemory.md",
     "docs/proposal.md",
     "docs/limits.md",
     "docs/artifacts.md",

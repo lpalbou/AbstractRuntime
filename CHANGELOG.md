@@ -7,10 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.15.0] - unreleased
+## [0.15.0] - 2026-10-28
 
-Requires AbstractMemory 0.4.0 or newer (`abstractmemory.graph`). This release waits for AbstractMemory 0.4.0 on
-PyPI: a release never ships above an unpublished floor (root ADR 0034). ADR 0011, backlog 0856.
+Requires AbstractMemory 0.4.0 or newer (`abstractmemory.graph`). ADR 0011, backlog 0856.
+
+### Upgrade notes (one-way)
+
+- AbstractMemory 0.4.0 rewrites a SQLite home's JSON-text vectors as float32 BLOBs on first write; a 0.3.x reader then
+  finds no vectors (zero semantic hits, no error). Every process sharing a home or a plane moves to AbstractMemory 0.4.0
+  (and so AbstractRuntime 0.15.0) together. See the AbstractMemory 0.4.0 changelog.
+- The JSON-file ledger writes a `ledger_<run_id>.idx` row index beside each ledger; older readers ignore it, and a
+  missing or stale index is rebuilt from the ledger.
 
 ### Added
 

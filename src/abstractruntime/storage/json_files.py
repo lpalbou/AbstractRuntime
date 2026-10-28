@@ -188,6 +188,9 @@ class JsonFileRunStore(RunStore):
         self._journal_path = self._base / ".runs_created.log"
         self._journal_lock = threading.Lock()
         self._journal_offset: Optional[int] = None
+        # The journal's size at an index build's mark when the first sync replays the tail before it
+        # (`_journal_replay_start`); records below it that the build's scan already filed are skipped.
+        self._journal_replay_end: Optional[int] = None
         from collections import deque as _deque
 
         self._journal_own_appends: Any = _deque(maxlen=8192)
@@ -751,6 +754,7 @@ class JsonFileRunStore(RunStore):
             if self._journal_offset is None:
                 size = self._journal_size()
                 self._journal_offset = self._journal_replay_start(size) if size is not None else 0
+                self._journal_replay_end = int(size) if size is not None and self._journal_offset < size else None
 
     def _journal_replay_start(self, size: int) -> int:
         """Where the first sync after an index build starts reading: the first record boundary
@@ -825,19 +829,43 @@ class JsonFileRunStore(RunStore):
             complete = chunk.rfind(b"\n") + 1  # a line still being written waits for the next sync
             self._journal_offset = offset + complete
             pending = dict(self._journal_pending)
+            replay_end, self._journal_replay_end = self._journal_replay_end, None
         entries = list(pending.items())
+        replayed: set[str] = set()
         now = time.time()
-        for raw in chunk[:complete].decode("utf-8", "replace").splitlines():
+        pos = offset
+        for raw_b in chunk[:complete].split(b"\n"):
+            line_start, pos = pos, pos + len(raw_b) + 1
+            raw = raw_b.decode("utf-8", "replace")
             op, rid = raw[:1], raw[1:].strip()
             if op in ("+", "-", "~", "=") and rid:
                 entries.append((rid, (op, now)))
-        self._apply_journal_entries(entries)
+                if replay_end is not None and line_start < replay_end:
+                    replayed.add(rid)
+        self._apply_journal_entries(entries, replayed=replayed)
 
-    def _apply_journal_entries(self, entries: Any) -> None:
+    def _filed_unchanged(self, rid: str, p: Path) -> bool:
+        """True when the scan memo already holds this run's file at its current identity token."""
+        try:
+            token = self._stat_token(p.stat())
+        except Exception:
+            return False
+        with self._scan_memo_lock:
+            cached = self._scan_memo.get(rid)
+        return cached is not None and tuple(cached[0]) == token and not cached[1].get("__unparseable")
+
+    def _apply_journal_entries(self, entries: Any, *, replayed: Any = frozenset()) -> None:
         cutoff = time.time() - float(self.STALE_TEMP_AGE_S)
         for rid, (op, since) in entries:
             p = self._path(rid)
             exists = p.exists()
+            if rid in replayed and op in ("+", "~", "=") and exists and self._filed_unchanged(rid, p):
+                # A record from before the build's mark whose file the build's scan already filed
+                # as it is now: nothing to apply, and no change to signal (`change_token`,
+                # `changed_run_ids`: a build must not look like ~400 runs changing).
+                with self._journal_lock:
+                    self._journal_pending.pop(rid, None)
+                continue
             if op in ("+", "~", "=") and exists:
                 fields = self._scan_fields(p)
                 if fields is not None:

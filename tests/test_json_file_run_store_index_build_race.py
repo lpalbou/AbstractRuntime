@@ -91,3 +91,20 @@ def test_the_reconciliation_refiles_a_run_the_session_and_children_indexes_misse
         service._scan_memo.pop("root-s3", None)
     service.rescan_active_index()
     assert "root-s3" in (service._session_index or {}).get("s3", {})
+
+
+def test_the_replayed_tail_signals_no_change_for_runs_the_build_already_filed(tmp_path: Path) -> None:
+    """0.15.2 review / gateway suite: the replay re-applied ~400 records the build's scan had just filed and
+    bumped the change signal for each, so a host's change-driven pass (the gateway's mail notifications)
+    re-loaded 400 finished runs once per build. Records whose file the scan filed as it is stay silent."""
+    for own in (True, False):  # the runs saved by this store object (the gateway's case) or another one
+        base = tmp_path / ("own" if own else "foreign")
+        writer = JsonFileRunStore(base)
+        for i in range(50):
+            writer.save(_run(f"done-{i:03d}", f"s{i}"))
+        service = writer if own else JsonFileRunStore(base)
+        t0 = service.change_token()
+        service.list_run_index(session_id="s7", limit=5)  # builds the session index (and replays the tail)
+        service.list_children(parent_run_id="done-001")
+        service.list_run_index(limit=100)
+        assert not service.changed_run_ids(t0), own

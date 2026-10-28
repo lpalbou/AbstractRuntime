@@ -12,10 +12,12 @@ If you are new to the project, start with `../README.md` and `../architecture.md
 
 ## Counts
 
+2026-10-28: +2 proposed, 0860 (the view does not say how a run was stopped; the gateway does not advertise the view) and 0861 (tool sandbox and per-call model timings missing from view activities), found by AbstractUIC 0040 (panel-chat renders the replay view).
+
 2026-10-28: recounted from disk (deprecated was 13 in this block, 14 on disk); +1 planned for 0858 (root 1063, typed runs); +1 planned for 0859 (ephemeral live-text deltas on the view stream, gateway 0954).
 
 - Planned: 34
-- Proposed: 14
+- Proposed: 16
 - Completed: 39
 - Deprecated: 14
 - Recurrent: 0

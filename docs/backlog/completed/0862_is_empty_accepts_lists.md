@@ -1,7 +1,7 @@
-# 0857 — Is Empty accepts lists (nothing or no elements = empty)
+# 0862 — Is Empty accepts lists (nothing or no elements = empty)
 
 **Status**: completed 2026-10-28, released in abstractruntime 0.15.1 (PR #15; released on the release lead's decision;
-the gateway floor stays >=0.15.0, the root pins 0.15.1) · **Priority**: P2 · **Created**: 2026-10-28
+the gateway floor stays >=0.15.0, the root pins 0.15.1) · **Priority**: P2 · **Created**: 2026-10-28 · Numbered 0857 at release (a clash with planned 0857, renumbered 2026-10-28)
 **Cross-package**: AbstractFlow backlog 0160 (operator QA 2026-10-28 item (e)); the Flow editor lets Is Empty take a
 list only after this is released (branch `fix/is-empty-lists` there).
 

@@ -11,7 +11,7 @@ It is designed for long-running workflows that must survive restarts and explici
 ## What's new in 0.15.1
 
 - **Is Empty accepts lists**: nothing, an empty text, or a list or object with no elements is empty (visual-flow
-  node `is_empty_string`; backlog 0857).
+  node `is_empty_string`; backlog 0862).
 
 ## What's new in 0.15.0
 

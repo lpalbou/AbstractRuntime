@@ -97,7 +97,7 @@ mtime). The anticipated ADR ("an automation is its controller root run") is not 
 
 | ID | Item |
 |----|------|
-| 0857 | [Is Empty accepts lists](completed/0857_is_empty_accepts_lists.md): completed 2026-10-28, released in abstractruntime 0.15.1 (PR #15); `is_empty_string` treats nothing, "" and a list/tuple/set/object with no elements as empty (operator QA 2026-10-28, AbstractFlow backlog 0160). |
+| 0862 | [Is Empty accepts lists](completed/0862_is_empty_accepts_lists.md): completed 2026-10-28, released in abstractruntime 0.15.1 (PR #15); `is_empty_string` treats nothing, "" and a list/tuple/set/object with no elements as empty (operator QA 2026-10-28, AbstractFlow backlog 0160). |
 | 0856 | [Memory facade and ledger provenance](completed/0856_memory_facade_and_ledger_provenance.md): completed 2026-10-27, released in abstractruntime 0.15.0 (2026-10-28, PR #6 merge `88a584b`; floor AbstractMemory>=0.4.0); ADR 0011: `MemoryFacade` (open a mind, stamp, reconstruct a source), `LedgerStore.get_record(run_id, seq)` (JSON-file line-offset index), the step context, a `step` ref on every memory write the runtime performs, `MEMORY_REVISE` / node `memory_revise`. Follow-up 0857. |
 | 0851 | [Per-account voice stores](completed/0851_per_account_voice_stores.md): completed 2026-10-27 (0.13.0); the runtime's voice catalog and voice library use its `voice_store_dir` / `voice_library_dirs`; real-weights E2E 9/9. |
 | 0852 | [Capability refusals are not retried](completed/0852_capability_refusals_are_not_retried.md): completed 2026-10-27 (0.13.0); one engine call for a refused request. |

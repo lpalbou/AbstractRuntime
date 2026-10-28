@@ -62,7 +62,8 @@ It is designed for long-running workflows that must survive restarts and explici
 ## What's new in 0.15.2
 
 - **Run index builds never lose a run created during them**: a run another process (or store object) wrote while
-  this store built its session index is listed at once instead of after the 10-minute reconciliation (backlog 0863).
+  this store built its indexes is in the session and children indexes and the listing at once (before, the session
+  index could miss it for the life of the store object; backlog 0863).
 
 ## What's new in 0.15.1
 

@@ -55,3 +55,39 @@ def test_a_long_journal_replays_only_its_tail(tmp_path: Path) -> None:
     start = service._journal_replay_start(size)
     assert 0 < size - start <= JsonFileRunStore.JOURNAL_REPLAY_TAIL_BYTES
     assert service._journal_path.read_bytes()[start - 1:start] == b"\n"  # a record boundary
+
+
+def test_the_reconciliation_refiles_a_run_the_session_and_children_indexes_missed(tmp_path: Path) -> None:
+    """Beyond the replayed tail (more than JOURNAL_REPLAY_TAIL_BYTES of records between the run's `+` line and
+    the build), the reconciliation repairs the session and children indexes, not only the listing memo."""
+    import os
+    import time
+
+    service = JsonFileRunStore(tmp_path)
+    service.warm_session_index()  # the memo is complete: rescans are reconciliations
+    foreign = JsonFileRunStore(tmp_path)
+    real_append = foreign._journal_append
+
+    def flood_then_rebuild(line: str) -> None:
+        real_append(line)
+        if line.startswith("+root-"):
+            for i in range(600):  # ~25 KB of other records after this one
+                real_append(f"+other-{i:05d}-0123456789abcdef0123456789abcdef")
+            service._session_index = None  # the next query rebuilds (a fresh store object would)
+            service._children_index = None
+            service._journal_offset = None
+            service.warm_session_index()
+
+    foreign._journal_append = flood_then_rebuild  # type: ignore[method-assign]
+    foreign.save(_run("root-s3", "s3"))
+    child = RunState(run_id="child-s3", workflow_id="c", status=RunStatus.COMPLETED, current_node="n", vars={},
+                     session_id="s3", parent_run_id="root-s3")
+    JsonFileRunStore(tmp_path).save(child)
+    service._session_index.get("s3", {}).pop("root-s3", None)  # what the build missed
+    settled = time.time() - JsonFileRunStore.RUN_INDEX_IN_FLIGHT_S - 1  # changed long enough ago to be a miss
+    p = tmp_path / "run_root-s3.json"
+    os.utime(p, (settled, settled))
+    with service._scan_memo_lock:
+        service._scan_memo.pop("root-s3", None)
+    service.rescan_active_index()
+    assert "root-s3" in (service._session_index or {}).get("s3", {})

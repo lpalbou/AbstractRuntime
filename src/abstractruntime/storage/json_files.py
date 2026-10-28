@@ -705,6 +705,7 @@ class JsonFileRunStore(RunStore):
             self._children_index = children
             self._run_parent_index = run_parent
         self._maybe_persist_scan_memo()
+        self._sync_indexes()  # the journal tail before the mark (`_journal_replay_start`), at once
 
     # --- creation journal ------------------------------------------------
 
@@ -761,7 +762,7 @@ class JsonFileRunStore(RunStore):
         file exists is filed, one whose file is still absent stays pending until it appears)
         closes that window. Cost: one read of at most JOURNAL_REPLAY_TAIL_BYTES and one stat per
         record in it, once per build. A record older than the tail is still caught by the
-        periodic reconciliation, which logs what it repairs."""
+        periodic reconciliation, which re-files what it repairs in every index and logs it."""
         start = max(0, int(size) - int(self.JOURNAL_REPLAY_TAIL_BYTES))
         if start == 0:
             return 0
@@ -909,6 +910,7 @@ class JsonFileRunStore(RunStore):
             self._session_index = index
             self._run_session = by_run
         self._maybe_persist_scan_memo()
+        self._sync_indexes()  # the journal tail before the mark (`_journal_replay_start`), at once
 
     def _update_session_index_on_save(self, run: RunState) -> None:
         rid = str(run.run_id)
@@ -1353,6 +1355,7 @@ class JsonFileRunStore(RunStore):
         t0 = time.monotonic()
         settled_ns = time.time_ns() - int(float(self.RUN_INDEX_IN_FLIGHT_S) * 1e9)
         repaired: List[str] = []
+        refile: Dict[str, Dict[str, Any]] = {}
         found: set[str] = set()
         seen: set[str] = set()
         for p in self._base.glob("run_*.json"):
@@ -1370,6 +1373,8 @@ class JsonFileRunStore(RunStore):
                 cur_tok = tuple(cur[0]) if cur is not None else None
                 if cur_tok is not None and cur_tok != prev_tok and cur_tok[0] < settled_ns:
                     repaired.append(rid)
+                    if fields is not None and rid:
+                        refile[rid] = fields
             if fields is None:
                 continue
             if self._is_active_status(fields.get("status")):
@@ -1378,6 +1383,13 @@ class JsonFileRunStore(RunStore):
         self._sync_indexes()
         dropped = self._scan_memo_prune(seen)
         if complete:
+            # A run the session/children indexes missed (gateway backlog 0963) is re-filed there
+            # too, not only in the memo and the active set; a vanished one leaves them.
+            for rid, fields in refile.items():
+                self._index_fields_into_indexes(rid, fields)
+            for rid in dropped:
+                self._drop_from_children_index(rid)
+                self._drop_from_session_index(rid)
             repaired.extend(dropped)
             self._note_reconcile(repaired, files=len(seen), seconds=time.monotonic() - t0)
         return found

@@ -26,6 +26,10 @@ one failed with "artifact not found". Evidence (operator data dir, run `68c30dd3
    artifact only through its own run or the session's memory run (`_assert_artifact_visible_to_run`), so a client
    asking through the root run gets 404 "artifact not found" although the blob exists.
 
+4. **The snapshot-built final has the same problem, unlisted.** When no completion record was folded,
+   `_finalize` builds `:final` from `snapshot.output_artifacts` (every ref under the output, bookkeeping included)
+   and lists none of them in `view.artifacts`, so a client cannot tell an image from a scratchpad offload.
+
 ## Proposal
 
 - A message's `artifact_ids` exclude refs under the run's bookkeeping (`scratchpad`, node traces, `_`-prefixed
@@ -40,5 +44,5 @@ one failed with "artifact not found". Evidence (operator data dir, run `68c30dd3
 
 ## Client status
 
-AbstractAssistant 0.16.3 drops unlisted and bookkeeping refs on its side and opens each artifact through its
+AbstractAssistant 0.16.3 drops listed bookkeeping refs, and unlisted refs of a ledger-folded final, on its side (a snapshot-built final keeps its unlisted refs) and opens each artifact through its
 owning run; AbstractUIC panel-chat and the iPhone/watch clients should apply the same rule until this lands.

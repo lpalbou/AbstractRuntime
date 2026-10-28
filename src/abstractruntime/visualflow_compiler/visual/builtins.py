@@ -283,10 +283,15 @@ def string_length(inputs: Dict[str, Any]) -> int:
 
 
 def string_is_empty(inputs: Dict[str, Any]) -> bool:
-    """Return True if `text` is exactly empty."""
-    text_raw = inputs.get("text")
-    text = "" if text_raw is None else str(text_raw)
-    return text == ""
+    """Is Empty: True when `text` is nothing (unset / None), an empty string, or a list,
+    tuple, set or object with no elements (operator QA 2026-10-28: a list variable filled
+    by a loop is checked with one node). Whitespace is not empty; any other value is not."""
+    value = inputs.get("text")
+    if value is None:
+        return True
+    if isinstance(value, (list, tuple, set, frozenset, dict)):
+        return len(value) == 0
+    return str(value) == ""
 
 
 def string_contains(inputs: Dict[str, Any]) -> bool:

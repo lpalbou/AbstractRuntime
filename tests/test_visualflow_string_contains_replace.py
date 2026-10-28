@@ -14,6 +14,21 @@ def test_string_is_empty_builtin() -> None:
     assert is_empty({"text": "hello"}) is False
 
 
+def test_is_empty_accepts_lists_and_objects() -> None:
+    """Operator QA 2026-10-28: Is Empty also takes a list (no elements = empty), so a list
+    variable filled by a ForEach is checked with one node instead of Array Length + Compare."""
+    is_empty = get_builtin_handler("is_empty_string")
+    assert is_empty({"text": []}) is True
+    assert is_empty({"text": ()}) is True
+    assert is_empty({"text": {}}) is True
+    assert is_empty({"text": ["a"]}) is False
+    assert is_empty({"text": [None]}) is False
+    assert is_empty({"text": [[]]}) is False
+    assert is_empty({"text": {"k": 1}}) is False
+    assert is_empty({"text": 0}) is False
+    assert is_empty({"text": False}) is False
+
+
 def test_string_contains_builtin() -> None:
     contains = get_builtin_handler("contains")
     assert contains is not None

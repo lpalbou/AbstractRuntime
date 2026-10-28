@@ -20,7 +20,7 @@ the check. One node that says "the list is empty" is the readable way.
 so every saved flow compiles as before and a text input behaves as before.
 
 ## Evidence
-- `tests/test_visualflow_string_contains_replace.py::test_is_empty_accepts_lists_and_objects` (RED before: `[]`
+- `tests/test_visualflow_string_contains_replace.py::test_is_empty_accepts_lists_and_objects` and `::test_is_empty_on_a_list_variable_in_a_compiled_flow` (Get Variable → Is Empty → If; RED before: `[]`
   returned False).
 - The operator's email-triage flow with Array Length + Compare replaced by Is Empty(Get triage) → If false → Notify
   me, run through the executor with 5 emails / 2 important: reaches Notify me and publishes the alert

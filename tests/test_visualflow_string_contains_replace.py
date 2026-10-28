@@ -56,3 +56,47 @@ def test_string_replace_builtin_modes() -> None:
 
     # Numeric best-effort support: replace first N occurrences.
     assert replace({"text": "a-b-c-d", "pattern": "-", "replacement": "_", "mode": "2"}) == "a_b_c-d"
+
+
+def test_is_empty_on_a_list_variable_in_a_compiled_flow() -> None:
+    """A list variable filled earlier, read by Get Variable into Is Empty, decides an If (the email-triage shape)."""
+    from abstractruntime.core.runtime import Runtime
+    from abstractruntime.storage.in_memory import InMemoryLedgerStore, InMemoryRunStore
+    from abstractruntime.visualflow_compiler.compiler import compile_flow
+    from abstractruntime.visualflow_compiler.visual.executor import visual_to_flow
+    from abstractruntime.visualflow_compiler.visual.models import load_visualflow_json
+
+    x, o = {"id": "exec-in", "type": "execution"}, {"id": "exec-out", "type": "execution"}
+
+    def node(nid, ntype, inputs=(), outputs=(), **data):
+        return {"id": nid, "type": ntype, "data": {"nodeType": ntype, "inputs": list(inputs), "outputs": list(outputs), **data}}
+
+    def edge(s, sh, t, th):
+        return {"source": s, "sourceHandle": sh, "target": t, "targetHandle": th}
+
+    def run(items):
+        nodes = [
+            node("start", "on_flow_start", outputs=[o]),
+            node("get", "get_var", [{"id": "name", "type": "string"}], [{"id": "value", "type": "array"}], pinDefaults={"name": "triage"}),
+            node("empty", "is_empty_string", [{"id": "text", "type": "any"}], [{"id": "result", "type": "boolean"}]),
+            node("if", "if", [x, {"id": "condition", "type": "boolean"}], [{"id": "true", "type": "execution"}, {"id": "false", "type": "execution"}]),
+            node("none", "on_flow_end", [x, {"id": "response", "type": "string"}], pinDefaults={"response": "none"}),
+            node("some", "on_flow_end", [x, {"id": "response", "type": "string"}], pinDefaults={"response": "some"}),
+        ]
+        edges = [
+            edge("start", "exec-out", "if", "exec-in"),
+            edge("get", "value", "empty", "text"),
+            edge("empty", "result", "if", "condition"),
+            edge("if", "true", "none", "exec-in"),
+            edge("if", "false", "some", "exec-in"),
+        ]
+        vf = load_visualflow_json({"id": "t", "name": "t", "entryNode": "start", "nodes": nodes, "edges": edges})
+        rt = Runtime(run_store=InMemoryRunStore(), ledger_store=InMemoryLedgerStore())
+        wf = compile_flow(visual_to_flow(vf))
+        rid = rt.start(workflow=wf, vars={"triage": items})
+        state = rt.tick(workflow=wf, run_id=rid, max_steps=50)
+        assert state.status.value == "completed", state.error
+        return state.output["response"]
+
+    assert run([]) == "none"
+    assert run([{"id": "m1"}, {"id": "m2"}]) == "some"

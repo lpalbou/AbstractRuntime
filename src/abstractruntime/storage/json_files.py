@@ -130,6 +130,10 @@ class JsonFileRunStore(RunStore):
     # A run temp file older than this is an orphan of a crashed writer (a
     # save()/create_if_absent() publishes its temp within milliseconds).
     STALE_TEMP_AGE_S = 600.0
+    # An index build re-applies the journal records written in this many bytes BEFORE its mark
+    # (`_mark_journal_start`; ~400 records): a run whose `+` line landed before the mark while its
+    # file was published after the folder scan is otherwise in neither (gateway backlog 0963).
+    JOURNAL_REPLAY_TAIL_BYTES = 16 * 1024
     # Background reconciliation of the active index (foreign writers that bypass the journal).
     ACTIVE_INDEX_RESCAN_S = 60.0
     # Trusted run index: with the folder and the creation log unchanged since the last
@@ -745,7 +749,32 @@ class JsonFileRunStore(RunStore):
         with self._journal_lock:
             if self._journal_offset is None:
                 size = self._journal_size()
-                self._journal_offset = size if size is not None else 0
+                self._journal_offset = self._journal_replay_start(size) if size is not None else 0
+
+    def _journal_replay_start(self, size: int) -> int:
+        """Where the first sync after an index build starts reading: the first record boundary
+        within JOURNAL_REPLAY_TAIL_BYTES before `size` (the journal's size at the mark).
+
+        `_save` appends a new run's `+id` BEFORE publishing its file (J53-1). A build that marks
+        the journal at `size` and then scans the folder misses a run whose line is before the
+        mark and whose file lands after the scan; re-applying the tail (idempotent: a `+` whose
+        file exists is filed, one whose file is still absent stays pending until it appears)
+        closes that window. Cost: one read of at most JOURNAL_REPLAY_TAIL_BYTES and one stat per
+        record in it, once per build. A record older than the tail is still caught by the
+        periodic reconciliation, which logs what it repairs."""
+        start = max(0, int(size) - int(self.JOURNAL_REPLAY_TAIL_BYTES))
+        if start == 0:
+            return 0
+        try:
+            with open(self._journal_path, "rb") as f:
+                f.seek(start)
+                chunk = f.read(int(size) - start)
+        except OSError:
+            logger.warning("JsonFileRunStore: creation journal tail unreadable; index build replays nothing before its mark",
+                           exc_info=True)
+            return int(size)
+        boundary = chunk.find(b"\n")  # records are framed `\n<op><run_id>\n`: start after a newline
+        return start + boundary + 1 if boundary >= 0 else int(size)
 
     def _sync_indexes(self) -> None:
         """Apply journal lines appended since the last sync (one stat when

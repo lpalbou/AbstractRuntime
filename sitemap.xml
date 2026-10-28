@@ -289,7 +289,11 @@
          <lastmod>2026-10-28</lastmod>
     </url>
     <url>
-         <loc>https://www.lpalbou.info/AbstractRuntime/backlog/completed/0857_is_empty_accepts_lists/</loc>
+         <loc>https://www.lpalbou.info/AbstractRuntime/backlog/completed/0862_is_empty_accepts_lists/</loc>
+         <lastmod>2026-10-28</lastmod>
+    </url>
+    <url>
+         <loc>https://www.lpalbou.info/AbstractRuntime/backlog/completed/0863_index_build_never_loses_a_run_created_during_it/</loc>
          <lastmod>2026-10-28</lastmod>
     </url>
     <url>
@@ -526,6 +530,10 @@
     </url>
     <url>
          <loc>https://www.lpalbou.info/AbstractRuntime/backlog/proposed/0861_replay_view_activity_tool_sandbox_and_call_timings/</loc>
+         <lastmod>2026-10-28</lastmod>
+    </url>
+    <url>
+         <loc>https://www.lpalbou.info/AbstractRuntime/backlog/proposed/0862_replay_view_message_artifacts_exclude_bookkeeping/</loc>
          <lastmod>2026-10-28</lastmod>
     </url>
     <url>

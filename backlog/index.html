@@ -1090,11 +1090,12 @@
 - <code>deprecated/</code> — historical backlog notes (superseded)</p>
 <p>If you are new to the project, start with <code>../README.md</code> and <code>../architecture.md</code> instead.</p>
 <h2 id="counts">Counts<a class="headerlink" href="#counts" title="Permanent link">&para;</a></h2>
+<p>2026-10-28: +1 proposed, 0862 (a message's artifacts list the run's offloaded bookkeeping; one listed ref is missing from <code>view.artifacts</code>), found by the desktop Assistant QA (AbstractAssistant 1067).</p>
 <p>2026-10-28: +2 proposed, 0860 (the view does not say how a run was stopped; the gateway does not advertise the view) and 0861 (tool sandbox and per-call model timings missing from view activities), found by AbstractUIC 0040 (panel-chat renders the replay view).</p>
 <p>2026-10-28: recounted from disk (deprecated was 13 in this block, 14 on disk); +1 planned for 0858 (root 1063, typed runs); +1 planned for 0859 (ephemeral live-text deltas on the view stream, gateway 0954).</p>
 <ul>
 <li>Planned: 34</li>
-<li>Proposed: 16</li>
+<li>Proposed: 17</li>
 <li>Completed: 39</li>
 <li>Deprecated: 14</li>
 <li>Recurrent: 0</li>
@@ -1177,8 +1178,12 @@ mtime). The anticipated ADR ("an automation is its controller root run") is not 
 </thead>
 <tbody>
 <tr>
-<td>0857</td>
-<td><a href="completed/0857_is_empty_accepts_lists/">Is Empty accepts lists</a>: completed 2026-10-28, released in abstractruntime 0.15.1 (PR #15); <code>is_empty_string</code> treats nothing, "" and a list/tuple/set/object with no elements as empty (operator QA 2026-10-28, AbstractFlow backlog 0160).</td>
+<td>0863</td>
+<td><a href="completed/0863_index_build_never_loses_a_run_created_during_it/">An index build never loses a run created during it</a>: completed 2026-10-28, released in abstractruntime 0.15.2; the first sync after an index build re-applies the journal's last 16 KiB (gateway backlog 0963, the flaky archive test).</td>
+</tr>
+<tr>
+<td>0862</td>
+<td><a href="completed/0862_is_empty_accepts_lists/">Is Empty accepts lists</a>: completed 2026-10-28, released in abstractruntime 0.15.1 (PR #15); <code>is_empty_string</code> treats nothing, "" and a list/tuple/set/object with no elements as empty (operator QA 2026-10-28, AbstractFlow backlog 0160).</td>
 </tr>
 <tr>
 <td>0856</td>

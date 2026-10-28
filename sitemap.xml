@@ -289,6 +289,10 @@
          <lastmod>2026-10-28</lastmod>
     </url>
     <url>
+         <loc>https://www.lpalbou.info/AbstractRuntime/backlog/completed/0857_is_empty_accepts_lists/</loc>
+         <lastmod>2026-10-28</lastmod>
+    </url>
+    <url>
          <loc>https://www.lpalbou.info/AbstractRuntime/backlog/deprecated/</loc>
          <lastmod>2026-10-28</lastmod>
     </url>
@@ -409,6 +413,14 @@
          <lastmod>2026-10-28</lastmod>
     </url>
     <url>
+         <loc>https://www.lpalbou.info/AbstractRuntime/backlog/planned/0858_typed_runs_run_type_stamped_at_start/</loc>
+         <lastmod>2026-10-28</lastmod>
+    </url>
+    <url>
+         <loc>https://www.lpalbou.info/AbstractRuntime/backlog/planned/0859_replay_view_ephemeral_text_deltas/</loc>
+         <lastmod>2026-10-28</lastmod>
+    </url>
+    <url>
          <loc>https://www.lpalbou.info/AbstractRuntime/backlog/planned/runtime_portability/</loc>
          <lastmod>2026-10-28</lastmod>
     </url>
@@ -506,6 +518,14 @@
     </url>
     <url>
          <loc>https://www.lpalbou.info/AbstractRuntime/backlog/proposed/0850_growing_automation_history_out_of_the_controller_ledger/</loc>
+         <lastmod>2026-10-28</lastmod>
+    </url>
+    <url>
+         <loc>https://www.lpalbou.info/AbstractRuntime/backlog/proposed/0860_replay_view_stop_wording_from_the_ledger/</loc>
+         <lastmod>2026-10-28</lastmod>
+    </url>
+    <url>
+         <loc>https://www.lpalbou.info/AbstractRuntime/backlog/proposed/0861_replay_view_activity_tool_sandbox_and_call_timings/</loc>
          <lastmod>2026-10-28</lastmod>
     </url>
     <url>

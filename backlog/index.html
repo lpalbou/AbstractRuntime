@@ -1090,11 +1090,13 @@
 - <code>deprecated/</code> — historical backlog notes (superseded)</p>
 <p>If you are new to the project, start with <code>../README.md</code> and <code>../architecture.md</code> instead.</p>
 <h2 id="counts">Counts<a class="headerlink" href="#counts" title="Permanent link">&para;</a></h2>
+<p>2026-10-28: +2 proposed, 0860 (the view does not say how a run was stopped; the gateway does not advertise the view) and 0861 (tool sandbox and per-call model timings missing from view activities), found by AbstractUIC 0040 (panel-chat renders the replay view).</p>
+<p>2026-10-28: recounted from disk (deprecated was 13 in this block, 14 on disk); +1 planned for 0858 (root 1063, typed runs); +1 planned for 0859 (ephemeral live-text deltas on the view stream, gateway 0954).</p>
 <ul>
-<li>Planned: 32</li>
-<li>Proposed: 14</li>
+<li>Planned: 34</li>
+<li>Proposed: 16</li>
 <li>Completed: 39</li>
-<li>Deprecated: 13</li>
+<li>Deprecated: 14</li>
 <li>Recurrent: 0</li>
 </ul>
 <p>2026-09-20: counts reconciled to disk (28 planned and 12 proposed before this
@@ -1174,6 +1176,10 @@ mtime). The anticipated ADR ("an automation is its controller root run") is not 
 </tr>
 </thead>
 <tbody>
+<tr>
+<td>0857</td>
+<td><a href="completed/0857_is_empty_accepts_lists/">Is Empty accepts lists</a>: completed 2026-10-28, released in abstractruntime 0.15.1 (PR #15); <code>is_empty_string</code> treats nothing, "" and a list/tuple/set/object with no elements as empty (operator QA 2026-10-28, AbstractFlow backlog 0160).</td>
+</tr>
 <tr>
 <td>0856</td>
 <td><a href="completed/0856_memory_facade_and_ledger_provenance/">Memory facade and ledger provenance</a>: completed 2026-10-27, released in abstractruntime 0.15.0 (2026-10-28, PR #6 merge <code>88a584b</code>; floor AbstractMemory&gt;=0.4.0); ADR 0011: <code>MemoryFacade</code> (open a mind, stamp, reconstruct a source), <code>LedgerStore.get_record(run_id, seq)</code> (JSON-file line-offset index), the step context, a <code>step</code> ref on every memory write the runtime performs, <code>MEMORY_REVISE</code> / node <code>memory_revise</code>. Follow-up 0857.</td>
@@ -1388,6 +1394,14 @@ mtime). The anticipated ADR ("an automation is its controller root run") is not 
 <tr>
 <td>0857</td>
 <td><code>planned/0857_entity_direct_memory_writes_provenance.md</code> (P2; entity memory written outside any effect: world models, tending, night passes; follows 0856)</td>
+</tr>
+<tr>
+<td>0858</td>
+<td><code>planned/0858_typed_runs_run_type_stamped_at_start.md</code> (P1; one <code>run_type</code> + <code>origin.surface</code> stamped at start, indexed, in <code>replay_view_v1</code>; root 1063, gateway 0951)</td>
+</tr>
+<tr>
+<td>0859</td>
+<td><code>planned/0859_replay_view_ephemeral_text_deltas.md</code> (P1; live token text on <code>/view/stream</code> as ephemeral <code>text</code> deltas the reducer ignores; gateway 0954; regression found by the Assistant desktop migration)</td>
 </tr>
 <tr>
 <td>0044</td>

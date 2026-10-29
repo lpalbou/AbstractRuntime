@@ -30,3 +30,14 @@ async def serve_core_request(
 
     with use_server_auth_policy(ServerAuthPolicy(token, allow_unauthenticated)):
         await module.app(scope, receive, send)
+
+
+def start_core_server(*, host: str | None = None, port: int | None = None) -> Any:
+    """Start Core's independently authenticated server in this execution process.
+
+    The returned Core-owned handle supplies ``url``, ``is_running``, ``stop()``
+    and ``status()``. Importing this facade never imports the optional server.
+    """
+    from abstractcore.server.managed import start_managed_server
+
+    return start_managed_server(host=host, port=port)

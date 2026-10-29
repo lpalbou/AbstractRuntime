@@ -52,7 +52,7 @@ class _StubLLM:
         params = params if isinstance(params, dict) else {}
 
         # Structured-output call: `ltm-ai-kg-extract-triples`
-        if "response_model" in params:
+        if "response_schema" in params:
             ctx = "Ada's goal is to find the City of Glass."
             return {
                 "data": {
@@ -245,7 +245,7 @@ def test_kg_ingest_is_idempotent_and_recall_injects_active_memory() -> None:
         for c in llm.calls:
             params = c.get("params") if isinstance(c, dict) else None
             params = params if isinstance(params, dict) else {}
-            if "response_model" in params:
+            if "response_schema" in params:
                 continue
             chat_calls.append(c)
 

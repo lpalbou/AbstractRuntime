@@ -70,3 +70,32 @@ def test_policy_resets_on_failure_or_cancellation(monkeypatch, error):
             await server_facade.serve_core_request({}, receive, send, token="managed")
         assert current_server_auth_policy() is None
     asyncio.run(run())
+
+
+def test_managed_core_server_delegates_without_wrapping_http_or_handle(monkeypatch):
+    import sys
+    from types import ModuleType
+    managed = ModuleType("abstractcore.server.managed")
+    calls = []
+    handle = object()
+    def start_managed_server(**kwargs):
+        calls.append(kwargs)
+        return handle
+    managed.start_managed_server = start_managed_server
+    monkeypatch.setitem(sys.modules, managed.__name__, managed)
+    assert server_facade.start_core_server(host="127.0.0.1", port=0) is handle
+    assert calls == [{"host": "127.0.0.1", "port": 0}]
+
+
+def test_importing_managed_facade_never_imports_optional_server_dependencies():
+    import os
+    import subprocess
+    import sys
+    code = """
+import sys
+from abstractruntime.integrations.abstractcore.server_facade import start_core_server
+assert 'abstractcore.server.app' not in sys.modules
+assert 'abstractcore.server.managed' not in sys.modules
+assert 'uvicorn' not in sys.modules
+"""
+    subprocess.run([sys.executable, "-c", code], env=os.environ.copy(), check=True)

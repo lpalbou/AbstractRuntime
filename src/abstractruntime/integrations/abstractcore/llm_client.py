@@ -41,6 +41,7 @@ from typing import Any, Dict, List, Mapping, Optional, Protocol, Sequence, Tuple
 from urllib.parse import quote, urlencode
 
 from .logging import get_logger
+from .structured_output import StructuredOutputRequestError, pop_response_schema, response_model_from_json_schema
 from .output_specs import (
     capability_default_reasoning_for_text as _capability_default_reasoning_for_text,
     capability_default_route_keys_for_spec as _capability_default_route_keys_for_spec,
@@ -1756,7 +1757,12 @@ class AbstractCoreLLMClient(Protocol):
         media: Optional[List[Any]] = None,
         params: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
-        """Return a JSON-safe dict with at least: content/tool_calls/usage/model."""
+        """Return a JSON-safe dict with at least content/tool_calls/usage/model.
+
+        Structured requests carry original JSON ``response_schema`` and optional
+        ``response_schema_name`` in params. The execution client materializes
+        the provider's response class; callers never need to transport one.
+        """
 
     def stream_tts(
         self,
@@ -8836,6 +8842,10 @@ class LocalAbstractCoreLLMClient:
 
         try:
             params = _normalize_prompt_cache_binding_params(params)
+            schema_request = pop_response_schema(params)
+            if schema_request is not None:
+                schema, schema_name = schema_request
+                params["response_model"] = response_model_from_json_schema(schema, name=schema_name)
             prompt_cache_attribution = params.pop("_prompt_cache_attribution", None)
             # The runtime's PER-CALL live delta callback (core.live_deltas),
             # never a provider kwarg and never the per-client `on_token`
@@ -16579,6 +16589,9 @@ class RemoteAbstractCoreLLMClient:
         params: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         params = _normalize_prompt_cache_binding_params(params)
+        schema_request = pop_response_schema(params)
+        if params.get("response_model") is not None:
+            raise StructuredOutputRequestError("Remote generation cannot transport response_model validators; use response_schema data")
         prompt_cache_attribution = params.pop("_prompt_cache_attribution", None)
         # REMOTE MODE DOES NOT STREAM LIVE DELTAS. The AbstractCore server call
         # below is a single non-streaming request (`"stream": False`), so the
@@ -16745,6 +16758,18 @@ class RemoteAbstractCoreLLMClient:
             # This keeps runtime authority even when the actual provider call happens server-side.
             "timeout_s": self._timeout_s,
         }
+
+        if schema_request is not None:
+            schema, schema_name = schema_request
+            # Validate the Runtime schema contract locally; send the ORIGINAL
+            # schema, rather than a derived Pydantic schema with different refs.
+            response_model_from_json_schema(schema, name=schema_name)
+            body["response_format"] = {
+                "type": "json_schema",
+                "json_schema": {"name": schema_name, "schema": schema},
+            }
+        elif params.get("response_format") is not None:
+            body["response_format"] = params["response_format"]
 
         # Dynamic routing support (AbstractCore server feature).
         base_url = params.pop("base_url", None)

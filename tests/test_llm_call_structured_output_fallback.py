@@ -28,7 +28,7 @@ class _FailStructuredThenReturn:
         self.calls.append(dict(kwargs))
         params = kwargs.get("params") if isinstance(kwargs, dict) else None
         params = params if isinstance(params, dict) else {}
-        if "response_model" in params:
+        if "response_schema" in params:
             raise _make_validation_error()
         return {"content": self._content, "metadata": {}}
 
@@ -43,7 +43,7 @@ class _FailStructuredThenRepair:
         self.calls.append(dict(kwargs))
         params = kwargs.get("params") if isinstance(kwargs, dict) else None
         params = params if isinstance(params, dict) else {}
-        if "response_model" in params:
+        if "response_schema" in params:
             raise _make_validation_error()
         if len(self.calls) == 2:
             return {"content": self._invalid_content, "metadata": {}}

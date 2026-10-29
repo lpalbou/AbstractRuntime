@@ -7,16 +7,6 @@ def _ctx():
     return SimpleNamespace(now_iso=lambda: "2026-01-16T00:00:00Z")
 
 
-def _model_field_names(model):
-    fields = getattr(model, "model_fields", None)
-    if isinstance(fields, dict):
-        return set(fields.keys())
-    fields = getattr(model, "__fields__", None)
-    if isinstance(fields, dict):
-        return set(fields.keys())
-    return set()
-
-
 def test_visualflow_llm_call_pin_default_response_schema_preserves_enum() -> None:
     from abstractruntime.core.models import RunState, RunStatus
     from abstractruntime.visualflow_compiler import compile_visualflow
@@ -158,10 +148,9 @@ def test_visualflow_llm_call_auto_defaults_still_preserve_response_schema() -> N
     assert isinstance(llm.kwargs, dict)
     params = llm.kwargs.get("params")
     assert isinstance(params, dict)
-    response_model = params.get("response_model")
-    assert response_model is not None
-    assert _model_field_names(response_model) == {"choice", "confidence"}
-    model_schema = response_model.model_json_schema()
+    assert "response_model" not in params
+    model_schema = params["response_schema"]
+    assert set(model_schema["properties"]) == {"choice", "confidence"}
     assert model_schema["properties"]["choice"]["description"] == "The selected task route."
     assert model_schema["properties"]["confidence"]["description"] == "Confidence in range 0.0 to 1.0."
 

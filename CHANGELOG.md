@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **An index build no longer announces its journal replay as changes** (`JsonFileRunStore`; a 0.15.2 regression).
+  0.15.2's first sync after a build re-applies the journal tail before the build's mark (backlog 0863) and noted every
+  replayed record on the change ring: a plain read (`list_run_index`, `warm_session_index`) moved `change_token` and
+  `changed_run_ids` then named every run in the tail as changed, so a change-driven consumer re-read every run after
+  each build (the gateway's mail notification check loaded all 400 finished runs of its index test on every full
+  pass: AbstractGateway backlog 0965, red CI since 0.15.2). Replayed records are still filed into the session,
+  children and active indexes (the 0863 guarantee stands); only records after the mark are announced. Tests:
+  `tests/test_json_file_run_store_change_token_after_build.py` (red on 0.15.2).
+
 ## [0.15.2] - 2026-10-28
 
 ### Fixed

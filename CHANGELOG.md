@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A console change to a non-text default no longer reloads the text model, and a runtime never
+  leaves a dropped copy resident.** Found on the Linux test server (two accounts, a 9B GGUF):
+  changing the embedding default evicted the admin runtime's whole text pool; the boot-warmed copy
+  was dropped, its eject skipped because both accounts' runtimes named the same default, and the
+  copy stayed in memory with no pool holding it ("resident ~5.4 GiB + 8.3 GiB cache ... still in
+  use by runtime client 70a5b844f350, runtime client 70a72f833890; not ejected"), with nothing
+  running. Now: (1) a capability-only refresh keeps every pooled text client and hands it the new
+  routes in place (a move of the `input.text` route itself still rebuilds); (2) a configured default
+  the client has not built is no longer a residency claim (a loaded one is its `pool` claim, one
+  loading is `building`); (3) when another runtime really keeps its own copy, the dropping runtime
+  still unloads its OWN HuggingFace copy (`released_own_copies`; MLX shares weights and is left to
+  the process-wide eject); (4) holders are named in words: `MultiLocalAbstractCoreLLMClient
+  .residency_owner_label` (hosts set it; the gateway: "the runtime of account default/bob"), claims
+  carry `owner_label`, residency records carry `held_by`, and the skip reason reads "the runtime of
+  account default/bob (loaded) still uses it". HuggingFace process rows also carry the loaded
+  `context_length` and `kv_cache_bytes` (AbstractCore 2.31.1).
+- **A standalone `LocalAbstractCoreLLMClient` claims the model it holds** (ROOT backlog 0897): another
+  client's default switch or a server unload no longer ejects weights it still uses (its next call
+  silently reloaded them). A pool unregisters the clients it adopts (its own claims cover them).
+  A dropped HuggingFace copy is never lent to another request again, a copy a call just started on
+  is freed when that call ends, and one waiter per model frees every copy a later switch drops.
 ## [0.15.3] - 2026-10-29
 
 ### Fixed

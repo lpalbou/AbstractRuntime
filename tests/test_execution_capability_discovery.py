@@ -125,7 +125,11 @@ def test_pool_refresh_distinguishes_inherit_from_authoritative_empty_scope(monke
     monkeypatch.setattr(factory, "create_llm", create)
     client = MultiLocalAbstractCoreLLMClient(provider="mlx", model="test")
     assert "_abstractcore_capability_defaults" not in captures[-1]
+    # A capability-only refresh hands the scope to the pooled provider IN
+    # PLACE (no rebuild of the text model, Linux test server 2026-10-29).
+    provider = client._clients[("mlx", "test")]._llm
     assert client.set_capability_defaults({}) is True
-    assert captures[-1]["_abstractcore_capability_defaults"] == {}
+    assert provider._abstractcore_capability_defaults == {}, "authoritative empty scope"
     assert client.set_capability_defaults(None) is True
-    assert "_abstractcore_capability_defaults" not in captures[-1]
+    assert provider._abstractcore_capability_defaults is None, "back to inheriting the config file"
+    assert len(captures) == 1, "the text model was rebuilt for a capability-only change"

@@ -37,7 +37,7 @@ import wave
 from dataclasses import asdict, dataclass, is_dataclass
 from datetime import datetime, timezone
 from contextlib import contextmanager
-from typing import Any, Dict, List, Mapping, Optional, Protocol, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Protocol, Sequence, Tuple
 from urllib.parse import quote, urlencode
 
 from .logging import get_logger
@@ -4500,6 +4500,14 @@ def _mlx_process_row_extras(row: Dict[str, Any]) -> Dict[str, Any]:
     }
     if isinstance(row.get("weights_bytes"), int) and not isinstance(row.get("weights_bytes"), bool):
         extras["est_weights_bytes"] = int(row["weights_bytes"])
+    # GGUF holders: the context each copy was built with and its KV cache
+    # (estimated from the GGUF geometry; core `hf_residency`), so the panel
+    # can say what the "cache" is.
+    if isinstance(row.get("context_length"), int) and row["context_length"] > 0:
+        extras["context_length"] = int(row["context_length"])
+    if isinstance(row.get("kv_cache_bytes"), int):
+        extras["kv_cache_bytes"] = int(row["kv_cache_bytes"])
+        extras["kv_cache_estimated"] = True
     return extras
 
 
@@ -7818,6 +7826,26 @@ class LocalAbstractCoreLLMClient:
         self._provider_endpoint_profile_resolver = None
         self._locked_model_residency: set = set()
         self._on_token: Optional[Any] = None
+        # A STANDALONE client claims the model it holds (ROOT backlog 0897):
+        # without a claim, another client's default switch or a server unload
+        # ejected weights this client was still using and its next call
+        # silently reloaded them. A pool (`MultiLocalAbstractCoreLLMClient
+        # ._adopt_client`) unregisters the clients it owns: its own claims
+        # cover them, and a client it drops must not keep the model claimed.
+        self.residency_owner_label: str = _DEFAULT_RESIDENCY_OWNER_LABEL
+        _pr = _core_process_residency()
+        if _pr is not None:
+            _pr.register_claimant(self)
+
+    def residency_claims(self) -> List[Dict[str, Any]]:
+        """The (provider, model) this standalone client holds, while it holds it."""
+        llm = getattr(self, "_llm", None)
+        if llm is None or not _provider_instance_holds_weights(llm):
+            return []
+        locked = (self._provider, self._model) in set(_local_locked_residency_pairs(self))
+        return [{"provider": self._provider, "model": self._model, "locked": locked, "kind": "pool",
+                 "owner": f"runtime client {id(self):x}",
+                 "owner_label": str(getattr(self, "residency_owner_label", "") or _DEFAULT_RESIDENCY_OWNER_LABEL)}]
 
     def _stream_parity_refusal(self, params: Dict[str, Any]) -> Optional[str]:
         """Why a streamed call on this provider would record less than a non-streamed one, or None."""
@@ -10241,6 +10269,91 @@ def default_model_warmup() -> bool:
     return bool(_WARM_DEFAULT_MODEL)
 
 
+_DEFAULT_RESIDENCY_OWNER_LABEL = "a runtime in this process"
+_CLAIM_KIND_WORDS = {
+    "pool": "loaded",
+    "override": "loaded for a run",
+    "lock": "locked",
+    "building": "loading it now",
+}
+
+
+def _readable_claim_holders(claims: Sequence[Dict[str, Any]]) -> List[str]:
+    """Each distinct holder of a model, in words: "the runtime of account
+    default/bob (loaded)". A claim with no readable label (another library's
+    owner, an unreadable claimant) is named by what it is, never by an id."""
+    by_holder: Dict[str, set] = {}
+    for c in claims or []:
+        if not isinstance(c, dict):
+            continue
+        kind = str(c.get("kind") or "")
+        name = str(c.get("owner_label") or "").strip()
+        if not name:
+            name = "an unreadable owner" if kind == "claimant_error" else "another owner in this process"
+        words = by_holder.setdefault(name, set())
+        if c.get("locked"):
+            words.add("locked")
+        if kind in _CLAIM_KIND_WORDS:
+            words.add(_CLAIM_KIND_WORDS[kind])
+    out = []
+    for name in sorted(by_holder):
+        words = sorted(by_holder[name])
+        out.append(f"{name} ({', '.join(words)})" if words else name)
+    return out
+
+
+def _process_claims_for(provider: str, model: str) -> List[Dict[str, Any]]:
+    pr = _core_process_residency()
+    if pr is None:
+        return []
+    try:
+        return list(pr.claims_for(provider, model))
+    except Exception:  # noqa: BLE001 - a listing never fails on the claim registry
+        return []
+
+
+def _stamp_readable_holders(records: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """`held_by` on every in-process record: who keeps the model in memory,
+    readable (the console names holders in words, ADR 0043). A resident model
+    no owner claims says so."""
+    for record in records:
+        if not isinstance(record, dict):
+            continue
+        provider_s = str(record.get("provider") or "").strip().lower()
+        model_s = str(record.get("model") or "").strip()
+        if provider_s not in _PROCESS_RESIDENCY_PROVIDERS or not model_s or record.get("resident") is not True:
+            continue
+        holders = _readable_claim_holders(_process_claims_for(provider_s, model_s))
+        record["held_by"] = holders or ["no runtime uses it (unloading it frees the memory)"]
+    return records
+
+
+def _provider_instance_holds_weights(instance: Any) -> bool:
+    """Does a provider instance still hold its model? In-process providers
+    drop `llm` / `model_instance` / `pipeline` on unload; a remote provider
+    holds nothing in this process (its claim is filtered by backend anyway)."""
+    attrs = [a for a in ("llm", "model_instance", "pipeline") if hasattr(instance, a)]
+    if not attrs:
+        return True
+    return any(getattr(instance, a, None) is not None for a in attrs)
+
+
+def _text_route_changed(old: Dict[str, Any], old_explicit: bool, new: Dict[str, Any], new_explicit: bool) -> bool:
+    """Did a capability-defaults refresh move the TEXT route a pooled text
+    client was built from (`input.text`: provider, model, endpoint or
+    load-time options such as speculation)? The first push of the payload the
+    host read from the same config file (implicit -> explicit) is not a move."""
+    def _route(rows: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        row = (rows or {}).get("input.text")
+        if not isinstance(row, dict):
+            return None
+        return {k: row.get(k) for k in ("provider", "model", "base_url", "options") if row.get(k) not in (None, "", {})}
+
+    if not old_explicit or not new_explicit:
+        return False
+    return _route(old) != _route(new)
+
+
 class MultiLocalAbstractCoreLLMClient:
     """Local AbstractCore client with per-request provider/model routing.
 
@@ -10288,6 +10401,10 @@ class MultiLocalAbstractCoreLLMClient:
         self._building: Dict[Tuple[str, str], int] = {}
         self._pending_ejects: Dict[str, Dict[str, Any]] = {}
         self._last_switch_ejects: Dict[str, Any] = {}
+        # Who this client is, in words a person reads (ADR 0043): hosts set
+        # it (the gateway: "the runtime of account default/bob"); it names this
+        # client wherever a model is "kept in memory" because of it.
+        self.residency_owner_label: str = _DEFAULT_RESIDENCY_OWNER_LABEL
         _pr = _core_process_residency()
         if _pr is not None:
             _pr.register_claimant(self)
@@ -10396,6 +10513,8 @@ class MultiLocalAbstractCoreLLMClient:
             next_kwargs.update(new_connection)
 
         capability_changed = False
+        previous_defaults = dict(getattr(self, "_capability_defaults", {}) or {})
+        previous_explicit = bool(getattr(self, "_capability_defaults_explicit", False))
         if capability_defaults is not _UNSET:
             normalized_defaults = _normalize_core_capability_defaults(capability_defaults)
             explicit_defaults = capability_defaults is not None
@@ -10414,6 +10533,42 @@ class MultiLocalAbstractCoreLLMClient:
         )
         if not identity_changed and not capability_changed:
             return False
+        if not identity_changed and not _text_route_changed(
+            previous_defaults, previous_explicit,
+            self._capability_defaults, bool(getattr(self, "_capability_defaults_explicit", False)),
+        ):
+            # CAPABILITY-ONLY REFRESH (Linux test server, 2026-10-29): a console
+            # change to a NON-text route (the embedding model, a voice) used to
+            # evict this whole pool and rebuild the default text model -- the
+            # boot-warmed 9B instance was dropped, its eject skipped because
+            # other accounts' runtimes claimed the same model, and the copy
+            # stayed resident with no pool holding it ("resident ~5.4 GiB +
+            # 8.3 GiB cache ... still in use by runtime client X, runtime client
+            # Y; not ejected"). The text model and its connection did not move:
+            # keep every pooled client and hand it the new routes in place (core
+            # reads them per request); only the media host and the capability
+            # residency core are rebuilt.
+            self.__dict__.pop("_media_host", None)
+            self._retire_capability_residency_core()
+            routes = self._capability_defaults if self._capability_defaults_explicit else None
+            for pooled in list(dict(getattr(self, "_clients", {}) or {}).values()) + list(
+                dict(getattr(self, "_override_clients", {}) or {}).values()
+            ):
+                try:
+                    pooled._capability_defaults = _normalize_core_capability_defaults(routes)
+                    if routes is None:
+                        # Back to INHERIT: the provider reads the config file
+                        # again (core treats a None scope as "not pushed").
+                        for target in (pooled, getattr(pooled, "_llm", None)):
+                            if target is not None:
+                                setattr(target, "_abstractcore_capability_defaults", None)
+                    else:
+                        _attach_core_execution_context_to_client(
+                            pooled, core_config_file=self._core_config_file, capability_defaults=routes,
+                        )
+                except Exception:  # noqa: BLE001 - a fake / foreign client keeps its routes
+                    pass
+            return True
 
         self._llm_kwargs = next_kwargs
         # The media-only client carries the capability defaults and the shared kwargs: rebuilt
@@ -10481,12 +10636,22 @@ class MultiLocalAbstractCoreLLMClient:
             if self._override_clients.get(key) is not client
         )
         del previous_clients, previous_overrides
-        self._eject_models_dropped_by_switch(dropped)
-        del dropped
-        if (provider_s or model_s) and _WARM_DEFAULT_MODEL:
-            self._default_client = self._get_client(provider_s, model_s)
+        if (provider_s and model_s) and _WARM_DEFAULT_MODEL:
+            # The new default is built right below: claim it as "building" from
+            # the eject through the build, so switching TO a model this pool
+            # already had keeps MLX's shared weights for the rebuild (HF copies
+            # are private: the dropped one is freed, `_release_own_copies_if_kept`).
+            with self._building_claim((provider_s, model_s)):
+                self._eject_models_dropped_by_switch(dropped)
+                del dropped
+                self._default_client = self._get_client(provider_s, model_s)
         else:
-            self._default_client = None
+            self._eject_models_dropped_by_switch(dropped)
+            del dropped
+            if (provider_s or model_s) and _WARM_DEFAULT_MODEL:
+                self._default_client = self._get_client(provider_s, model_s)
+            else:
+                self._default_client = None
         self._llm = getattr(self._default_client, "_llm", None)
         return True
 
@@ -10506,27 +10671,73 @@ class MultiLocalAbstractCoreLLMClient:
         reports: Dict[str, Any] = {}
         self._last_switch_ejects = reports
         for (provider_s, model_s), instances in by_pair.items():
+            if str(provider_s) == "huggingface":
+                # A dropped HF copy is this client's to free: never lend it to
+                # another request again (core `process_residency.resident_provider`
+                # skips request-scoped instances).
+                for i in instances:
+                    if i is not None:
+                        try:
+                            setattr(i, "_abstractcore_request_scoped", True)
+                        except Exception:  # noqa: BLE001
+                            pass
             busy = [i for i in instances if i is not None and _provider_inflight_count(i) > 0]
             label = f"{provider_s}/{model_s}"
             if busy:
                 reports[label] = {"deferred": True, "reason": "waiting for the in-flight call"}
-                if label in self._pending_ejects:
-                    continue  # one waiter per model
-                self._pending_ejects[label] = {"provider": provider_s, "model": model_s,
-                                               "reason": "waiting for the in-flight call", "since": time.time()}
-                logger.info(f"default switch: {label} is still generating; it is unloaded when that call ends")
-                threading.Thread(
-                    target=self._eject_after_inflight,
-                    args=(provider_s, model_s, [weakref.ref(i) for i in busy], reports),
-                    name=f"switch-eject:{label}",
-                    daemon=True,
-                ).start()
+                self._defer_eject(provider_s, model_s, instances, reports)
                 continue
-            reports[label] = self._eject_dropped_pair(provider_s, model_s)
+            reports[label] = self._release_own_copies_if_kept(
+                provider_s, model_s, instances, self._eject_dropped_pair(provider_s, model_s))
+
+    def _release_own_copies_if_kept(self, provider_s: str, model_s: str, instances: Sequence[Any],
+                                    report: Dict[str, Any]) -> Dict[str, Any]:
+        """The process-wide eject was skipped (another owner still holds the
+        model): free THIS client's dropped copies anyway. A HuggingFace holder
+        is a full private copy of the weights (llama.cpp / transformers), so
+        unloading it touches no other owner; leaving it was the orphan the
+        Linux test server showed ("resident_via_other_holders", 5.4 GiB of
+        weights + its KV, held by no pool). MLX instances share weights and are
+        never unloaded one by one."""
+        if not isinstance(report, dict) or not report.get("skipped") or str(provider_s) != "huggingface":
+            return report
+        still_pooled = {
+            id(getattr(c, "_llm", None))
+            for c in list(dict(getattr(self, "_clients", {}) or {}).values())
+            + list(dict(getattr(self, "_override_clients", {}) or {}).values())
+        }
+        released = 0
+        busy: List[Any] = []
+        for instance in instances:
+            if instance is None or id(instance) in still_pooled:
+                continue
+            unload = getattr(instance, "unload_model", None)
+            if not callable(unload):
+                continue
+            with _core_residency_lock():
+                # Re-checked under the lock: a call that started meanwhile is
+                # never cancelled; the copy is freed when that call ends.
+                if _provider_inflight_count(instance) > 0:
+                    busy.append(instance)
+                    continue
+                try:
+                    unload(model_s)
+                    released += 1
+                except Exception as exc:  # noqa: BLE001 - the report says it
+                    report = {**report, "release_error": f"{type(exc).__name__}: {exc}"}
+                    logger.warning(f"default switch: could not free this client's copy of {provider_s}/{model_s}: {exc}")
+        if busy:
+            report = {**report, "release_deferred": len(busy)}
+            self._defer_eject(provider_s, model_s, busy, self._last_switch_ejects)
+        if released:
+            report = {**report, "released_own_copies": released,
+                      "reason": f"{report.get('reason') or 'kept for another owner'}; this runtime's own copy was unloaded"}
+            logger.info(f"default switch: freed this runtime's copy of {provider_s}/{model_s}; other owners keep theirs")
+        return report
 
     def _eject_dropped_pair(self, provider_s: str, model_s: str, *, reason: str = "default_switch") -> Dict[str, Any]:
         """Eject a model this client dropped, unless ANY owner in the process
-        (this client included: pool, override, lock, build, default) still
+        (this client included: pool, override, lock, build) still
         claims it. The claim check and the eject run under core's process
         residency lock, so a rebuild cannot slip in between."""
         label = f"{provider_s}/{model_s}"
@@ -10536,6 +10747,13 @@ class MultiLocalAbstractCoreLLMClient:
             return {"ok": True, "skipped": True,
                     "reason": "this AbstractCore has no residency claim registry; upgrade it to unload switched-away models"}
         report = pr.eject_unclaimed(provider_s, model_s, reason=reason) or {"ok": True, "holders_found": 0}
+        if report.get("skipped") and isinstance(report.get("claims"), list):
+            # The console shows this sentence: holders in words (ADR 0043),
+            # never "runtime client 7f3a...".
+            holders = _readable_claim_holders(report["claims"])
+            if holders:
+                report = {**report, "held_by": holders,
+                          "reason": f"{'; '.join(holders)} still use{'s' if len(holders) == 1 else ''} it"}
         if report.get("skipped"):
             logger.info(f"{reason}: {label} kept: {report.get('reason')}")
         elif report.get("ok") is False:
@@ -10544,18 +10762,47 @@ class MultiLocalAbstractCoreLLMClient:
             logger.info(f"{reason}: unloaded {label} from {int(report.get('holders_found') or 0)} holder(s) no owner uses any more")
         return report
 
+    def _defer_eject(self, provider_s: str, model_s: str, instances: Sequence[Any], reports: Dict[str, Any]) -> None:
+        """Eject (and free this client's copies) when the in-flight calls on
+        `instances` end. One waiter per model: a later switch adds its dropped
+        instances to the running waiter instead of losing them."""
+        label = f"{provider_s}/{model_s}"
+        new_refs = [weakref.ref(i) for i in instances if i is not None]
+        refs = self.__dict__.setdefault("_pending_eject_refs", {})
+        if label in self._pending_ejects and isinstance(refs.get(label), list):
+            refs[label].extend(new_refs)
+            return
+        refs[label] = new_refs
+        self._pending_ejects[label] = {"provider": provider_s, "model": model_s,
+                                       "reason": "waiting for the in-flight call", "since": time.time()}
+        logger.info(f"default switch: {label} is still generating; it is unloaded when that call ends")
+        threading.Thread(
+            target=self._eject_after_inflight,
+            args=(provider_s, model_s, new_refs, reports),
+            name=f"switch-eject:{label}",
+            daemon=True,
+        ).start()
+
     def _eject_after_inflight(self, provider_s: str, model_s: str, refs: List[Any], reports: Dict[str, Any]) -> None:
         label = f"{provider_s}/{model_s}"
         try:
             # Ends when the call ends or the instance is collected.
-            while any((r() is not None and _provider_inflight_count(r()) > 0) for r in refs):
-                time.sleep(0.5)
-            reports[label] = self._eject_dropped_pair(provider_s, model_s)
+            while True:
+                while any((r() is not None and _provider_inflight_count(r()) > 0) for r in refs):
+                    time.sleep(0.5)
+                report = self._release_own_copies_if_kept(
+                    provider_s, model_s, [r() for r in list(refs)], self._eject_dropped_pair(provider_s, model_s))
+                reports[label] = report
+                # A copy a new call grabbed meanwhile stays in `refs` (the
+                # release re-queued it here): wait for that call too.
+                if not (isinstance(report, dict) and report.get("release_deferred")):
+                    break
         except Exception as exc:  # noqa: BLE001 - the report must say it failed
             reports[label] = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
             logger.warning(f"default switch: deferred unload of {label} failed: {exc}")
         finally:
             self._pending_ejects.pop(label, None)
+            self.__dict__.get("_pending_eject_refs", {}).pop(label, None)
 
     def _retire_capability_residency_core(self) -> None:
         core = getattr(self, "_capability_residency_core", None)
@@ -10699,6 +10946,11 @@ class MultiLocalAbstractCoreLLMClient:
         A setting that arrives after construction reaches every client the
         pool owns through its setter (`_owned_clients`)."""
         client._capability_residency_parent = weakref.ref(self)
+        # This pool's claims cover the client (0897): its own claim would keep
+        # a model this pool drops "in use" until the client is collected.
+        _pr = _core_process_residency()
+        if _pr is not None:
+            _pr.unregister_claimant(client)
         explicit = getattr(self, "_capability_defaults_explicit", bool(self._capability_defaults))
         if self._core_config_file or explicit:
             _attach_core_execution_context_to_client(
@@ -10850,6 +11102,7 @@ class MultiLocalAbstractCoreLLMClient:
         """Every (provider, model) this client still wants resident: pooled,
         per-override, locked, being built, or its default."""
         owner = f"runtime client {id(self):x}"
+        label = str(getattr(self, "residency_owner_label", "") or _DEFAULT_RESIDENCY_OWNER_LABEL)
         locked = set(_local_locked_residency_pairs(self))
         claims: List[Dict[str, Any]] = []
         for p, m in list(getattr(self, "_clients", {}) or {}):
@@ -10861,9 +11114,15 @@ class MultiLocalAbstractCoreLLMClient:
             claims.append({"provider": p, "model": m, "locked": True, "kind": "lock", "owner": owner})
         for p, m in list((getattr(self, "_building", {}) or {}).keys()):
             claims.append({"provider": p, "model": m, "locked": False, "kind": "building", "owner": owner})
-        if getattr(self, "_default_provider", None) and getattr(self, "_default_model", None):
-            claims.append({"provider": self._default_provider, "model": self._default_model, "locked": False,
-                           "kind": "default", "owner": owner})
+        # NO "default" claim (Linux test server, 2026-10-29): the configured
+        # default of a client that has not built it holds no weights, yet it
+        # kept another holder's copy in memory -- every account's runtime named
+        # the gateway default, so an eject of a copy NOBODY pooled was skipped
+        # as "still in use by runtime client X, runtime client Y". A default
+        # this client loaded is its "pool" claim; one it is loading is
+        # "building".
+        for claim in claims:
+            claim["owner_label"] = label
         return claims
 
     def _drop_failed_load_client(self, key: Tuple[str, str]) -> None:
@@ -10987,6 +11246,7 @@ class MultiLocalAbstractCoreLLMClient:
         records = _merge_host_sweep_into_text_records(records, provider=provider, model=model)
         records = _merge_mlx_process_residency_into_text_records(records, provider=provider, model=model)
         records = _merge_hf_process_residency_into_text_records(records, provider=provider, model=model)
+        records = _stamp_readable_holders(records)
         if task_s is None:
             return _local_all_model_residency_result(
                 self,

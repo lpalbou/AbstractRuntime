@@ -24,6 +24,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   of it; a store with no sidecar announces its first replay (a bounded one-off). Tests:
   `tests/test_json_file_run_store_change_token_after_build.py` (red on 0.15.2).
 
+### Added
+
+- **`config_facade.model_catalog(..., hub_page=, hub_page_size=)`** (backlog 0864) passes a page of Hugging Face search
+  results through to AbstractCore, which reports it in `hub.search`. It is passed only when asked. An AbstractCore
+  whose catalog has no `hub_page` raises `AbstractCoreTooOld` in words instead of answering page 1.
+  `AbstractCoreTooOld` accepts a `required=` description.
+
 ## [0.15.2] - 2026-10-28
 
 ### Fixed

@@ -662,12 +662,23 @@ MODELS_ENGINES_MIN_ABSTRACTCORE = "2.16.0"
 class AbstractCoreTooOld(NotImplementedError):
     """The installed AbstractCore predates the models & engines modules."""
 
-    def __init__(self, feature: str, installed: Optional[str] = None, *, missing: Optional[str] = None):
+    def __init__(
+        self,
+        feature: str,
+        installed: Optional[str] = None,
+        *,
+        missing: Optional[str] = None,
+        required: Optional[str] = None,
+    ):
         self.feature = str(feature)
         self.installed = installed
-        self.required = MODELS_ENGINES_MIN_ABSTRACTCORE
+        self.required = required or MODELS_ENGINES_MIN_ABSTRACTCORE
         self.missing = missing
         have = f"AbstractCore {installed} is installed" if installed else "the installed AbstractCore is too old"
+        if required and not required[:1].isdigit():
+            # No released version carries it yet: name what is missing instead of a floor.
+            super().__init__(f"{self.feature} requires {required}; {have}. Upgrade it with: pip install -U abstractcore")
+            return
         super().__init__(
             f"{self.feature} requires abstractcore>={self.required}; {have}. "
             f"Upgrade it with: pip install -U \"abstractcore>={self.required}\""
@@ -882,15 +893,34 @@ def model_catalog(
     fits_only: bool = False,
     hub: bool = False,
     tags: Optional[List[str]] = None,
+    hub_page: Optional[int] = None,
+    hub_page_size: Optional[int] = None,
 ) -> Dict[str, Any]:
     """Contract C (`model_catalog_v1`): downloadable models with presence and a fit verdict.
 
     `fits_only` keeps artifacts whose verdict is `fits` or `tight` on this host;
     `hub` enriches from the Hugging Face API (cached 24 h) and adds hub search rows.
+    `hub_page` / `hub_page_size` pick a page of those rows (AbstractCore reports it in
+    `hub.search`); only passed when asked, and an AbstractCore without them says so
+    (`AbstractCoreTooOld`) instead of answering page 1.
     """
 
     catalog = _core_module("config.model_catalog", "The model catalog")
-    return dict(catalog.catalog(q or None, engine=engine or None, fits=bool(fits_only), hub=bool(hub), tags=tags or None))
+    kwargs: Dict[str, Any] = {"engine": engine or None, "fits": bool(fits_only), "hub": bool(hub), "tags": tags or None}
+    paging = {k: int(v) for k, v in (("hub_page", hub_page), ("hub_page_size", hub_page_size)) if v is not None}
+    if paging:
+        import inspect
+
+        params = inspect.signature(catalog.catalog).parameters
+        if not all(k in params for k in paging):
+            raise AbstractCoreTooOld(
+                "Hugging Face search pages",
+                _installed_abstractcore_version(),
+                missing="abstractcore.config.model_catalog.catalog(hub_page=, hub_page_size=)",
+                required="an AbstractCore whose catalog accepts hub_page (backlog 0864)",
+            )
+        kwargs.update(paging)
+    return dict(catalog.catalog(q or None, **kwargs))
 
 
 def list_installed_models(provider: Optional[str] = None) -> Dict[str, Any]:

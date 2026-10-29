@@ -895,31 +895,43 @@ def model_catalog(
     tags: Optional[List[str]] = None,
     hub_page: Optional[int] = None,
     hub_page_size: Optional[int] = None,
+    extended: Optional[bool] = None,
 ) -> Dict[str, Any]:
     """Contract C (`model_catalog_v1`): downloadable models with presence and a fit verdict.
 
     `fits_only` keeps artifacts whose verdict is `fits` or `tight` on this host;
     `hub` enriches from the Hugging Face API (cached 24 h) and adds hub search rows.
     `hub_page` / `hub_page_size` pick a page of those rows (AbstractCore reports it in
-    `hub.search`); only passed when asked, and an AbstractCore without them says so
-    (`AbstractCoreTooOld`) instead of answering page 1.
+    `hub.search`); `extended` lists every quant of the rows' own GGUF repos (AbstractCore 0865).
+    Each is passed only when asked, and an AbstractCore without it says so (`AbstractCoreTooOld`)
+    instead of answering without it.
     """
 
     catalog = _core_module("config.model_catalog", "The model catalog")
     kwargs: Dict[str, Any] = {"engine": engine or None, "fits": bool(fits_only), "hub": bool(hub), "tags": tags or None}
     paging = {k: int(v) for k, v in (("hub_page", hub_page), ("hub_page_size", hub_page_size)) if v is not None}
-    if paging:
+    asked: Dict[str, Any] = dict(paging)
+    if extended:
+        asked["extended"] = True
+    if asked:
         import inspect
 
         params = inspect.signature(catalog.catalog).parameters
-        if not all(k in params for k in paging):
+        if paging and not all(k in params for k in paging):
             raise AbstractCoreTooOld(
                 "Hugging Face search pages",
                 _installed_abstractcore_version(),
                 missing="abstractcore.config.model_catalog.catalog(hub_page=, hub_page_size=)",
                 required="an AbstractCore whose catalog accepts hub_page (backlog 0864)",
             )
-        kwargs.update(paging)
+        if "extended" in asked and "extended" not in params:
+            raise AbstractCoreTooOld(
+                "Every quant of a model",
+                _installed_abstractcore_version(),
+                missing="abstractcore.config.model_catalog.catalog(extended=)",
+                required="an AbstractCore whose catalog accepts extended (backlog 0865)",
+            )
+        kwargs.update(asked)
     return dict(catalog.catalog(q or None, **kwargs))
 
 

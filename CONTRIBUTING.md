@@ -81,7 +81,8 @@ When behavior changes, update:
 - `docs/api.md` (public API surface + imports)
 - `docs/getting-started.md` (onboarding examples)
 - `docs/architecture.md` (semantics/invariants)
-- `CHANGELOG.md` (user-visible changes)
+- a changelog fragment, `changelog.d/<pr-or-slug>.md` (user-visible changes; never an edit of
+  `CHANGELOG.md`: [changelog.d/README.md](changelog.d/README.md), checked by CI)
 
 List every `docs/*.md` page in `docs/README.md`. Keep `llms.txt` (the hand-curated index) and
 `llms-full.txt` in step with the documentation in the same change. `llms-full.txt` is generated:
@@ -92,4 +93,5 @@ is stale). Add a page to the script's `DOCUMENTS` list when it joins the core se
 ## Releases
 
 - Bump `version` in `pyproject.toml`
-- Add a dated section to `CHANGELOG.md` (Keep a Changelog format)
+- Assemble the changelog: `python scripts/changelog.py assemble X.Y.Z` (the dated section from
+  `changelog.d/`, fragments deleted)

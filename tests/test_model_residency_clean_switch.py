@@ -363,9 +363,12 @@ def test_a_switch_never_ejects_a_model_another_client_in_the_process_still_holds
     b.set_default_provider_model(provider="mlx", model="vendor/C")
     assert ejects == [], "B's LOCK keeps it"
     b._locked_model_residency.clear()
-    # B's capability change evicts its pool: now NOBODY claims vendor/A.
+    # A capability-only change keeps B's pool (the text model did not move)...
     b.set_capability_defaults({"output": {"audio": {"provider": "x", "model": "y"}}})
-    assert ("mlx", "vendor/A") in ejects and ("mlx", "vendor/B") not in ejects and ("mlx", "vendor/C") not in ejects
+    assert ejects == [], "a non-text route change must not drop the pooled text models"
+    # ...B's next default switch drops it: now NOBODY claims vendor/A.
+    b.set_default_provider_model(provider="mlx", model="vendor/D")
+    assert ("mlx", "vendor/A") in ejects and ("mlx", "vendor/B") not in ejects
 
 
 def test_a_model_being_built_by_another_client_is_not_ejected(pool):

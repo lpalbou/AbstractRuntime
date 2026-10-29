@@ -2554,6 +2554,14 @@ def make_llm_call_handler(*, llm: AbstractCoreLLMClient, artifact_store: Optiona
 
             refusal = residency_refusal_details(e)
             if refusal is not None:
+                # A reload at generation time (an evicted model coming back) is refused
+                # here, not in the pool's build: keep it for the Models page too.
+                note = getattr(llm, "_note_residency_refusal", None)
+                if callable(note):
+                    try:
+                        note(e)
+                    except Exception:  # noqa: BLE001 - visibility never changes the outcome
+                        pass
                 # core ADR 0010: the model does not fit, even after evicting what is
                 # not locked. Retrying would only evict more: the sentence, once.
                 return EffectOutcome.failed(str(refusal.get("message") or e), retryable=False, error_details=refusal)

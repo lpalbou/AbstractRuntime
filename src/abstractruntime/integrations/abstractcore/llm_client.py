@@ -11032,6 +11032,7 @@ class MultiLocalAbstractCoreLLMClient:
                         client = self._create_client(key[0], key[1], llm_kwargs_override=llm_kwargs_override)
                         with _core_residency_lock():
                             override_clients[override_key] = client
+                    self._clear_residency_refusals(key[1])
                 except Exception as exc:
                     self._note_residency_refusal(exc)
                     raise

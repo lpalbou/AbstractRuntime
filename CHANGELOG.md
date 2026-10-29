@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`config_facade.model_catalog(..., hub_page=, hub_page_size=)`** (backlog 0864) passes a page of Hugging Face search
+  results through to AbstractCore, which reports it in `hub.search`. It is passed only when asked. An AbstractCore
+  whose catalog has no `hub_page` raises `AbstractCoreTooOld` in words instead of answering page 1.
+  `AbstractCoreTooOld` accepts a `required=` description. `extended=True` (every quant of a row's own GGUF repos,
+  AbstractCore 0865) is passed the same way and refused in words on an AbstractCore without it.
+
 ### Fixed
 
 - **A console change to a non-text default no longer reloads the text model, and a runtime never

@@ -164,6 +164,16 @@ def fake_core(monkeypatch: pytest.MonkeyPatch) -> types.SimpleNamespace:
         calls.catalog.append({"q": q, "engine": engine, "fits": fits, "hub": hub, "tags": tags})
         return {"schema": "model_catalog_v1", "rows": []}
 
+    def catalog_paged(
+        q: Any = None, *, engine: Any = None, fits: bool = False, hub: bool = False, tags: Any = None,
+        hub_page: int = 1, hub_page_size: int = 20, extended: bool = False,
+    ) -> Dict[str, Any]:
+        calls.catalog.append({"q": q, "engine": engine, "fits": fits, "hub": hub, "tags": tags,
+                              "hub_page": hub_page, "hub_page_size": hub_page_size, "extended": extended})
+        return {"schema": "model_catalog_v1", "rows": []}
+
+    catalog_mod.catalog_paged = catalog_paged
+
     catalog_mod.catalog = catalog
 
     materializer_mod = types.ModuleType("abstractcore.config.model_materializer")
@@ -249,6 +259,15 @@ def test_reads_pass_arguments_through_unchanged(fake_core) -> None:
     # Empty strings are "no filter", never a filter on the empty string.
     facade.model_catalog("", engine="")
     assert fake_core.calls.catalog.last() == {"q": None, "engine": None, "fits": False, "hub": False, "tags": None}
+
+    # Paging (backlog 0864 in AbstractCore) is passed only when asked; an AbstractCore whose
+    # catalog has no `hub_page` refuses in words instead of answering page 1.
+    with pytest.raises(facade.AbstractCoreTooOld) as too_old:
+        facade.model_catalog("qwen", hub=True, hub_page=2)
+    assert "Hugging Face search pages" in str(too_old.value) and "hub_page" in str(too_old.value)
+    with pytest.raises(facade.AbstractCoreTooOld) as too_old:
+        facade.model_catalog("qwen", hub=True, extended=True)
+    assert "Every quant of a model" in str(too_old.value) and "extended" in str(too_old.value)
 
     facade.list_installed_models("lmstudio")
     assert fake_core.calls.installed.last() == {"provider": "lmstudio"}
@@ -507,3 +526,18 @@ def test_real_abstractcore_passthroughs(real_core_jobs) -> None:
     frag = facade.console_fragment("models")
     assert set(frag) == {"html", "js", "css"}
     assert "AbstractCoreConsole" in frag["js"]
+
+
+def test_catalog_pages_pass_through_to_an_abstractcore_that_has_them(fake_core, monkeypatch) -> None:
+    import sys
+
+    mod = sys.modules["abstractcore.config.model_catalog"]
+    monkeypatch.setattr(mod, "catalog", mod.catalog_paged)
+    facade.model_catalog("qwen", hub=True, hub_page=3, hub_page_size=10)
+    assert fake_core.calls.catalog.last() == {
+        "q": "qwen", "engine": None, "fits": False, "hub": True, "tags": None, "hub_page": 3, "hub_page_size": 10, "extended": False,
+    }
+    facade.model_catalog("qwen", hub=True, extended=True)
+    assert fake_core.calls.catalog.last()["extended"] is True
+    facade.model_catalog("qwen", hub=True)  # no page asked: none passed, AbstractCore's default applies
+    assert (fake_core.calls.catalog.last()["hub_page"], fake_core.calls.catalog.last()["hub_page_size"]) == (1, 20)

@@ -17,7 +17,7 @@ class _DoesNotFit(Exception):
     code = "model_does_not_fit"
 
     def as_dict(self):
-        return {"code": self.code, "message": str(self), "needed_bytes": 13_700_000_000,
+        return {"code": self.code, "message": str(self), "model": "org/m", "needed_bytes": 13_700_000_000,
                 "free_bytes": 3_000_000_000, "suggestions": [{"artifact": "org/m:Q4_K_M", "download_bytes": 5_600_000_000}]}
 
 
@@ -60,3 +60,21 @@ def test_step_record_keeps_the_typed_fields():
     assert rec.error == SENTENCE and rec.result == {"error_details": {"code": "model_does_not_fit", "needed_bytes": 1}}
     out = EffectOutcome.failed(SENTENCE, retryable=False, error_details={"code": "model_does_not_fit"})
     assert out.retryable is False and out.error_details["code"] == "model_does_not_fit"
+
+
+def test_a_model_that_loads_later_clears_its_refusal(monkeypatch):
+    state = {"refuse": True}
+
+    def maybe(self, provider, model, *, llm_kwargs_override=None):
+        if state["refuse"]:
+            raise _DoesNotFit(SENTENCE)
+        return SimpleNamespace(_llm=SimpleNamespace(model=model), _drop_prompt_cache_client_state=lambda: None)
+
+    monkeypatch.setattr(MultiLocalAbstractCoreLLMClient, "_create_client", maybe)
+    monkeypatch.setattr(llm_mod, "_WARM_DEFAULT_MODEL", False)
+    c = MultiLocalAbstractCoreLLMClient(provider="huggingface", model="org/default")
+    with pytest.raises(_DoesNotFit):
+        c._get_client("huggingface", "org/m")
+    state["refuse"] = False
+    c._get_client("huggingface", "org/m")
+    assert c.residency_eject_diagnostics()["refusals"] == [], "MUTANT: a stale 'Not loaded' after it loaded -> RED"

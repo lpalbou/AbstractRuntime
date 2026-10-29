@@ -11043,6 +11043,7 @@ class MultiLocalAbstractCoreLLMClient:
                     client = self._create_client(key[0], key[1])
                     with _core_residency_lock():
                         self._clients[key] = client
+                self._clear_residency_refusals(key[1])
             except DefaultRouteProviderError:
                 raise
             except Exception as exc:
@@ -11064,6 +11065,12 @@ class MultiLocalAbstractCoreLLMClient:
                     ) from exc
                 raise
         return client
+
+    def _clear_residency_refusals(self, model: str) -> None:
+        """A model that now loaded is no longer "not loaded": drop its refusals."""
+        refusals = self.__dict__.get("_residency_refusals")
+        if refusals:
+            refusals[:] = [r for r in refusals if str(r.get("model") or "") != str(model)]
 
     def _note_residency_refusal(self, exc: BaseException) -> Optional[Dict[str, Any]]:
         """Keep the last fit refusals (core ADR 0010 `ModelDoesNotFitError`) for the

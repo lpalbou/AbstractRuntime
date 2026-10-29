@@ -41,7 +41,7 @@ from typing import Any, Dict, List, Mapping, Optional, Protocol, Sequence, Tuple
 from urllib.parse import quote, urlencode
 
 from .logging import get_logger
-from .structured_output import StructuredOutputRequestError, pop_response_schema, response_model_from_json_schema
+from .structured_output import StructuredOutputRequestError, pop_response_schema, prepare_response_model as response_model_from_json_schema
 from .output_specs import (
     capability_default_reasoning_for_text as _capability_default_reasoning_for_text,
     capability_default_route_keys_for_spec as _capability_default_route_keys_for_spec,

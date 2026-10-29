@@ -34,7 +34,7 @@ from ...core.tool_scope import ToolScopeError, resolve_tool_scope
 from ...storage.base import RunStore
 from ...storage.artifacts import ArtifactStore, is_artifact_ref, get_artifact_id
 from .llm_client import AbstractCoreLLMClient, _models_agree
-from .structured_output import response_model_from_json_schema as _pydantic_model_from_json_schema
+from .structured_output import prepare_response_model as _pydantic_model_from_json_schema
 from .output_specs import (
     is_abstractcore_output_request,
     output_request_has_generated_media,

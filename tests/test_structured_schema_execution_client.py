@@ -92,6 +92,24 @@ def test_effect_to_execution_client_preserves_original_nested_schema_and_stream_
     assert provider.calls[0]["stream"] is False
 
 
+@pytest.mark.parametrize("schema", [
+    {"type": "string"},
+    {"type": "object", "properties": {}},
+    {"type": "object", "properties": {"invalid-name": {"type": "string"}}},
+])
+def test_invalid_schema_request_is_not_retried_or_sent_to_provider(schema):
+    from abstractruntime.integrations.abstractcore.effect_handlers import _llm_error_is_retryable
+    from abstractruntime.integrations.abstractcore.structured_output import StructuredOutputRequestError
+    provider = Provider({})
+    with pytest.raises(StructuredOutputRequestError) as error:
+        local_client(provider).generate(prompt="answer", params={"response_schema": schema})
+    assert _llm_error_is_retryable(error.value) is False
+    outcome = effect_call(DataBoundary(local_client(provider)), schema=schema)
+    assert outcome.status == "failed"
+    assert outcome.retryable is False
+    assert not provider.calls
+
+
 @pytest.mark.parametrize("answer", [
     {"nested": {"n": "not-int"}, "items": [1], "mode": "chat"},
     {"nested": {"n": 1}, "items": [1], "mode": "invalid"},

@@ -14,6 +14,14 @@ class StructuredOutputRequestError(ValueError):
     status_code = 400
 
 
+def prepare_response_model(schema: Dict[str, Any], *, name: str) -> Type[Any]:
+    """Classify invalid schema requests before inference without changing validation."""
+    try:
+        return response_model_from_json_schema(schema, name=name)
+    except (ValueError, TypeError) as exc:
+        raise StructuredOutputRequestError(str(exc)) from exc
+
+
 def pop_response_schema(params: Dict[str, Any]) -> Optional[Tuple[Dict[str, Any], str]]:
     """Remove a schema request from a private per-call parameter dictionary."""
     schema = params.pop("response_schema", None)

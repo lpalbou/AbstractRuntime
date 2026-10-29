@@ -28,6 +28,10 @@
 - [Storage interfaces](src/abstractruntime/storage/base.py): `RunStore`, `LedgerStore`, `QueryableRunStore`, `MailboxQueryableRunStore`
 - [Triggers](src/abstractruntime/triggers/): sources, registry, connections, CloudEvents envelope, feed and webhook sources
 
+## Agent Skill
+
+- [AbstractRuntime agent skill](skills/abstractruntime/SKILL.md): operate workflows, durable waits, stores and AbstractCore execution with verified public recipes
+
 ## Guides
 
 - [FAQ](docs/faq.md): common questions and gotchas
@@ -36,6 +40,9 @@
 - [Limits](docs/limits.md): `_limits` namespace and RuntimeConfig
 
 ## Integrations
+
+- [Structured responses](docs/integrations/abstractcore.md#structured-responses): preserve original schema data across execution boundaries, create local validators at inference, and forward remote schemas as OpenAI response formats
+- [Host-managed serving](docs/integrations/abstractcore.md#host-managed-serving): explicitly start Core's own optional authenticated listener; native Runtime execution and HTTP lifecycle remain independent
 
 - [Cancellation, pause and tool ceiling](docs/api.md#runtime-start--tick--resume): `Runtime.cancel_run(...)` stops the in-flight effect (recorded `cancelled`, never retried), a model unload cancels the calls using it first, `tick(..., step_gate=...)` pauses at step boundaries, and an explicit `allowed_tools` list is a run-tree ceiling approval policy cannot widen.
 - [Live token streaming](docs/integrations/abstractcore.md#live-token-streaming): `Runtime.set_live_delta_sink(sink)` plus run input `_runtime.stream: true` delivers `llm.delta` / `llm.delta_end` events (content and reasoning channels, `parent_run_id`) while an answer is generated; nothing reaches the ledger, children inherit the switch, and every call that cannot stream with a complete record says why (`reason: unavailable` + `detail`).

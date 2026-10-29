@@ -16,7 +16,7 @@ Implementation pointers (this repo):
 pip install abstractruntime
 ```
 
-The base install includes AbstractCore 2.29.0 or newer. That is the supported baseline for the current server auth split (`Authorization` for server auth, `X-AbstractCore-Provider-API-Key` for provider overrides), generated-media contracts, image upscaling, capability catalog, prompt-cache control-plane endpoints (including session attribution via `/acore/prompt_cache/key_meta`), host memory snapshots, the host-wide loaded-model sweep used by residency listings, the process-wide MLX residency report and eject used by model unload, durable bloc prompt-cache helpers, bindings and lifecycle operations, task-aware model residency for text/image/video/TTS/STT, current tool catalog, AbstractCore's public output-selector contract, async/sync text-generation output-selector parity, video generation endpoints, the public local vision-cache catalog helper used by Runtime discovery, vision adapter discovery plus batch/LoRA media controls, and the released shared workspace/file-filter utility surface used by Runtime packaging and integration checks.
+The base install includes AbstractCore 2.30.0 or newer. That is the supported baseline for the current server auth split (`Authorization` for server auth, `X-AbstractCore-Provider-API-Key` for provider overrides), generated-media contracts, image upscaling, capability catalog, prompt-cache control-plane endpoints (including session attribution via `/acore/prompt_cache/key_meta`), host memory snapshots, the host-wide loaded-model sweep used by residency listings, the process-wide MLX residency report and eject used by model unload, durable bloc prompt-cache helpers, bindings and lifecycle operations, task-aware model residency for text/image/video/TTS/STT, current tool catalog, AbstractCore's public output-selector contract, async/sync text-generation output-selector parity, video generation endpoints, the public local vision-cache catalog helper used by Runtime discovery, vision adapter discovery plus batch/LoRA media controls, and the released shared workspace/file-filter utility surface used by Runtime packaging and integration checks.
 
 The base install also includes the remote-light media/capability plugins needed
 for AbstractCore's multimodal `generate(..., output=...)` path. Local
@@ -124,6 +124,56 @@ Notes:
 - `output` may be top-level or inside `params`; top-level `outputs` is accepted as a runtime alias for AbstractCore's `output`.
 - `output.tags`, when present, are merged into the generated artifact metadata. Runtime metadata such as `run_id` and `tags` is used by AbstractRuntime's ArtifactStore boundary and is not forwarded as provider-specific generation kwargs.
 - Host-supplied run defaults such as `run.vars["_runtime"]["provider"]` and `run.vars["_runtime"]["model"]` are persisted as JSON-safe routing metadata; provider clients, auth objects, downloaded model handles, and server sessions are not durable runtime state.
+
+## Structured responses
+
+For a durable structured request, put the JSON schema and its name on the
+`LLM_CALL` payload:
+
+```json
+{
+  "prompt": "Choose chat or tool, and explain your choice.",
+  "response_schema_name": "RouteChoice",
+  "response_schema": {
+    "type": "object",
+    "properties": {
+      "choice": {"type": "string", "enum": ["chat", "tool"]},
+      "reason": {"type": "string"}
+    },
+    "required": ["choice", "reason"]
+  },
+  "structured_output_fallback": false
+}
+```
+
+The original normalized schema and name remain data through execution-client
+boundaries. The local execution client builds Core's Pydantic response class in
+the process calling the provider; the effect handler also validates the result.
+Successful structured results expose the object as `result.data`. The local
+conversion supports object properties, nested objects, arrays, enums, nullable
+types and defaults, with Pydantic's type coercion. It is a best-effort schema
+conversion, not an implementation of every JSON Schema keyword.
+
+Structured calls run without token streaming even when `params.stream` is true;
+the live channel reports `unavailable` with detail `structured_output`. Schema
+conversion errors and conflicting structured inputs fail without inference or
+retries. Do not combine `response_schema` with an explicit `response_model` or a
+different `response_format`. An identical source OpenAI schema wrapper is
+consumed during normalization. The `structured_output_fallback` option controls
+the handler's optional repair path; set it to false when an invalid structured
+response must fail directly.
+
+Remote and hybrid clients send schema data to Core as an OpenAI `response_format`
+of type `json_schema`. The remote server's validation rules apply, so do not
+assume the same coercion behavior as local Pydantic conversion. A raw
+`params.response_format` is preserved for Core. Python validator classes are
+supported only in direct local Python client calls; they are not durable JSON
+state and the remote HTTP client refuses them before sending a request.
+
+See [structured-output host checks](#structured-output-checks-for-hosts-structured-facade)
+for validating an incoming OpenAI response format, and
+[troubleshooting](../troubleshooting.md#structured-generation-is-refused-before-inference)
+for request errors.
 
 ## Execution controls and local concurrency
 
@@ -1238,6 +1288,35 @@ This is useful when building a `MappingToolExecutor` quickly.
 - `../adr/0002_execution_modes_local_remote_hybrid.md` — rationale for local/remote/hybrid
 
 ## Host-managed serving
+
+Hosts can explicitly start Core's optional independently authenticated listener:
+
+```python
+from abstractruntime.integrations.abstractcore.server_facade import start_core_server
+
+server = start_core_server(host="127.0.0.1", port=0)
+try:
+    assert server.is_running
+    print(server.url)
+finally:
+    server.stop()
+```
+
+Omit `host` and `port` to use Core's persisted server configuration (default
+`127.0.0.1:8000`); port `0` requests an ephemeral port. The Core-owned handle
+provides `url`, `is_running`, `status()` and `stop()`. Startup failures raise to
+the caller. Core owns the listener's authentication and bind-sensitive security
+policy, including its first-run token handling. Stopping the listener leaves
+resident provider resources available to native clients. HTTP requests go to
+Core directly and do not enter Runtime's run/ledger pipeline.
+
+This is an explicit lifecycle operation: importing the facade starts no server
+and loads no HTTP application. Hosts should keep native execution readiness
+independent of optional HTTP readiness. An isolated execution process can hold
+the providers and listener together; restarting that process loses its resident
+models and in-flight requests. The facade does not create another process.
+
+### Host-admitted ASGI requests
 
 Hosts that expose AbstractCore serving routes use
 `abstractruntime.integrations.abstractcore.server_facade.serve_core_request(scope, receive, send, *, token, allow_unauthenticated=False)`.

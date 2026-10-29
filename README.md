@@ -223,6 +223,14 @@ sr = create_scheduled_runtime(
 )
 ```
 
+## For AI agents
+
+Register and use the [`abstractruntime` agent skill](https://github.com/lpalbou/AbstractRuntime/tree/main/skills/abstractruntime)
+to operate durable workflows, waits, storage and AbstractCore integration. Copy
+`skills/abstractruntime/` from the checkout matching your package version into
+your agent's skills directory. Start with its install verification, then use the
+linked documentation for the installed version.
+
 ## Documentation
 
 | Document | Description |

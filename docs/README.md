@@ -23,6 +23,10 @@ In this repo, the AbstractCore wiring lives under `src/abstractruntime/integrati
 
 ## Guides
 
+- [AbstractRuntime agent skill](../skills/abstractruntime/SKILL.md) — a self-contained operating guide for agents using workflows, durable waits, stores and AbstractCore execution
+- [Structured responses](integrations/abstractcore.md#structured-responses) — JSON schemas across execution boundaries, local and remote validation, and streaming behavior
+- [Host-managed serving](integrations/abstractcore.md#host-managed-serving) — optional Core-owned HTTP lifecycle and host-admitted ASGI requests
+
 - `faq.md` — common questions (recommended)
 - `manual_testing.md` — manual smoke tests and how to run the test suite
 - `artifacts.md` — Runtime artifact identity, descriptors, provenance, catalog search, and access stats

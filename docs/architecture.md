@@ -1,7 +1,5 @@
 # AbstractRuntime — Architecture
 
-> Updated: 2026-10-01
-> Version: 0.8.2
 > Scope: this describes **what is implemented in this repository**.
 
 AbstractRuntime is a **durable workflow runtime**: it executes workflow graphs as a persisted state machine with explicit waits (user, time, events, jobs, subworkflows). A run can pause for hours/days and resume **without** keeping Python stacks/coroutines alive.
@@ -86,6 +84,34 @@ engine installer, host job registry"]
 
 This keeps the runtime usable by `../abstractgateway` and application layers such as `../abstractflow`, `../abstractassistant`, `../abstractobserver`, and `../abstractcode` without embedding provider-specific model logic in the durable kernel.
 
+### Structured execution and optional HTTP serving
+
+Durable `LLM_CALL` payloads keep schemas as JSON-safe data. The execution request
+carries the normalized original schema and its name. The local execution client
+constructs the provider-facing validator where inference runs; the effect handler validates the
+returned object as well. Hosts can place that execution client in a supervised
+process without transporting generated Python classes. A process boundary does
+not turn native execution into a request to the OpenAI-compatible HTTP API.
+
+```mermaid
+flowchart LR
+  Host["Native host"] --> RT["Runtime effect handler"]
+  RT -->|"schema + name as JSON data"| Exec["Local execution client<br/>in the execution process"]
+  Exec -->|"provider-facing validator"| Core["AbstractCore providers<br/>and resident resources"]
+  Core -->|"result"| RT
+  RT -->|"validated result"| Ledger["LedgerStore"]
+  HTTPClient["Optional Core HTTP client"] -->|"Core server credentials"| HTTP["Core HTTP application"]
+  HTTP --> Core
+  Host -.->|"explicit lifecycle only<br/>start_core_server"| HTTP
+```
+
+The optional listener is Core-owned and independently authenticated. Starting or
+stopping it does not create a Runtime run or unload resident model resources.
+Importing Runtime's server facade starts no listener and imports no HTTP
+application. Native execution does not require this listener. See
+[structured responses](integrations/abstractcore.md#structured-responses) and
+[host-managed serving](integrations/abstractcore.md#host-managed-serving).
+
 ### Live token streaming (outside the ledger)
 
 Live text travels on a side channel next to the durable path. A run opts in with `_runtime.stream: true`, the host registers one sink with `Runtime.set_live_delta_sink(sink)`, and each `LLM_CALL` hands a per-call emitter (`src/abstractruntime/core/live_deltas.py`) to the AbstractCore client. The emitter batches fragments (about 40 ms), splits reasoning from content, holds back tool-call markup, and always closes the call with one `llm.delta_end` after the durable record is appended. Nothing on the live path is persisted, so replay and the ledger are the same with streaming on or off. See [Live token streaming](integrations/abstractcore.md#live-token-streaming).
@@ -107,6 +133,14 @@ set_live_delta_sink"]
 ```
 
 ### Model residency in a shared process
+
+Core-managed local loaders reuse compatible resident weights and refuse a
+conflicting allocation of the same canonical artifact before loading it again.
+Some configurations can share weights with separate KV contexts; configurations
+without safe sharing require reuse of the supported profile or an unload first.
+This coordination is process-local. Independent external servers and arbitrary
+plugin/raw-engine allocations need their own ownership policy; starting another
+server process does not join the execution process's resource pool.
 
 In-process models (MLX, HuggingFace, embeddings) belong to the process, not to one runtime. Every multi-local client registers what it still needs (pooled, per-override, locked, being built, default) with AbstractCore's process residency registry. An unload after a default switch or a failed load goes through `eject_unclaimed`, which checks every owner's claims and unloads under one lock, so one service never unloads a model another service, user, entity runtime or the AbstractCore server still uses. A model that is still generating is unloaded when its call ends. See [Unloading and switching models](integrations/abstractcore.md#unloading-and-switching-models).
 

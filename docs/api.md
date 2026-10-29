@@ -187,6 +187,13 @@ Implementation: `src/abstractruntime/core/policy.py`.
 - `EffectPolicy` protocol and implementations: `DefaultEffectPolicy`, `RetryPolicy`, `NoRetryPolicy`
 - `compute_idempotency_key(...)` helper
 
+The AbstractCore runtime factories default to three total LLM attempts and one
+tool attempt, with exponential backoff starting at one second and capped at
+30 seconds. Supply `effect_policy=NoRetryPolicy()` to disable Runtime retries;
+the provider may have its own retry policy. Deterministic structured-request
+and serialization refusals are nonretryable. Inspect a returned run's status
+and error even when `tick(...)` itself returns normally.
+
 Docs: `architecture.md` (reliability section).
 
 ## WorkflowBundles (`.flow`) and VisualFlow distribution
@@ -396,6 +403,7 @@ Execution controls and cancellation:
 - `media`: a media path, artifact ref (`{"$artifact": "..."}` or `{"artifact_id": "..."}`), media dict, or list of those
 - `output`: AbstractCore output selector; top-level `outputs` is accepted as a runtime alias
 - `params`: provider/model routing, generation controls, prompt-cache keys or `prompt_cache_binding`, structured-output schema options, and tracing metadata
+- `response_schema` / `response_schema_name`: JSON schema data and name for a structured result at `result.data`; local execution creates the validator at the provider boundary. Structured calls do not stream tokens. Remote/hybrid clients forward an OpenAI JSON-schema response format; Python validator classes cannot cross HTTP. See [structured responses](integrations/abstractcore.md#structured-responses).
 
 Multimodal support:
 - common remote-light AbstractCore media, vision, voice, audio, and music dependencies are part of the base Runtime install
@@ -473,6 +481,8 @@ inside an effect handler. Details: [integrations/abstractmemory.md](integrations
 - `integrations/abstractmemory.md` — memory facade, provenance stamping, `MEMORY_REVISE`
 
 ### Host ASGI serving
+
+`abstractruntime.integrations.abstractcore.server_facade.start_core_server(*, host=None, port=None)` starts Core's optional listener in the calling execution process. It returns a Core-owned handle with `url`, `is_running`, `status()` and `stop()`. Core owns configuration, credentials and HTTP request handling; stopping the listener does not unload resident providers. Omitted bind arguments use Core server settings; explicit port `0` selects an ephemeral port. Startup errors raise to the caller. Importing the facade starts nothing. See [host-managed serving](integrations/abstractcore.md#host-managed-serving).
 
 `abstractruntime.integrations.abstractcore.server_facade.serve_core_request(scope, receive, send, *, token: str, allow_unauthenticated: bool = False)` delegates host-admitted ASGI requests with request-scoped Core authentication. See [host-managed serving](integrations/abstractcore.md#host-managed-serving) for network and credential responsibilities.
 

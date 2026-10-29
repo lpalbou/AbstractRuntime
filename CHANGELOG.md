@@ -12,6 +12,8 @@ Unreleased changes live in [`changelog.d/`](changelog.d/README.md), one file per
 
 ### Added
 
+- A package agent skill documents operating durable workflows, waits, storage and structured execution through the public Python API.
+
 - **`config_facade.model_catalog(..., hub_page=, hub_page_size=)`** (backlog 0864) passes a page of Hugging Face search
   results through to AbstractCore, which reports it in `hub.search`. It is passed only when asked. An AbstractCore
   whose catalog has no `hub_page` raises `AbstractCoreTooOld` in words instead of answering page 1.

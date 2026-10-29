@@ -20,13 +20,42 @@ Fix:
 - Install or upgrade the base Runtime package. LLM/tools integration, common
   remote-light multimodal dependencies, and the MCP worker entry point are part
   of the base install.
-- The current AbstractCore integration expects `abstractcore>=2.20.2`.
+- The current AbstractCore integration expects `abstractcore>=2.30.0`.
 
 Verify:
 
 ```bash
 python -c "import abstractruntime.integrations.abstractcore as ac; print(ac.__all__[:5])"
 ```
+
+## Structured generation is refused before inference
+
+Symptoms:
+- A failed `LLM_CALL` reports an invalid `response_schema`, conflicting structured inputs,
+  or that remote generation cannot transport `response_model` validators.
+
+Use a JSON object schema with nonempty `properties` and identifier-style property
+names. Put `response_schema` and `response_schema_name` on the effect payload,
+and remove a conflicting `response_model` or `response_format`. Send schema
+data through process and HTTP boundaries; generated Python classes do not belong
+in durable effects or `RunState.vars`. These deterministic request refusals are
+not retried, so correct the input before starting another run.
+
+If inference succeeds but validation fails, inspect the recorded response and
+the schema. Local conversion follows Pydantic coercion, while a remote Core
+server applies its own schema validation. Structured responses do not stream
+tokens, even with streaming enabled. See
+[structured responses](integrations/abstractcore.md#structured-responses).
+
+## An optional Core HTTP listener fails to start
+
+`start_core_server(...)` raises for an occupied bind address, unusable server
+configuration or failed Core server startup. Check Core's host/port and its own
+authentication configuration; Gateway credentials are not Core server tokens.
+Native Runtime execution does not require this optional listener. Keep its
+lifecycle separate from native readiness, and inspect the returned handle's
+`status()` after successful startup. Stopping it leaves resident models loaded.
+See [host-managed serving](integrations/abstractcore.md#host-managed-serving).
 
 ## A run is waiting and does not continue
 

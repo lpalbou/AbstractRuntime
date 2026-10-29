@@ -4508,6 +4508,19 @@ def _mlx_process_row_extras(row: Dict[str, Any]) -> Dict[str, Any]:
     if isinstance(row.get("kv_cache_bytes"), int):
         extras["kv_cache_bytes"] = int(row["kv_cache_bytes"])
         extras["kv_cache_estimated"] = True
+    # The model's slot pool (core ADR 0011): how many generations can run on the one weights
+    # instance, how many run and wait now, and why another slot is not built -- so the Resources
+    # table shows the queued state (OVH 8080 pass four: only /host/state carried it).
+    for key in ("slots", "slots_max", "active", "queued", "copies"):
+        value = row.get(key)
+        if isinstance(value, int) and not isinstance(value, bool):
+            extras[key] = int(value)
+    if row.get("slot_refusal_reason"):
+        extras["slot_refusal_reason"] = str(row["slot_refusal_reason"])
+    if isinstance(row.get("slot_bytes"), int):
+        extras["slot_bytes"] = int(row["slot_bytes"])
+    if row.get("shared_weights") is not None:
+        extras["shared_weights"] = bool(row.get("shared_weights"))
     return extras
 
 
@@ -4534,8 +4547,12 @@ def _merge_process_residency_into_text_records(
     rows = _process_residency_rows_for(lane)
     if not rows:
         return records
-    copies_note = " (each a full copy of the weights)" if lane == "huggingface" else ""
+    # Core ADR 0011: GGUF holders share one weights instance; a row whose `copies` is above 1
+    # (transformers holders, or an older Core) still says each holds a copy.
+    copies_note = ""
     for row in rows:
+        copies_note = (" (each a full copy of the weights)" if lane == "huggingface"
+                       and int(row.get("copies") or row.get("holders") or 0) > 1 and not row.get("shared_weights") else "")
         names = [str(n) for n in (row.get("models") or []) if str(n).strip()]
         if not names:
             names = [str(row.get("model_path") or "").strip()]

@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Fit refusals (AbstractCore ADR 0010) reach every surface.** A load refused with `ModelDoesNotFitError` (the model
+  does not fit even after evicting what is not locked) is never retried (a retry would only evict more); its
+  sentence is the effect error, its fields (needed/free bytes, kept models, suggestions) are kept on the ledger
+  record (`result.error_details`, `EffectOutcome.error_details`) and in the residency diagnostics (`refusals`, the
+  last five), and the default pair keeps the sentence instead of the configuration hint.
+
 ### Fixed
 
 - **A console change to a non-text default no longer reloads the text model, and a runtime never

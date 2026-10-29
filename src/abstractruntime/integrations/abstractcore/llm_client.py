@@ -7826,6 +7826,26 @@ class LocalAbstractCoreLLMClient:
         self._provider_endpoint_profile_resolver = None
         self._locked_model_residency: set = set()
         self._on_token: Optional[Any] = None
+        # A STANDALONE client claims the model it holds (ROOT backlog 0897):
+        # without a claim, another client's default switch or a server unload
+        # ejected weights this client was still using and its next call
+        # silently reloaded them. A pool (`MultiLocalAbstractCoreLLMClient
+        # ._adopt_client`) unregisters the clients it owns: its own claims
+        # cover them, and a client it drops must not keep the model claimed.
+        self.residency_owner_label: str = _DEFAULT_RESIDENCY_OWNER_LABEL
+        _pr = _core_process_residency()
+        if _pr is not None:
+            _pr.register_claimant(self)
+
+    def residency_claims(self) -> List[Dict[str, Any]]:
+        """The (provider, model) this standalone client holds, while it holds it."""
+        llm = getattr(self, "_llm", None)
+        if llm is None or not _provider_instance_holds_weights(llm):
+            return []
+        locked = (self._provider, self._model) in set(_local_locked_residency_pairs(self))
+        return [{"provider": self._provider, "model": self._model, "locked": locked, "kind": "pool",
+                 "owner": f"runtime client {id(self):x}",
+                 "owner_label": str(getattr(self, "residency_owner_label", "") or _DEFAULT_RESIDENCY_OWNER_LABEL)}]
 
     def _stream_parity_refusal(self, params: Dict[str, Any]) -> Optional[str]:
         """Why a streamed call on this provider would record less than a non-streamed one, or None."""
@@ -10308,6 +10328,16 @@ def _stamp_readable_holders(records: List[Dict[str, Any]]) -> List[Dict[str, Any
     return records
 
 
+def _provider_instance_holds_weights(instance: Any) -> bool:
+    """Does a provider instance still hold its model? In-process providers
+    drop `llm` / `model_instance` / `pipeline` on unload; a remote provider
+    holds nothing in this process (its claim is filtered by backend anyway)."""
+    attrs = [a for a in ("llm", "model_instance", "pipeline") if hasattr(instance, a)]
+    if not attrs:
+        return True
+    return any(getattr(instance, a, None) is not None for a in attrs)
+
+
 def _text_route_changed(old: Dict[str, Any], old_explicit: bool, new: Dict[str, Any], new_explicit: bool) -> bool:
     """Did a capability-defaults refresh move the TEXT route a pooled text
     client was built from (`input.text`: provider, model, endpoint or
@@ -10607,19 +10637,21 @@ class MultiLocalAbstractCoreLLMClient:
         )
         del previous_clients, previous_overrides
         if (provider_s and model_s) and _WARM_DEFAULT_MODEL:
-            # The new default is built right below: claim it as "building" for
-            # the eject, so switching TO a model this pool already had keeps
-            # MLX's shared weights for the rebuild (HF copies are private: the
-            # dropped one is freed, `_release_own_copies_if_kept`).
+            # The new default is built right below: claim it as "building" from
+            # the eject through the build, so switching TO a model this pool
+            # already had keeps MLX's shared weights for the rebuild (HF copies
+            # are private: the dropped one is freed, `_release_own_copies_if_kept`).
             with self._building_claim((provider_s, model_s)):
                 self._eject_models_dropped_by_switch(dropped)
+                del dropped
+                self._default_client = self._get_client(provider_s, model_s)
         else:
             self._eject_models_dropped_by_switch(dropped)
-        del dropped
-        if (provider_s or model_s) and _WARM_DEFAULT_MODEL:
-            self._default_client = self._get_client(provider_s, model_s)
-        else:
-            self._default_client = None
+            del dropped
+            if (provider_s or model_s) and _WARM_DEFAULT_MODEL:
+                self._default_client = self._get_client(provider_s, model_s)
+            else:
+                self._default_client = None
         self._llm = getattr(self._default_client, "_llm", None)
         return True
 
@@ -10639,21 +10671,21 @@ class MultiLocalAbstractCoreLLMClient:
         reports: Dict[str, Any] = {}
         self._last_switch_ejects = reports
         for (provider_s, model_s), instances in by_pair.items():
+            if str(provider_s) == "huggingface":
+                # A dropped HF copy is this client's to free: never lend it to
+                # another request again (core `process_residency.resident_provider`
+                # skips request-scoped instances).
+                for i in instances:
+                    if i is not None:
+                        try:
+                            setattr(i, "_abstractcore_request_scoped", True)
+                        except Exception:  # noqa: BLE001
+                            pass
             busy = [i for i in instances if i is not None and _provider_inflight_count(i) > 0]
             label = f"{provider_s}/{model_s}"
             if busy:
                 reports[label] = {"deferred": True, "reason": "waiting for the in-flight call"}
-                if label in self._pending_ejects:
-                    continue  # one waiter per model
-                self._pending_ejects[label] = {"provider": provider_s, "model": model_s,
-                                               "reason": "waiting for the in-flight call", "since": time.time()}
-                logger.info(f"default switch: {label} is still generating; it is unloaded when that call ends")
-                threading.Thread(
-                    target=self._eject_after_inflight,
-                    args=(provider_s, model_s, [weakref.ref(i) for i in busy], reports),
-                    name=f"switch-eject:{label}",
-                    daemon=True,
-                ).start()
+                self._defer_eject(provider_s, model_s, instances, reports)
                 continue
             reports[label] = self._release_own_copies_if_kept(
                 provider_s, model_s, instances, self._eject_dropped_pair(provider_s, model_s))
@@ -10675,18 +10707,28 @@ class MultiLocalAbstractCoreLLMClient:
             + list(dict(getattr(self, "_override_clients", {}) or {}).values())
         }
         released = 0
+        busy: List[Any] = []
         for instance in instances:
-            if instance is None or id(instance) in still_pooled or _provider_inflight_count(instance) > 0:
+            if instance is None or id(instance) in still_pooled:
                 continue
             unload = getattr(instance, "unload_model", None)
             if not callable(unload):
                 continue
-            try:
-                unload(model_s)
-                released += 1
-            except Exception as exc:  # noqa: BLE001 - the report says it
-                report = {**report, "release_error": f"{type(exc).__name__}: {exc}"}
-                logger.warning(f"default switch: could not free this client's copy of {provider_s}/{model_s}: {exc}")
+            with _core_residency_lock():
+                # Re-checked under the lock: a call that started meanwhile is
+                # never cancelled; the copy is freed when that call ends.
+                if _provider_inflight_count(instance) > 0:
+                    busy.append(instance)
+                    continue
+                try:
+                    unload(model_s)
+                    released += 1
+                except Exception as exc:  # noqa: BLE001 - the report says it
+                    report = {**report, "release_error": f"{type(exc).__name__}: {exc}"}
+                    logger.warning(f"default switch: could not free this client's copy of {provider_s}/{model_s}: {exc}")
+        if busy:
+            report = {**report, "release_deferred": len(busy)}
+            self._defer_eject(provider_s, model_s, busy, self._last_switch_ejects)
         if released:
             report = {**report, "released_own_copies": released,
                       "reason": f"{report.get('reason') or 'kept for another owner'}; this runtime's own copy was unloaded"}
@@ -10720,19 +10762,47 @@ class MultiLocalAbstractCoreLLMClient:
             logger.info(f"{reason}: unloaded {label} from {int(report.get('holders_found') or 0)} holder(s) no owner uses any more")
         return report
 
+    def _defer_eject(self, provider_s: str, model_s: str, instances: Sequence[Any], reports: Dict[str, Any]) -> None:
+        """Eject (and free this client's copies) when the in-flight calls on
+        `instances` end. One waiter per model: a later switch adds its dropped
+        instances to the running waiter instead of losing them."""
+        label = f"{provider_s}/{model_s}"
+        new_refs = [weakref.ref(i) for i in instances if i is not None]
+        refs = self.__dict__.setdefault("_pending_eject_refs", {})
+        if label in self._pending_ejects and isinstance(refs.get(label), list):
+            refs[label].extend(new_refs)
+            return
+        refs[label] = new_refs
+        self._pending_ejects[label] = {"provider": provider_s, "model": model_s,
+                                       "reason": "waiting for the in-flight call", "since": time.time()}
+        logger.info(f"default switch: {label} is still generating; it is unloaded when that call ends")
+        threading.Thread(
+            target=self._eject_after_inflight,
+            args=(provider_s, model_s, new_refs, reports),
+            name=f"switch-eject:{label}",
+            daemon=True,
+        ).start()
+
     def _eject_after_inflight(self, provider_s: str, model_s: str, refs: List[Any], reports: Dict[str, Any]) -> None:
         label = f"{provider_s}/{model_s}"
         try:
             # Ends when the call ends or the instance is collected.
-            while any((r() is not None and _provider_inflight_count(r()) > 0) for r in refs):
-                time.sleep(0.5)
-            reports[label] = self._release_own_copies_if_kept(
-                provider_s, model_s, [r() for r in refs], self._eject_dropped_pair(provider_s, model_s))
+            while True:
+                while any((r() is not None and _provider_inflight_count(r()) > 0) for r in refs):
+                    time.sleep(0.5)
+                report = self._release_own_copies_if_kept(
+                    provider_s, model_s, [r() for r in list(refs)], self._eject_dropped_pair(provider_s, model_s))
+                reports[label] = report
+                # A copy a new call grabbed meanwhile stays in `refs` (the
+                # release re-queued it here): wait for that call too.
+                if not (isinstance(report, dict) and report.get("release_deferred")):
+                    break
         except Exception as exc:  # noqa: BLE001 - the report must say it failed
             reports[label] = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
             logger.warning(f"default switch: deferred unload of {label} failed: {exc}")
         finally:
             self._pending_ejects.pop(label, None)
+            self.__dict__.get("_pending_eject_refs", {}).pop(label, None)
 
     def _retire_capability_residency_core(self) -> None:
         core = getattr(self, "_capability_residency_core", None)
@@ -10876,6 +10946,11 @@ class MultiLocalAbstractCoreLLMClient:
         A setting that arrives after construction reaches every client the
         pool owns through its setter (`_owned_clients`)."""
         client._capability_residency_parent = weakref.ref(self)
+        # This pool's claims cover the client (0897): its own claim would keep
+        # a model this pool drops "in use" until the client is collected.
+        _pr = _core_process_residency()
+        if _pr is not None:
+            _pr.unregister_claimant(client)
         explicit = getattr(self, "_capability_defaults_explicit", bool(self._capability_defaults))
         if self._core_config_file or explicit:
             _attach_core_execution_context_to_client(

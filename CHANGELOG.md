@@ -25,6 +25,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   carry `owner_label`, residency records carry `held_by`, and the skip reason reads "the runtime of
   account default/bob (loaded) still uses it". HuggingFace process rows also carry the loaded
   `context_length` and `kv_cache_bytes` (AbstractCore 2.31.1).
+- **A standalone `LocalAbstractCoreLLMClient` claims the model it holds** (ROOT backlog 0897): another
+  client's default switch or a server unload no longer ejects weights it still uses (its next call
+  silently reloaded them). A pool unregisters the clients it adopts (its own claims cover them).
+  A dropped HuggingFace copy is never lent to another request again, a copy a call just started on
+  is freed when that call ends, and one waiter per model frees every copy a later switch drops.
 
 ## [0.15.2] - 2026-10-28
 

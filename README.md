@@ -4,9 +4,16 @@
 
 It is designed for long-running workflows that must survive restarts and explicitly model blocking (human input, timers, external events, subworkflows) without keeping Python stacks alive.
 
-**Version:** 0.15.2 • **Python:** 3.10+
+**Version:** 0.15.3 • **Python:** 3.10+
 
 **Status:** pre-1.0 (API may evolve). For production use, pin versions and follow `CHANGELOG.md`.
+
+## What's new in 0.15.3
+
+- **A run-store index build no longer announces its journal replay as changes**: a plain read (`list_run_index`,
+  `warm_session_index`) leaves `change_token` and `changed_run_ids` untouched, so a change-driven consumer (the
+  gateway's mail notification check) no longer re-reads every finished run after each build (a 0.15.2 regression;
+  AbstractGateway backlog 0965). A file that landed during the build and a known run that vanished are still announced.
 
 ## What's new in 0.15.2
 

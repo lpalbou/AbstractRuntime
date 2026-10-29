@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.3] - 2026-10-29
+
 ### Fixed
 
 - **An index build no longer announces its journal replay as changes** (`JsonFileRunStore`; a 0.15.2 regression).

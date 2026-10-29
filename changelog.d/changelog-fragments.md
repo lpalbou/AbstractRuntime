@@ -3,4 +3,4 @@
 - **Changelog entries are fragments** (`changelog.d/`, `scripts/changelog.py`). A pull request adds
   `changelog.d/<pr-or-slug>.md` instead of editing `CHANGELOG.md`'s `[Unreleased]` section, which conflicted on every
   merge of main; the release assembles the fragments (`python scripts/changelog.py assemble X.Y.Z`) and CI fails a pull
-  request that changes `src/` without one. The `[Unreleased]` section was empty.
+  request that changes `src/` without one. The entries already under `[Unreleased]` stay there until the next release assembles them above the fragments.

@@ -17,6 +17,11 @@ Unreleased changes live in [`changelog.d/`](changelog.d/README.md), one file per
   whose catalog has no `hub_page` raises `AbstractCoreTooOld` in words instead of answering page 1.
   `AbstractCoreTooOld` accepts a `required=` description. `extended=True` (every quant of a row's own GGUF repos,
   AbstractCore 0865) is passed the same way and refused in words on an AbstractCore without it.
+- **Fit refusals (AbstractCore ADR 0010) reach every surface.** A load refused with `ModelDoesNotFitError` (the model
+  does not fit even after evicting what is not locked) is never retried (a retry would only evict more); its
+  sentence is the effect error, its fields (needed/free bytes, kept models, suggestions) are kept on the ledger
+  record (`result.error_details`, `EffectOutcome.error_details`) and in the residency diagnostics (`refusals`, the
+  last five), and the default pair keeps the sentence instead of the configuration hint.
 
 ### Fixed
 
@@ -41,14 +46,6 @@ Unreleased changes live in [`changelog.d/`](changelog.d/README.md), one file per
   silently reloaded them). A pool unregisters the clients it adopts (its own claims cover them).
   A dropped HuggingFace copy is never lent to another request again, a copy a call just started on
   is freed when that call ends, and one waiter per model frees every copy a later switch drops.
-
-### Added
-
-- **Fit refusals (AbstractCore ADR 0010) reach every surface.** A load refused with `ModelDoesNotFitError` (the model
-  does not fit even after evicting what is not locked) is never retried (a retry would only evict more); its
-  sentence is the effect error, its fields (needed/free bytes, kept models, suggestions) are kept on the ledger
-  record (`result.error_details`, `EffectOutcome.error_details`) and in the residency diagnostics (`refusals`, the
-  last five), and the default pair keeps the sentence instead of the configuration hint.
 
 ## [0.15.3] - 2026-10-29
 

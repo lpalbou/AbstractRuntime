@@ -158,6 +158,7 @@ mtime). The anticipated ADR ("an automation is its controller root run") is not 
 | 0854 | `planned/0854_replay_view.md` (P0; abstractruntime 0.14.0 carries the reducer, the durable per-run `seq` cursor and the conformance cases; gateway routes and client migration remain; ADR 0010) |
 | 0857 | `planned/0857_entity_direct_memory_writes_provenance.md` (P2; entity memory written outside any effect: world models, tending, night passes; follows 0856) |
 | 0858 | `planned/0858_typed_runs_run_type_stamped_at_start.md` (P1; one `run_type` + `origin.surface` stamped at start, indexed, in `replay_view_v1`; root 1063, gateway 0951) |
+| 0866 | `planned/0866_queued_state_in_the_ledger_and_pools_lend_never_build.md` (P0; Core ADR 0011: gateway-side generations borrow a lease on the principal's pool, never build a client; the `queued` progress phase in the ledger and the replay view; `set_model_concurrency` facade; pool fields relayed) |
 | 0859 | `planned/0859_replay_view_ephemeral_text_deltas.md` (P1; live token text on `/view/stream` as ephemeral `text` deltas the reducer ignores; gateway 0954; regression found by the Assistant desktop migration) |
 | 0044 | `planned/runtime_systemic_reliability/0044_meta_analysis_record.md` (track source record) |
 | 0045 | `planned/runtime_systemic_reliability/0045_crash_replay_harness_and_ordering_invariant.md` |

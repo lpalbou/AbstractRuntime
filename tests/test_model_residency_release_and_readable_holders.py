@@ -187,6 +187,11 @@ def test_release_never_unloads_a_copy_a_call_just_started_on(env):
     out = c._release_own_copies_if_kept(HF[0], HF[1], [racing], {"ok": True, "skipped": True, "reason": "x"})
     assert racing.unloaded == [] and out["release_deferred"] == 1
     racing.inflight.n = 0
+    import time as _t
+    deadline = _t.time() + 5
+    while c._pending_ejects and _t.time() < deadline:   # let the waiter finish HERE: a leaked
+        _t.sleep(0.05)                                 # waiter ejects into the next test's fixture
+    assert not c._pending_ejects
 
 
 def test_a_client_a_pool_adopts_does_not_claim_on_its_own():

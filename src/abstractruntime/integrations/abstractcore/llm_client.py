@@ -10338,6 +10338,21 @@ def _provider_instance_holds_weights(instance: Any) -> bool:
     return any(getattr(instance, a, None) is not None for a in attrs)
 
 
+def residency_refusal_details(exc: Optional[BaseException]) -> Optional[Dict[str, Any]]:
+    """The fields of a core ADR 0010 fit refusal (`ModelDoesNotFitError`, code
+    "model_does_not_fit") anywhere in `exc`'s cause chain, else None."""
+    seen = 0
+    while exc is not None and seen < 8:
+        if getattr(exc, "code", None) == "model_does_not_fit" and callable(getattr(exc, "as_dict", None)):
+            try:
+                return dict(exc.as_dict())
+            except Exception:  # noqa: BLE001
+                return {"code": "model_does_not_fit", "message": str(exc)}
+        exc = exc.__cause__ or exc.__context__
+        seen += 1
+    return None
+
+
 def _text_route_changed(old: Dict[str, Any], old_explicit: bool, new: Dict[str, Any], new_explicit: bool) -> bool:
     """Did a capability-defaults refresh move the TEXT route a pooled text
     client was built from (`input.text`: provider, model, endpoint or
@@ -11012,10 +11027,15 @@ class MultiLocalAbstractCoreLLMClient:
                 self._override_clients = override_clients
             client = override_clients.get(override_key)
             if client is None:
-                with self._building_claim(key):
-                    client = self._create_client(key[0], key[1], llm_kwargs_override=llm_kwargs_override)
-                    with _core_residency_lock():
-                        override_clients[override_key] = client
+                try:
+                    with self._building_claim(key):
+                        client = self._create_client(key[0], key[1], llm_kwargs_override=llm_kwargs_override)
+                        with _core_residency_lock():
+                            override_clients[override_key] = client
+                    self._clear_residency_refusals(key[1])
+                except Exception as exc:
+                    self._note_residency_refusal(exc)
+                    raise
             return client
         client = self._clients.get(key)
         if client is None:
@@ -11024,9 +11044,12 @@ class MultiLocalAbstractCoreLLMClient:
                     client = self._create_client(key[0], key[1])
                     with _core_residency_lock():
                         self._clients[key] = client
+                self._clear_residency_refusals(key[1])
             except DefaultRouteProviderError:
                 raise
             except Exception as exc:
+                if self._note_residency_refusal(exc) is not None:
+                    raise  # the fit refusal is its own sentence (core ADR 0010)
                 # ATTRIBUTION. When the pair that failed IS the host default,
                 # the operator did not type it on this call -- they set it in
                 # the config store, possibly weeks ago through the other entry
@@ -11043,6 +11066,24 @@ class MultiLocalAbstractCoreLLMClient:
                     ) from exc
                 raise
         return client
+
+    def _clear_residency_refusals(self, model: str) -> None:
+        """A model that now loaded is no longer "not loaded": drop its refusals."""
+        refusals = self.__dict__.get("_residency_refusals")
+        if refusals:
+            refusals[:] = [r for r in refusals if str(r.get("model") or "") != str(model)]
+
+    def _note_residency_refusal(self, exc: BaseException) -> Optional[Dict[str, Any]]:
+        """Keep the last fit refusals (core ADR 0010 `ModelDoesNotFitError`) for the
+        residency diagnostics the Models page shows. None when `exc` is not one."""
+        details = residency_refusal_details(exc)
+        if details is None:
+            return None
+        refusals = self.__dict__.setdefault("_residency_refusals", [])
+        refusals.append({**details, "at": time.time()})
+        del refusals[:-5]
+        logger.warning(f"model load refused: {details.get('message')}")
+        return details
 
     def _media_host_client(self) -> "LocalAbstractCoreLLMClient":
         """The pool's media-only client: AbstractCore's capability host (no text model), built
@@ -11147,6 +11188,8 @@ class MultiLocalAbstractCoreLLMClient:
                 for label, report in list((getattr(self, "_last_switch_ejects", {}) or {}).items())
                 if isinstance(report, dict)
             ],
+            # Loads the fit check refused (core ADR 0010): sentence, numbers, suggestions.
+            "refusals": [dict(r) for r in list(self.__dict__.get("_residency_refusals", []) or [])],
         }
 
     def set_provider_endpoint_profile_resolver(self, resolver: Any) -> None:

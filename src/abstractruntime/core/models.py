@@ -340,9 +340,12 @@ class StepRecord:
         self.ended_at = utc_now().isoformat()
         return self
 
-    def finish_failure(self, error: str) -> "StepRecord":
+    def finish_failure(self, error: str, *, details: Optional[Dict[str, Any]] = None) -> "StepRecord":
         self.status = StepStatus.FAILED
         self.error = error
+        if details:
+            # Typed fields of the failure (e.g. `model_does_not_fit`), JSON.
+            self.result = {"error_details": dict(details)}
         self.ended_at = utc_now().isoformat()
         return self
 

@@ -15,7 +15,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `changed_run_ids` then named every run in the tail as changed, so a change-driven consumer re-read every run after
   each build (the gateway's mail notification check loaded all 400 finished runs of its index test on every full
   pass: AbstractGateway backlog 0965, red CI since 0.15.2). Replayed records are still filed into the session,
-  children and active indexes (the 0863 guarantee stands); only records after the mark are announced. Tests:
+  children and active indexes (the 0863 guarantee stands). A replay is quiet only when it says nothing new: its file
+  was known to the store at the build's mark (the scan memo, the sidecar included) and is unchanged since; a file
+  that landed or changed during the build (the record precedes the file, J53-1), a known run now gone, and every
+  record after the mark are announced as before, so a consumer whose token already covers the record still learns
+  of it; a store with no sidecar announces its first replay (a bounded one-off). Tests:
   `tests/test_json_file_run_store_change_token_after_build.py` (red on 0.15.2).
 
 ## [0.15.2] - 2026-10-28

@@ -10,6 +10,46 @@ Unreleased changes live in [`changelog.d/`](changelog.d/README.md), one file per
 
 ## [Unreleased]
 
+### Added
+
+- **`config_facade.model_catalog(..., hub_page=, hub_page_size=)`** (backlog 0864) passes a page of Hugging Face search
+  results through to AbstractCore, which reports it in `hub.search`. It is passed only when asked. An AbstractCore
+  whose catalog has no `hub_page` raises `AbstractCoreTooOld` in words instead of answering page 1.
+  `AbstractCoreTooOld` accepts a `required=` description. `extended=True` (every quant of a row's own GGUF repos,
+  AbstractCore 0865) is passed the same way and refused in words on an AbstractCore without it.
+
+### Fixed
+
+- **A console change to a non-text default no longer reloads the text model, and a runtime never
+  leaves a dropped copy resident.** Found on the Linux test server (two accounts, a 9B GGUF):
+  changing the embedding default evicted the admin runtime's whole text pool; the boot-warmed copy
+  was dropped, its eject skipped because both accounts' runtimes named the same default, and the
+  copy stayed in memory with no pool holding it ("resident ~5.4 GiB + 8.3 GiB cache ... still in
+  use by runtime client 70a5b844f350, runtime client 70a72f833890; not ejected"), with nothing
+  running. Now: (1) a capability-only refresh keeps every pooled text client and hands it the new
+  routes in place (a move of the `input.text` route itself still rebuilds); (2) a configured default
+  the client has not built is no longer a residency claim (a loaded one is its `pool` claim, one
+  loading is `building`); (3) when another runtime really keeps its own copy, the dropping runtime
+  still unloads its OWN HuggingFace copy (`released_own_copies`; MLX shares weights and is left to
+  the process-wide eject); (4) holders are named in words: `MultiLocalAbstractCoreLLMClient
+  .residency_owner_label` (hosts set it; the gateway: "the runtime of account default/bob"), claims
+  carry `owner_label`, residency records carry `held_by`, and the skip reason reads "the runtime of
+  account default/bob (loaded) still uses it". HuggingFace process rows also carry the loaded
+  `context_length` and `kv_cache_bytes` (AbstractCore 2.31.1).
+- **A standalone `LocalAbstractCoreLLMClient` claims the model it holds** (ROOT backlog 0897): another
+  client's default switch or a server unload no longer ejects weights it still uses (its next call
+  silently reloaded them). A pool unregisters the clients it adopts (its own claims cover them).
+  A dropped HuggingFace copy is never lent to another request again, a copy a call just started on
+  is freed when that call ends, and one waiter per model frees every copy a later switch drops.
+
+### Added
+
+- **Fit refusals (AbstractCore ADR 0010) reach every surface.** A load refused with `ModelDoesNotFitError` (the model
+  does not fit even after evicting what is not locked) is never retried (a retry would only evict more); its
+  sentence is the effect error, its fields (needed/free bytes, kept models, suggestions) are kept on the ledger
+  record (`result.error_details`, `EffectOutcome.error_details`) and in the residency diagnostics (`refusals`, the
+  last five), and the default pair keeps the sentence instead of the configuration hint.
+
 ## [0.15.3] - 2026-10-29
 
 ### Fixed

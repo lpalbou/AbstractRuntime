@@ -1002,6 +1002,9 @@ class EffectOutcome:
     # deterministic client errors (invalid request/auth/model-not-found): retrying a permanent
     # 4xx burns attempts and user-facing latency for an identical failure.
     retryable: bool = True
+    # Structured fields of a FAILED outcome the ledger keeps beside the error sentence
+    # (e.g. core ADR 0010 `model_does_not_fit`: needed/free bytes, suggestions).
+    error_details: Optional[Dict[str, Any]] = None
 
     @classmethod
     def completed(cls, result: Optional[Dict[str, Any]] = None) -> "EffectOutcome":
@@ -1012,8 +1015,9 @@ class EffectOutcome:
         return cls(status="waiting", wait=wait)
 
     @classmethod
-    def failed(cls, error: str, *, retryable: bool = True) -> "EffectOutcome":
-        return cls(status="failed", error=error, retryable=retryable)
+    def failed(cls, error: str, *, retryable: bool = True,
+               error_details: Optional[Dict[str, Any]] = None) -> "EffectOutcome":
+        return cls(status="failed", error=error, retryable=retryable, error_details=error_details)
 
     @classmethod
     def cancelled(cls, details: Optional[Dict[str, Any]] = None) -> "EffectOutcome":
@@ -3867,6 +3871,7 @@ class Runtime:
 
         max_attempts = self._effect_policy.max_attempts(effect)
         last_error: Optional[str] = None
+        last_details: Optional[Dict[str, Any]] = None
         self._health.increment("effect_steps_total")
         try:
             # Run-object flag for the tick wrapper's vars-size gauge gate
@@ -4074,7 +4079,8 @@ class Runtime:
 
                 # Failed - record and maybe retry
                 last_error = outcome.error or "unknown error"
-                rec.finish_failure(last_error)
+                last_details = getattr(outcome, "error_details", None)
+                rec.finish_failure(last_error, details=last_details)
                 _slim_terminal_record(rec, started_digests=started_digests)
                 self._ledger_store.append(rec)
             finally:
@@ -4091,7 +4097,7 @@ class Runtime:
             if getattr(outcome, "retryable", True) is False:
                 self._health.increment("effect_failures_total")
                 self._health.record_error("effect", str(last_error or "unknown error"))
-                return EffectOutcome.failed(last_error, retryable=False)
+                return EffectOutcome.failed(last_error, retryable=False, error_details=last_details)
 
             if attempt < max_attempts:
                 # Wait before retry

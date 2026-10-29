@@ -173,3 +173,19 @@ def test_unload_of_a_pooled_hf_client_still_ejects_every_other_copy(monkeypatch)
     assert ejects == [model], "the process-wide HF eject must run after the pool's own unload"
     assert result["ok"] is True and result["unloaded"] is True
     assert result["process_eject"]["holders_unloaded"]
+
+
+def test_a_gguf_slot_pool_row_carries_the_pool_state_and_no_full_copy_warning(monkeypatch):
+    """Core ADR 0011 (OVH 8080 pass four): GGUF holders share ONE weights instance and its slot pool.
+    The listing row carries slots / slots_max / active / queued / slot_refusal_reason (only
+    /host/state did), and never says "each a full copy". MUTANT: extras without the pool keys -> RED."""
+    model = "vendor/held-gguf"
+    row = dict(_held_row(model, 2, 10_000_000, lane="gguf"), copies=1, shared_weights=True, slots=1, slots_max=4,
+               active=1, queued=3, slot_bytes=4_000_000,
+               slot_refusal_reason="another slot of vendor/held-gguf needs 8.3 GiB of GPU memory, 1.0 GiB free")
+    monkeypatch.setattr(llm_mod, "_hf_process_residency_rows", lambda: [row])
+    client = MultiLocalAbstractCoreLLMClient(provider="mlx", model="vendor/other")
+    got = {(m["provider"], m["model"]): m for m in client.list_model_residency(task="text_generation")["models"]}[("huggingface", model)]
+    assert (got["slots"], got["slots_max"], got["active"], got["queued"], got["copies"]) == (1, 4, 1, 3, 1)
+    assert "needs 8.3 GiB" in got["slot_refusal_reason"] and got["slot_bytes"] == 4_000_000
+    assert not any("full copy" in w for w in got.get("warnings", []))

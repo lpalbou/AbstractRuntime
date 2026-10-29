@@ -2550,6 +2550,13 @@ def make_llm_call_handler(*, llm: AbstractCoreLLMClient, artifact_store: Optiona
                 logger.info("LLM_CALL stopped by cancel", detail=str(e))
                 return EffectOutcome.failed(str(e), retryable=False)
             logger.error("LLM_CALL failed", error=str(e))
+            from .llm_client import residency_refusal_details
+
+            refusal = residency_refusal_details(e)
+            if refusal is not None:
+                # core ADR 0010: the model does not fit, even after evicting what is
+                # not locked. Retrying would only evict more: the sentence, once.
+                return EffectOutcome.failed(str(refusal.get("message") or e), retryable=False, error_details=refusal)
             if _is_voice_refusal(e, params.get("output") if isinstance(params, dict) else None):
                 return EffectOutcome.failed(str(e), retryable=False)
             return EffectOutcome.failed(str(e), retryable=_llm_error_is_retryable(e))

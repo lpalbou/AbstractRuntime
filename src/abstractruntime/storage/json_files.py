@@ -188,6 +188,16 @@ class JsonFileRunStore(RunStore):
         self._journal_path = self._base / ".runs_created.log"
         self._journal_lock = threading.Lock()
         self._journal_offset: Optional[int] = None
+        # The journal's size when an index build marked it (`_mark_journal_start`): records
+        # before it are REPLAYED by the first sync (filed into the indexes, nothing announced:
+        # they predate the build's scan, which already read their files, or are this store's own
+        # saves, announced when they happened). Only records after it are changes.
+        self._journal_replay_mark: int = 0
+        # What this store knew when it marked: {run id: file identity token} from the scan memo
+        # (the sidecar included). A replayed record is quiet only for a file known then and
+        # unchanged since; anything else (a file that landed or changed during the build, a known
+        # run now gone) is announced like any change.
+        self._journal_replay_known: Dict[str, tuple] = {}
         from collections import deque as _deque
 
         self._journal_own_appends: Any = _deque(maxlen=8192)
@@ -747,10 +757,17 @@ class JsonFileRunStore(RunStore):
         """Called BEFORE an index's full scan: entries appended from here on
         are re-applied by `_sync_indexes` (idempotent), so nothing created
         during the scan is lost."""
+        if self._journal_offset is not None:
+            return
+        self._load_scan_sidecar_once()  # the memo as a restarted store knows it, before the snapshot
+        with self._scan_memo_lock:
+            known = {rid: tuple(v[0]) for rid, v in self._scan_memo.items()}
         with self._journal_lock:
             if self._journal_offset is None:
                 size = self._journal_size()
                 self._journal_offset = self._journal_replay_start(size) if size is not None else 0
+                self._journal_replay_mark = int(size) if size is not None else 0
+                self._journal_replay_known = known
 
     def _journal_replay_start(self, size: int) -> int:
         """Where the first sync after an index build starts reading: the first record boundary
@@ -824,24 +841,57 @@ class JsonFileRunStore(RunStore):
                 return
             complete = chunk.rfind(b"\n") + 1  # a line still being written waits for the next sync
             self._journal_offset = offset + complete
+            mark = self._journal_replay_mark
             pending = dict(self._journal_pending)
         entries = list(pending.items())
         now = time.time()
-        for raw in chunk[:complete].decode("utf-8", "replace").splitlines():
+        # A record wholly before the build's mark is a replay (0.15.2): it is filed, never
+        # announced as a change (`change_token` / `changed_run_ids` stay put: a read that moved
+        # them made every change-driven consumer re-read every run after each build, 0.15.3).
+        replayed: set = set()
+        announced: set = set()
+        pos = offset
+        for raw_line in chunk[:complete].split(b"\n"):
+            line_end = pos + len(raw_line) + 1
+            raw = raw_line.decode("utf-8", "replace")
             op, rid = raw[:1], raw[1:].strip()
             if op in ("+", "-", "~", "=") and rid:
                 entries.append((rid, (op, now)))
-        self._apply_journal_entries(entries)
+                (replayed if line_end <= mark else announced).add(rid)
+            pos = line_end
+        self._apply_journal_entries(entries, quiet=replayed - announced)
+        if offset + complete >= mark:
+            self._journal_replay_known = {}  # the replay is over: later records are all new
 
-    def _apply_journal_entries(self, entries: Any) -> None:
+    def _apply_journal_entries(self, entries: Any, *, quiet: Any = frozenset()) -> None:
+        """`quiet`: run ids whose records are replays (an index build's tail). A replay is filed
+        without a change-ring note only when it says nothing new: its file was known at the mark
+        (`_journal_replay_known`) and is unchanged since; a known run now gone IS announced. A file
+        that landed or changed during the build (J53-1: the record precedes the file) is announced
+        like any change, so a consumer whose token already covers the record still learns of it."""
         cutoff = time.time() - float(self.STALE_TEMP_AGE_S)
         for rid, (op, since) in entries:
+            note = rid not in quiet
             p = self._path(rid)
             exists = p.exists()
+            if not note:
+                known = self._journal_replay_known.get(rid)
+                if exists:
+                    try:
+                        unchanged = known is not None and tuple(known) == tuple(self._stat_token(p.stat()))
+                    except OSError:
+                        unchanged = False
+                    note = not unchanged
+                else:
+                    with self._scan_memo_lock:
+                        in_memo = rid in self._scan_memo
+                    with self._active_lock:
+                        in_active = rid in self._active
+                    note = known is not None or in_memo or in_active
             if op in ("+", "~", "=") and exists:
                 fields = self._scan_fields(p)
                 if fields is not None:
-                    self._index_fields_into_indexes(rid, fields)
+                    self._index_fields_into_indexes(rid, fields, note=note)
                 # `~` announces a flip TO active: until the file says so it is
                 # not resolved (the writer's replace may land after its line).
                 # `=` is written AFTER its file was published: one read resolves it.
@@ -849,7 +899,7 @@ class JsonFileRunStore(RunStore):
             elif op == "-" and not exists:
                 self._drop_from_children_index(rid)
                 self._drop_from_session_index(rid)
-                self._forget_active(rid)
+                self._forget_active(rid, note=note)
                 self._memo_pop(rid)
                 resolved = True
             elif op == "=":
@@ -862,7 +912,7 @@ class JsonFileRunStore(RunStore):
                 else:
                     self._journal_pending[rid] = (op, since)
 
-    def _index_fields_into_indexes(self, rid: str, fields: Dict[str, Any]) -> None:
+    def _index_fields_into_indexes(self, rid: str, fields: Dict[str, Any], *, note: bool = True) -> None:
         parent = fields.get("parent_run_id")
         parent = str(parent) if parent else None
         with self._index_lock:
@@ -875,7 +925,7 @@ class JsonFileRunStore(RunStore):
             if self._session_index is not None and sid:
                 self._session_index.setdefault(sid, {})[rid] = fields.get("session_kind")
                 self._run_session[rid] = sid
-        self._note_active_status(rid, fields.get("status"))
+        self._note_active_status(rid, fields.get("status"), note=note)
 
     def warm_session_index(self) -> None:
         """Build the session and children indexes now (host boot), so the
@@ -1267,24 +1317,37 @@ class JsonFileRunStore(RunStore):
             e = self._active[rid] = _ActiveEntry()
         return e
 
-    def _note_active_status(self, rid: str, status: Any) -> None:
+    def _note_active_status(self, rid: str, status: Any, *, note: bool = True) -> None:
         """Record what a save, a journal line or a verified read says about a
         run. Always recorded (before the first build too): a scan in progress
         merges by generation, a build not yet started reads disk truth and
-        reconciles these notes with it."""
+        reconciles these notes with it.
+
+        `note=False` (a replayed journal record, `_apply_journal_entries`): the
+        membership is kept right, but nothing is announced: no sequence bump,
+        no change-ring entry, so `change_token` does not move for a read."""
         if not rid:
             return
         with self._active_lock:
+            existed = rid in self._active
             e = self._active_entry(rid)
+            active = self._is_active_status(status)
+            if not note and (not existed or e.active == active):
+                # A replay of a file known at the mark and unchanged since: filed, not announced
+                # (an existing entry whose active flag FLIPS is a change, announced below).
+                e.active = active
+                return
+            e.active = active
             self._active_seq += 1
             e.gen = self._active_seq
-            e.active = self._is_active_status(status)
             self._change_ring.note(self._active_seq, rid)
 
-    def _forget_active(self, rid: str) -> None:
+    def _forget_active(self, rid: str, *, note: bool = True) -> None:
         """The run is gone (deleted here, or a `-id` line): drop its record."""
         with self._active_lock:
             self._active.pop(rid, None)
+            if not note:
+                return
             self._active_seq += 1
             self._change_ring.note(self._active_seq, rid)
 

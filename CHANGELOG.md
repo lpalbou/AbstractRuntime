@@ -7,14 +7,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Added
-
-- **Fit refusals (AbstractCore ADR 0010) reach every surface.** A load refused with `ModelDoesNotFitError` (the model
-  does not fit even after evicting what is not locked) is never retried (a retry would only evict more); its
-  sentence is the effect error, its fields (needed/free bytes, kept models, suggestions) are kept on the ledger
-  record (`result.error_details`, `EffectOutcome.error_details`) and in the residency diagnostics (`refusals`, the
-  last five), and the default pair keeps the sentence instead of the configuration hint.
-
 ### Fixed
 
 - **A console change to a non-text default no longer reloads the text model, and a runtime never
@@ -38,6 +30,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   silently reloaded them). A pool unregisters the clients it adopts (its own claims cover them).
   A dropped HuggingFace copy is never lent to another request again, a copy a call just started on
   is freed when that call ends, and one waiter per model frees every copy a later switch drops.
+
+### Added
+
+- **Fit refusals (AbstractCore ADR 0010) reach every surface.** A load refused with `ModelDoesNotFitError` (the model
+  does not fit even after evicting what is not locked) is never retried (a retry would only evict more); its
+  sentence is the effect error, its fields (needed/free bytes, kept models, suggestions) are kept on the ledger
+  record (`result.error_details`, `EffectOutcome.error_details`) and in the residency diagnostics (`refusals`, the
+  last five), and the default pair keeps the sentence instead of the configuration hint.
+
+## [0.15.3] - 2026-10-29
+
+### Fixed
+
+- **An index build no longer announces its journal replay as changes** (`JsonFileRunStore`; a 0.15.2 regression).
+  0.15.2's first sync after a build re-applies the journal tail before the build's mark (backlog 0863) and noted every
+  replayed record on the change ring: a plain read (`list_run_index`, `warm_session_index`) moved `change_token` and
+  `changed_run_ids` then named every run in the tail as changed, so a change-driven consumer re-read every run after
+  each build (the gateway's mail notification check loaded all 400 finished runs of its index test on every full
+  pass: AbstractGateway backlog 0965, red CI since 0.15.2). Replayed records are still filed into the session,
+  children and active indexes (the 0863 guarantee stands). A replay is quiet only when it says nothing new: its file
+  was known to the store at the build's mark (the scan memo, the sidecar included) and is unchanged since; a file
+  that landed or changed during the build (the record precedes the file, J53-1), a known run now gone, and every
+  record after the mark are announced as before, so a consumer whose token already covers the record still learns
+  of it; a store with no sidecar announces its first replay (a bounded one-off). Tests:
+  `tests/test_json_file_run_store_change_token_after_build.py` (red on 0.15.2).
 
 ## [0.15.2] - 2026-10-28
 

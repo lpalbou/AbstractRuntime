@@ -906,6 +906,9 @@ class ReplayView:
         act = self._activities.get(aid)
         if act is not None:
             act["wait"] = {"kind": kind, "wait_key": key or None, "until": wait.get("until"), "ended_by": None}
+            question_id = _s(_obj(_obj(details).get("question")).get("id"))
+            if kind == "ask_user" and question_id:
+                act["wait"]["question_id"] = question_id
         if kind == "ask_user" and _s(wait.get("prompt")):
             self._message(f"{r.run_id}:{step_id}:question", role="assistant", kind="question",
                           text=_s(wait.get("prompt")), run_id=r.run_id, step_id=step_id, seq=seq, ts=ts,
@@ -971,11 +974,16 @@ class ReplayView:
             self._dirty["runs"].add(r.run_id)
         if kind == "ask_user":
             text = _text_of(answer) if not isinstance(answer, str) else answer.strip()
+            question_id = _obj(_obj(act).get("wait")).get("question_id")
+            if question_id and isinstance(answer, dict) and isinstance(answer.get("response"), str) and answer["response"].strip():
+                text = answer["response"]  # original words, including intentional whitespace
             if not text and isinstance(answer, dict):
                 text = _s(answer.get("response")) or _s(answer.get("value"))
             if text:
                 self._message(f"{r.run_id}:{step_id}:answer", role="user", kind="answer", text=text, run_id=r.run_id,
-                              step_id=step_id, seq=seq, ts=ts, source="resume", extra={"wait_key": key or None})
+                              step_id=step_id, seq=seq, ts=ts, source="resume",
+                              extra={"wait_key": key or None,
+                                     "question_id": question_id})
         self._note_artifacts(r.run_id, step_id, seq, answer, ts)
 
     def _fold_event(self, r: _Run, rec: Dict[str, Any], payload: Dict[str, Any], name: str, ts: str, seq: int,
@@ -1027,8 +1035,8 @@ class ReplayView:
             return
         if name == "abstract.question_reply_retained" and question_receipt and _s(rec.get("status")) == "completed":
             b = _obj(body)
-            text = _s(_obj(b.get("payload")).get("response"))
-            if text:
+            text = _obj(b.get("payload")).get("response")
+            if isinstance(text, str) and text.strip():
                 self._message(f"{r.run_id}:{step_id}:retained_reply", role="user", kind="retained_reply", text=text,
                               run_id=r.run_id, step_id=step_id, seq=seq, ts=ts, source="emit_event",
                               extra={"question_id": b.get("question_id"), "reply_status": "retained",

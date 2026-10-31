@@ -7,4 +7,5 @@
 
 ### Fixed
 
+- Conversational answer and retained-reply replay preserves original human whitespace and the actual question generation identity, including after another question has opened.
 - Completed flows with an explicit structured `result` and no prose now retain a final JSON message in replay. Generic agent envelopes are not serialized; internal-bearing results are withheld from the public projection while their technical run output remains available.

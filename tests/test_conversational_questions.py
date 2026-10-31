@@ -96,12 +96,18 @@ def test_answer_after_cutoff_expires_even_before_due_scan_and_keeps_text(clock):
 def test_early_answer_and_late_old_generation_do_not_answer_next_question(clock):
     wf = workflow(twice=True)
     rt, rid, first = park(wf)
-    second = rt.resume(workflow=wf, run_id=rid, wait_key=first, payload={"response": "Inside"})
+    second = rt.resume(workflow=wf, run_id=rid, wait_key=first, payload={"response": "  Inside\n"})
     assert second.waiting.wait_key != first
     second_key = second.waiting.wait_key
-    rt.resume(workflow=wf, run_id=rid, wait_key=first, payload={"response": "Old reply"})
+    rt.resume(workflow=wf, run_id=rid, wait_key=first, payload={"response": "  Old reply\n"})
     assert rt.get_state(rid).waiting.wait_key == second_key
     assert rt.get_state(rid).vars["_runtime"]["last_question_reply"]["status"] == "retained"
+    messages = replay({rid: rt.get_ledger(rid)}, root_run_id=rid).to_json()["messages"]
+    answer = next(m for m in messages if m["kind"] == "answer")
+    assert answer["text"] == "  Inside\n"
+    assert next(m for m in messages if m["kind"] == "retained_reply")["text"] == "  Old reply\n"
+    assert answer["question_id"] == first.removeprefix("question:")
+    assert answer["question_id"] != second_key.removeprefix("question:")
     with pytest.raises(StaleResumeError):
         rt.resume(workflow=wf, run_id=rid, wait_key=None, payload={"response": "No identity"})
 

@@ -39,7 +39,9 @@ does not close an active wait or claim the actor adopted the correction.
 Optional `client_message_id` correlates a pending client message to the host receipt. Its
 command-inbox sequence is independent of the guidance sidecar sequence encoded in the id.
 
-Question metadata remains on question messages. Host-authored expiry appears as a system
+Question metadata remains on question messages. Answers carry `question_id` from the matched
+original wait when that wait declared one; legacy waits without an identity leave it absent.
+Host-authored expiry appears as a system
 `question_outcome`; a retained late reply is `retained_reply` with its status and reason.
 A fallback is never rendered as a human answer. These facts do not trigger notifications;
 notification and audio policy belongs to the consuming host/client.

@@ -30,7 +30,7 @@
 
 ## Agent Skill
 
-- [AbstractRuntime agent skill](skills/abstractruntime/SKILL.md): operate workflows, durable waits, stores and AbstractCore execution with verified public recipes
+- [AbstractRuntime agent skill](skills/abstractruntime/SKILL.md): operate workflows, conversational questions, durable guidance, stores and AbstractCore execution
 
 ## Guides
 

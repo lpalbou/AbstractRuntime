@@ -112,6 +112,21 @@ the words:
   payload is not byte-reconstructible from the ledger alone —
   reconstruction re-resolves refs through doors that enforce authority.
 
+## Live visit corrections
+
+Visit hosts may call `Runtime.queue_visit_guidance(run_id, text=..., speaker=...,
+display_text=...)` for the current stamped participant while a visit actor is working.
+The canonical host validates ownership before calling this narrower door; generic raw
+`Runtime.steer` remains refused for driver-owned visits. The durable sidecar records
+visit and turn identity, attributed words and optional original display text.
+
+Before the next actor reasoning boundary, the visit performs fresh channel-labeled memory
+recall, merges and deduplicates its handles with those already visible, and appends the
+participant's verbatim correction and the refreshed recall. It keeps the existing transcript
+prefix. Empty queues add no model call or recall. A correction from an older turn is retained
+with attribution and is not silently applied to a later turn. Acceptance and delivery receipts
+describe transport; only the actor's later words can acknowledge a change of plan.
+
 ## Durable visit waits: event + deadline
 
 A visit parks on the visitor's next message; the park may carry an idle

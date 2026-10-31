@@ -4,7 +4,7 @@ description: Operate AbstractRuntime through durable Python workflows, effect re
 license: MIT
 compatibility: Python 3.10+. Model execution needs a configured AbstractCore provider or server; local engines need the apple or gpu install profile. This skill uses the Python API rather than a Gateway HTTP API.
 metadata:
-  package-version: "0.15.3"
+  package-version: "unreleased"
 ---
 
 # AbstractRuntime
@@ -31,15 +31,15 @@ local inference engines. Verify the installed environment before doing work:
 
 ```python
 from importlib.metadata import PackageNotFoundError, version
+from inspect import signature
 try:
     import abstractruntime
     installed = version("abstractruntime")
     assert callable(abstractruntime.Runtime), "Runtime API is unavailable"
+    assert "display_text" in signature(abstractruntime.Runtime.steer).parameters, "Install the matching source checkout for conversational guidance"
 except (ImportError, PackageNotFoundError, AssertionError) as exc:
     raise SystemExit(f"Install verification failed: {exc}") from None
 print(f"AbstractRuntime {installed}")
-if installed != "0.15.3":
-    raise SystemExit("Version differs from this skill; use the installed version's docs/skill.")
 ```
 
 For inference, have the user configure credentials locally; never request keys
@@ -114,7 +114,24 @@ assert runtime.get_ledger(run_id), "Expected recorded execution"
 
 Success is a completed run and a nonempty ledger. For another wait reason, use
 the stored wait's contract; a `WAIT_UNTIL` is not a human approval prompt.
-Two callers cannot resume one wait: the loser gets `StaleResumeError`.
+Two callers cannot resume one legacy wait: the loser gets `StaleResumeError`.
+
+### Ask an essential or timed clarification question
+
+Add `question: {"importance": "essential"}` to the ASK_USER payload to wait indefinitely
+with a fresh `question:<id>` key. For optional clarification, use
+`question: {"importance": "clarification", "timeout_s": 120, "fallback": "Compare both options."}`;
+only 120–300 seconds is valid. Resume the exact key with `{"response": "the person's words"}`.
+Empty responses and approval payloads are refused. At or after the deadline, Runtime returns
+`timed_out`, `fallback` and `question.outcome: "expired"`, with no `response`; do not impersonate
+the user with the fallback. Explicit pause preserves the deadline and suppresses continuation
+until resume. Recognized late replies are retained without answering a newer question.
+
+For public guidance history, supply `display_text` explicitly to `Runtime.steer`; keep original
+human words there and any quoted context in the ordinary message argument. An acceptance
+receipt means queued, not adopted. Driver-owned entity visits require their participant-checked
+visit guidance door, never generic steer. See the API's conversational questions and public
+conversation sections for outcome, crash-recovery and single-writer limits.
 
 ## Keep the same workflow across restarts
 

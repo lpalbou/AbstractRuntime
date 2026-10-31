@@ -720,7 +720,7 @@ class SqliteRunStore(RunStore):
             # EVENT when it carries `until` (the D3 idle-timeout shape) —
             # the scheduler's due-scan must wake a parked visit whose
             # deadline passed, not just pure timers.
-            if run.waiting.reason in (WaitReason.UNTIL, WaitReason.EVENT):
+            if run.waiting.reason in (WaitReason.UNTIL, WaitReason.EVENT, WaitReason.USER):
                 wait_until = str(run.waiting.until) if run.waiting.until else None
 
         # Hot-path read columns (backlog 0068): derived from run.vars in the
@@ -755,7 +755,8 @@ class SqliteRunStore(RunStore):
         wait_until = row["wait_until"]
         if run.status == RunStatus.WAITING and wait_until:
             index_status = (
-                "waiting_until" if row["wait_reason"] == WaitReason.UNTIL.value else "waiting_event_deadline"
+                "waiting_until" if row["wait_reason"] == WaitReason.UNTIL.value else
+                "waiting_question_deadline" if row["wait_reason"] == WaitReason.USER.value else "waiting_event_deadline"
             )
             conn.execute(
                 """

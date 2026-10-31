@@ -21,6 +21,35 @@ delta = view.apply(ledger.list_after(run_id=child_id, after=view.last_seq(child_
 client_copy = apply_delta(doc, delta)      # == view.to_json()
 ```
 
+## Public conversation messages
+
+Explicit completed `public_update` events become assistant messages with
+`kind: "public_update"`, stable run-scoped `id`, `text`, `run_id`, optional `session_id`,
+`iteration`, `source_call_ids`, and normal ledger provenance. Replay does not turn reasoning,
+raw tool output or a marker inside model text into public speech. Diary/thinking fences
+are excluded. These are actor-authored updates; their wording alone is not proof of a fact
+or of completed work.
+
+Public human guidance becomes `role: "user", kind: "guidance", source: "user_guidance"`
+with `speaker` and `guidance_status: "accepted"`. It must come from Runtime's reserved
+host receipt node `__host_user_guidance__` and idempotency key
+`system:user_guidance:<seq>`, not an arbitrary actor-authored event with the same name.
+The words are the explicit `display_text`, not the operational context wrapper. Acceptance
+does not close an active wait or claim the actor adopted the correction.
+Optional `client_message_id` correlates a pending client message to the host receipt. Its
+command-inbox sequence is independent of the guidance sidecar sequence encoded in the id.
+
+Question metadata remains on question messages. Host-authored expiry appears as a system
+`question_outcome`; a retained late reply is `retained_reply` with its status and reason.
+A fallback is never rendered as a human answer. These facts do not trigger notifications;
+notification and audio policy belongs to the consuming host/client.
+
+A final explicit `output.result` object with no prose field can be displayed as JSON. Only
+that result is projected; private siblings in an agent envelope are excluded. The structured
+fallback is withheld when the result itself contains internal fields (such as `scratchpad`,
+`reasoning`, `report`, `messages`, `cycles`, `diary` or underscore-prefixed keys) or diary/thinking
+fences. The original structured output remains available in the technical run output.
+
 ## Contract
 
 - **Pure and deterministic.** There is no I/O and no clock. The input is records plus snapshots,

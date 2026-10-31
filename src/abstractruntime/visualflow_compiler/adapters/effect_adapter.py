@@ -20,6 +20,7 @@ def create_ask_user_handler(
     input_key: Optional[str] = None,
     output_key: Optional[str] = None,
     allow_free_text: bool = True,
+    question: Optional[Dict[str, Any]] = None,
 ) -> Callable:
     """Create a node handler that asks the user for input.
 
@@ -69,6 +70,11 @@ def create_ask_user_handler(
             result_key=output_key or "_temp.user_response",
         )
 
+        question_policy = input_data.get("question") if isinstance(input_data, dict) else None
+        if question_policy is None:
+            question_policy = question
+        if question_policy is not None:
+            effect.payload["question"] = deepcopy(question_policy)
         return StepPlan(
             node_id=node_id,
             effect=effect,

@@ -386,6 +386,7 @@ def _create_effect_node_handler(
             input_key=input_key,
             output_key=output_key,
             allow_free_text=effect_config.get("allowFreeText", True),
+            question=effect_config.get("question"),
         )
     elif effect_type == "answer_user":
         base_handler = create_answer_user_handler(
@@ -1533,6 +1534,10 @@ def _create_visual_agent_effect_handler(
                     if isinstance(parent_prompt_cache, dict)
                     else parent_prompt_cache,
                 )
+
+            conversation = parent_runtime.get("conversation")
+            if isinstance(conversation, dict) and isinstance(conversation.get("enabled"), bool):
+                runtime_ns.setdefault("conversation", deepcopy(conversation))
 
         thinking_value = _normalize_thinking(thinking)
         if thinking_value is None and isinstance(parent_runtime, dict):
@@ -3181,7 +3186,10 @@ def _sync_effect_results_to_node_outputs(run: Any, flow: Flow) -> None:
 
         if effect_type == "ask_user":
             if isinstance(raw, dict):
-                # raw is usually {"response": "..."} (resume payload)
+                # Expiry is a host outcome, never the pre-effect prompt
+                # placeholder or an invented answer by the person.
+                if raw.get("timed_out") is True and "response" not in raw:
+                    current.pop("response", None)
                 current.update(raw)
                 mapped_value = raw.get("response")
         elif effect_type == "answer_user":

@@ -48,7 +48,8 @@ from .models import (
 from .spec import WorkflowSpec
 from .policy import DefaultEffectPolicy, EffectPolicy
 from .progress_channel import effect_delta_callback, effect_progress_callback
-from .step_context import StepContext, effect_step_context
+from .step_context import StepContext, effect_step_context, current_step_context
+from .questions import QUESTION_HISTORY_LIMIT, make_question, question_of, resolution_payload
 from .live_deltas import LiveDeltaEmitter, LiveDeltaSink
 from .effect_cancellation import (
     EffectKilled,
@@ -1787,6 +1788,17 @@ class Runtime:
     def cancel_run(
         self, run_id: str, *, reason: Optional[str] = None, cancelled_by: str = "api"
     ) -> RunState:
+        # Only a parked conversational question needs answer/cancel arbitration.
+        # Ordinary in-flight cancellation must NEVER wait behind the tick lock.
+        run = self.get_state(run_id)
+        if run.status == RunStatus.WAITING and question_of(run.waiting):
+            with _RESUME_LOCKS.hold("question-resolution:" + run_id):
+                return self._cancel_run_commit(run_id, reason=reason, cancelled_by=cancelled_by)
+        return self._cancel_run_commit(run_id, reason=reason, cancelled_by=cancelled_by)
+
+    def _cancel_run_commit(
+        self, run_id: str, *, reason: Optional[str] = None, cancelled_by: str = "api"
+    ) -> RunState:
         """Cancel a run.
 
         Sets the run status to CANCELLED. Only RUNNING or WAITING runs can be cancelled.
@@ -1821,6 +1833,9 @@ class Runtime:
             request_effect_cancel(run.run_id, cancelled_by=cancelled_by, reason=run.error or reason)
             return run
 
+        question = question_of(run.waiting)
+        if question:
+            self._record_question_resolution(run, question, "cancelled", {"cancelled_by": cancelled_by})
         run.status = RunStatus.CANCELLED
         run.error = reason or "Cancelled"
         run.waiting = None
@@ -1838,7 +1853,8 @@ class Runtime:
         self._append_terminal_status_event(run)
         return run
 
-    def steer(self, run_id: str, message: Any) -> int:
+    def steer(self, run_id: str, message: Any, *, display_text: Optional[str] = None,
+              speaker: Optional[str] = None, client_message_id: Optional[str] = None) -> int:
         """Queue a steer message for a live run (hooks plan H4).
 
         The message is APPENDED to the steer sidecar — never written into run
@@ -1881,7 +1897,16 @@ class Runtime:
             item = copy.deepcopy(message)
         else:
             raise ValueError("steer message must be a non-empty string or a dict with string content")
+        if display_text is not None:
+            if not isinstance(display_text, str) or not display_text.strip() or len(display_text) > 65_536:
+                raise ValueError("display_text must contain 1–65536 characters of human input")
+            item["public_message"] = {"text": display_text, "speaker": speaker or "person:operator"}
+            if client_message_id is not None:
+                if not isinstance(client_message_id, str) or not client_message_id.strip():
+                    raise ValueError("client_message_id must be a non-empty string")
+                item["public_message"]["client_message_id"] = client_message_id
         seq = int(self._steer_store.append(run.run_id, item))
+        recorded = display_text is None or self._record_guidance_acceptance(run, seq, item["public_message"])
         # TOCTOU close (adversary P2): the run may have finished between the
         # status check and the append. Recheck once and retire the message so
         # it cannot sit pending forever on a terminal run.
@@ -1892,7 +1917,10 @@ class Runtime:
                 RunStatus.FAILED,
                 RunStatus.CANCELLED,
             ):
-                self._steer_store.ack(run.run_id, seq)
+                if recorded:
+                    self._steer_store.ack(run.run_id, seq)
+                if display_text is not None:
+                    return seq  # words accepted/retained, never a claim of adoption
                 raise ValueError(
                     f"run '{run_id}' finished while the steer was being queued; message retired"
                 )
@@ -1900,6 +1928,69 @@ class Runtime:
             raise
         except Exception:  # pragma: no cover - recheck is best-effort
             pass
+        return seq
+
+    def _record_guidance_acceptance(self, run: RunState, seq: int, public: Dict[str, Any]) -> bool:
+        """Repairable projection of the durable sidecar admission, never raw inbox data.
+
+        A receipt failure does not turn an already-durable admission into a
+        refusal. The sidecar keeps the exact public words; delivery retries
+        the receipt BEFORE acknowledging/removing that source.
+        """
+        try:
+            with _RESUME_LOCKS.hold("guidance-receipt:" + run.run_id):
+                key = f"system:user_guidance:{seq}"
+                if any(r.get("node_id") == "__host_user_guidance__" and r.get("idempotency_key") == key
+                       for r in self._ledger_store.list(run.run_id)):
+                    return True
+                body = {
+                    "id": f"{run.run_id}:guidance:{seq}", "text": public["text"],
+                    "run_id": run.run_id, "session_id": run.session_id,
+                    "speaker": public["speaker"], "seq": seq, "status": "accepted",
+                }
+                if public.get("client_message_id"):
+                    body["client_message_id"] = public["client_message_id"]
+                rec = StepRecord.start(run=run, node_id="__host_user_guidance__",
+                    effect=Effect(type=EffectType.EMIT_EVENT, payload={"name": "user_guidance", "scope": "run", "payload": body}),
+                    idempotency_key=key)
+                rec.finish_success(body)
+                self._ledger_store.append(rec)
+                return True
+        except Exception as exc:
+            self._health.record_error("guidance_receipt", str(exc))
+            logger.warning("accepted guidance %s#%s awaits public receipt repair: %s", run.run_id, seq, exc)
+            return False
+
+    def queue_visit_guidance(self, run_id: str, *, text: str, speaker: str,
+                             display_text: Optional[str] = None) -> int:
+        """Trusted visit-host door: attributed words, consumed by the visit recall rite.
+
+        This does not call/relax generic steer(), write live run vars, wake a
+        wait, or claim that the actor adopted the correction.
+        """
+        run = self.get_state(run_id)
+        ns = run.vars.get("_runtime") or {}
+        stamp = ns.get("entity") or {}
+        visit = run.vars.get("_visit")
+        if (not isinstance(visit, dict) or not isinstance(stamp, dict)
+                or not stamp.get("visit_id") or speaker not in (stamp.get("participants") or [])):
+            raise PermissionError("visit guidance requires a stamped participant on the current visit")
+        if not isinstance(text, str) or not text.strip():
+            raise ValueError("visit guidance requires non-empty text")
+        if (run.status != RunStatus.RUNNING or run.current_node not in
+                {"reason", "parse", "act", "observe", "maybe_review", "review_parse"}):
+            raise ValueError("the visit is not taking live guidance now; answer its wait or send the next turn")
+        if self._steer_store is None:
+            raise RuntimeError("visit guidance requires its durable steer sidecar")
+        shown = text if display_text is None else display_text
+        if not isinstance(shown, str) or not shown.strip() or len(shown) > 65_536:
+            raise ValueError("display_text must contain 1–65536 characters of human input")
+        seq = int(self._steer_store.append(run_id, {
+            "kind": "visit_guidance", "content": text, "speaker": speaker,
+            "visit_id": stamp["visit_id"], "turn_id": str((run.vars.get("_turn") or {}).get("turn_id") or ""),
+            "channel": "operator-visit", "public_message": {"text": shown, "speaker": speaker},
+        }))
+        self._record_guidance_acceptance(run, seq, {"text": shown, "speaker": speaker})
         return seq
 
     @staticmethod
@@ -1956,16 +2047,23 @@ class Runtime:
                 return
             # H5 at DELIVERY time too: refuse to deliver into a visit run even
             # if a message slipped past the append-time guard (birth window).
+            visit_guidance = False
             try:
                 self._refuse_entity_steer(run)
             except PermissionError:
-                logger.warning(
-                    "steer sidecar: %d message(s) pending on entity visit run %s are NOT "
-                    "delivered (H5: the steer rite is not built); they stay pending.",
-                    len(items),
-                    run.run_id,
-                )
-                return
+                stamp = (run.vars.get("_runtime") or {}).get("entity") or {}
+                for item in items:
+                    msg = item.get("message") or {}
+                    if (msg.get("kind") != "visit_guidance" or msg.get("visit_id") != stamp.get("visit_id")
+                            or msg.get("speaker") not in (stamp.get("participants") or [])):
+                        logger.warning("raw steer refused at visit delivery; use the attributed visit door")
+                        return
+                visit_guidance = True
+            for entry in items:
+                msg = entry.get("message") or {}
+                public = msg.get("public_message")
+                if isinstance(public, dict) and not self._record_guidance_acceptance(run, int(entry["seq"]), public):
+                    return  # durable source remains pending; no silent loss or false delivery
             runtime_ns = run.vars.get("_runtime")
             if not isinstance(runtime_ns, dict):
                 runtime_ns = {}
@@ -1990,10 +2088,11 @@ class Runtime:
                 or _is_paused_run_vars(latest.vars)
             ):
                 return
-            inbox = runtime_ns.get("inbox")
+            inbox_key = "visit_guidance_pending" if visit_guidance else "inbox"
+            inbox = runtime_ns.get(inbox_key)
             if not isinstance(inbox, list):
                 inbox = []
-                runtime_ns["inbox"] = inbox
+                runtime_ns[inbox_key] = inbox
             # Bounded inbox via BACKPRESSURE, never destruction (backlog
             # 0053, reshaped by the 2026-07-14 adversary P2-2: the first
             # cut drop-oldested at delivery — destroying operator words
@@ -2029,7 +2128,10 @@ class Runtime:
                 )
             seqs: list[int] = []
             for entry in fresh:
-                inbox.append(entry.get("message"))
+                message = copy.deepcopy(entry.get("message"))
+                if visit_guidance:
+                    message["seq"] = int(entry.get("seq") or 0)
+                inbox.append(message)
                 seqs.append(int(entry.get("seq") or 0))
             last_seq = max(seqs)
             runtime_ns["steer_watermark"] = last_seq
@@ -2066,6 +2168,12 @@ class Runtime:
             logger.warning("steer sidecar drain failed for run %s: %s", run.run_id, e)
 
     def pause_run(self, run_id: str, *, reason: Optional[str] = None) -> RunState:
+        if question_of(self.get_state(run_id).waiting):
+            with _RESUME_LOCKS.hold("question-resolution:" + run_id):
+                return self._pause_run_commit(run_id, reason=reason)
+        return self._pause_run_commit(run_id, reason=reason)
+
+    def _pause_run_commit(self, run_id: str, *, reason: Optional[str] = None) -> RunState:
         """Pause a run (durably) until it is explicitly resumed.
 
         Semantics:
@@ -2085,7 +2193,8 @@ class Runtime:
 
         # Don't interfere with real user prompts (ASK_USER).
         if run.status == RunStatus.WAITING and run.waiting is not None:
-            if getattr(run.waiting, "reason", None) == WaitReason.USER and not _is_pause_wait(run.waiting, run_id=run_id):
+            if (getattr(run.waiting, "reason", None) == WaitReason.USER
+                    and not question_of(run.waiting) and not _is_pause_wait(run.waiting, run_id=run_id)):
                 return run
 
         control = _ensure_control_namespace(run.vars)
@@ -2111,6 +2220,12 @@ class Runtime:
         return run
 
     def resume_run(self, run_id: str) -> RunState:
+        if question_of(self.get_state(run_id).waiting):
+            with _RESUME_LOCKS.hold("question-resolution:" + run_id):
+                return self._resume_paused_run_commit(run_id)
+        return self._resume_paused_run_commit(run_id)
+
+    def _resume_paused_run_commit(self, run_id: str) -> RunState:
         """Resume a previously paused run (durably).
 
         If the run was paused while RUNNING, this clears the synthetic pause wait
@@ -2643,6 +2758,21 @@ class Runtime:
                     self._apply_resume_payload(run, payload={}, override_node=run.waiting.resume_to_node)
                 else:
                     return run
+            elif question_of(run.waiting):
+                question = question_of(run.waiting)
+                if (self._question_resolution(run_id, question["id"]) is not None
+                        or (run.waiting.until and utc_now_iso() >= run.waiting.until)):
+                    # Resolve via the same locked commit as an answer; no client timer.
+                    with _RESUME_LOCKS.hold("question-resolution:" + run_id):
+                        run, finished = self._resume_commit(
+                            workflow=workflow, run_id=run_id, wait_key=run.waiting.wait_key,
+                            payload=resolution_payload(question_of(run.waiting), "expired"),
+                            _question_expiry=True,
+                        )
+                    if finished:
+                        return run
+                else:
+                    return run
             elif run.waiting and run.waiting.reason == WaitReason.EVENT and run.waiting.until:
                 # EVENT wait with a DEADLINE (frozen seam spec D3): the event
                 # resume wins before the deadline; past it, the wait resolves
@@ -3134,13 +3264,90 @@ class Runtime:
         # its Agent node twice) re-reads the committed state and is refused
         # as "Run is not waiting". The tick after the commit takes the same
         # lock again for its whole duration (`run_mutation_lock`).
-        with run_mutation_lock(run_id):
+        with run_mutation_lock(run_id), _RESUME_LOCKS.hold("question-resolution:" + run_id):
             run, finished = self._resume_commit(
                 workflow=workflow, run_id=run_id, wait_key=wait_key, payload=payload
             )
         if finished or max_steps <= 0:
             return run
         return self.tick(workflow=workflow, run_id=run_id, max_steps=max_steps)
+
+    def _question_receipt(self, run: RunState, name: str, data: Dict[str, Any]) -> None:
+        """Full durable history; these records are facts, never notification effects."""
+        rec = StepRecord.start(
+            run=run, node_id="__host_question__",
+            effect=Effect(type=EffectType.EMIT_EVENT, payload={"name": name, "scope": "run", "payload": data}),
+            idempotency_key=f"system:question:{uuid.uuid4()}",
+        )
+        rec.finish_success(data)
+        self._ledger_store.append(rec)
+
+    def _record_question_resolution(
+        self, run: RunState, question: Dict[str, Any], outcome: str, payload: Dict[str, Any]
+    ) -> None:
+        runtime_ns = _ensure_runtime_namespace(run.vars)
+        history = runtime_ns.setdefault("question_outcomes", [])
+        if not isinstance(history, list):
+            raise ValueError("_runtime.question_outcomes must be a list")
+        if any(isinstance(row, dict) and row.get("id") == question["id"] for row in history):
+            return
+        existing = self._question_resolution(run.run_id, question["id"])
+        if existing is not None:
+            row = existing["question"]
+        else:
+            row = {**question, "outcome": outcome, "resolved_at": utc_now_iso()}
+            self._question_receipt(run, "abstract.question_resolved", {"question": row, "payload": payload})
+        history.append(row)
+        if len(history) > QUESTION_HISTORY_LIMIT:
+            # Bounded index only; complete entries remain in the ledger.
+            del history[:-QUESTION_HISTORY_LIMIT]
+
+    def _question_resolution(self, run_id: str, question_id: str) -> Optional[Dict[str, Any]]:
+        """The durable winner also survives receipt append before checkpoint save."""
+        for rec in reversed(self._ledger_store.list(run_id)):
+            if (rec.get("node_id") != "__host_question__" or rec.get("status") != StepStatus.COMPLETED.value
+                    or not str(rec.get("idempotency_key") or "").startswith("system:question:")):
+                continue
+            effect = rec.get("effect") or {}
+            if (effect.get("payload") or {}).get("name") != "abstract.question_resolved":
+                continue
+            result = rec.get("result") or {}
+            if isinstance(result.get("question"), dict) and result["question"].get("id") == question_id:
+                return result
+        return None
+
+    def _retain_question_reply(
+        self, run: RunState, wait_key: str, payload: Dict[str, Any], *, reason: str, save: bool = True
+    ) -> bool:
+        """Keep late/paused text without applying it to any question or action."""
+        question_id = wait_key.removeprefix("question:")
+        question = question_of(run.waiting)
+        if not question or question.get("id") != question_id:
+            history = _ensure_runtime_namespace(run.vars).get("question_outcomes", [])
+            question = next((row for row in history if isinstance(row, dict) and row.get("id") == question_id), None)
+            if question is None:
+                # The bounded index may have rolled over; history remains authoritative.
+                for rec in reversed(self._ledger_store.list(run.run_id)):
+                    result = rec.get("result") if isinstance(rec, dict) else None
+                    candidate = result.get("question") if isinstance(result, dict) else None
+                    if isinstance(candidate, dict) and candidate.get("id") == question_id:
+                        question = candidate
+                        break
+        if question is None:
+            return False
+        receipt = {
+            "question_id": question_id, "status": "retained", "reason": reason,
+            "payload": copy.deepcopy(payload), "received_at": utc_now_iso(),
+            "message": "Your reply was kept as context; it did not answer or resume a question.",
+        }
+        self._question_receipt(run, "abstract.question_reply_retained", receipt)
+        _ensure_runtime_namespace(run.vars)["last_question_reply"] = {
+            key: value for key, value in receipt.items() if key != "payload"
+        }
+        if save:
+            run.updated_at = utc_now_iso()
+            self._run_store.save(run)
+        return True
 
     def _waiting_record(
         self, run_id: str, wait: Optional[WaitState], effect_type: EffectType
@@ -3206,9 +3413,20 @@ class Runtime:
         run_id: str,
         wait_key: Optional[str],
         payload: Dict[str, Any],
+        _question_expiry: bool = False,
     ) -> tuple[RunState, bool]:
         """Validate and persist one resume; returns (run, finished)."""
         run = self.get_state(run_id)
+        question = question_of(run.waiting)
+        if isinstance(wait_key, str) and wait_key.startswith("question:") and (
+            run.status != RunStatus.WAITING or run.waiting is None or wait_key != run.waiting.wait_key
+        ):
+            if self._retain_question_reply(run, wait_key, payload, reason="already_resolved"):
+                return run, True
+        if question and _is_paused_run_vars(run.vars):
+            if wait_key == run.waiting.wait_key:
+                self._retain_question_reply(run, wait_key, payload, reason="paused")
+                return run, True
         if _is_paused_run_vars(run.vars):
             raise ValueError("Run is paused")
         if run.status != RunStatus.WAITING or run.waiting is None:
@@ -3218,6 +3436,32 @@ class Runtime:
         # Validate wait_key if provided
         if wait_key is not None and run.waiting.wait_key is not None and wait_key != run.waiting.wait_key:
             raise StaleResumeError(f"wait_key mismatch: expected '{run.waiting.wait_key}', got '{wait_key}'")
+
+        if question:
+            if wait_key != run.waiting.wait_key:
+                raise StaleResumeError("conversational question requires its exact wait_key")
+            resolved = self._question_resolution(run_id, question["id"])
+            expired = bool(run.waiting.until and utc_now_iso() >= run.waiting.until)
+            if _question_expiry and not expired and resolved is None:
+                raise ValueError("question deadline has not passed")
+            if resolved is not None:
+                # A crash may have published the winner without saving RunState.
+                # Reapply that winner, never arbitrate a second time against a later clock.
+                if resolved["question"]["outcome"] == "cancelled":
+                    return self._cancel_run_commit(run_id), True
+                saved_payload = copy.deepcopy(resolved["payload"])
+                if not _question_expiry and payload != saved_payload and payload.get("response") != saved_payload.get("response"):
+                    self._retain_question_reply(run, wait_key, payload, reason="already_resolved", save=False)
+                payload = saved_payload
+            elif expired:
+                if not _question_expiry:
+                    self._retain_question_reply(run, wait_key, payload, reason="deadline_passed", save=False)
+                payload = resolution_payload(question, "expired")
+            else:
+                if "approved" in payload or not isinstance(payload.get("response"), str) or not payload["response"].strip():
+                    raise ValueError("conversational question answer requires a non-empty response string")
+                payload = {**payload, **resolution_payload(question, "answered")}
+            self._record_question_resolution(run, question, payload["question"]["outcome"], payload)
 
         resume_to = run.waiting.resume_to_node
         result_key = run.waiting.result_key
@@ -4636,9 +4880,32 @@ class Runtime:
         choices = effect.payload.get("choices")
         allow_free_text = bool(effect.payload.get("allow_free_text", True))
 
+        question = None
+        if effect.payload.get("question") is not None:
+            ctx = current_step_context(run.run_id)
+            issuance = self._effect_policy.idempotency_key(run=run, node_id=run.current_node, effect=effect) if ctx else None
+            published_at = utc_now_iso()
+            if issuance:
+                # A crash after the WAITING row but before the run save must
+                # preserve the published generation and its original deadline.
+                for row in reversed(self._ledger_store.list(run.run_id)):
+                    old_wait = ((row.get("result") or {}).get("wait") or {})
+                    old = (old_wait.get("details") or {}).get("question") or {}
+                    if old.get("id") == issuance:
+                        published_at = old["published_at"]
+                        break
+            try:
+                question = make_question(effect.payload["question"], published_at=published_at,
+                                         issuance_id=issuance)
+            except ValueError as exc:
+                return EffectOutcome.failed(str(exc), retryable=False)
+            wait_key = f"question:{question['id']}"
+
         wait = WaitState(
             reason=WaitReason.USER,
             wait_key=str(wait_key),
+            until=question["deadline"] if question else None,
+            details={"question": question} if question else None,
             resume_to_node=resume_to,
             result_key=effect.result_key,
             prompt=str(prompt),
@@ -4968,6 +5235,10 @@ class Runtime:
                     sub_rt = {}
                     sub_vars["_runtime"] = sub_rt
                 sub_rt.setdefault("stream", stream)
+            conversation = (parent_rt or {}).get("conversation") if isinstance(parent_rt, dict) else None
+            if isinstance(conversation, dict) and isinstance(conversation.get("enabled"), bool):
+                sub_rt = sub_vars.setdefault("_runtime", {})
+                sub_rt.setdefault("conversation", copy.deepcopy(conversation))
         except Exception:
             pass
         # The host's built-in workspace protection is authoritative for the run

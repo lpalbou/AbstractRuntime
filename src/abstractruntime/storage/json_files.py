@@ -2390,7 +2390,7 @@ class JsonFileRunStore(RunStore):
                 continue
             if fields.get("status") != RunStatus.WAITING.value:
                 continue
-            if fields.get("wait_reason") not in (WaitReason.UNTIL.value, WaitReason.EVENT.value):
+            if fields.get("wait_reason") not in (WaitReason.UNTIL.value, WaitReason.EVENT.value, WaitReason.USER.value):
                 continue
             until = fields.get("wait_until")
             if not until:
@@ -2543,7 +2543,7 @@ class JsonFileRunStore(RunStore):
             fields = self._verify_active_fields(p, RunStatus.WAITING) if ids is not None else self._scan_fields(p)
             if fields is None or fields.get("status") != RunStatus.WAITING.value:
                 continue
-            if fields.get("wait_reason") not in (WaitReason.UNTIL.value, WaitReason.EVENT.value):
+            if fields.get("wait_reason") not in (WaitReason.UNTIL.value, WaitReason.EVENT.value, WaitReason.USER.value):
                 continue
             until = fields.get("wait_until")
             if until and (best is None or str(until) < best):

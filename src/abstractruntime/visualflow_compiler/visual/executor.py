@@ -3517,17 +3517,20 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
             choices = input_data.get("choices", []) if isinstance(input_data, dict) else []
             allow_free_text = config.get("allowFreeText", True)
 
+            question = input_data.get("question") if isinstance(input_data, dict) else None
+            if question is None:
+                question = config.get("question")
+            pending = {
+                "type": "ask_user", "prompt": prompt, "choices": choices, "allow_free_text": allow_free_text,
+            }
+            if question is not None:
+                pending["question"] = question
             return {
                 "response": f"[User prompt: {prompt}]",
                 "prompt": prompt,
                 "choices": choices,
                 "allow_free_text": allow_free_text,
-                "_pending_effect": {
-                    "type": "ask_user",
-                    "prompt": prompt,
-                    "choices": choices,
-                    "allow_free_text": allow_free_text,
-                },
+                "_pending_effect": pending,
             }
 
         return handler

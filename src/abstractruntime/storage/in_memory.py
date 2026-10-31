@@ -157,7 +157,7 @@ class InMemoryRunStore(RunStore):
                 continue
             if run.waiting is None:
                 continue
-            if run.waiting.reason not in (WaitReason.UNTIL, WaitReason.EVENT):
+            if run.waiting.reason not in (WaitReason.UNTIL, WaitReason.EVENT, WaitReason.USER):
                 continue
             if run.waiting.until is None:
                 continue
@@ -188,7 +188,7 @@ class InMemoryRunStore(RunStore):
             for r in list(self._runs.values())
             if r.status == RunStatus.WAITING
             and r.waiting is not None
-            and r.waiting.reason in (WaitReason.UNTIL, WaitReason.EVENT)
+            and r.waiting.reason in (WaitReason.UNTIL, WaitReason.EVENT, WaitReason.USER)
             and r.waiting.until
         ]
         return min(deadlines) if deadlines else None

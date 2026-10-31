@@ -1129,7 +1129,7 @@ Implementation: `src/abstractruntime/core/runtime.py`.
   - optional `step_gate()` is consulted at every step boundary; when it returns `False` the tick returns the persisted state and the run stays `RUNNING` (a later tick continues where it stopped)
 - `Runtime.resume(workflow, run_id, wait_key, payload, max_steps=...) -> RunState`
   - validates the `wait_key`, writes `payload` to `WaitState.result_key` (if set), and continues from `WaitState.resume_to_node`
-  - a wait is resumed at most once: a resume of a run that is no longer waiting, or that waits on another key, raises `StaleResumeError` (a `ValueError`), for example when another caller resumed it first
+  - a wait is resumed at most once: a resume of a run that is no longer waiting, or that waits on another key, raises `StaleResumeError` (a `ValueError`); replies to recognized conversational questions are instead retained without answering or resuming another question (below)
   - the check and the commit run under a per-run lock, and tools approved with `{"approved": true}` execute while that lock is held, so a long tool delays a competing resume of the same run, which is then refused
 - `run_mutation_lock(run_id)` (package root): the per-run, per-process, re-entrant lock that `tick` holds for the whole tick and `resume` for its commit; take it around your own read-modify-save of a run so a tick cannot overwrite your change
 - `Runtime.get_state(run_id) -> RunState` and `Runtime.get_ledger(run_id) -> list[dict]`
@@ -1146,6 +1146,77 @@ Effect cancellation helpers (`src/abstractruntime/core/effect_cancellation.py`):
 - `inflight_effects(run_ids=None)` lists executing effects (run, step, provider, model, elapsed time)
 - `request_model_effects_cancel(provider, model, cancelled_by="model_eject")` stops the effects using a model before it is unloaded; local `unload_model_residency` calls it for you
 - `kill_inflight_effect(step_id, killed_by=...)` is an in-process hard stop for a call that ignores its cancel event (it cannot interrupt a thread blocked inside one native call)
+
+### Conversational questions and deadlines
+
+`ASK_USER` retains its indefinite legacy behavior when `payload.question` is absent.
+For a conversational question, add exactly one of these policies alongside the existing
+`prompt`, `choices` and `allow_free_text` fields:
+
+```json
+{"importance": "essential"}
+```
+
+```json
+{"importance": "clarification", "timeout_s": 120, "fallback": "Compare both options before choosing."}
+```
+
+Essential questions have no deadline or fallback. Clarifications require a numeric duration
+from 120 through 300 seconds and a nonempty, predeclared safe fallback. Extra policy fields
+are refused. Time passing never grants tool approval or permission to perform an action.
+Flows may supply the same object through the AskUser `question` input or `effectConfig.question`.
+
+Every logical issuance has a fresh `wait_key` (`question:<id>`). Its persisted
+`waiting.details.question` contains `id`, `purpose: "conversation"`, `importance`,
+`published_at`, `deadline` and `fallback` (the last two are null for essential questions).
+The existing `waiting.prompt` remains the question text. Resume with the exact key and
+`{"response": "the person's words"}`. Empty responses and approval payloads are refused.
+
+The server arbitrates at commit time: a response before the deadline wins; at or after it,
+expiry wins even if the due scan has not run. An answer result carries
+`question: {id, outcome: "answered"}`. Expiry produces
+`{timed_out: true, fallback: "...", question: {id, outcome: "expired"}}` with no `response`.
+Hosts and actors must present this as a host-authored continuation, never as human speech.
+Cancellation records a `cancelled` outcome and does not continue the workflow.
+
+Explicit pause suppresses timeout continuation. The original deadline survives pause and
+restart; after explicit resume, an overdue question resolves before further work. A reply to
+a paused, expired or already resolved recognized question is retained in the ledger, with
+its reason, and does not answer a newer question. The small outcome index retains 64 entries;
+full outcomes and retained replies remain in the ledger. Outcome receipts are authoritative
+across a crash before the following checkpoint save.
+
+Memory, JSON and SQLite run stores index these USER deadlines through their existing due-wait
+queries. The existing scheduler/host runner advances them; Runtime does not install a timer
+service. Resolution uses process-local locks and the existing single-writer authority for
+the store; it is not a distributed multi-writer transaction. Legacy EVENT deadlines and
+tool-approval waits retain their own contracts.
+
+### Public conversation and accepted guidance
+
+An opt-in actor may inherit `_runtime.conversation: {enabled: true}` through native child
+workflows and VisualFlow Agent nodes. This flag does not create an extra inference call.
+Public updates enter replay only through an explicit completed `EMIT_EVENT` named
+`public_update`, with payload `id`, `text`, `run_id`, optional `session_id`, `iteration` and
+`source_call_ids`. The event's owner must match `run_id`; private diary/thinking fences are
+excluded. See [replay.md](replay.md#public-conversation-messages).
+
+For human input during work, `Runtime.steer(run_id, message, display_text=words, speaker=...)`
+keeps the existing durable guidance path and adds a public acceptance receipt only when
+`display_text` is explicitly supplied. `message` may contain quoted context; `display_text`
+preserves the person's exact original words (nonblank, at most 65,536 characters).
+Operational steering without this field does not become public human history.
+Hosts may supply `client_message_id` for correlation; it is preserved on the reserved
+receipt and replay message, independently of the sidecar sequence and message id.
+An accepted receipt means the words were durably queued; the actor's later response is the
+evidence that it considered or adopted them. It does not undo an action already performed.
+
+If the sidecar append succeeds and the public-receipt append fails, admission still succeeds:
+the exact words remain in the sidecar and the host logs a repair warning. Delivery repairs
+the receipt before acknowledging that source. A terminal run does not promise another actor
+boundary; its retained sidecar remains recoverable rather than being reported as refused.
+Entity visits use the narrower participant-checked visit door and fresh attributed recall,
+described in [entity-runtime.md](entity-runtime.md#live-visit-corrections).
 
 Tool scope: an explicit `allowed_tools` list in `run.vars["_runtime"]`, in a child run's `_runtime`, or in a `TOOL_CALLS` payload is a ceiling intersected across the run tree (`src/abstractruntime/core/tool_scope.py`). Approval policy can remove a prompt but can never grant a tool outside it; a missing key means unrestricted and an empty list denies every tool.
 
@@ -6180,6 +6251,21 @@ the words:
   payload is not byte-reconstructible from the ledger alone —
   reconstruction re-resolves refs through doors that enforce authority.
 
+## Live visit corrections
+
+Visit hosts may call `Runtime.queue_visit_guidance(run_id, text=..., speaker=...,
+display_text=...)` for the current stamped participant while a visit actor is working.
+The canonical host validates ownership before calling this narrower door; generic raw
+`Runtime.steer` remains refused for driver-owned visits. The durable sidecar records
+visit and turn identity, attributed words and optional original display text.
+
+Before the next actor reasoning boundary, the visit performs fresh channel-labeled memory
+recall, merges and deduplicates its handles with those already visible, and appends the
+participant's verbatim correction and the refreshed recall. It keeps the existing transcript
+prefix. Empty queues add no model call or recall. A correction from an older turn is retained
+with attribution and is not silently applied to a later turn. Acceptance and delivery receipts
+describe transport; only the actor's later words can acknowledge a change of plan.
+
 ## Durable visit waits: event + deadline
 
 A visit parks on the visitor's next message; the park may carry an idle
@@ -6339,6 +6425,35 @@ doc = view.to_json()                       # replay_view_v1, JSON-safe
 delta = view.apply(ledger.list_after(run_id=child_id, after=view.last_seq(child_id))[0])
 client_copy = apply_delta(doc, delta)      # == view.to_json()
 ```
+
+## Public conversation messages
+
+Explicit completed `public_update` events become assistant messages with
+`kind: "public_update"`, stable run-scoped `id`, `text`, `run_id`, optional `session_id`,
+`iteration`, `source_call_ids`, and normal ledger provenance. Replay does not turn reasoning,
+raw tool output or a marker inside model text into public speech. Diary/thinking fences
+are excluded. These are actor-authored updates; their wording alone is not proof of a fact
+or of completed work.
+
+Public human guidance becomes `role: "user", kind: "guidance", source: "user_guidance"`
+with `speaker` and `guidance_status: "accepted"`. It must come from Runtime's reserved
+host receipt node `__host_user_guidance__` and idempotency key
+`system:user_guidance:<seq>`, not an arbitrary actor-authored event with the same name.
+The words are the explicit `display_text`, not the operational context wrapper. Acceptance
+does not close an active wait or claim the actor adopted the correction.
+Optional `client_message_id` correlates a pending client message to the host receipt. Its
+command-inbox sequence is independent of the guidance sidecar sequence encoded in the id.
+
+Question metadata remains on question messages. Host-authored expiry appears as a system
+`question_outcome`; a retained late reply is `retained_reply` with its status and reason.
+A fallback is never rendered as a human answer. These facts do not trigger notifications;
+notification and audio policy belongs to the consuming host/client.
+
+A final explicit `output.result` object with no prose field can be displayed as JSON. Only
+that result is projected; private siblings in an agent envelope are excluded. The structured
+fallback is withheld when the result itself contains internal fields (such as `scratchpad`,
+`reasoning`, `report`, `messages`, `cycles`, `diary` or underscore-prefixed keys) or diary/thinking
+fences. The original structured output remains available in the technical run output.
 
 ## Contract
 

@@ -221,8 +221,8 @@ capability default of the client or Core server. The result carries `answers`
 System One body: `model`, `answers`, `usage`, `latency_ms`, `truncated` when
 the state was cut), `content` (the answers as JSON) and the decision model's
 `provider` / `model`. The VisualFlow `decide` node asks one question (inputs `state`, `question`,
-`question_type` = `choice` | `noul` | `score`, `options` or `levels`, `model`,
-`truncate`) and fills that type's pins (`answer`; `choice`/`confidence`/
+`question_type` = `choice` | `noul` | `score`, `options` or `levels`, `provider`,
+`model`, `truncate`) and fills that type's pins (`answer`; `choice`/`confidence`/
 `probabilities`, `noul`/`verdict`, or `score`/`level`); a wired `questions`
 object asks several at once and fills `answers`. It lowers to the same effect;
 remote runtimes post `/v1/decisions` on the Core server. Threshold `confidence` or the probabilities before acting;

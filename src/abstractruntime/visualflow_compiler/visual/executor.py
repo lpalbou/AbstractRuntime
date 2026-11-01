@@ -3510,9 +3510,15 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
             if truncate_raw is not None:
                 output_spec["truncate"] = _coerce_bool(truncate_raw)
 
+            # `provider` comes from the node's own pin only (the editor's decision-provider
+            # picker): `effectConfig.provider` is the text runtime of llm_call-style nodes,
+            # never a decision selector. A `provider/model` handle in `model` still names its
+            # own provider (AbstractCore splits it).
+            provider = _nonempty_str(_dict_input(payload).get("provider"))
             model = _nonempty_str(_input_or_config(payload, config, "model"))
+            if provider:
+                output_spec["provider"] = provider.strip().lower()
             if model:
-                # `provider/model` handles travel whole; AbstractCore splits them.
                 output_spec["model"] = model
 
             pending: Dict[str, Any] = {

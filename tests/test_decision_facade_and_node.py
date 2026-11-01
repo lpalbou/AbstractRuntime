@@ -308,19 +308,18 @@ def test_decide_node_without_model_or_truncate_sends_only_the_decision_spec() ->
     assert output == {"modality": "decision", "questions": QUESTIONS}
 
 
-def test_decide_node_runtime_provider_model_inputs_are_not_decision_selectors() -> None:
-    plan = _plan_for_node(
-        "decide",
-        {"state": "s", "questions": QUESTIONS},
-        {"provider": "lmstudio", "model_text": "chat-model"},
-    )
+def test_decide_node_provider_pin_is_the_decision_provider_never_the_text_runtime() -> None:
+    """The node's `provider` / `model` pins pick the DECISION model (the editor scopes the
+    pickers to decision providers); the text runtime never reaches the spec, and without pins
+    the spec names no route (the output.decision default applies)."""
+    plan = _plan_for_node("decide", {"state": "s", "questions": QUESTIONS}, {"provider": "mlx", "model": "jaredpalmer/kev-0.8b"})
+    output = dict(plan.effect.payload["output"])
+    assert output["provider"] == "mlx" and output["model"] == "jaredpalmer/kev-0.8b"
+    assert "provider" not in plan.effect.payload
 
-    assert plan.effect is not None
-    payload = dict(plan.effect.payload or {})
-    assert "provider" not in payload
-    output = dict(payload.get("output") or {})
-    assert "provider" not in output
-    assert "model" not in output
+    plan = _plan_for_node("decide", {"state": "s", "questions": QUESTIONS, "provider": "lmstudio", "model_text": "chat-model"})
+    output = dict(plan.effect.payload["output"])
+    assert "provider" not in output and "model" not in output
 
 
 def test_decide_node_rejects_missing_state_or_questions() -> None:
@@ -866,3 +865,14 @@ def test_level_is_the_nearest_label_with_half_rounding_up(score, level) -> None:
     from abstractruntime.visualflow_compiler.compiler import _decide_level_for
 
     assert _decide_level_for(score, {"0": "Calm", "1": "Frustrated", "2": "Very angry"}) == level
+
+
+def test_decide_provider_pin_travels_beside_the_model() -> None:
+    # the provider PIN (wired or a pin default) selects the decision provider ...
+    plan = _plan_for_node("decide", {"state": "s", "question": "q?", "question_type": "noul"},
+                          {"provider": "MLX", "model": "jaredpalmer/kev-0.8b"})
+    output = plan.effect.payload["output"]
+    assert output["provider"] == "mlx" and output["model"] == "jaredpalmer/kev-0.8b"
+    # ... while effectConfig.provider (the text runtime of llm_call-style nodes) never does
+    plan = _plan_for_node("decide", {"state": "s", "question": "q?", "question_type": "noul", "provider": "lmstudio", "model": "typesafe/jev-latest"})
+    assert "provider" not in plan.effect.payload["output"] and plan.effect.payload["output"]["model"] == "typesafe/jev-latest"

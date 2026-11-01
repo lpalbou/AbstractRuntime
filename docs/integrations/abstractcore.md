@@ -16,7 +16,7 @@ Implementation pointers (this repo):
 pip install abstractruntime
 ```
 
-The base install includes AbstractCore 2.30.0 or newer. That is the supported baseline for the current server auth split (`Authorization` for server auth, `X-AbstractCore-Provider-API-Key` for provider overrides), generated-media contracts, image upscaling, capability catalog, prompt-cache control-plane endpoints (including session attribution via `/acore/prompt_cache/key_meta`), host memory snapshots, the host-wide loaded-model sweep used by residency listings, the process-wide MLX residency report and eject used by model unload, durable bloc prompt-cache helpers, bindings and lifecycle operations, task-aware model residency for text/image/video/TTS/STT, current tool catalog, AbstractCore's public output-selector contract, async/sync text-generation output-selector parity, video generation endpoints, the public local vision-cache catalog helper used by Runtime discovery, vision adapter discovery plus batch/LoRA media controls, and the released shared workspace/file-filter utility surface used by Runtime packaging and integration checks.
+The base install includes AbstractCore 2.32.0 or newer. That is the supported baseline for the `decision` output modality (the `output.decision` route and `/v1/decisions`), the current server auth split (`Authorization` for server auth, `X-AbstractCore-Provider-API-Key` for provider overrides), generated-media contracts, image upscaling, capability catalog, prompt-cache control-plane endpoints (including session attribution via `/acore/prompt_cache/key_meta`), host memory snapshots, the host-wide loaded-model sweep used by residency listings, the process-wide MLX residency report and eject used by model unload, durable bloc prompt-cache helpers, bindings and lifecycle operations, task-aware model residency for text/image/video/TTS/STT, current tool catalog, AbstractCore's public output-selector contract, async/sync text-generation output-selector parity, video generation endpoints, the public local vision-cache catalog helper used by Runtime discovery, vision adapter discovery plus batch/LoRA media controls, and the released shared workspace/file-filter utility surface used by Runtime packaging and integration checks.
 
 The base install also includes the remote-light media/capability plugins needed
 for AbstractCore's multimodal `generate(..., output=...)` path. Local
@@ -104,7 +104,7 @@ print(state.output)
   "messages": [{"role": "user", "content": "..."}],
   "system_prompt": "...",
   "media": ["path/or/artifact-ref"],
-  "output": {"modality": "text|image|video|voice|sound|music", "task": "optional"},
+  "output": {"modality": "text|image|video|voice|sound|music|decision", "task": "optional"},
   "tools": [{"name": "...", "description": "...", "parameters": {...}}],
   "params": {
     "temperature": 0.0,
@@ -359,6 +359,51 @@ Long-running generated media may expose provider progress callbacks. Runtime off
 
 **It is not carried in the payload either.** `Effect.payload` is JSON to every consumer downstream (ledger, SSE stream, host handlers that `json.dumps` it), so the callback travels BESIDE the effect: `Runtime._execute_effect_with_retry` installs it on the `contextvars.ContextVar` in `abstractruntime/core/progress_channel.py` for the duration of the handler call, and `make_llm_call_handler` reads it there into its own params dict — which is what becomes provider kwargs. An explicit `params["on_progress"]` from the caller always wins; an effect with no progress channel is offered `None`, never the previous effect's callback. A handler that hands work to a bare thread must carry the callback object (it does — `params` holds it), not re-read the ContextVar.
 
+### Decisions
+
+A decision is text in, calibrated typed answers out: an `LLM_CALL` whose output spec is `{"modality": "decision", "questions": {...}}`, with the state (the document the questions are about) as the prompt. Optional spec keys: `truncate` (bool), `provider` and `model` (the decision model). `model` may be a `provider/model` handle such as `mlx/jaredpalmer/kev-4b`, `huggingface/ggml-org/Kev-4B-GGUF:Q4_K_M` or `typesafe/jev-latest`; AbstractCore splits it. Without a model the call takes the `output.decision` capability default, so a text runtime on any provider answers decisions once that default is set, and AbstractCore runs the configured decision model. Each question is a `choice`, `noul` or `score` object (`{"type": ..., "instructions": ..., "criteria": ...}`), or AbstractCore's shorthand: a string is a yes/no (`noul`) question, a list is a `choice`. See AbstractCore's [decision models guide](https://github.com/lpalbou/abstractcore/blob/main/docs/decision-models.md) for the question and answer shapes and the available models.
+
+```python
+Effect(
+    type=EffectType.LLM_CALL,
+    payload={
+        "prompt": "Shoes arrived two weeks late and in the wrong size.",
+        "output": {
+            "modality": "decision",
+            "model": "mlx/jaredpalmer/kev-4b",
+            "questions": {
+                "department": {
+                    "type": "choice",
+                    "instructions": "Which team should handle this?",
+                    "criteria": ["returns", "billing", "shipping"],
+                },
+                "urgent": "Is the customer asking for urgent help?",
+            },
+        },
+    },
+    result_key="triage",
+)
+```
+
+A decision produces no bytes: it needs no `ArtifactStore`, and `outputs` / `resources` are empty. The result carries the answers as JSON in `content`, the System One body in `decision` (`model`, `answers`, `usage`, `latency_ms`, and `truncated` when the state was cut to fit the model), `answers` (= `decision.answers`), and `provider` / `model` naming the decision model that answered. The resolved action id is `decision`. A decision spec receives no derived session prompt-cache key.
+
+```json
+{
+  "content": "{\"department\": {...}, \"urgent\": {...}}",
+  "decision": {"model": "...", "answers": {...}, "usage": {"input_tokens": 212, "output_tokens": 0}, "latency_ms": 41},
+  "answers": {
+    "department": {"type": "choice", "choice": "returns", "confidence": 0.91, "probabilities": {"returns": 0.91, "billing": 0.07, "shipping": 0.02}},
+    "urgent": {"type": "noul", "noul": 0.12}
+  },
+  "provider": "mlx",
+  "model": "jaredpalmer/kev-4b",
+  "outputs": {},
+  "resources": {}
+}
+```
+
+Remote and hybrid runtimes post `POST /v1/decisions` on the AbstractCore server (`model` as `provider/model`, `state`, `questions`, `truncate`) and map the server's body to the same result. For a durable child run on an existing run use `decide(...)` on the [run facade](#durable-run-scoped-media-and-comms-execution); in VisualFlow use the `decide` node.
+
 ### Text phase feedback (prefill vs generation)
 
 The callback is injected for **every** `LLM_CALL`, not only generated-media ones. AbstractCore decides per PROVIDER whether it has an honest signal (`BaseProvider.supports_text_progress_events()`, default `False`); a provider that has none never calls back, and that run's ledger gains no progress records at all. Providers that do (today: every MLX lane) report the prefill→generation boundary, so a client can replace "Thinking…" with what the call is actually doing.
@@ -383,7 +428,7 @@ One real record, from a `basic-agent` chat turn on `mlx/Qwen3.5-4B-4bit`:
 
 **Scope.** These records are `scope: "run"` and land in the ledger of the run that made the call. In a chat bundle the `llm_call` runs inside the Agent node's SUBWORKFLOW, so a client sees them only once it follows child ledgers — the same requirement that already applies to the `abstract.status` "Thinking…" event (`result.wait.details.sub_run_id` on the parent's waiting record).
 
-Remote runtimes support chat media by sending OpenAI-compatible data URL content arrays to AbstractCore Server. They also support image generation (`/v1/images/generations`), image edits (`/v1/images/edits` or `/{provider}/v1/images/edits`), image upscaling (`/v1/images/upscale` or `/{provider}/v1/images/upscale`), text-to-video (`/v1/videos/generations`), image-to-video (`/v1/videos/edits` or `/{provider}/v1/videos/edits`), TTS (`/v1/audio/speech`), music generation (`/v1/audio/music`), and STT (`/v1/audio/transcriptions`) with the same artifact-backed result shape. The Runtime/Core request surface forwards task-specific media controls including `count`/`n`, `seeds`, ordered `lora_adapters`, and video `flow_shift`. Remote media endpoint calls do not inherit the chat model by default; pass an output-specific `model` only when you want a remote provider/model instead of the server's configured capability default. Remote STT requires exactly one audio media item that resolves to a local file path or artifact-backed temporary file. Remote image edits, image upscaling, and image-to-video require one source image media item resolving to a local path or artifact-backed temporary file. For voice clone/register or reference-guided TTS, use local execution so AbstractCore can use its in-process capability dispatcher. Runtime does not import `abstractmusic` directly; local music support comes through the configured AbstractCore capability stack.
+Remote runtimes support chat media by sending OpenAI-compatible data URL content arrays to AbstractCore Server. They also support image generation (`/v1/images/generations`), image edits (`/v1/images/edits` or `/{provider}/v1/images/edits`), image upscaling (`/v1/images/upscale` or `/{provider}/v1/images/upscale`), text-to-video (`/v1/videos/generations`), image-to-video (`/v1/videos/edits` or `/{provider}/v1/videos/edits`), TTS (`/v1/audio/speech`), music generation (`/v1/audio/music`), and STT (`/v1/audio/transcriptions`) with the same artifact-backed result shape, and decisions (`/v1/decisions`) with the typed-answer result shape described under [Decisions](#decisions). The Runtime/Core request surface forwards task-specific media controls including `count`/`n`, `seeds`, ordered `lora_adapters`, and video `flow_shift`. Remote media endpoint calls do not inherit the chat model by default; pass an output-specific `model` only when you want a remote provider/model instead of the server's configured capability default. Remote STT requires exactly one audio media item that resolves to a local file path or artifact-backed temporary file. Remote image edits, image upscaling, and image-to-video require one source image media item resolving to a local path or artifact-backed temporary file. For voice clone/register or reference-guided TTS, use local execution so AbstractCore can use its in-process capability dispatcher. Runtime does not import `abstractmusic` directly; local music support comes through the configured AbstractCore capability stack.
 
 Remote multimodal generation currently supports one `output` selector per `LLM_CALL`. Hybrid runtimes use the same remote LLM/media path as remote mode while executing tools locally. Local runtimes can use AbstractCore's in-process multimodal dispatcher for richer capability plugin behavior.
 
@@ -611,7 +656,7 @@ Contract notes:
 - This surface is intentionally host-oriented; the runtime effect handlers still only use prompt caching during LLM execution, and gateway/CLI hosts manage prompt caches and durable bloc/KV artifacts through the public facade instead of reaching through to provider internals.
 - Automatic per-session prompt-cache keys are enabled by `run.vars["_runtime"]["prompt_cache"]`, `LLM_CALL.params.prompt_cache_key`, or the Runtime-owned `ABSTRACTRUNTIME_PROMPT_CACHE` process default. Gateway-specific prompt-cache env vars should be translated by Gateway into `_runtime.prompt_cache`.
 - Durable exact reuse uses `LLM_CALL.params.prompt_cache_binding`. If a binding includes `key`, Runtime adopts it as the effective cache key, rejects mismatches before provider execution, and skips auto-derived session-key injection for that call.
-- Automatic prompt-cache key derivation is text/chat-only. Non-text output selectors such as image, voice, music, and transcription may carry an explicit `prompt_cache_binding`, but Runtime does not derive a session cache key for them.
+- Automatic prompt-cache key derivation is text/chat-only. Non-text output selectors such as image, voice, music, decision, and transcription may carry an explicit `prompt_cache_binding`, but Runtime does not derive a session cache key for them.
 - Local Runtime owns the bloc store root policy:
   - default local root: `~/.abstractruntime/blocs`
   - default file-runtime root: `<base_dir>/blocs`
@@ -1134,7 +1179,7 @@ except VoiceLibraryError as err:
 
 ## Durable run-scoped media and comms execution
 
-Hosts sometimes need to trigger image/TTS/music/STT work or outbound comms sends for an existing run. That work should still execute through Runtime so the child run ledger, artifact ownership, and replay surface remain Runtime-authored.
+Hosts sometimes need to trigger image/TTS/music/STT work, a decision, or outbound comms sends for an existing run. That work should still execute through Runtime so the child run ledger, artifact ownership, and replay surface remain Runtime-authored.
 
 Public durable entry points:
 
@@ -1151,6 +1196,7 @@ Public durable entry points:
 - `generate_voice(...)`
 - `stream_voice(...)`
 - `generate_music(...)`
+- `decide(...)`
 - `transcribe_audio(...)`
 - `send_email(...)`
 - `send_telegram_message(...)`
@@ -1236,6 +1282,29 @@ child = facade.generate_video(
 
 print(child.run_id, child.output["result"]["outputs"]["video"][0]["artifact_id"])
 ```
+
+For a calibrated decision (typed answers, no artifact), use the same child-run boundary:
+
+```python
+child = facade.decide(
+    "existing-parent-run-id",
+    state="Shoes arrived two weeks late and in the wrong size.",
+    questions={
+        "department": {
+            "type": "choice",
+            "instructions": "Which team should handle this?",
+            "criteria": ["returns", "billing", "shipping"],
+        },
+        "urgent": "Is the customer asking for urgent help?",
+    },
+    model="mlx/jaredpalmer/kev-4b",
+)
+
+result = child.output["result"]
+print(child.run_id, result["model"], result["answers"]["department"]["choice"])
+```
+
+`decide(run_id, *, state, questions, model=None, truncate=None, params=None, child_vars=None)` starts a child `LLM_CALL` whose output spec is `{"modality": "decision", "questions": ...}` (plus `truncate` and `model` when given) with `state` as the prompt. A `provider/model` handle travels whole and AbstractCore splits it; omit `model` to use the `output.decision` capability default. The child's result carries `answers`, `decision`, `content`, `provider` and `model` as described under [Decisions](#decisions).
 
 Outbound comms sends that belong to a run should use the same durable child-run surface:
 

@@ -366,6 +366,8 @@ def _resolved_action_id_from_output(summary: Dict[str, Any]) -> str:
         if task == "text_to_audio":
             return "generated_sound"
         return "generated_music"
+    if modality == "decision":
+        return "decision"
     return "generate_text"
 
 
@@ -463,7 +465,8 @@ def _augment_output_request_for_runtime(output: Any, *, run: RunState) -> Any:
 
         modality = str(s.get("modality") or "").strip().lower()
         task = str(s.get("task") or "").strip()
-        tags = _runtime_output_tags(run, generated_media=modality != "text")
+        # A decision is typed answers, not generated media (no bytes, no artifact).
+        tags = _runtime_output_tags(run, generated_media=modality not in {"text", "decision"})
         existing_tags = s.get("tags")
         if isinstance(existing_tags, dict):
             tags.update({str(k): str(v) for k, v in existing_tags.items() if v is not None})

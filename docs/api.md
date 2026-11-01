@@ -297,8 +297,8 @@ VisualFlow compiler helpers are available from `abstractruntime.visualflow_compi
 - `compile_visualflow(...)` and `compile_visualflow_tree(...)` compile VisualFlow JSON into executable `WorkflowSpec` objects.
 
 VisualFlow authoring note (media and document nodes):
-- Runtime recognizes first-class VisualFlow media nodes such as `generate_image`, `edit_image`, `image_to_image`, `upscale_image`, `image_upscale`, `generate_video`, `text_to_video`, `image_to_video`, `generate_voice`, `generate_music`, `transcribe_audio`, and `listen_voice`.
-- Generated-media and transcription nodes lower to a durable `EffectType.LLM_CALL` with an `output` selector (for example `{"modality":"music","task":"music_generation"}`), while `listen_voice` lowers to `WAIT_EVENT`. Hosts should persist the authoring node type rather than pre-lowering to `llm_call`.
+- Runtime recognizes first-class VisualFlow media nodes such as `generate_image`, `edit_image`, `image_to_image`, `upscale_image`, `image_upscale`, `generate_video`, `text_to_video`, `image_to_video`, `generate_voice`, `generate_music`, `decide`, `transcribe_audio`, and `listen_voice`.
+- Generated-media and transcription nodes lower to a durable `EffectType.LLM_CALL` with an `output` selector (for example `{"modality":"music","task":"music_generation"}`), while `listen_voice` lowers to `WAIT_EVENT`. The `decide` node asks ONE question about a state (inputs `state`, `question`, `question_type` = `choice` | `noul` | `score`, `options` for a choice, `levels` for a score, `model`, `truncate`) and fills the typed output pins of that type (`answer` plus `choice`/`confidence`/`probabilities`, `noul`/`verdict`, or `score`/`level`/`confidence`/`probabilities`, with `model` and `success`); a wired `questions` object (several System One questions) replaces the single question and fills `answers`. It lowers to the same `LLM_CALL` with `{"modality":"decision","questions":{...}}` and the state as the prompt; see [decisions](integrations/abstractcore.md#decisions). Hosts should persist the authoring node type rather than pre-lowering to `llm_call`.
 - Runtime also recognizes file/document nodes. `read_file` and `write_file`
   handle UTF-8 text/JSON workspace paths. In Gateway-hosted runs, those paths
   follow the shared canonical contract: `rel/path` for the main workspace root
@@ -451,7 +451,7 @@ Implementation: `src/abstractruntime/replay/` (ADR 0010). Guide: [replay.md](rep
 
 ### AbstractCore (LLM + tools)
 
-Requires: `pip install abstractruntime` (AbstractCore 2.30.0 or newer is part of the base install).
+Requires: `pip install abstractruntime` (AbstractCore 2.32.0 or newer is part of the base install).
 
 Implementation: `src/abstractruntime/integrations/abstractcore/*`.
 
@@ -475,7 +475,7 @@ Entry points:
 - local `list_model_residency` merges AbstractCore's host-wide loaded-model sweep into text-generation listings (sweep-only rows carry `source: "provider_server"` and no `task` label), and residency rows normalize provider size extras to `size_bytes` / `size_vram_bytes` while keeping the originals; local text rows also carry registry-declared `modalities` (omitted on a registry miss), host identity (`host_id` / `host_name`), and runtime-owned lock truth (`locked` / `lockable`, with `pinned` a truthful alias of `locked` — never the default-identity flag, which `default` alone carries), while remote listings keep the Core server's row identity
 - host-local prompt-cache export/import admin also lives on the host facade and client delegation layer (`list_prompt_cache_exports`, `prompt_cache_export`, `prompt_cache_import`) and is intentionally local-only
 - host-facade email helpers (`list_email_accounts`, `list_emails`, `read_email`, `send_email`) use the process's own AbstractCore account (single-user installs)
-- run-facade helpers create and resume durable child runs for existing runs (`execute_llm_call`, `execute_tool_calls`, `resume_tool_calls`, `generate_image`, `edit_image`, `upscale_image`, `generate_video`, `image_to_video`, `generate_voice`, `generate_music`, `transcribe_audio`, `send_email`, `send_telegram_message`)
+- run-facade helpers create and resume durable child runs for existing runs (`execute_llm_call`, `execute_tool_calls`, `resume_tool_calls`, `generate_image`, `edit_image`, `upscale_image`, `generate_video`, `image_to_video`, `generate_voice`, `generate_music`, `decide`, `transcribe_audio`, `send_email`, `send_telegram_message`)
 - task-specific image/video helpers preserve batch and adapter controls such as
   `count`/`n`, `seeds`, ordered `lora_adapters`, and video `flow_shift`; local
   subprocess isolation stays within the same public contract.
@@ -497,11 +497,12 @@ Execution controls and cancellation:
 Multimodal support:
 - common remote-light AbstractCore media, vision, voice, audio, and music dependencies are part of the base Runtime install
 - local clients call AbstractCore's unified `generate(..., media=..., output=...)`
-- remote and hybrid clients support AbstractCore Server chat media content arrays plus image generation, image edits, image upscaling, text-to-video, image-to-video, speech, music generation, and transcription endpoints; pass an output-specific `model` for remote media provider routing, otherwise the server endpoint can use its configured capability default
+- remote and hybrid clients support AbstractCore Server chat media content arrays plus image generation, image edits, image upscaling, text-to-video, image-to-video, speech, music generation, transcription, and decision (`POST /v1/decisions`) endpoints; pass an output-specific `model` for remote media provider routing, otherwise the server endpoint can use its configured capability default
 - remote transcription requires one audio media item that resolves to a local file path or artifact-backed temporary file
 - generated image/video/voice/music/audio bytes require a runtime `ArtifactStore`; the result contains `artifact_id` / `artifact_ref` instead of inline bytes
+- a decision (`output: {"modality": "decision", "questions": {...}}`, the state as the prompt) is typed answers, not bytes: no `ArtifactStore` is needed, and the result carries `content` (the answers as JSON), `decision` (`model`, `answers`, `usage`, `latency_ms`, optional `truncated`), `answers`, and the `provider` / `model` of the decision model; the resolved action id is `decision`. Without a `model` the call uses the `output.decision` capability default, so a text runtime on any provider can answer decisions once that default is set (see [decisions](integrations/abstractcore.md#decisions))
 - streamed TTS playback artifacts carry `purpose=voice_playback`, `artifact_space=voice` and a logical `voice/tts-<id>.wav` path in their tags; hosts can separate read-aloud recordings from user attachments while retaining their artifact refs and provenance
-- with the pooled local client (`MultiLocalAbstractCoreLLMClient`), a request whose outputs are all non-text (image, video, voice, music, transcription) and that carries no tools never builds the text client: it runs on AbstractCore's capability host (`CapabilityHostProvider`, no text model), and so does streaming TTS. A text default that cannot be built (an engine not installed) therefore never blocks speech or image generation
+- with the pooled local client (`MultiLocalAbstractCoreLLMClient`), a request whose outputs are all non-text (image, video, voice, music, transcription, decision) and that carries no tools never builds the text client: it runs on AbstractCore's capability host (`CapabilityHostProvider`, no text model), and so does streaming TTS. A text default that cannot be built (an engine not installed) therefore never blocks speech or image generation
 - media-only normalized results expose `runtime_provider` / `runtime_model` separately from `media_provider` / `media_model`
 - local image/video generation runs in a one-shot subprocess (`execution_mode="local_one_shot_subprocess"`) unless every requested media model is resident (explicitly loaded with `load_model_residency`), in which case it runs in-process on the loaded pipeline (`execution_mode="resident_in_process"`, `resident_load_ids`)
 - a media spec whose `provider` is an endpoint profile (`endpoint:<id>`) never uses the one-shot subprocess: it is an HTTP call to that endpoint, and the host's endpoint-profile resolver (`set_provider_endpoint_profile_resolver`) exists only in this process
@@ -513,7 +514,7 @@ Prompt cache / cached sessions:
 - LLM clients expose cache control methods listed above for host-side preparation and inspection
 - `LLM_CALL.params.prompt_cache_key` selects a cache key for a call; runtime can also derive a session-scoped key from `run.vars["_runtime"]["prompt_cache"]` or the Runtime-owned `ABSTRACTRUNTIME_PROMPT_CACHE` process default
 - `LLM_CALL.params.prompt_cache_binding` is the durable exact-reuse input for bloc-backed prompt caching; if a binding includes `key`, Runtime adopts it as the effective prompt-cache key and refuses mismatches before provider execution
-- Runtime only auto-derives session prompt-cache keys for text/chat calls; non-text output selectors such as image, voice, music, and transcription keep explicit `prompt_cache_binding` support but do not receive an inferred cache key
+- Runtime only auto-derives session prompt-cache keys for text/chat calls; non-text output selectors such as image, voice, music, decision, and transcription keep explicit `prompt_cache_binding` support but do not receive an inferred cache key
 - when Runtime injects the derived session key, the client stamps session attribution (`session_id`, `run_id`, `workflow_id`, `node_id`, `namespace`) into the cache entry's metadata after each generate; caller-supplied `prompt_cache_key`s and binding keys are never stamped, so session-scoped clearing cannot destroy caches shared across sessions
 - `get_abstractcore_host_facade(...)` exposes `get_memory_snapshot()`, `list_session_prompt_caches(session_id=None)`, and `clear_session_prompt_caches(session_id)`; session caches persist until a host clears them, the owning model is unloaded, or the provider evicts them — completing a run does not clear them
 - `get_abstractcore_host_facade(...)` also exposes durable bloc helpers (`upsert_text_bloc`, `get_bloc_record`, `list_blocs`, `get_bloc_kv_manifest`, `ensure_bloc_kv_artifact`, `load_bloc_kv_artifact`, `list_bloc_kv_artifacts`, `delete_bloc_kv_artifact`, `prune_bloc_kv_artifacts`, `delete_bloc`)

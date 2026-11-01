@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import re
 from copy import deepcopy
 from typing import Any, Callable, Dict, List, Optional, Tuple, TYPE_CHECKING
@@ -42,6 +43,19 @@ from .visual.executor import (
 if TYPE_CHECKING:
     from abstractruntime.core.models import StepPlan
     from abstractruntime.core.spec import WorkflowSpec
+
+
+
+def _decide_level_for(score: Any, legend: Any) -> Optional[str]:
+    """The level label nearest a score (halves round up): legend["1"] for 0.5 <= score < 1.5."""
+    try:
+        index = int(math.floor(float(score) + 0.5))
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(legend, dict):
+        return None
+    value = legend.get(str(index))
+    return value if isinstance(value, str) else None
 
 
 def _as_dict_list(value: Any) -> List[Dict[str, Any]]:
@@ -485,6 +499,7 @@ def _create_effect_node_handler(
         "image_to_video",
         "generate_voice",
         "generate_music",
+        "decide",
         "transcribe_audio",
     }:
         base_handler = create_llm_call_handler(
@@ -3336,6 +3351,47 @@ def _sync_effect_results_to_node_outputs(run: Any, flow: Flow) -> None:
                 current["meta"] = {k: v for k, v in meta.items() if v is not None}
                 current["raw"] = raw
                 mapped_value = artifact_ref or artifact_id
+        elif effect_type == "decide":
+            if isinstance(raw, dict):
+                decision = raw.get("decision")
+                answers = raw.get("answers")
+                if not isinstance(answers, dict) and isinstance(decision, dict):
+                    answers = decision.get("answers")
+                current["answers"] = answers if isinstance(answers, dict) else {}
+                current["decision"] = decision if isinstance(decision, dict) else None
+                # `answer` = the single-question form's answer, else the first answer;
+                # the typed pins follow its `type` (the others stay None).
+                answer = current["answers"].get("answer", next(iter(current["answers"].values()), None))
+                answer = answer if isinstance(answer, dict) else None
+                current["answer"] = answer
+                for key in ("choice", "confidence", "probabilities", "noul", "score"):
+                    current[key] = answer.get(key) if answer else None
+                noul = current["noul"]
+                current["verdict"] = bool(float(noul) >= 0.5) if isinstance(noul, (bool, int, float)) else None
+                score, legend = current["score"], (answer.get("legend") if answer else None)
+                current["level"] = (
+                    _decide_level_for(score, legend)
+                    if isinstance(legend, dict) and isinstance(score, (int, float)) and not isinstance(score, bool)
+                    else None
+                )
+                model = raw.get("model")
+                current["model"] = model.strip() if isinstance(model, str) and model.strip() else None
+                content = raw.get("content")
+                current["content"] = str(content) if content is not None else ""
+                current["success"] = isinstance(answers, dict) and bool(answers)
+                meta = {
+                    "schema": "abstractflow.decide.v1.meta",
+                    "version": 1,
+                    "modality": "decision",
+                    "provider": raw.get("provider"),
+                    "model": raw.get("model"),
+                }
+                usage = raw.get("usage")
+                if isinstance(usage, dict):
+                    meta["usage"] = dict(usage)
+                current["meta"] = {k: v for k, v in meta.items() if v is not None}
+                current["raw"] = raw
+                mapped_value = current["answers"]
         elif effect_type == "transcribe_audio":
             if isinstance(raw, dict):
                 text_value = ""

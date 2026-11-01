@@ -789,6 +789,49 @@ class AbstractCoreRunFacade:
             child_vars=child_vars,
         )
 
+    def decide(
+        self,
+        run_id: str,
+        *,
+        state: str,
+        questions: Dict[str, Any],
+        model: Optional[str] = None,
+        truncate: Optional[bool] = None,
+        params: Optional[Dict[str, Any]] = None,
+        child_vars: Optional[Dict[str, Any]] = None,
+    ) -> RunState:
+        """Create a durable child run for one calibrated decision.
+
+        A decision is an `LLM_CALL` whose output spec has `modality: "decision"`:
+        `state` travels as the prompt, the `questions` mapping lives in the spec,
+        and the child's result carries `answers`, `decision` (the System One body),
+        `content`, `provider` and `model`. `model` may be a `provider/model` handle
+        (`mlx/jaredpalmer/kev-4b`); AbstractCore splits it, validates the questions
+        and resolves the `output.decision` route when no model is named.
+        """
+
+        if not isinstance(state, str) or not state.strip():
+            raise ValueError("decide requires `state` as a non-empty string.")
+        if not isinstance(questions, dict) or not questions:
+            raise ValueError("decide requires `questions` as a non-empty mapping.")
+
+        spec: Dict[str, Any] = {"modality": "decision", "questions": dict(questions)}
+        if truncate is not None:
+            spec["truncate"] = bool(truncate)
+
+        # A `provider/model` handle travels whole: AbstractCore's decision lane splits it
+        # (`abstractcore.decision.pool.split_handle`); the runtime keeps no provider list.
+        if isinstance(model, str) and model.strip():
+            spec["model"] = model.strip()
+
+        return self.execute_llm_call(
+            run_id,
+            prompt=state,
+            output=spec,
+            params=params,
+            child_vars=child_vars,
+        )
+
     def transcribe_audio(
         self,
         run_id: str,

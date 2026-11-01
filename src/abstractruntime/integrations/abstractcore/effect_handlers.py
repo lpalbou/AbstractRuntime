@@ -3267,6 +3267,55 @@ def _refined_auto_names(calls: List[Dict[str, Any]], run: "RunState", *, auto: S
     return {name for name, ok in verdict.items() if ok}
 
 
+def approval_public_action(run: RunState, payload: Dict[str, Any],
+                            host_calls: List[Dict[str, Any]], waiting_calls: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """Validate public action context and return it narrowed to the waiting calls.
+
+    Hosts that gate before the Core executor can share this presentation validator.
+    Pass the original effect payload, its host calls and the exact gated subset;
+    use the returned metadata before replacing a delegated payload's tool_calls.
+    This function grants no permission and never changes tool approval policy.
+
+    The adapter binds a public update to the exact proposed effect batch. Policy/
+    scope may withhold calls before approval; narrow the binding to that actual
+    wait, never expand it or attach another batch's words.
+    """
+    action = payload.get("public_action")
+    fields = {"text", "update_id", "run_id", "iteration", "call_ids"}
+    if not isinstance(action, dict) or set(action) != fields or action.get("run_id") != run.run_id:
+        return None
+    text, update_id, iteration = action.get("text"), action.get("update_id"), action.get("iteration")
+    prefix = run.run_id + ":public_update:"
+    if (not isinstance(text, str) or not text.strip() or len(text) > 600
+            or re.search(r"```\s*diary\b|<\s*diary\b|<\s*think\b", text, flags=re.I)
+            or not isinstance(update_id, str) or not update_id.startswith(prefix)
+            or len(update_id) > len(prefix) + 20 or re.fullmatch(r"[1-9][0-9]*", update_id[len(prefix):]) is None
+            or type(iteration) is not int or iteration < 1):
+        return None
+    proposed = payload.get("tool_calls")
+    if not isinstance(proposed, list) or any(not isinstance(call, dict) for call in proposed):
+        return None
+    ids = [call.get("call_id") for call in proposed]
+    if (not ids or any(not isinstance(cid, str) or not cid for cid in ids)
+            or len(set(ids)) != len(ids) or action.get("call_ids") != ids):
+        return None
+    candidates = {call.get("call_id"): call for call in host_calls if isinstance(call, dict)}
+    narrowed = []
+    for call in waiting_calls:
+        if not isinstance(call, dict):
+            return None
+        cid = call.get("call_id")
+        original = candidates.get(cid) if isinstance(cid, str) else None
+        if (cid not in ids or original is None or cid in narrowed
+                or call.get("name") != original.get("name") or call.get("arguments") != original.get("arguments")):
+            return None
+        narrowed.append(cid)
+    if not narrowed:
+        return None
+    return {"text": text, "update_id": update_id, "run_id": run.run_id,
+            "iteration": iteration, "call_ids": narrowed}
+
+
 def make_tool_calls_handler(
     *,
     tools: Optional[ToolExecutor] = None,
@@ -4502,6 +4551,10 @@ def make_tool_calls_handler(
                     tool_calls_for_wait = host_tool_calls
 
                 details: Dict[str, Any] = {"mode": mode, "tool_calls": _jsonable(tool_calls_for_wait)}
+                if str(mode) == "approval_required":
+                    public_action = approval_public_action(run, payload, host_tool_calls, tool_calls_for_wait)
+                    if public_action is not None:
+                        details["public_action"] = public_action
                 executor_details = result.get("details")
                 if isinstance(executor_details, dict) and executor_details:
                     details["executor"] = _jsonable(executor_details)

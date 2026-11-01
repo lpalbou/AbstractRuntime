@@ -133,6 +133,16 @@ receipt means queued, not adopted. Driver-owned entity visits require their part
 visit guidance door, never generic steer. See the API's conversational questions and public
 conversation sections for outcome, crash-recovery and single-writer limits.
 
+For approval purpose, read only the optional validated `waiting.details.public_action`:
+`text`, `update_id`, `run_id`, positive integer `iteration`, and `call_ids` for that
+exact pending batch. Check the run and pending IDs before presenting it. These are
+actor-stated public words, not evidence of execution or an approval grant. Keep a
+missing explanation explicit; never substitute private reasoning, tool arguments,
+or another update. The approval still uses its original wait key and decision. If your host gates before
+Core's executor, reuse `approval_public_action(run, original_payload, host_calls, waiting_calls)`
+from `abstractruntime.integrations.abstractcore.effect_handlers` before narrowing a delegated
+payload, and forward only the returned context (or omit it when `None`).
+
 ## Keep the same workflow across restarts
 
 ```python

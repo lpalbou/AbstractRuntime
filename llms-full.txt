@@ -1201,6 +1201,24 @@ Public updates enter replay only through an explicit completed `EMIT_EVENT` name
 `source_call_ids`. The event's owner must match `run_id`; private diary/thinking fences are
 excluded. See [replay.md](replay.md#public-conversation-messages).
 
+Actors may attach `public_action` to a proposed `TOOL_CALLS` payload with `text`,
+`update_id`, `run_id`, positive integer `iteration` and `call_ids`. The text is the
+actor's public stated purpose (nonblank, at most 600 characters), not execution
+proof. The adapter owns its binding to an accepted public update and unchanged
+proposed calls. Runtime checks the owning run and exact effect call IDs, then
+narrows the metadata to the actual calls requiring approval. Mismatched targets,
+unknown or duplicate IDs, malformed metadata and private fences withhold the
+explanation without changing the approval policy. Valid context appears at
+`waiting.details.public_action` and the canonical replay interaction's `details`.
+Clients verify its run and exact pending IDs before presenting it. An absent
+explanation must not be replaced with private reasoning or a guessed purpose.
+Hosts with an earlier approval boundary can share
+`abstractruntime.integrations.abstractcore.effect_handlers.approval_public_action(run, payload, host_calls, waiting_calls)`.
+Pass the original effect payload and host calls plus the exact gated subset. The return
+value is validated narrowed metadata or `None`; compute it before replacing a delegated
+payload's `tool_calls`, and carry only that returned context forward. This helper grants
+no permission and changes no approval policy.
+
 For human input during work, `Runtime.steer(run_id, message, display_text=words, speaker=...)`
 keeps the existing durable guidance path and adds a public acceptance receipt only when
 `display_text` is explicitly supplied. `message` may contain quoted context; `display_text`

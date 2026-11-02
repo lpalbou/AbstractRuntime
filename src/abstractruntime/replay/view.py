@@ -813,6 +813,10 @@ class ReplayView:
                 if row is None:
                     row = {"id": cid, "name": _s(call.get("name")) or None, "arguments": call.get("arguments"),
                            "status": "running"}
+                    # The model's own call id when the runtime keyed the row by its runtime id:
+                    # what a public update's `source_call_ids` cite.
+                    if _s(call.get("call_id")) and _s(call.get("call_id")) != cid:
+                        row["call_id"] = _s(call.get("call_id"))
                     rows.append(row)
                     by_id[cid] = row
                     for key in sorted({_s(call.get("call_id")), _s(call.get("id")), cid} - {""}):

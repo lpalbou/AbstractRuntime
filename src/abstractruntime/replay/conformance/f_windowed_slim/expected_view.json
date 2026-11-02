@@ -60,6 +60,7 @@
             "file_path": "txt-0103dd11b7b3",
             "mode": "w"
           },
+          "call_id": "call_0bc78da56dbe4ed2b5a6df2ded9a94a7",
           "id": "rtcall_fe21410a76b14a7c1ca671766b46a5c1_1",
           "name": "write_file",
           "status": "waiting"

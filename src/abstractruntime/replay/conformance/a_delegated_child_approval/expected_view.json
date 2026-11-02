@@ -156,6 +156,7 @@
             "timeout": 20,
             "working_directory": "txt-d523396bd73d"
           },
+          "call_id": "call_a3662b122ca24e5c9923e031a3f64cec",
           "id": "rtcall_f9c0f06c1bdbb275cb98845fe7bd956e_1",
           "name": "execute_command",
           "output": {
@@ -265,6 +266,7 @@
             "file_path": "txt-0103dd11b7b3",
             "mode": "w"
           },
+          "call_id": "call_0bc78da56dbe4ed2b5a6df2ded9a94a7",
           "id": "rtcall_fe21410a76b14a7c1ca671766b46a5c1_1",
           "name": "write_file",
           "status": "waiting"

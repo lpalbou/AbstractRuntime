@@ -105,7 +105,7 @@ Each rule below was once a divergence between clients:
 | `interaction` | the person-facing wait, or `null`: `kind` (`tool_approval`, `ask_user`, `event`), `run_id`, `wait_key`, `step_id`, `seq`, `prompt`, `choices`, `allow_free_text`, `details`, `tool_calls` (resolved), `activity_id`, `answer_payload`, and `command` (the resume a client sends to answer it) |
 | `open_waits[]` | every open wait of the tree, with `person_facing` |
 | `messages[]` | verbatim turns: `role`, `kind` (`prompt`, `answer`, `question`, `final`, `event`), `text`, provenance (`run_id`, `step_ids`, `seqs`, `artifact_ids`, `source`) |
-| `activities[]` | one per execution: `kind`, `name`, `status`, `node_id`, `execution_id`, `seqs`, `step_ids`, `tool_calls[]` (each call's status, output, error), `wait` (`kind`, `wait_key`, `ended_by`: `resume`, `later_step`, `terminal`), `usage`, `child_run_id`, `progress` |
+| `activities[]` | one per execution: `kind`, `name`, `status`, `node_id`, `execution_id`, `seqs`, `step_ids`, `tool_calls[]` (each call's `id`, status, output, error, and `call_id`, the model's own call id, when `id` is a runtime call id; public updates cite `call_id`), `wait` (`kind`, `wait_key`, `ended_by`: `resume`, `later_step`, `terminal`), `usage`, `child_run_id`, `progress` |
 | `artifacts[]` | every `{"$artifact": id}` reference, with the run, step, seq and JSON path that produced it |
 | `usage` | tokens and LLM calls summed over the tree |
 | `warnings[]` | what the view could not show (records before a window, an unresolved `$slim`) |

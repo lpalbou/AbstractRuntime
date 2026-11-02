@@ -4,9 +4,26 @@
 
 It is designed for long-running workflows that must survive restarts and explicitly model blocking (human input, timers, external events, subworkflows) without keeping Python stacks alive.
 
-**Version:** 0.15.3 • **Python:** 3.10+
+**Version:** 0.16.0 • **Python:** 3.10+
 
 **Status:** pre-1.0 (API may evolve). For production use, pin versions and follow `CHANGELOG.md`.
+
+## What's new in 0.16.0
+
+- **Calibrated decisions**: an `LLM_CALL` whose output says `modality: "decision"` returns typed answers
+  (`answers`, `decision`) from a decision model instead of generated text; `run_facade.decide(...)` runs one as a
+  durable child run and the `decide` VisualFlow node asks a choice, yes/no or score question. Requires AbstractCore
+  2.32.0. See [docs/integrations/abstractcore.md](docs/integrations/abstractcore.md).
+- **Conversational questions and guidance**: `ASK_USER` can ask an essential question (waits indefinitely) or a timed
+  clarification with a declared fallback; `Runtime.steer(..., display_text=)` records human guidance in its exact
+  words; opt-in public updates and tool-approval `public_action` context appear in the replay view.
+- **Model residency in words**: fit refusals are never retried and keep their typed fields on the ledger, residency
+  rows carry the slot pool (`slots`, `active`, `queued`, ...) and name who holds a model, and the config facade reads
+  and sets a local model's loaded context (`configured_model_context`, `set_model_context`).
+- **Structured output across process boundaries**: JSON schemas travel as data and validators are built where
+  inference runs, for local, remote and hybrid clients alike.
+- **Voice transport is not a turn attachment** in history bundles and conversation search. Full list:
+  [CHANGELOG.md](CHANGELOG.md#0160---2026-11-02).
 
 ## What's new in 0.15.3
 

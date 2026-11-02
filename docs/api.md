@@ -428,6 +428,13 @@ This produces a portable record of a run’s state + ledger + artifacts suitable
 When available, it also includes `resolved_actions`: bounded capability/action summaries derived
 from Core route resolution and persisted from `LLM_CALL` results.
 
+Voice transport is never part of a conversation turn: the recording of a spoken question and the
+read-aloud audio synthesized from an answer are left out of each session turn's `attachments` and
+`artifacts`. `is_voice_transport(tags)` (in `abstractruntime.history_bundle`) recognizes them:
+`purpose` `voice_playback` or `voice_dictation`, `artifact_space` `voice`, or a `voice/` or
+`client:voice/` path. The bundle's own `artifacts` section stays complete, and conversation search
+applies the same rule.
+
 ## Replay view (one reconstruction of a run, every client)
 
 Implementation: `src/abstractruntime/replay/` (ADR 0010). Guide: [replay.md](replay.md).

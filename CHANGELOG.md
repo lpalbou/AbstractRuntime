@@ -10,6 +10,8 @@ Unreleased changes live in [`changelog.d/`](changelog.d/README.md), one file per
 
 ## [Unreleased]
 
+## [0.16.0] - 2026-11-02
+
 ### Added
 
 - A package agent skill documents operating durable workflows, waits, storage and structured execution through the public Python API.
@@ -24,6 +26,37 @@ Unreleased changes live in [`changelog.d/`](changelog.d/README.md), one file per
   sentence is the effect error, its fields (needed/free bytes, kept models, suggestions) are kept on the ledger
   record (`result.error_details`, `EffectOutcome.error_details`) and in the residency diagnostics (`refusals`, the
   last five), and the default pair keeps the sentence instead of the configuration hint.
+- Opt-in public actor updates and explicit human-guidance acceptance messages share durable replay history, with host-origin checks and exact original human words.
+- Conversational ASK_USER policies distinguish indefinite essential questions from 120–300 second clarifications with predeclared safe fallbacks. Fresh question keys, strict server cutoffs, durable outcomes, retained late replies and pause/restart behavior reuse the existing due-wait indexes.
+- Participant-checked live entity-visit corrections use the existing durable sidecar and fresh attributed recall before the next actor reasoning boundary.
+- The package agent skill documents these question and guidance contracts.
+- **A decision is an `LLM_CALL` whose output spec says `modality: "decision"`** (`integrations/abstractcore/llm_client.py`, `effect_handlers.py`). Payload `{"prompt": <state>, "output": {"modality": "decision", "questions": {...}, "truncate"?, "model"?}}`; the result is the usual normalized shape plus `decision` (the System One body: `model`, `answers`, `usage`, `latency_ms`[, `truncated`]) and `answers` (= `decision.answers`), with `content` the answers as JSON, `outputs`/`resources` empty and `provider`/`model` the decision model that answered. No artifact, no store, no `generated_media` tag; the resolved action id is `decision`. Local: the resolved spec (the `output.decision` capability default, or the spec's own route) reaches `generate(prompt, output=[spec])` and core runs it through its decision pool on any text provider; the pooled client serves a decision-only request on the capability host without building the text model. Remote: `POST {core}/v1/decisions` with `model` = `provider/model`, `state`, `questions`, `truncate`; the server's body maps to the same result.
+- **`decide`: a calibrated decision as a durable child run and a VisualFlow node** (`integrations/abstractcore/run_facade.py`, `visualflow_compiler/visual/executor.py`, `visualflow_compiler/compiler.py`). `run_facade.decide(run_id, state=..., questions=..., model=None, truncate=None)` starts a child `LLM_CALL` whose output spec is `{"modality": "decision", "questions": ...}` (plus `truncate` and `model` when given); a `model` written as `provider/model` (`mlx/jaredpalmer/kev-4b`) travels whole and AbstractCore splits it. The `decide` VisualFlow node asks one typed question (inputs `state`, `question`, `question_type` = `choice` | `noul` | `score`, `options` / `levels`, `provider`, `model`, `truncate`) and fills that type's output pins (`answer`, then `choice`/`confidence`/`probabilities`, `noul`/`verdict`, or `score`/`level`/`confidence`/`probabilities`, plus `model`, `success`); a wired `questions` object asks several System One questions at once and fills `answers`. It lowers to the same `LLM_CALL`; the result sync also carries `decision` (the System One body), `content` and `meta` (`abstractflow.decide.v1.meta`).
+- **A local model's loaded context, through the config facade** (`integrations/abstractcore/config_facade.py`).
+  `configured_model_context(provider, model)` and `set_model_context(provider, model, tokens)` read and set the
+  per-model context AbstractCore loads a model with (AbstractCore ADR 0010 point 8: a set context is a pin, loaded
+  as is or refused, never shrunk). The gateway's Resources page "Set context" calls them instead of importing
+  AbstractCore. On a Core without `abstractcore.config.model_contexts` (every release up to 2.31.1) they raise
+  `AbstractCoreTooOld` naming what is missing.
+- Tool approval waits can carry optional `details.public_action` (`text`, `update_id`, `run_id`,
+  `iteration`, `call_ids`) supplied by an actor adapter alongside its proposed effect batch.
+  Runtime validates its owning run and exact call identities, narrows it to the actual gated
+  subset, and withholds mismatched or private-fenced context. The canonical replay preserves
+  this public explanation; approval decisions and policies are unchanged.
+- Hosts can start Core's independently authenticated HTTP listener through a lazy Runtime lifecycle facade; unused server dependencies stay unloaded.
+
+### Changed
+
+- **Changelog entries are fragments** (`changelog.d/`, `scripts/changelog.py`). A pull request adds
+  `changelog.d/<pr-or-slug>.md` instead of editing `CHANGELOG.md`'s `[Unreleased]` section, which conflicted on every
+  merge of main; the release assembles the fragments (`python scripts/changelog.py assemble X.Y.Z`) and CI fails a pull
+  request that changes `src/` without one.
+- **AbstractCore floor `>=2.32.0`** (`pyproject.toml`, `integrations/abstractcore/output_specs.py`): the `decision` output modality (`output.decision` route, `/v1/decisions`, `MultimodalGenerateResponse.decision`, `output_has_generated_media` False for it).
+- **Voice transport is not a conversation attachment** (`history_bundle.py`, `conversation_search.py`). A session turn in
+  a history bundle no longer lists the recording of a spoken question or the read-aloud audio of an answer among its
+  `attachments` and `artifacts`; `is_voice_transport(tags)` recognizes them (`purpose` `voice_playback` or
+  `voice_dictation`, `artifact_space` `voice`, a `voice/` or `client:voice/` path). The bundle's own `artifacts`
+  section still lists every artifact. Clients that showed voice recordings as turn attachments stop doing so.
 
 ### Fixed
 
@@ -48,6 +81,13 @@ Unreleased changes live in [`changelog.d/`](changelog.d/README.md), one file per
   silently reloaded them). A pool unregisters the clients it adopts (its own claims cover them).
   A dropped HuggingFace copy is never lent to another request again, a copy a call just started on
   is freed when that call ends, and one waiter per model frees every copy a later switch drops.
+- Conversational answer and retained-reply replay preserves original human whitespace and the actual question generation identity, including after another question has opened.
+- Completed flows with an explicit structured `result` and no prose now retain a final JSON message in replay. Generic agent envelopes are not serialized; internal-bearing results are withheld from the public projection while their technical run output remains available.
+- **A pin expression that is a single bare word explains how to pass text** (`visualflow_compiler/visual/pin_expressions.py`).
+  `hello` is read as a Python name; its `NameError` now says to write `'hello'` with quotes or to set the pin's value
+  instead of an expression.
+- **The residency listing carries the model's slot pool** (`integrations/abstractcore/llm_client.py`, core ADR 0011, OVH 8080 pass four). A GGUF row now carries `slots`, `slots_max`, `active`, `queued`, `copies`, `slot_bytes`, `shared_weights` and `slot_refusal_reason`, folded from Core's process row. Before, only the gateway's `/host/state` showed them, so the Resources table could not say that requests were waiting, or why another slot is not built. A row whose holders share one weights instance no longer says "each a full copy of the weights".
+- Structured generation carries JSON schemas across execution-client boundaries and creates validators where inference runs, preserving nested validation and defaults without serializing Python classes. Remote Core calls forward their structured response format and explicitly refuse Python validator classes that cannot cross HTTP. Local explicit validator classes remain supported. Request serialization failures are not retried, and execution diagnostics include the actual ledger step identity.
 
 ## [0.15.3] - 2026-10-29
 

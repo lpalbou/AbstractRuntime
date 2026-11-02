@@ -4,7 +4,7 @@ description: Operate AbstractRuntime through durable Python workflows, effect re
 license: MIT
 compatibility: Python 3.10+. Model execution needs a configured AbstractCore provider or server; local engines need the apple or gpu install profile. This skill uses the Python API rather than a Gateway HTTP API.
 metadata:
-  package-version: "unreleased"
+  package-version: "0.16.0"
 ---
 
 # AbstractRuntime
@@ -19,10 +19,10 @@ folder when state must survive a restart.
 
 ## Install and verify
 
-From a checkout matching this skill's version:
+Install the version this skill describes (or newer):
 
 ```bash
-python -m pip install -e .
+python -m pip install "abstractruntime>=0.16.0"
 ```
 
 The base profile includes remote-light AbstractCore integration and the MCP
@@ -36,7 +36,7 @@ try:
     import abstractruntime
     installed = version("abstractruntime")
     assert callable(abstractruntime.Runtime), "Runtime API is unavailable"
-    assert "display_text" in signature(abstractruntime.Runtime.steer).parameters, "Install the matching source checkout for conversational guidance"
+    assert "display_text" in signature(abstractruntime.Runtime.steer).parameters, "Install AbstractRuntime 0.16.0 or newer for conversational guidance"
 except (ImportError, PackageNotFoundError, AssertionError) as exc:
     raise SystemExit(f"Install verification failed: {exc}") from None
 print(f"AbstractRuntime {installed}")

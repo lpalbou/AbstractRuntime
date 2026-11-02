@@ -368,6 +368,34 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Runtime (start / tick / resume)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#conversational-questions-and-deadlines" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Conversational questions and deadlines
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#public-conversation-and-accepted-guidance" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Public conversation and accepted guidance
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -1331,6 +1359,34 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Runtime (start / tick / resume)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#conversational-questions-and-deadlines" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Conversational questions and deadlines
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#public-conversation-and-accepted-guidance" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Public conversation and accepted guidance
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -1648,7 +1704,7 @@
 <li>optional <code>step_gate()</code> is consulted at every step boundary; when it returns <code>False</code> the tick returns the persisted state and the run stays <code>RUNNING</code> (a later tick continues where it stopped)</li>
 <li><code>Runtime.resume(workflow, run_id, wait_key, payload, max_steps=...) -&gt; RunState</code></li>
 <li>validates the <code>wait_key</code>, writes <code>payload</code> to <code>WaitState.result_key</code> (if set), and continues from <code>WaitState.resume_to_node</code></li>
-<li>a wait is resumed at most once: a resume of a run that is no longer waiting, or that waits on another key, raises <code>StaleResumeError</code> (a <code>ValueError</code>), for example when another caller resumed it first</li>
+<li>a wait is resumed at most once: a resume of a run that is no longer waiting, or that waits on another key, raises <code>StaleResumeError</code> (a <code>ValueError</code>); replies to recognized conversational questions are instead retained without answering or resuming another question (below)</li>
 <li>the check and the commit run under a per-run lock, and tools approved with <code>{"approved": true}</code> execute while that lock is held, so a long tool delays a competing resume of the same run, which is then refused</li>
 <li><code>run_mutation_lock(run_id)</code> (package root): the per-run, per-process, re-entrant lock that <code>tick</code> holds for the whole tick and <code>resume</code> for its commit; take it around your own read-modify-save of a run so a tick cannot overwrite your change</li>
 <li><code>Runtime.get_state(run_id) -&gt; RunState</code> and <code>Runtime.get_ledger(run_id) -&gt; list[dict]</code></li>
@@ -1665,6 +1721,79 @@
 - <code>inflight_effects(run_ids=None)</code> lists executing effects (run, step, provider, model, elapsed time)
 - <code>request_model_effects_cancel(provider, model, cancelled_by="model_eject")</code> stops the effects using a model before it is unloaded; local <code>unload_model_residency</code> calls it for you
 - <code>kill_inflight_effect(step_id, killed_by=...)</code> is an in-process hard stop for a call that ignores its cancel event (it cannot interrupt a thread blocked inside one native call)</p>
+<h3 id="conversational-questions-and-deadlines">Conversational questions and deadlines<a class="headerlink" href="#conversational-questions-and-deadlines" title="Permanent link">&para;</a></h3>
+<p><code>ASK_USER</code> retains its indefinite legacy behavior when <code>payload.question</code> is absent.
+For a conversational question, add exactly one of these policies alongside the existing
+<code>prompt</code>, <code>choices</code> and <code>allow_free_text</code> fields:</p>
+<div class="highlight"><pre><span></span><code><span class="p">{</span><span class="nt">"importance"</span><span class="p">:</span><span class="w"> </span><span class="s2">"essential"</span><span class="p">}</span>
+</code></pre></div>
+<div class="highlight"><pre><span></span><code><span class="p">{</span><span class="nt">"importance"</span><span class="p">:</span><span class="w"> </span><span class="s2">"clarification"</span><span class="p">,</span><span class="w"> </span><span class="nt">"timeout_s"</span><span class="p">:</span><span class="w"> </span><span class="mi">120</span><span class="p">,</span><span class="w"> </span><span class="nt">"fallback"</span><span class="p">:</span><span class="w"> </span><span class="s2">"Compare both options before choosing."</span><span class="p">}</span>
+</code></pre></div>
+<p>Essential questions have no deadline or fallback. Clarifications require a numeric duration
+from 120 through 300 seconds and a nonempty, predeclared safe fallback. Extra policy fields
+are refused. Time passing never grants tool approval or permission to perform an action.
+Flows may supply the same object through the AskUser <code>question</code> input or <code>effectConfig.question</code>.</p>
+<p>Every logical issuance has a fresh <code>wait_key</code> (<code>question:&lt;id&gt;</code>). Its persisted
+<code>waiting.details.question</code> contains <code>id</code>, <code>purpose: "conversation"</code>, <code>importance</code>,
+<code>published_at</code>, <code>deadline</code> and <code>fallback</code> (the last two are null for essential questions).
+The existing <code>waiting.prompt</code> remains the question text. Resume with the exact key and
+<code>{"response": "the person's words"}</code>. Empty responses and approval payloads are refused.</p>
+<p>The server arbitrates at commit time: a response before the deadline wins; at or after it,
+expiry wins even if the due scan has not run. An answer result carries
+<code>question: {id, outcome: "answered"}</code>. Expiry produces
+<code>{timed_out: true, fallback: "...", question: {id, outcome: "expired"}}</code> with no <code>response</code>.
+Hosts and actors must present this as a host-authored continuation, never as human speech.
+Cancellation records a <code>cancelled</code> outcome and does not continue the workflow.</p>
+<p>Explicit pause suppresses timeout continuation. The original deadline survives pause and
+restart; after explicit resume, an overdue question resolves before further work. A reply to
+a paused, expired or already resolved recognized question is retained in the ledger, with
+its reason, and does not answer a newer question. The small outcome index retains 64 entries;
+full outcomes and retained replies remain in the ledger. Outcome receipts are authoritative
+across a crash before the following checkpoint save.</p>
+<p>Memory, JSON and SQLite run stores index these USER deadlines through their existing due-wait
+queries. The existing scheduler/host runner advances them; Runtime does not install a timer
+service. Resolution uses process-local locks and the existing single-writer authority for
+the store; it is not a distributed multi-writer transaction. Legacy EVENT deadlines and
+tool-approval waits retain their own contracts.</p>
+<h3 id="public-conversation-and-accepted-guidance">Public conversation and accepted guidance<a class="headerlink" href="#public-conversation-and-accepted-guidance" title="Permanent link">&para;</a></h3>
+<p>An opt-in actor may inherit <code>_runtime.conversation: {enabled: true}</code> through native child
+workflows and VisualFlow Agent nodes. This flag does not create an extra inference call.
+Public updates enter replay only through an explicit completed <code>EMIT_EVENT</code> named
+<code>public_update</code>, with payload <code>id</code>, <code>text</code>, <code>run_id</code>, optional <code>session_id</code>, <code>iteration</code> and
+<code>source_call_ids</code>. The event's owner must match <code>run_id</code>; private diary/thinking fences are
+excluded. See <a href="../replay/#public-conversation-messages">replay.md</a>.</p>
+<p>Actors may attach <code>public_action</code> to a proposed <code>TOOL_CALLS</code> payload with <code>text</code>,
+<code>update_id</code>, <code>run_id</code>, positive integer <code>iteration</code> and <code>call_ids</code>. The text is the
+actor's public stated purpose (nonblank, at most 600 characters), not execution
+proof. The adapter owns its binding to an accepted public update and unchanged
+proposed calls. Runtime checks the owning run and exact effect call IDs, then
+narrows the metadata to the actual calls requiring approval. Mismatched targets,
+unknown or duplicate IDs, malformed metadata and private fences withhold the
+explanation without changing the approval policy. Valid context appears at
+<code>waiting.details.public_action</code> and the canonical replay interaction's <code>details</code>.
+Clients verify its run and exact pending IDs before presenting it. An absent
+explanation must not be replaced with private reasoning or a guessed purpose.
+Hosts with an earlier approval boundary can share
+<code>abstractruntime.integrations.abstractcore.effect_handlers.approval_public_action(run, payload, host_calls, waiting_calls)</code>.
+Pass the original effect payload and host calls plus the exact gated subset. The return
+value is validated narrowed metadata or <code>None</code>; compute it before replacing a delegated
+payload's <code>tool_calls</code>, and carry only that returned context forward. This helper grants
+no permission and changes no approval policy.</p>
+<p>For human input during work, <code>Runtime.steer(run_id, message, display_text=words, speaker=...)</code>
+keeps the existing durable guidance path and adds a public acceptance receipt only when
+<code>display_text</code> is explicitly supplied. <code>message</code> may contain quoted context; <code>display_text</code>
+preserves the person's exact original words (nonblank, at most 65,536 characters).
+Operational steering without this field does not become public human history.
+Hosts may supply <code>client_message_id</code> for correlation; it is preserved on the reserved
+receipt and replay message, independently of the sidecar sequence and message id.
+An accepted receipt means the words were durably queued; the actor's later response is the
+evidence that it considered or adopted them. It does not undo an action already performed.</p>
+<p>If the sidecar append succeeds and the public-receipt append fails, admission still succeeds:
+the exact words remain in the sidecar and the host logs a repair warning. Delivery repairs
+the receipt before acknowledging that source. A terminal run does not promise another actor
+boundary; its retained sidecar remains recoverable rather than being reported as refused.
+Entity visits use the narrower participant-checked visit door and fresh attributed recall,
+described in <a href="../entity-runtime/#live-visit-corrections">entity-runtime.md</a>.</p>
 <p>Tool scope: an explicit <code>allowed_tools</code> list in <code>run.vars["_runtime"]</code>, in a child run's <code>_runtime</code>, or in a <code>TOOL_CALLS</code> payload is a ceiling intersected across the run tree (<code>src/abstractruntime/core/tool_scope.py</code>). Approval policy can remove a prompt but can never grant a tool outside it; a missing key means unrestricted and an empty list denies every tool.</p>
 <p>For the execution model (ledger records, effect outcomes, waits), see <code>architecture.md</code>.</p>
 <h2 id="scheduler-convenience-api">Scheduler convenience API<a class="headerlink" href="#scheduler-convenience-api" title="Permanent link">&para;</a></h2>
@@ -1739,6 +1868,12 @@ Deep dive: <code>artifacts.md</code>.</p>
 <li><code>EffectPolicy</code> protocol and implementations: <code>DefaultEffectPolicy</code>, <code>RetryPolicy</code>, <code>NoRetryPolicy</code></li>
 <li><code>compute_idempotency_key(...)</code> helper</li>
 </ul>
+<p>The AbstractCore runtime factories default to three total LLM attempts and one
+tool attempt, with exponential backoff starting at one second and capped at
+30 seconds. Supply <code>effect_policy=NoRetryPolicy()</code> to disable Runtime retries;
+the provider may have its own retry policy. Deterministic structured-request
+and serialization refusals are nonretryable. Inspect a returned run's status
+and error even when <code>tick(...)</code> itself returns normally.</p>
 <p>Docs: <code>architecture.md</code> (reliability section).</p>
 <h2 id="workflowbundles-flow-and-visualflow-distribution">WorkflowBundles (<code>.flow</code>) and VisualFlow distribution<a class="headerlink" href="#workflowbundles-flow-and-visualflow-distribution" title="Permanent link">&para;</a></h2>
 <p>Implementation:
@@ -1749,8 +1884,8 @@ Deep dive: <code>artifacts.md</code>.</p>
 - <code>visual_to_flow(...)</code> lowers VisualFlow into the internal Flow IR.
 - <code>compile_visualflow(...)</code> and <code>compile_visualflow_tree(...)</code> compile VisualFlow JSON into executable <code>WorkflowSpec</code> objects.</p>
 <p>VisualFlow authoring note (media and document nodes):
-- Runtime recognizes first-class VisualFlow media nodes such as <code>generate_image</code>, <code>edit_image</code>, <code>image_to_image</code>, <code>upscale_image</code>, <code>image_upscale</code>, <code>generate_video</code>, <code>text_to_video</code>, <code>image_to_video</code>, <code>generate_voice</code>, <code>generate_music</code>, <code>transcribe_audio</code>, and <code>listen_voice</code>.
-- Generated-media and transcription nodes lower to a durable <code>EffectType.LLM_CALL</code> with an <code>output</code> selector (for example <code>{"modality":"music","task":"music_generation"}</code>), while <code>listen_voice</code> lowers to <code>WAIT_EVENT</code>. Hosts should persist the authoring node type rather than pre-lowering to <code>llm_call</code>.
+- Runtime recognizes first-class VisualFlow media nodes such as <code>generate_image</code>, <code>edit_image</code>, <code>image_to_image</code>, <code>upscale_image</code>, <code>image_upscale</code>, <code>generate_video</code>, <code>text_to_video</code>, <code>image_to_video</code>, <code>generate_voice</code>, <code>generate_music</code>, <code>decide</code>, <code>transcribe_audio</code>, and <code>listen_voice</code>.
+- Generated-media and transcription nodes lower to a durable <code>EffectType.LLM_CALL</code> with an <code>output</code> selector (for example <code>{"modality":"music","task":"music_generation"}</code>), while <code>listen_voice</code> lowers to <code>WAIT_EVENT</code>. The <code>decide</code> node asks ONE question about a state (inputs <code>state</code>, <code>question</code>, <code>question_type</code> = <code>choice</code> | <code>noul</code> | <code>score</code>, <code>options</code> for a choice, <code>levels</code> for a score, <code>provider</code>, <code>model</code>, <code>truncate</code>) and fills the typed output pins of that type (<code>answer</code> plus <code>choice</code>/<code>confidence</code>/<code>probabilities</code>, <code>noul</code>/<code>verdict</code>, or <code>score</code>/<code>level</code>/<code>confidence</code>/<code>probabilities</code>, with <code>model</code> and <code>success</code>); a wired <code>questions</code> object (several System One questions) replaces the single question and fills <code>answers</code>. It lowers to the same <code>LLM_CALL</code> with <code>{"modality":"decision","questions":{...}}</code> and the state as the prompt; see <a href="../integrations/abstractcore/#decisions">decisions</a>. Hosts should persist the authoring node type rather than pre-lowering to <code>llm_call</code>.
 - Runtime also recognizes file/document nodes. <code>read_file</code> and <code>write_file</code>
   handle UTF-8 text/JSON workspace paths. In Gateway-hosted runs, those paths
   follow the shared canonical contract: <code>rel/path</code> for the main workspace root
@@ -1866,6 +2001,12 @@ Deep dive: <a href="../automations/">automations.md</a>.</p>
 <p>This produces a portable record of a run’s state + ledger + artifacts suitable for debugging/review.
 When available, it also includes <code>resolved_actions</code>: bounded capability/action summaries derived
 from Core route resolution and persisted from <code>LLM_CALL</code> results.</p>
+<p>Voice transport is never part of a conversation turn: the recording of a spoken question and the
+read-aloud audio synthesized from an answer are left out of each session turn's <code>attachments</code> and
+<code>artifacts</code>. <code>is_voice_transport(tags)</code> (in <code>abstractruntime.history_bundle</code>) recognizes them:
+<code>purpose</code> <code>voice_playback</code> or <code>voice_dictation</code>, <code>artifact_space</code> <code>voice</code>, or a <code>voice/</code> or
+<code>client:voice/</code> path. The bundle's own <code>artifacts</code> section stays complete, and conversation search
+applies the same rule.</p>
 <h2 id="replay-view-one-reconstruction-of-a-run-every-client">Replay view (one reconstruction of a run, every client)<a class="headerlink" href="#replay-view-one-reconstruction-of-a-run-every-client" title="Permanent link">&para;</a></h2>
 <p>Implementation: <code>src/abstractruntime/replay/</code> (ADR 0010). Guide: <a href="../replay/">replay.md</a>.</p>
 <ul>
@@ -1886,7 +2027,7 @@ from Core route resolution and persisted from <code>LLM_CALL</code> results.</p>
 </ul>
 <h2 id="runtime-owned-integrations">Runtime-owned integrations<a class="headerlink" href="#runtime-owned-integrations" title="Permanent link">&para;</a></h2>
 <h3 id="abstractcore-llm-tools">AbstractCore (LLM + tools)<a class="headerlink" href="#abstractcore-llm-tools" title="Permanent link">&para;</a></h3>
-<p>Requires: <code>pip install abstractruntime</code> (AbstractCore 2.30.0 or newer is part of the base install).</p>
+<p>Requires: <code>pip install abstractruntime</code> (AbstractCore 2.32.0 or newer is part of the base install).</p>
 <p>Implementation: <code>src/abstractruntime/integrations/abstractcore/*</code>.</p>
 <p>Entry points:
 - <code>create_local_runtime(...)</code>, <code>create_remote_runtime(...)</code>, <code>create_hybrid_runtime(...)</code> (<code>src/abstractruntime/integrations/abstractcore/factory.py</code>)
@@ -1908,7 +2049,7 @@ from Core route resolution and persisted from <code>LLM_CALL</code> results.</p>
 - local <code>list_model_residency</code> merges AbstractCore's host-wide loaded-model sweep into text-generation listings (sweep-only rows carry <code>source: "provider_server"</code> and no <code>task</code> label), and residency rows normalize provider size extras to <code>size_bytes</code> / <code>size_vram_bytes</code> while keeping the originals; local text rows also carry registry-declared <code>modalities</code> (omitted on a registry miss), host identity (<code>host_id</code> / <code>host_name</code>), and runtime-owned lock truth (<code>locked</code> / <code>lockable</code>, with <code>pinned</code> a truthful alias of <code>locked</code> — never the default-identity flag, which <code>default</code> alone carries), while remote listings keep the Core server's row identity
 - host-local prompt-cache export/import admin also lives on the host facade and client delegation layer (<code>list_prompt_cache_exports</code>, <code>prompt_cache_export</code>, <code>prompt_cache_import</code>) and is intentionally local-only
 - host-facade email helpers (<code>list_email_accounts</code>, <code>list_emails</code>, <code>read_email</code>, <code>send_email</code>) use the process's own AbstractCore account (single-user installs)
-- run-facade helpers create and resume durable child runs for existing runs (<code>execute_llm_call</code>, <code>execute_tool_calls</code>, <code>resume_tool_calls</code>, <code>generate_image</code>, <code>edit_image</code>, <code>upscale_image</code>, <code>generate_video</code>, <code>image_to_video</code>, <code>generate_voice</code>, <code>generate_music</code>, <code>transcribe_audio</code>, <code>send_email</code>, <code>send_telegram_message</code>)
+- run-facade helpers create and resume durable child runs for existing runs (<code>execute_llm_call</code>, <code>execute_tool_calls</code>, <code>resume_tool_calls</code>, <code>generate_image</code>, <code>edit_image</code>, <code>upscale_image</code>, <code>generate_video</code>, <code>image_to_video</code>, <code>generate_voice</code>, <code>generate_music</code>, <code>decide</code>, <code>transcribe_audio</code>, <code>send_email</code>, <code>send_telegram_message</code>)
 - task-specific image/video helpers preserve batch and adapter controls such as
   <code>count</code>/<code>n</code>, <code>seeds</code>, ordered <code>lora_adapters</code>, and video <code>flow_shift</code>; local
   subprocess isolation stays within the same public contract.</p>
@@ -1922,15 +2063,17 @@ from Core route resolution and persisted from <code>LLM_CALL</code> results.</p>
 - <code>prompt</code>, <code>messages</code>, <code>system_prompt</code>, and convenience <code>text</code>
 - <code>media</code>: a media path, artifact ref (<code>{"$artifact": "..."}</code> or <code>{"artifact_id": "..."}</code>), media dict, or list of those
 - <code>output</code>: AbstractCore output selector; top-level <code>outputs</code> is accepted as a runtime alias
-- <code>params</code>: provider/model routing, generation controls, prompt-cache keys or <code>prompt_cache_binding</code>, structured-output schema options, and tracing metadata</p>
+- <code>params</code>: provider/model routing, generation controls, prompt-cache keys or <code>prompt_cache_binding</code>, structured-output schema options, and tracing metadata
+- <code>response_schema</code> / <code>response_schema_name</code>: JSON schema data and name for a structured result at <code>result.data</code>; local execution creates the validator at the provider boundary. Structured calls do not stream tokens. Remote/hybrid clients forward an OpenAI JSON-schema response format; Python validator classes cannot cross HTTP. See <a href="../integrations/abstractcore/#structured-responses">structured responses</a>.</p>
 <p>Multimodal support:
 - common remote-light AbstractCore media, vision, voice, audio, and music dependencies are part of the base Runtime install
 - local clients call AbstractCore's unified <code>generate(..., media=..., output=...)</code>
-- remote and hybrid clients support AbstractCore Server chat media content arrays plus image generation, image edits, image upscaling, text-to-video, image-to-video, speech, music generation, and transcription endpoints; pass an output-specific <code>model</code> for remote media provider routing, otherwise the server endpoint can use its configured capability default
+- remote and hybrid clients support AbstractCore Server chat media content arrays plus image generation, image edits, image upscaling, text-to-video, image-to-video, speech, music generation, transcription, and decision (<code>POST /v1/decisions</code>) endpoints; pass an output-specific <code>model</code> for remote media provider routing, otherwise the server endpoint can use its configured capability default
 - remote transcription requires one audio media item that resolves to a local file path or artifact-backed temporary file
 - generated image/video/voice/music/audio bytes require a runtime <code>ArtifactStore</code>; the result contains <code>artifact_id</code> / <code>artifact_ref</code> instead of inline bytes
+- a decision (<code>output: {"modality": "decision", "questions": {...}}</code>, the state as the prompt) is typed answers, not bytes: no <code>ArtifactStore</code> is needed, and the result carries <code>content</code> (the answers as JSON), <code>decision</code> (<code>model</code>, <code>answers</code>, <code>usage</code>, <code>latency_ms</code>, optional <code>truncated</code>), <code>answers</code>, and the <code>provider</code> / <code>model</code> of the decision model; the resolved action id is <code>decision</code>. Without a <code>model</code> the call uses the <code>output.decision</code> capability default, so a text runtime on any provider can answer decisions once that default is set (see <a href="../integrations/abstractcore/#decisions">decisions</a>)
 - streamed TTS playback artifacts carry <code>purpose=voice_playback</code>, <code>artifact_space=voice</code> and a logical <code>voice/tts-&lt;id&gt;.wav</code> path in their tags; hosts can separate read-aloud recordings from user attachments while retaining their artifact refs and provenance
-- with the pooled local client (<code>MultiLocalAbstractCoreLLMClient</code>), a request whose outputs are all non-text (image, video, voice, music, transcription) and that carries no tools never builds the text client: it runs on AbstractCore's capability host (<code>CapabilityHostProvider</code>, no text model), and so does streaming TTS. A text default that cannot be built (an engine not installed) therefore never blocks speech or image generation
+- with the pooled local client (<code>MultiLocalAbstractCoreLLMClient</code>), a request whose outputs are all non-text (image, video, voice, music, transcription, decision) and that carries no tools never builds the text client: it runs on AbstractCore's capability host (<code>CapabilityHostProvider</code>, no text model), and so does streaming TTS. A text default that cannot be built (an engine not installed) therefore never blocks speech or image generation
 - media-only normalized results expose <code>runtime_provider</code> / <code>runtime_model</code> separately from <code>media_provider</code> / <code>media_model</code>
 - local image/video generation runs in a one-shot subprocess (<code>execution_mode="local_one_shot_subprocess"</code>) unless every requested media model is resident (explicitly loaded with <code>load_model_residency</code>), in which case it runs in-process on the loaded pipeline (<code>execution_mode="resident_in_process"</code>, <code>resident_load_ids</code>)
 - a media spec whose <code>provider</code> is an endpoint profile (<code>endpoint:&lt;id&gt;</code>) never uses the one-shot subprocess: it is an HTTP call to that endpoint, and the host's endpoint-profile resolver (<code>set_provider_endpoint_profile_resolver</code>) exists only in this process
@@ -1941,7 +2084,7 @@ from Core route resolution and persisted from <code>LLM_CALL</code> results.</p>
 - LLM clients expose cache control methods listed above for host-side preparation and inspection
 - <code>LLM_CALL.params.prompt_cache_key</code> selects a cache key for a call; runtime can also derive a session-scoped key from <code>run.vars["_runtime"]["prompt_cache"]</code> or the Runtime-owned <code>ABSTRACTRUNTIME_PROMPT_CACHE</code> process default
 - <code>LLM_CALL.params.prompt_cache_binding</code> is the durable exact-reuse input for bloc-backed prompt caching; if a binding includes <code>key</code>, Runtime adopts it as the effective prompt-cache key and refuses mismatches before provider execution
-- Runtime only auto-derives session prompt-cache keys for text/chat calls; non-text output selectors such as image, voice, music, and transcription keep explicit <code>prompt_cache_binding</code> support but do not receive an inferred cache key
+- Runtime only auto-derives session prompt-cache keys for text/chat calls; non-text output selectors such as image, voice, music, decision, and transcription keep explicit <code>prompt_cache_binding</code> support but do not receive an inferred cache key
 - when Runtime injects the derived session key, the client stamps session attribution (<code>session_id</code>, <code>run_id</code>, <code>workflow_id</code>, <code>node_id</code>, <code>namespace</code>) into the cache entry's metadata after each generate; caller-supplied <code>prompt_cache_key</code>s and binding keys are never stamped, so session-scoped clearing cannot destroy caches shared across sessions
 - <code>get_abstractcore_host_facade(...)</code> exposes <code>get_memory_snapshot()</code>, <code>list_session_prompt_caches(session_id=None)</code>, and <code>clear_session_prompt_caches(session_id)</code>; session caches persist until a host clears them, the owning model is unloaded, or the provider evicts them — completing a run does not clear them
 - <code>get_abstractcore_host_facade(...)</code> also exposes durable bloc helpers (<code>upsert_text_bloc</code>, <code>get_bloc_record</code>, <code>list_blocs</code>, <code>get_bloc_kv_manifest</code>, <code>ensure_bloc_kv_artifact</code>, <code>load_bloc_kv_artifact</code>, <code>list_bloc_kv_artifacts</code>, <code>delete_bloc_kv_artifact</code>, <code>prune_bloc_kv_artifacts</code>, <code>delete_bloc</code>)
@@ -1989,6 +2132,7 @@ inside an effect handler. Details: <a href="../integrations/abstractmemory/">int
 <li><code>integrations/abstractmemory.md</code> — memory facade, provenance stamping, <code>MEMORY_REVISE</code></li>
 </ul>
 <h3 id="host-asgi-serving">Host ASGI serving<a class="headerlink" href="#host-asgi-serving" title="Permanent link">&para;</a></h3>
+<p><code>abstractruntime.integrations.abstractcore.server_facade.start_core_server(*, host=None, port=None)</code> starts Core's optional listener in the calling execution process. It returns a Core-owned handle with <code>url</code>, <code>is_running</code>, <code>status()</code> and <code>stop()</code>. Core owns configuration, credentials and HTTP request handling; stopping the listener does not unload resident providers. Omitted bind arguments use Core server settings; explicit port <code>0</code> selects an ephemeral port. Startup errors raise to the caller. Importing the facade starts nothing. See <a href="../integrations/abstractcore/#host-managed-serving">host-managed serving</a>.</p>
 <p><code>abstractruntime.integrations.abstractcore.server_facade.serve_core_request(scope, receive, send, *, token: str, allow_unauthenticated: bool = False)</code> delegates host-admitted ASGI requests with request-scoped Core authentication. See <a href="../integrations/abstractcore/#host-managed-serving">host-managed serving</a> for network and credential responsibilities.</p>
 <h3 id="structured-output-checks">Structured-output checks<a class="headerlink" href="#structured-output-checks" title="Permanent link">&para;</a></h3>
 <p><code>abstractruntime.integrations.abstractcore.structured_facade.parse_response_format(raw) -&gt; (kind, schema, name)</code> checks an OpenAI <code>response_format</code> and raises <code>ResponseFormatError</code> (AbstractCore's own class, with <code>.param</code>) for an unusable one. Both are also exported flat from <code>abstractruntime.integrations.abstractcore</code>. Requires AbstractCore 2.25.0 or newer. See <a href="../integrations/abstractcore/#structured-output-checks-for-hosts-structured-facade">structured-output checks for hosts</a>.</p>

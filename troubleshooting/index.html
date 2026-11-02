@@ -430,6 +430,28 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#structured-generation-is-refused-before-inference" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Structured generation is refused before inference
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#an-optional-core-http-listener-fails-to-start" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        An optional Core HTTP listener fails to start
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#a-run-is-waiting-and-does-not-continue" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1234,6 +1256,28 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#structured-generation-is-refused-before-inference" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Structured generation is refused before inference
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#an-optional-core-http-listener-fails-to-start" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        An optional Core HTTP listener fails to start
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#a-run-is-waiting-and-does-not-continue" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1455,10 +1499,33 @@ python<span class="w"> </span>-m<span class="w"> </span>pip<span class="w"> </sp
 - Install or upgrade the base Runtime package. LLM/tools integration, common
   remote-light multimodal dependencies, and the MCP worker entry point are part
   of the base install.
-- The current AbstractCore integration expects <code>abstractcore&gt;=2.20.2</code>.</p>
+- The current AbstractCore integration expects <code>abstractcore&gt;=2.32.0</code>.</p>
 <p>Verify:</p>
 <div class="highlight"><pre><span></span><code>python<span class="w"> </span>-c<span class="w"> </span><span class="s2">"import abstractruntime.integrations.abstractcore as ac; print(ac.__all__[:5])"</span>
 </code></pre></div>
+<h2 id="structured-generation-is-refused-before-inference">Structured generation is refused before inference<a class="headerlink" href="#structured-generation-is-refused-before-inference" title="Permanent link">&para;</a></h2>
+<p>Symptoms:
+- A failed <code>LLM_CALL</code> reports an invalid <code>response_schema</code>, conflicting structured inputs,
+  or that remote generation cannot transport <code>response_model</code> validators.</p>
+<p>Use a JSON object schema with nonempty <code>properties</code> and identifier-style property
+names. Put <code>response_schema</code> and <code>response_schema_name</code> on the effect payload,
+and remove a conflicting <code>response_model</code> or <code>response_format</code>. Send schema
+data through process and HTTP boundaries; generated Python classes do not belong
+in durable effects or <code>RunState.vars</code>. These deterministic request refusals are
+not retried, so correct the input before starting another run.</p>
+<p>If inference succeeds but validation fails, inspect the recorded response and
+the schema. Local conversion follows Pydantic coercion, while a remote Core
+server applies its own schema validation. Structured responses do not stream
+tokens, even with streaming enabled. See
+<a href="../integrations/abstractcore/#structured-responses">structured responses</a>.</p>
+<h2 id="an-optional-core-http-listener-fails-to-start">An optional Core HTTP listener fails to start<a class="headerlink" href="#an-optional-core-http-listener-fails-to-start" title="Permanent link">&para;</a></h2>
+<p><code>start_core_server(...)</code> raises for an occupied bind address, unusable server
+configuration or failed Core server startup. Check Core's host/port and its own
+authentication configuration; Gateway credentials are not Core server tokens.
+Native Runtime execution does not require this optional listener. Keep its
+lifecycle separate from native readiness, and inspect the returned handle's
+<code>status()</code> after successful startup. Stopping it leaves resident models loaded.
+See <a href="../integrations/abstractcore/#host-managed-serving">host-managed serving</a>.</p>
 <h2 id="a-run-is-waiting-and-does-not-continue">A run is waiting and does not continue<a class="headerlink" href="#a-run-is-waiting-and-does-not-continue" title="Permanent link">&para;</a></h2>
 <p>Symptom:
 - <code>Runtime.tick(...)</code> returns <code>status=waiting</code>, and the run stays paused.</p>

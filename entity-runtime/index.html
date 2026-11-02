@@ -544,6 +544,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#live-visit-corrections" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Live visit corrections
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#durable-visit-waits-event-deadline" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1135,6 +1146,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#live-visit-corrections" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Live visit corrections
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#durable-visit-waits-event-deadline" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1274,6 +1296,18 @@ the words:</p>
   payload is not byte-reconstructible from the ledger alone —
   reconstruction re-resolves refs through doors that enforce authority.</li>
 </ul>
+<h2 id="live-visit-corrections">Live visit corrections<a class="headerlink" href="#live-visit-corrections" title="Permanent link">&para;</a></h2>
+<p>Visit hosts may call <code>Runtime.queue_visit_guidance(run_id, text=..., speaker=...,
+display_text=...)</code> for the current stamped participant while a visit actor is working.
+The canonical host validates ownership before calling this narrower door; generic raw
+<code>Runtime.steer</code> remains refused for driver-owned visits. The durable sidecar records
+visit and turn identity, attributed words and optional original display text.</p>
+<p>Before the next actor reasoning boundary, the visit performs fresh channel-labeled memory
+recall, merges and deduplicates its handles with those already visible, and appends the
+participant's verbatim correction and the refreshed recall. It keeps the existing transcript
+prefix. Empty queues add no model call or recall. A correction from an older turn is retained
+with attribution and is not silently applied to a later turn. Acceptance and delivery receipts
+describe transport; only the actor's later words can acknowledge a change of plan.</p>
 <h2 id="durable-visit-waits-event-deadline">Durable visit waits: event + deadline<a class="headerlink" href="#durable-visit-waits-event-deadline" title="Permanent link">&para;</a></h2>
 <p>A visit parks on the visitor's next message; the park may carry an idle
 deadline (no reaper daemons):</p>

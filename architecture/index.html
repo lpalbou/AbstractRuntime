@@ -399,6 +399,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#structured-execution-and-optional-http-serving" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Structured execution and optional HTTP serving
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#live-token-streaming-outside-the-ledger" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1342,6 +1353,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#structured-execution-and-optional-http-serving" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Structured execution and optional HTTP serving
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#live-token-streaming-outside-the-ledger" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1612,9 +1634,7 @@
 
 <h1 id="abstractruntime-architecture">AbstractRuntime — Architecture<a class="headerlink" href="#abstractruntime-architecture" title="Permanent link">&para;</a></h1>
 <blockquote>
-<p>Updated: 2026-10-01
-Version: 0.8.2
-Scope: this describes <strong>what is implemented in this repository</strong>.</p>
+<p>Scope: this describes <strong>what is implemented in this repository</strong>.</p>
 </blockquote>
 <p>AbstractRuntime is a <strong>durable workflow runtime</strong>: it executes workflow graphs as a persisted state machine with explicit waits (user, time, events, jobs, subworkflows). A run can pause for hours/days and resume <strong>without</strong> keeping Python stacks/coroutines alive.</p>
 <h2 id="ecosystem-abstractframework">Ecosystem (AbstractFramework)<a class="headerlink" href="#ecosystem-abstractframework" title="Permanent link">&para;</a></h2>
@@ -1632,11 +1652,12 @@ Scope: this describes <strong>what is implemented in this repository</strong>.</
 - <strong>Append-only observability</strong>: every step is recorded as a <code>StepRecord</code> in a <code>LedgerStore</code> (<code>src/abstractruntime/core/models.py</code>, <code>src/abstractruntime/storage/base.py</code>).
 - <strong>Side effects are mediated</strong>: nodes request work via <code>Effect</code>/<code>EffectType</code>; execution happens via effect handlers (<code>src/abstractruntime/core/runtime.py</code>).</p>
 <h2 id="abstractcore-capability-boundary">AbstractCore capability boundary<a class="headerlink" href="#abstractcore-capability-boundary" title="Permanent link">&para;</a></h2>
-<p>AbstractRuntime's job is persistence and orchestration. AbstractCore owns model/provider capability execution: chat, structured output, cached sessions/prompt cache, media input analysis, image generation, video generation, voice/audio generation, music generation, and transcription.</p>
+<p>AbstractRuntime's job is persistence and orchestration. AbstractCore owns model/provider capability execution: chat, structured output, cached sessions/prompt cache, media input analysis, image generation, video generation, voice/audio generation, music generation, transcription, and calibrated decisions (typed answers from a decision model).</p>
 <p>The boundary is intentionally narrow:
 - Workflow nodes request model work with <code>EffectType.LLM_CALL</code>; the runtime persists the request/result and delegates execution to the configured AbstractCore client.
 - <code>media</code> inputs remain JSON-safe in the effect payload. Artifact refs are materialized into temporary provider-ready files for the call, then cleaned up.
 - Generated binary outputs are written to <code>ArtifactStore</code> and returned as <code>artifact_id</code> / <code>artifact_ref</code>, keeping <code>RunState.vars</code> and ledger records bounded and JSON-safe.
+- A decision (<code>output: {"modality": "decision", "questions": {...}}</code>) is an <code>LLM_CALL</code> whose result is typed answers, not bytes: it needs no <code>ArtifactStore</code>, and the result carries <code>answers</code> and <code>decision</code> beside <code>content</code>.
 - Remote chat media is sent to AbstractCore Server as provider-ready content arrays, but persisted provider-request metadata redacts data URLs so checkpoints and ledgers do not embed media bytes.
 - Provider sessions and prompt-cache objects are not runtime state. Runtime may carry stable cache keys, while AbstractCore clients/servers manage warm caches. Runtime stamps session attribution onto the session-derived cache keys it injects so hosts can list and clear caches per session through the host facade; caller-owned keys stay unstamped, and completing a run does not clear session caches.
 - Hosts should use Runtime-owned AbstractCore facades for discovery snapshots, prompt-cache/model-residency control operations, and durable run-scoped media/comms child runs instead of reaching through private runtime attachments or importing Core internals directly.
@@ -1683,6 +1704,29 @@ engine installer, host job registry"]
   ConfigFacade --&gt; CoreConfig
 </code></pre></div>
 <p>This keeps the runtime usable by <code>../abstractgateway</code> and application layers such as <code>../abstractflow</code>, <code>../abstractassistant</code>, <code>../abstractobserver</code>, and <code>../abstractcode</code> without embedding provider-specific model logic in the durable kernel.</p>
+<h3 id="structured-execution-and-optional-http-serving">Structured execution and optional HTTP serving<a class="headerlink" href="#structured-execution-and-optional-http-serving" title="Permanent link">&para;</a></h3>
+<p>Durable <code>LLM_CALL</code> payloads keep schemas as JSON-safe data. The execution request
+carries the normalized original schema and its name. The local execution client
+constructs the provider-facing validator where inference runs; the effect handler validates the
+returned object as well. Hosts can place that execution client in a supervised
+process without transporting generated Python classes. A process boundary does
+not turn native execution into a request to the OpenAI-compatible HTTP API.</p>
+<div class="highlight"><pre><span></span><code>flowchart LR
+  Host["Native host"] --&gt; RT["Runtime effect handler"]
+  RT --&gt;|"schema + name as JSON data"| Exec["Local execution client&lt;br/&gt;in the execution process"]
+  Exec --&gt;|"provider-facing validator"| Core["AbstractCore providers&lt;br/&gt;and resident resources"]
+  Core --&gt;|"result"| RT
+  RT --&gt;|"validated result"| Ledger["LedgerStore"]
+  HTTPClient["Optional Core HTTP client"] --&gt;|"Core server credentials"| HTTP["Core HTTP application"]
+  HTTP --&gt; Core
+  Host -.-&gt;|"explicit lifecycle only&lt;br/&gt;start_core_server"| HTTP
+</code></pre></div>
+<p>The optional listener is Core-owned and independently authenticated. Starting or
+stopping it does not create a Runtime run or unload resident model resources.
+Importing Runtime's server facade starts no listener and imports no HTTP
+application. Native execution does not require this listener. See
+<a href="../integrations/abstractcore/#structured-responses">structured responses</a> and
+<a href="../integrations/abstractcore/#host-managed-serving">host-managed serving</a>.</p>
 <h3 id="live-token-streaming-outside-the-ledger">Live token streaming (outside the ledger)<a class="headerlink" href="#live-token-streaming-outside-the-ledger" title="Permanent link">&para;</a></h3>
 <p>Live text travels on a side channel next to the durable path. A run opts in with <code>_runtime.stream: true</code>, the host registers one sink with <code>Runtime.set_live_delta_sink(sink)</code>, and each <code>LLM_CALL</code> hands a per-call emitter (<code>src/abstractruntime/core/live_deltas.py</code>) to the AbstractCore client. The emitter batches fragments (about 40 ms), splits reasoning from content, holds back tool-call markup, and always closes the call with one <code>llm.delta_end</code> after the durable record is appended. Nothing on the live path is persisted, so replay and the ledger are the same with streaming on or off. See <a href="../integrations/abstractcore/#live-token-streaming">Live token streaming</a>.</p>
 <div class="highlight"><pre><span></span><code>flowchart LR
@@ -1700,6 +1744,13 @@ set_live_delta_sink"]
   Handler -.-&gt;|"after the record: delta_end"| Emitter
 </code></pre></div>
 <h3 id="model-residency-in-a-shared-process">Model residency in a shared process<a class="headerlink" href="#model-residency-in-a-shared-process" title="Permanent link">&para;</a></h3>
+<p>Core-managed local loaders reuse compatible resident weights and refuse a
+conflicting allocation of the same canonical artifact before loading it again.
+Some configurations can share weights with separate KV contexts; configurations
+without safe sharing require reuse of the supported profile or an unload first.
+This coordination is process-local. Independent external servers and arbitrary
+plugin/raw-engine allocations need their own ownership policy; starting another
+server process does not join the execution process's resource pool.</p>
 <p>In-process models (MLX, HuggingFace, embeddings) belong to the process, not to one runtime. Every multi-local client registers what it still needs (pooled, per-override, locked, being built, default) with AbstractCore's process residency registry. An unload after a default switch or a failed load goes through <code>eject_unclaimed</code>, which checks every owner's claims and unloads under one lock, so one service never unloads a model another service, user, entity runtime or the AbstractCore server still uses. A model that is still generating is unloaded when its call ends. See <a href="../integrations/abstractcore/#unloading-and-switching-models">Unloading and switching models</a>.</p>
 <div class="highlight"><pre><span></span><code>flowchart TB
   subgraph Process["One host process"]
@@ -1869,7 +1920,7 @@ record exactly once), and no doubled side effects.</p>
   <code>Runtime.set_publish_event_handler(...)</code> appends the event to the user's stream (see
   <a href="../automations/#publish-to-channel">automations.md</a>)
 - <code>SCHEDULE_RUN</code>: the kernel validates the request and plans a one-shot automation (tools at most the caller's ceiling, never <code>schedule_run</code> itself); the host's <code>Runtime.set_schedule_run_handler(...)</code> creates it, because only the host knows the target workflow, the owner and the workspace (see <a href="../automations/#wakes-schedule_run">automations.md</a>)
-- <code>LLM_CALL</code>, <code>TOOL_CALLS</code>, <code>MODEL_RESIDENCY</code>: provided by AbstractCore integration (<code>src/abstractruntime/integrations/abstractcore/effect_handlers.py</code>). The integration supports local/remote/hybrid execution, cached sessions/prompt-cache control with per-session attribution and clearing, host memory snapshots, discovery/catalog snapshots, model residency including host-wide provider-server rows in listings, residency locks with <code>force</code>-gated unload and context-estimate relays, durable run-scoped media child runs, media inputs, generated media outputs, provider progress callbacks as ledger events, provider-key header routing for remote servers, passthrough tools, approval-gated local tool execution, and workspace-scoped file and shell tools (run vars <code>workspace_*</code>, inherited by child runs; the host's built-in deny prefixes are enforced without being rendered into the model's prompt).
+- <code>LLM_CALL</code>, <code>TOOL_CALLS</code>, <code>MODEL_RESIDENCY</code>: provided by AbstractCore integration (<code>src/abstractruntime/integrations/abstractcore/effect_handlers.py</code>). The integration supports local/remote/hybrid execution, cached sessions/prompt-cache control with per-session attribution and clearing, host memory snapshots, discovery/catalog snapshots, model residency including host-wide provider-server rows in listings, residency locks with <code>force</code>-gated unload and context-estimate relays, durable run-scoped media and decision child runs, media inputs, generated media outputs, calibrated decisions (<code>output.modality: "decision"</code>), provider progress callbacks as ledger events, provider-key header routing for remote servers, passthrough tools, approval-gated local tool execution, and workspace-scoped file and shell tools (run vars <code>workspace_*</code>, inherited by child runs; the host's built-in deny prefixes are enforced without being rendered into the model's prompt).
 - <code>MEMORY_KG_*</code>: provided by the AbstractMemory bridge (<code>src/abstractruntime/integrations/abstractmemory/effect_handlers.py</code>)</p>
 <h3 id="reliability-retries-idempotency">Reliability: retries + idempotency<a class="headerlink" href="#reliability-retries-idempotency" title="Permanent link">&para;</a></h3>
 <ul>

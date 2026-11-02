@@ -436,6 +436,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#structured-responses" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Structured responses
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#execution-controls-and-local-concurrency" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -468,6 +479,17 @@
   
     <nav class="md-nav" aria-label="Multimodal generation">
       <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#decisions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Decisions
+      
+    </span>
+  </a>
+  
+</li>
         
           <li class="md-nav__item">
   <a href="#text-phase-feedback-prefill-vs-generation" class="md-nav__link">
@@ -725,6 +747,23 @@
       
     </span>
   </a>
+  
+    <nav class="md-nav" aria-label="Host-managed serving">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#host-admitted-asgi-requests" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Host-admitted ASGI requests
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
   
 </li>
       
@@ -1417,6 +1456,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#structured-responses" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Structured responses
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#execution-controls-and-local-concurrency" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1449,6 +1499,17 @@
   
     <nav class="md-nav" aria-label="Multimodal generation">
       <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#decisions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Decisions
+      
+    </span>
+  </a>
+  
+</li>
         
           <li class="md-nav__item">
   <a href="#text-phase-feedback-prefill-vs-generation" class="md-nav__link">
@@ -1707,6 +1768,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Host-managed serving">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#host-admitted-asgi-requests" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Host-admitted ASGI requests
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -1752,7 +1830,7 @@
 <h2 id="install">Install<a class="headerlink" href="#install" title="Permanent link">&para;</a></h2>
 <div class="highlight"><pre><span></span><code>pip<span class="w"> </span>install<span class="w"> </span>abstractruntime
 </code></pre></div>
-<p>The base install includes AbstractCore 2.29.0 or newer. That is the supported baseline for the current server auth split (<code>Authorization</code> for server auth, <code>X-AbstractCore-Provider-API-Key</code> for provider overrides), generated-media contracts, image upscaling, capability catalog, prompt-cache control-plane endpoints (including session attribution via <code>/acore/prompt_cache/key_meta</code>), host memory snapshots, the host-wide loaded-model sweep used by residency listings, the process-wide MLX residency report and eject used by model unload, durable bloc prompt-cache helpers, bindings and lifecycle operations, task-aware model residency for text/image/video/TTS/STT, current tool catalog, AbstractCore's public output-selector contract, async/sync text-generation output-selector parity, video generation endpoints, the public local vision-cache catalog helper used by Runtime discovery, vision adapter discovery plus batch/LoRA media controls, and the released shared workspace/file-filter utility surface used by Runtime packaging and integration checks.</p>
+<p>The base install includes AbstractCore 2.32.0 or newer. That is the supported baseline for the <code>decision</code> output modality (the <code>output.decision</code> route and <code>/v1/decisions</code>), the current server auth split (<code>Authorization</code> for server auth, <code>X-AbstractCore-Provider-API-Key</code> for provider overrides), generated-media contracts, image upscaling, capability catalog, prompt-cache control-plane endpoints (including session attribution via <code>/acore/prompt_cache/key_meta</code>), host memory snapshots, the host-wide loaded-model sweep used by residency listings, the process-wide MLX residency report and eject used by model unload, durable bloc prompt-cache helpers, bindings and lifecycle operations, task-aware model residency for text/image/video/TTS/STT, current tool catalog, AbstractCore's public output-selector contract, async/sync text-generation output-selector parity, video generation endpoints, the public local vision-cache catalog helper used by Runtime discovery, vision adapter discovery plus batch/LoRA media controls, and the released shared workspace/file-filter utility surface used by Runtime packaging and integration checks.</p>
 <p>The base install also includes the remote-light media/capability plugins needed
 for AbstractCore's multimodal <code>generate(..., output=...)</code> path. Local
 image/video/voice/music generation still depends on configured AbstractCore
@@ -1824,7 +1902,7 @@ the current process. Remote model execution is a separate topology exposed throu
 <span class="w">  </span><span class="nt">"messages"</span><span class="p">:</span><span class="w"> </span><span class="p">[{</span><span class="nt">"role"</span><span class="p">:</span><span class="w"> </span><span class="s2">"user"</span><span class="p">,</span><span class="w"> </span><span class="nt">"content"</span><span class="p">:</span><span class="w"> </span><span class="s2">"..."</span><span class="p">}],</span>
 <span class="w">  </span><span class="nt">"system_prompt"</span><span class="p">:</span><span class="w"> </span><span class="s2">"..."</span><span class="p">,</span>
 <span class="w">  </span><span class="nt">"media"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">"path/or/artifact-ref"</span><span class="p">],</span>
-<span class="w">  </span><span class="nt">"output"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">"modality"</span><span class="p">:</span><span class="w"> </span><span class="s2">"text|image|video|voice|sound|music"</span><span class="p">,</span><span class="w"> </span><span class="nt">"task"</span><span class="p">:</span><span class="w"> </span><span class="s2">"optional"</span><span class="p">},</span>
+<span class="w">  </span><span class="nt">"output"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">"modality"</span><span class="p">:</span><span class="w"> </span><span class="s2">"text|image|video|voice|sound|music|decision"</span><span class="p">,</span><span class="w"> </span><span class="nt">"task"</span><span class="p">:</span><span class="w"> </span><span class="s2">"optional"</span><span class="p">},</span>
 <span class="w">  </span><span class="nt">"tools"</span><span class="p">:</span><span class="w"> </span><span class="p">[{</span><span class="nt">"name"</span><span class="p">:</span><span class="w"> </span><span class="s2">"..."</span><span class="p">,</span><span class="w"> </span><span class="nt">"description"</span><span class="p">:</span><span class="w"> </span><span class="s2">"..."</span><span class="p">,</span><span class="w"> </span><span class="nt">"parameters"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="err">...</span><span class="p">}}],</span>
 <span class="w">  </span><span class="nt">"params"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
 <span class="w">    </span><span class="nt">"temperature"</span><span class="p">:</span><span class="w"> </span><span class="mf">0.0</span><span class="p">,</span>
@@ -1843,6 +1921,48 @@ the current process. Remote model execution is a separate topology exposed throu
 - <code>output</code> may be top-level or inside <code>params</code>; top-level <code>outputs</code> is accepted as a runtime alias for AbstractCore's <code>output</code>.
 - <code>output.tags</code>, when present, are merged into the generated artifact metadata. Runtime metadata such as <code>run_id</code> and <code>tags</code> is used by AbstractRuntime's ArtifactStore boundary and is not forwarded as provider-specific generation kwargs.
 - Host-supplied run defaults such as <code>run.vars["_runtime"]["provider"]</code> and <code>run.vars["_runtime"]["model"]</code> are persisted as JSON-safe routing metadata; provider clients, auth objects, downloaded model handles, and server sessions are not durable runtime state.</p>
+<h2 id="structured-responses">Structured responses<a class="headerlink" href="#structured-responses" title="Permanent link">&para;</a></h2>
+<p>For a durable structured request, put the JSON schema and its name on the
+<code>LLM_CALL</code> payload:</p>
+<div class="highlight"><pre><span></span><code><span class="p">{</span>
+<span class="w">  </span><span class="nt">"prompt"</span><span class="p">:</span><span class="w"> </span><span class="s2">"Choose chat or tool, and explain your choice."</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"response_schema_name"</span><span class="p">:</span><span class="w"> </span><span class="s2">"RouteChoice"</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"response_schema"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nt">"type"</span><span class="p">:</span><span class="w"> </span><span class="s2">"object"</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">"properties"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">      </span><span class="nt">"choice"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">"type"</span><span class="p">:</span><span class="w"> </span><span class="s2">"string"</span><span class="p">,</span><span class="w"> </span><span class="nt">"enum"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">"chat"</span><span class="p">,</span><span class="w"> </span><span class="s2">"tool"</span><span class="p">]},</span>
+<span class="w">      </span><span class="nt">"reason"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">"type"</span><span class="p">:</span><span class="w"> </span><span class="s2">"string"</span><span class="p">}</span>
+<span class="w">    </span><span class="p">},</span>
+<span class="w">    </span><span class="nt">"required"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">"choice"</span><span class="p">,</span><span class="w"> </span><span class="s2">"reason"</span><span class="p">]</span>
+<span class="w">  </span><span class="p">},</span>
+<span class="w">  </span><span class="nt">"structured_output_fallback"</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span>
+<span class="p">}</span>
+</code></pre></div>
+<p>The original normalized schema and name remain data through execution-client
+boundaries. The local execution client builds Core's Pydantic response class in
+the process calling the provider; the effect handler also validates the result.
+Successful structured results expose the object as <code>result.data</code>. The local
+conversion supports object properties, nested objects, arrays, enums, nullable
+types and defaults, with Pydantic's type coercion. It is a best-effort schema
+conversion, not an implementation of every JSON Schema keyword.</p>
+<p>Structured calls run without token streaming even when <code>params.stream</code> is true;
+the live channel reports <code>unavailable</code> with detail <code>structured_output</code>. Schema
+conversion errors and conflicting structured inputs fail without inference or
+retries. Do not combine <code>response_schema</code> with an explicit <code>response_model</code> or a
+different <code>response_format</code>. An identical source OpenAI schema wrapper is
+consumed during normalization. The <code>structured_output_fallback</code> option controls
+the handler's optional repair path; set it to false when an invalid structured
+response must fail directly.</p>
+<p>Remote and hybrid clients send schema data to Core as an OpenAI <code>response_format</code>
+of type <code>json_schema</code>. The remote server's validation rules apply, so do not
+assume the same coercion behavior as local Pydantic conversion. A raw
+<code>params.response_format</code> is preserved for Core. Python validator classes are
+supported only in direct local Python client calls; they are not durable JSON
+state and the remote HTTP client refuses them before sending a request.</p>
+<p>See <a href="#structured-output-checks-for-hosts-structured-facade">structured-output host checks</a>
+for validating an incoming OpenAI response format, and
+<a href="../../troubleshooting/#structured-generation-is-refused-before-inference">troubleshooting</a>
+for request errors.</p>
 <h2 id="execution-controls-and-local-concurrency">Execution controls and local concurrency<a class="headerlink" href="#execution-controls-and-local-concurrency" title="Permanent link">&para;</a></h2>
 <p>For text/chat calls, pass <code>params.thinking</code> as a boolean or reasoning level and
 <code>params.speculation</code> as <code>False</code>, <code>True</code>, or a Core speculation object, for example
@@ -1986,6 +2106,43 @@ request/output summary, and effective route actually ran.</p>
 <p>A model you load explicitly (<code>load_model_residency(task="image_generation", provider=..., model=...)</code>, the Gateway's <code>POST /models/load</code>, the console Load button, a flow's model residency node) is the exception: when every media output of a request names a model resident in the client's capability residency core, the request runs in-process on that loaded pipeline, with no subprocess and no second copy of the weights. The metadata then records <code>execution_mode="resident_in_process"</code> and <code>resident_load_ids</code>. A pooled client of <code>create_local_runtime(...)</code> uses its pool's residency core. Unloading the model (<code>unload_model_residency</code>, <code>POST /models/unload</code>) returns generation to the subprocess. Requests for a model that is not resident keep the subprocess, so an explicit load is how you opt into in-process execution for that model.</p>
 <p>Long-running generated media may expose provider progress callbacks. Runtime offers a transient <code>on_progress</code> callback during <code>LLM_CALL</code> execution and persists each callback as an <code>EMIT_EVENT</code> ledger record named <code>abstract.progress</code>. The callback itself is never stored in the effect payload or run vars.</p>
 <p><strong>It is not carried in the payload either.</strong> <code>Effect.payload</code> is JSON to every consumer downstream (ledger, SSE stream, host handlers that <code>json.dumps</code> it), so the callback travels BESIDE the effect: <code>Runtime._execute_effect_with_retry</code> installs it on the <code>contextvars.ContextVar</code> in <code>abstractruntime/core/progress_channel.py</code> for the duration of the handler call, and <code>make_llm_call_handler</code> reads it there into its own params dict — which is what becomes provider kwargs. An explicit <code>params["on_progress"]</code> from the caller always wins; an effect with no progress channel is offered <code>None</code>, never the previous effect's callback. A handler that hands work to a bare thread must carry the callback object (it does — <code>params</code> holds it), not re-read the ContextVar.</p>
+<h3 id="decisions">Decisions<a class="headerlink" href="#decisions" title="Permanent link">&para;</a></h3>
+<p>A decision is text in, calibrated typed answers out: an <code>LLM_CALL</code> whose output spec is <code>{"modality": "decision", "questions": {...}}</code>, with the state (the document the questions are about) as the prompt. Optional spec keys: <code>truncate</code> (bool), <code>provider</code> and <code>model</code> (the decision model). <code>model</code> may be a <code>provider/model</code> handle such as <code>mlx/jaredpalmer/kev-4b</code>, <code>huggingface/ggml-org/Kev-4B-GGUF:Q4_K_M</code> or <code>typesafe/jev-latest</code>; AbstractCore splits it. Without a model the call takes the <code>output.decision</code> capability default, so a text runtime on any provider answers decisions once that default is set, and AbstractCore runs the configured decision model. Each question is a <code>choice</code>, <code>noul</code> or <code>score</code> object (<code>{"type": ..., "instructions": ..., "criteria": ...}</code>), or AbstractCore's shorthand: a string is a yes/no (<code>noul</code>) question, a list is a <code>choice</code>. See AbstractCore's <a href="https://github.com/lpalbou/abstractcore/blob/main/docs/decision-models.md">decision models guide</a> for the question and answer shapes and the available models.</p>
+<div class="highlight"><pre><span></span><code><span class="n">Effect</span><span class="p">(</span>
+    <span class="nb">type</span><span class="o">=</span><span class="n">EffectType</span><span class="o">.</span><span class="n">LLM_CALL</span><span class="p">,</span>
+    <span class="n">payload</span><span class="o">=</span><span class="p">{</span>
+        <span class="s2">"prompt"</span><span class="p">:</span> <span class="s2">"Shoes arrived two weeks late and in the wrong size."</span><span class="p">,</span>
+        <span class="s2">"output"</span><span class="p">:</span> <span class="p">{</span>
+            <span class="s2">"modality"</span><span class="p">:</span> <span class="s2">"decision"</span><span class="p">,</span>
+            <span class="s2">"model"</span><span class="p">:</span> <span class="s2">"mlx/jaredpalmer/kev-4b"</span><span class="p">,</span>
+            <span class="s2">"questions"</span><span class="p">:</span> <span class="p">{</span>
+                <span class="s2">"department"</span><span class="p">:</span> <span class="p">{</span>
+                    <span class="s2">"type"</span><span class="p">:</span> <span class="s2">"choice"</span><span class="p">,</span>
+                    <span class="s2">"instructions"</span><span class="p">:</span> <span class="s2">"Which team should handle this?"</span><span class="p">,</span>
+                    <span class="s2">"criteria"</span><span class="p">:</span> <span class="p">[</span><span class="s2">"returns"</span><span class="p">,</span> <span class="s2">"billing"</span><span class="p">,</span> <span class="s2">"shipping"</span><span class="p">],</span>
+                <span class="p">},</span>
+                <span class="s2">"urgent"</span><span class="p">:</span> <span class="s2">"Is the customer asking for urgent help?"</span><span class="p">,</span>
+            <span class="p">},</span>
+        <span class="p">},</span>
+    <span class="p">},</span>
+    <span class="n">result_key</span><span class="o">=</span><span class="s2">"triage"</span><span class="p">,</span>
+<span class="p">)</span>
+</code></pre></div>
+<p>A decision produces no bytes: it needs no <code>ArtifactStore</code>, and <code>outputs</code> / <code>resources</code> are empty. The result carries the answers as JSON in <code>content</code>, the System One body in <code>decision</code> (<code>model</code>, <code>answers</code>, <code>usage</code>, <code>latency_ms</code>, and <code>truncated</code> when the state was cut to fit the model), <code>answers</code> (= <code>decision.answers</code>), and <code>provider</code> / <code>model</code> naming the decision model that answered. The resolved action id is <code>decision</code>. A decision spec receives no derived session prompt-cache key.</p>
+<div class="highlight"><pre><span></span><code><span class="p">{</span>
+<span class="w">  </span><span class="nt">"content"</span><span class="p">:</span><span class="w"> </span><span class="s2">"{\"department\": {...}, \"urgent\": {...}}"</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"decision"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">"model"</span><span class="p">:</span><span class="w"> </span><span class="s2">"..."</span><span class="p">,</span><span class="w"> </span><span class="nt">"answers"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="err">...</span><span class="p">},</span><span class="w"> </span><span class="nt">"usage"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">"input_tokens"</span><span class="p">:</span><span class="w"> </span><span class="mi">212</span><span class="p">,</span><span class="w"> </span><span class="nt">"output_tokens"</span><span class="p">:</span><span class="w"> </span><span class="mi">0</span><span class="p">},</span><span class="w"> </span><span class="nt">"latency_ms"</span><span class="p">:</span><span class="w"> </span><span class="mi">41</span><span class="p">},</span>
+<span class="w">  </span><span class="nt">"answers"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nt">"department"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">"type"</span><span class="p">:</span><span class="w"> </span><span class="s2">"choice"</span><span class="p">,</span><span class="w"> </span><span class="nt">"choice"</span><span class="p">:</span><span class="w"> </span><span class="s2">"returns"</span><span class="p">,</span><span class="w"> </span><span class="nt">"confidence"</span><span class="p">:</span><span class="w"> </span><span class="mf">0.91</span><span class="p">,</span><span class="w"> </span><span class="nt">"probabilities"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">"returns"</span><span class="p">:</span><span class="w"> </span><span class="mf">0.91</span><span class="p">,</span><span class="w"> </span><span class="nt">"billing"</span><span class="p">:</span><span class="w"> </span><span class="mf">0.07</span><span class="p">,</span><span class="w"> </span><span class="nt">"shipping"</span><span class="p">:</span><span class="w"> </span><span class="mf">0.02</span><span class="p">}},</span>
+<span class="w">    </span><span class="nt">"urgent"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">"type"</span><span class="p">:</span><span class="w"> </span><span class="s2">"noul"</span><span class="p">,</span><span class="w"> </span><span class="nt">"noul"</span><span class="p">:</span><span class="w"> </span><span class="mf">0.12</span><span class="p">}</span>
+<span class="w">  </span><span class="p">},</span>
+<span class="w">  </span><span class="nt">"provider"</span><span class="p">:</span><span class="w"> </span><span class="s2">"mlx"</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"model"</span><span class="p">:</span><span class="w"> </span><span class="s2">"jaredpalmer/kev-4b"</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"outputs"</span><span class="p">:</span><span class="w"> </span><span class="p">{},</span>
+<span class="w">  </span><span class="nt">"resources"</span><span class="p">:</span><span class="w"> </span><span class="p">{}</span>
+<span class="p">}</span>
+</code></pre></div>
+<p>Remote and hybrid runtimes post <code>POST /v1/decisions</code> on the AbstractCore server (<code>model</code> as <code>provider/model</code>, <code>state</code>, <code>questions</code>, <code>truncate</code>) and map the server's body to the same result. For a durable child run on an existing run use <code>decide(...)</code> on the <a href="#durable-run-scoped-media-and-comms-execution">run facade</a>; in VisualFlow use the <code>decide</code> node.</p>
 <h3 id="text-phase-feedback-prefill-vs-generation">Text phase feedback (prefill vs generation)<a class="headerlink" href="#text-phase-feedback-prefill-vs-generation" title="Permanent link">&para;</a></h3>
 <p>The callback is injected for <strong>every</strong> <code>LLM_CALL</code>, not only generated-media ones. AbstractCore decides per PROVIDER whether it has an honest signal (<code>BaseProvider.supports_text_progress_events()</code>, default <code>False</code>); a provider that has none never calls back, and that run's ledger gains no progress records at all. Providers that do (today: every MLX lane) report the prefill→generation boundary, so a client can replace "Thinking…" with what the call is actually doing.</p>
 <p>Text phase payloads carry <code>kind: "llm"</code> — the discriminator that separates them from the media shapes on the same event name — plus <code>phase</code> (<code>prefill</code> | <code>generate</code> | <code>complete</code>), <code>prompt_tokens</code>, <code>cached_tokens</code>, <code>fed_tokens</code>, <code>generated_tokens</code>, <code>ttft_s</code>, <code>tokens_per_second</code> and <code>elapsed_s</code>, on top of the runtime identity (<code>run_id</code>, <code>workflow_id</code>, <code>node_id</code>, <code>step_id</code>, <code>idempotency_key</code>, <code>attempt</code>) every progress payload gets. Keys with no measured value are absent, never zero.</p>
@@ -2002,7 +2159,7 @@ request/output summary, and effective route actually ran.</p>
 </code></pre></div>
 <p><strong>Cost.</strong> AbstractCore, not Runtime, bounds the volume: <code>prefill</code>, the first-token event and the terminal <code>complete</code> always fire, cadence events no closer than 0.5 s apart, for the whole call, never capped by count (ADR-0026). A 3.7 s answer produced 9 records. Runtime appends each already-completed with a uuid suffix, so no progress tick re-parses the ledger.</p>
 <p><strong>Scope.</strong> These records are <code>scope: "run"</code> and land in the ledger of the run that made the call. In a chat bundle the <code>llm_call</code> runs inside the Agent node's SUBWORKFLOW, so a client sees them only once it follows child ledgers — the same requirement that already applies to the <code>abstract.status</code> "Thinking…" event (<code>result.wait.details.sub_run_id</code> on the parent's waiting record).</p>
-<p>Remote runtimes support chat media by sending OpenAI-compatible data URL content arrays to AbstractCore Server. They also support image generation (<code>/v1/images/generations</code>), image edits (<code>/v1/images/edits</code> or <code>/{provider}/v1/images/edits</code>), image upscaling (<code>/v1/images/upscale</code> or <code>/{provider}/v1/images/upscale</code>), text-to-video (<code>/v1/videos/generations</code>), image-to-video (<code>/v1/videos/edits</code> or <code>/{provider}/v1/videos/edits</code>), TTS (<code>/v1/audio/speech</code>), music generation (<code>/v1/audio/music</code>), and STT (<code>/v1/audio/transcriptions</code>) with the same artifact-backed result shape. The Runtime/Core request surface forwards task-specific media controls including <code>count</code>/<code>n</code>, <code>seeds</code>, ordered <code>lora_adapters</code>, and video <code>flow_shift</code>. Remote media endpoint calls do not inherit the chat model by default; pass an output-specific <code>model</code> only when you want a remote provider/model instead of the server's configured capability default. Remote STT requires exactly one audio media item that resolves to a local file path or artifact-backed temporary file. Remote image edits, image upscaling, and image-to-video require one source image media item resolving to a local path or artifact-backed temporary file. For voice clone/register or reference-guided TTS, use local execution so AbstractCore can use its in-process capability dispatcher. Runtime does not import <code>abstractmusic</code> directly; local music support comes through the configured AbstractCore capability stack.</p>
+<p>Remote runtimes support chat media by sending OpenAI-compatible data URL content arrays to AbstractCore Server. They also support image generation (<code>/v1/images/generations</code>), image edits (<code>/v1/images/edits</code> or <code>/{provider}/v1/images/edits</code>), image upscaling (<code>/v1/images/upscale</code> or <code>/{provider}/v1/images/upscale</code>), text-to-video (<code>/v1/videos/generations</code>), image-to-video (<code>/v1/videos/edits</code> or <code>/{provider}/v1/videos/edits</code>), TTS (<code>/v1/audio/speech</code>), music generation (<code>/v1/audio/music</code>), and STT (<code>/v1/audio/transcriptions</code>) with the same artifact-backed result shape, and decisions (<code>/v1/decisions</code>) with the typed-answer result shape described under <a href="#decisions">Decisions</a>. The Runtime/Core request surface forwards task-specific media controls including <code>count</code>/<code>n</code>, <code>seeds</code>, ordered <code>lora_adapters</code>, and video <code>flow_shift</code>. Remote media endpoint calls do not inherit the chat model by default; pass an output-specific <code>model</code> only when you want a remote provider/model instead of the server's configured capability default. Remote STT requires exactly one audio media item that resolves to a local file path or artifact-backed temporary file. Remote image edits, image upscaling, and image-to-video require one source image media item resolving to a local path or artifact-backed temporary file. For voice clone/register or reference-guided TTS, use local execution so AbstractCore can use its in-process capability dispatcher. Runtime does not import <code>abstractmusic</code> directly; local music support comes through the configured AbstractCore capability stack.</p>
 <p>Remote multimodal generation currently supports one <code>output</code> selector per <code>LLM_CALL</code>. Hybrid runtimes use the same remote LLM/media path as remote mode while executing tools locally. Local runtimes can use AbstractCore's in-process multimodal dispatcher for richer capability plugin behavior.</p>
 <p>Local media residency goes through the installed AbstractCore capability plugins (AbstractVision for image/upscale/video, AbstractVoice for TTS/STT, AbstractMusic for music): <code>load_model_residency</code> preloads the model in-process and <code>list_model_residency</code> lists it. When no plugin can serve the task, the result is explicit rather than a pretend success:</p>
 <ul>
@@ -2259,7 +2416,7 @@ request/output summary, and effective route actually ran.</p>
 <li>This surface is intentionally host-oriented; the runtime effect handlers still only use prompt caching during LLM execution, and gateway/CLI hosts manage prompt caches and durable bloc/KV artifacts through the public facade instead of reaching through to provider internals.</li>
 <li>Automatic per-session prompt-cache keys are enabled by <code>run.vars["_runtime"]["prompt_cache"]</code>, <code>LLM_CALL.params.prompt_cache_key</code>, or the Runtime-owned <code>ABSTRACTRUNTIME_PROMPT_CACHE</code> process default. Gateway-specific prompt-cache env vars should be translated by Gateway into <code>_runtime.prompt_cache</code>.</li>
 <li>Durable exact reuse uses <code>LLM_CALL.params.prompt_cache_binding</code>. If a binding includes <code>key</code>, Runtime adopts it as the effective cache key, rejects mismatches before provider execution, and skips auto-derived session-key injection for that call.</li>
-<li>Automatic prompt-cache key derivation is text/chat-only. Non-text output selectors such as image, voice, music, and transcription may carry an explicit <code>prompt_cache_binding</code>, but Runtime does not derive a session cache key for them.</li>
+<li>Automatic prompt-cache key derivation is text/chat-only. Non-text output selectors such as image, voice, music, decision, and transcription may carry an explicit <code>prompt_cache_binding</code>, but Runtime does not derive a session cache key for them.</li>
 <li>Local Runtime owns the bloc store root policy:</li>
 <li>default local root: <code>~/.abstractruntime/blocs</code></li>
 <li>default file-runtime root: <code>&lt;base_dir&gt;/blocs</code></li>
@@ -2776,7 +2933,7 @@ streamed lane never sends it, as AbstractCore refuses <code>one_shot</code> on a
     <span class="nb">print</span><span class="p">(</span><span class="n">err</span><span class="o">.</span><span class="n">status_code</span><span class="p">,</span> <span class="n">err</span><span class="o">.</span><span class="n">detail</span><span class="p">)</span>  <span class="c1"># 404: the voice is gone</span>
 </code></pre></div>
 <h2 id="durable-run-scoped-media-and-comms-execution">Durable run-scoped media and comms execution<a class="headerlink" href="#durable-run-scoped-media-and-comms-execution" title="Permanent link">&para;</a></h2>
-<p>Hosts sometimes need to trigger image/TTS/music/STT work or outbound comms sends for an existing run. That work should still execute through Runtime so the child run ledger, artifact ownership, and replay surface remain Runtime-authored.</p>
+<p>Hosts sometimes need to trigger image/TTS/music/STT work, a decision, or outbound comms sends for an existing run. That work should still execute through Runtime so the child run ledger, artifact ownership, and replay surface remain Runtime-authored.</p>
 <p>Public durable entry points:</p>
 <ul>
 <li><code>get_abstractcore_run_facade(runtime)</code></li>
@@ -2792,6 +2949,7 @@ streamed lane never sends it, as AbstractCore refuses <code>one_shot</code> on a
 <li><code>generate_voice(...)</code></li>
 <li><code>stream_voice(...)</code></li>
 <li><code>generate_music(...)</code></li>
+<li><code>decide(...)</code></li>
 <li><code>transcribe_audio(...)</code></li>
 <li><code>send_email(...)</code></li>
 <li><code>send_telegram_message(...)</code></li>
@@ -2868,6 +3026,25 @@ streamed-speech wait left by a runtime before this behaviour
 
 <span class="nb">print</span><span class="p">(</span><span class="n">child</span><span class="o">.</span><span class="n">run_id</span><span class="p">,</span> <span class="n">child</span><span class="o">.</span><span class="n">output</span><span class="p">[</span><span class="s2">"result"</span><span class="p">][</span><span class="s2">"outputs"</span><span class="p">][</span><span class="s2">"video"</span><span class="p">][</span><span class="mi">0</span><span class="p">][</span><span class="s2">"artifact_id"</span><span class="p">])</span>
 </code></pre></div>
+<p>For a calibrated decision (typed answers, no artifact), use the same child-run boundary:</p>
+<div class="highlight"><pre><span></span><code><span class="n">child</span> <span class="o">=</span> <span class="n">facade</span><span class="o">.</span><span class="n">decide</span><span class="p">(</span>
+    <span class="s2">"existing-parent-run-id"</span><span class="p">,</span>
+    <span class="n">state</span><span class="o">=</span><span class="s2">"Shoes arrived two weeks late and in the wrong size."</span><span class="p">,</span>
+    <span class="n">questions</span><span class="o">=</span><span class="p">{</span>
+        <span class="s2">"department"</span><span class="p">:</span> <span class="p">{</span>
+            <span class="s2">"type"</span><span class="p">:</span> <span class="s2">"choice"</span><span class="p">,</span>
+            <span class="s2">"instructions"</span><span class="p">:</span> <span class="s2">"Which team should handle this?"</span><span class="p">,</span>
+            <span class="s2">"criteria"</span><span class="p">:</span> <span class="p">[</span><span class="s2">"returns"</span><span class="p">,</span> <span class="s2">"billing"</span><span class="p">,</span> <span class="s2">"shipping"</span><span class="p">],</span>
+        <span class="p">},</span>
+        <span class="s2">"urgent"</span><span class="p">:</span> <span class="s2">"Is the customer asking for urgent help?"</span><span class="p">,</span>
+    <span class="p">},</span>
+    <span class="n">model</span><span class="o">=</span><span class="s2">"mlx/jaredpalmer/kev-4b"</span><span class="p">,</span>
+<span class="p">)</span>
+
+<span class="n">result</span> <span class="o">=</span> <span class="n">child</span><span class="o">.</span><span class="n">output</span><span class="p">[</span><span class="s2">"result"</span><span class="p">]</span>
+<span class="nb">print</span><span class="p">(</span><span class="n">child</span><span class="o">.</span><span class="n">run_id</span><span class="p">,</span> <span class="n">result</span><span class="p">[</span><span class="s2">"model"</span><span class="p">],</span> <span class="n">result</span><span class="p">[</span><span class="s2">"answers"</span><span class="p">][</span><span class="s2">"department"</span><span class="p">][</span><span class="s2">"choice"</span><span class="p">])</span>
+</code></pre></div>
+<p><code>decide(run_id, *, state, questions, model=None, truncate=None, params=None, child_vars=None)</code> starts a child <code>LLM_CALL</code> whose output spec is <code>{"modality": "decision", "questions": ...}</code> (plus <code>truncate</code> and <code>model</code> when given) with <code>state</code> as the prompt. A <code>provider/model</code> handle travels whole and AbstractCore splits it; omit <code>model</code> to use the <code>output.decision</code> capability default. The child's result carries <code>answers</code>, <code>decision</code>, <code>content</code>, <code>provider</code> and <code>model</code> as described under <a href="#decisions">Decisions</a>.</p>
 <p>Outbound comms sends that belong to a run should use the same durable child-run surface:</p>
 <div class="highlight"><pre><span></span><code><span class="n">email_child</span> <span class="o">=</span> <span class="n">facade</span><span class="o">.</span><span class="n">send_email</span><span class="p">(</span>
     <span class="s2">"existing-parent-run-id"</span><span class="p">,</span>
@@ -2911,6 +3088,29 @@ streamed-speech wait left by a runtime before this behaviour
 <li><code>../adr/0002_execution_modes_local_remote_hybrid.md</code> — rationale for local/remote/hybrid</li>
 </ul>
 <h2 id="host-managed-serving">Host-managed serving<a class="headerlink" href="#host-managed-serving" title="Permanent link">&para;</a></h2>
+<p>Hosts can explicitly start Core's optional independently authenticated listener:</p>
+<div class="highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">abstractruntime.integrations.abstractcore.server_facade</span><span class="w"> </span><span class="kn">import</span> <span class="n">start_core_server</span>
+
+<span class="n">server</span> <span class="o">=</span> <span class="n">start_core_server</span><span class="p">(</span><span class="n">host</span><span class="o">=</span><span class="s2">"127.0.0.1"</span><span class="p">,</span> <span class="n">port</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+<span class="k">try</span><span class="p">:</span>
+    <span class="k">assert</span> <span class="n">server</span><span class="o">.</span><span class="n">is_running</span>
+    <span class="nb">print</span><span class="p">(</span><span class="n">server</span><span class="o">.</span><span class="n">url</span><span class="p">)</span>
+<span class="k">finally</span><span class="p">:</span>
+    <span class="n">server</span><span class="o">.</span><span class="n">stop</span><span class="p">()</span>
+</code></pre></div>
+<p>Omit <code>host</code> and <code>port</code> to use Core's persisted server configuration (default
+<code>127.0.0.1:8000</code>); port <code>0</code> requests an ephemeral port. The Core-owned handle
+provides <code>url</code>, <code>is_running</code>, <code>status()</code> and <code>stop()</code>. Startup failures raise to
+the caller. Core owns the listener's authentication and bind-sensitive security
+policy, including its first-run token handling. Stopping the listener leaves
+resident provider resources available to native clients. HTTP requests go to
+Core directly and do not enter Runtime's run/ledger pipeline.</p>
+<p>This is an explicit lifecycle operation: importing the facade starts no server
+and loads no HTTP application. Hosts should keep native execution readiness
+independent of optional HTTP readiness. An isolated execution process can hold
+the providers and listener together; restarting that process loses its resident
+models and in-flight requests. The facade does not create another process.</p>
+<h3 id="host-admitted-asgi-requests">Host-admitted ASGI requests<a class="headerlink" href="#host-admitted-asgi-requests" title="Permanent link">&para;</a></h3>
 <p>Hosts that expose AbstractCore serving routes use
 <code>abstractruntime.integrations.abstractcore.server_facade.serve_core_request(scope, receive, send, *, token, allow_unauthenticated=False)</code>.
 The facade lazily loads the Core ASGI application and keeps the host's independent

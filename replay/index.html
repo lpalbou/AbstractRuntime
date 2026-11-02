@@ -974,6 +974,17 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
+  <a href="#public-conversation-messages" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Public conversation messages
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#contract" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1067,6 +1078,32 @@ from raw records.</p>
 <span class="n">delta</span> <span class="o">=</span> <span class="n">view</span><span class="o">.</span><span class="n">apply</span><span class="p">(</span><span class="n">ledger</span><span class="o">.</span><span class="n">list_after</span><span class="p">(</span><span class="n">run_id</span><span class="o">=</span><span class="n">child_id</span><span class="p">,</span> <span class="n">after</span><span class="o">=</span><span class="n">view</span><span class="o">.</span><span class="n">last_seq</span><span class="p">(</span><span class="n">child_id</span><span class="p">))[</span><span class="mi">0</span><span class="p">])</span>
 <span class="n">client_copy</span> <span class="o">=</span> <span class="n">apply_delta</span><span class="p">(</span><span class="n">doc</span><span class="p">,</span> <span class="n">delta</span><span class="p">)</span>      <span class="c1"># == view.to_json()</span>
 </code></pre></div>
+<h2 id="public-conversation-messages">Public conversation messages<a class="headerlink" href="#public-conversation-messages" title="Permanent link">&para;</a></h2>
+<p>Explicit completed <code>public_update</code> events become assistant messages with
+<code>kind: "public_update"</code>, stable run-scoped <code>id</code>, <code>text</code>, <code>run_id</code>, optional <code>session_id</code>,
+<code>iteration</code>, <code>source_call_ids</code>, and normal ledger provenance. Replay does not turn reasoning,
+raw tool output or a marker inside model text into public speech. Diary/thinking fences
+are excluded. These are actor-authored updates; their wording alone is not proof of a fact
+or of completed work.</p>
+<p>Public human guidance becomes <code>role: "user", kind: "guidance", source: "user_guidance"</code>
+with <code>speaker</code> and <code>guidance_status: "accepted"</code>. It must come from Runtime's reserved
+host receipt node <code>__host_user_guidance__</code> and idempotency key
+<code>system:user_guidance:&lt;seq&gt;</code>, not an arbitrary actor-authored event with the same name.
+The words are the explicit <code>display_text</code>, not the operational context wrapper. Acceptance
+does not close an active wait or claim the actor adopted the correction.
+Optional <code>client_message_id</code> correlates a pending client message to the host receipt. Its
+command-inbox sequence is independent of the guidance sidecar sequence encoded in the id.</p>
+<p>Question metadata remains on question messages. Answers carry <code>question_id</code> from the matched
+original wait when that wait declared one; legacy waits without an identity leave it absent.
+Host-authored expiry appears as a system
+<code>question_outcome</code>; a retained late reply is <code>retained_reply</code> with its status and reason.
+A fallback is never rendered as a human answer. These facts do not trigger notifications;
+notification and audio policy belongs to the consuming host/client.</p>
+<p>A final explicit <code>output.result</code> object with no prose field can be displayed as JSON. Only
+that result is projected; private siblings in an agent envelope are excluded. The structured
+fallback is withheld when the result itself contains internal fields (such as <code>scratchpad</code>,
+<code>reasoning</code>, <code>report</code>, <code>messages</code>, <code>cycles</code>, <code>diary</code> or underscore-prefixed keys) or diary/thinking
+fences. The original structured output remains available in the technical run output.</p>
 <h2 id="contract">Contract<a class="headerlink" href="#contract" title="Permanent link">&para;</a></h2>
 <ul>
 <li><strong>Pure and deterministic.</strong> There is no I/O and no clock. The input is records plus snapshots,

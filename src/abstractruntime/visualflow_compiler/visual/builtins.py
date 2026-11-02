@@ -425,37 +425,79 @@ def string_template(inputs: Dict[str, Any]) -> str:
 
 
 # Control flow helpers (these return decision values, not execution control)
-def control_compare(inputs: Dict[str, Any]) -> bool:
-    """Compare two values."""
+_COMPARE_OPS: Dict[str, Callable[[Any, Any], Any]] = {
+    "==": lambda a, b: a == b,
+    "!=": lambda a, b: a != b,
+    "<": lambda a, b: a < b,
+    "<=": lambda a, b: a <= b,
+    ">": lambda a, b: a > b,
+    ">=": lambda a, b: a >= b,
+}
+
+
+def _compare_kind(value: Any) -> str:
+    """What a compared value is, in the words the Flow editor uses."""
+    if value is None:
+        return "no value"
+    if isinstance(value, bool):
+        return "true/false"
+    if isinstance(value, (int, float)):
+        return "a number"
+    if isinstance(value, str):
+        return "text"
+    if isinstance(value, (list, tuple)):
+        return "a list"
+    if isinstance(value, dict):
+        return "a JSON object"
+    return type(value).__name__
+
+
+def _compare_preview(value: Any) -> str:
+    text = repr(value)
+    return text if len(text) <= 40 else text[:39] + "…"
+
+
+def control_compare(inputs: Dict[str, Any], node: str = "") -> bool:
+    """Compare `a` and `b` with `op` (==, !=, <, <=, >, >=; not set: ==).
+
+    Values compare as stored, by Python's rules for their types; nothing is converted
+    (ADR 0049: the editor stores a typed value with its pin's type). Two cases are
+    refused with a run error instead of answering False:
+
+    - a number or true/false on one side and text on the other, for every operator
+      (``5 == "5"``): a flow saved before typed values stored the text, and its
+      answer would be silently wrong;
+    - an order (<, <=, >, >=) between values Python cannot order (a list and a
+      number, no value and a number).
+
+    true/false compares with numbers as Python's booleans do (``True == 1``,
+    ``False < 1``). Equality of any other pair is Python's (``None == 5`` is False).
+    `node` names the Compare node in the error ("'Is five' (node same)").
+    """
+    who = f"Compare {node}" if node else "Compare"
     a = inputs.get("a")
     b = inputs.get("b")
     op = str(inputs.get("op", "=="))
+    compare = _COMPARE_OPS.get(op)
+    if compare is None:
+        raise ValueError(f"Unknown comparison operator: {op}")
 
-    if op == "==":
-        return a == b
-    if op == "!=":
-        return a != b
-    if op == "<":
-        try:
-            return a < b
-        except Exception:
-            return False
-    if op == "<=":
-        try:
-            return a <= b
-        except Exception:
-            return False
-    if op == ">":
-        try:
-            return a > b
-        except Exception:
-            return False
-    if op == ">=":
-        try:
-            return a >= b
-        except Exception:
-            return False
-    raise ValueError(f"Unknown comparison operator: {op}")
+    for scalar, scalar_pin, text, text_pin in ((a, "a", b, "b"), (b, "b", a, "a")):
+        if isinstance(scalar, (bool, int, float)) and isinstance(text, str):
+            kind = "true/false" if isinstance(scalar, bool) else "a number"
+            raise ValueError(
+                f"{who} {op}: {scalar_pin} is {kind} ({_compare_preview(scalar)}) and {text_pin} is text "
+                f"({_compare_preview(text)}). One side is {kind} and the other is text. "
+                "Open the flow in the editor and save it to store typed values."
+            )
+
+    try:
+        return bool(compare(a, b))
+    except TypeError:
+        raise ValueError(
+            f"{who} {op}: a is {_compare_kind(a)} ({_compare_preview(a)}) and b is "
+            f"{_compare_kind(b)} ({_compare_preview(b)}); these cannot be ordered."
+        ) from None
 
 
 def control_not(inputs: Dict[str, Any]) -> bool:

@@ -26,7 +26,15 @@ def test_only_completed_explicit_owned_public_events_create_briefs():
     assert briefs[0]["role"] == "assistant"
     assert briefs[0]["source_call_ids"] == ["call-1"]
     assert briefs[0]["iteration"] == 1
+    assert briefs[0]["update_kind"] == "progress"  # written without a kind
     assert "private" not in str(messages) and "PRIVATE_SENTINEL" not in str(messages)
+
+
+@pytest.mark.parametrize("kind,expected", [("finding", "finding"), ("progress", "progress"), ("evidence", "progress"),
+                                           (None, "progress"), (["finding"], "progress")])
+def test_public_update_carries_the_producer_typed_kind(kind, expected):
+    messages = replay({"R": [event("R", 1, kind=kind)]}, root_run_id="R").to_json()["messages"]
+    assert [m["update_kind"] for m in messages if m["kind"] == "public_update"] == [expected]
 
 
 def test_live_reconnect_and_nested_replay_keep_same_brief_identity():

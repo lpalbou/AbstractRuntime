@@ -1016,9 +1016,12 @@ class ReplayView:
                     and not re.search(r"```\s*diary\b|<\s*diary\b|<\s*think\b", text, flags=re.I)):
                 mid = authored_id if authored_id.startswith(r.run_id + ":") else f"{r.run_id}:{authored_id}"
                 calls = b.get("source_call_ids")
+                # The producer types the update; only an explicit "finding" is one (older
+                # updates carry no kind and report progress).
                 self._message(mid, role="assistant", kind="public_update", text=text, run_id=r.run_id,
                               step_id=step_id, seq=seq, ts=ts, source="emit_event",
-                              extra={"source_call_ids": [c for c in calls if isinstance(c, str)]
+                              extra={"update_kind": "finding" if b.get("kind") == "finding" else "progress",
+                                     "source_call_ids": [c for c in calls if isinstance(c, str)]
                                      if isinstance(calls, list) else [], "iteration": b.get("iteration"),
                                      "session_id": _s(b.get("session_id")) or None})
             return

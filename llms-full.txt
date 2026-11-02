@@ -1215,8 +1215,9 @@ tool-approval waits retain their own contracts.
 An opt-in actor may inherit `_runtime.conversation: {enabled: true}` through native child
 workflows and VisualFlow Agent nodes. This flag does not create an extra inference call.
 Public updates enter replay only through an explicit completed `EMIT_EVENT` named
-`public_update`, with payload `id`, `text`, `run_id`, optional `session_id`, `iteration` and
-`source_call_ids`. The event's owner must match `run_id`; private diary/thinking fences are
+`public_update`, with payload `id`, `text`, `run_id`, optional `session_id`, `iteration`,
+`source_call_ids` and optional `kind` (`"progress"` or `"finding"`, replayed as the message's
+`update_kind`). The event's owner must match `run_id`; private diary/thinking fences are
 excluded. See [replay.md](replay.md#public-conversation-messages).
 
 Actors may attach `public_action` to a proposed `TOOL_CALLS` payload with `text`,
@@ -6557,7 +6558,10 @@ client_copy = apply_delta(doc, delta)      # == view.to_json()
 
 Explicit completed `public_update` events become assistant messages with
 `kind: "public_update"`, stable run-scoped `id`, `text`, `run_id`, optional `session_id`,
-`iteration`, `source_call_ids`, and normal ledger provenance. Replay does not turn reasoning,
+`iteration`, `source_call_ids`, `update_kind`, and normal ledger provenance. `update_kind` is
+the producer's type for the update: `"finding"` (a fact or piece of evidence the actor
+established) or `"progress"` (what it is doing); an event without a `kind` of `"finding"`
+replays as `"progress"`. Replay copies the type and never infers it from the text. Replay does not turn reasoning,
 raw tool output or a marker inside model text into public speech. Diary/thinking fences
 are excluded. These are actor-authored updates; their wording alone is not proof of a fact
 or of completed work.

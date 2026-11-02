@@ -654,6 +654,35 @@ def _list_replay_artifacts_for_run(
     return [_artifact_replay_summary(m) for m in metas0]
 
 
+# Voice transport is never an attachment (ADR 0047, 2026-11-02): the recording of
+# a person's spoken question and the read-aloud audio synthesized from an answer
+# are how the conversation travelled, not part of it. Producers tag them
+# (`purpose`, `artifact_space`, the reserved `voice/` and `client:voice/` paths);
+# the conversation projection (session turns) drops them from a turn's
+# `artifacts` and `attachments`. The run bundle's own `artifacts` section stays
+# complete: it is the archive, not the conversation.
+VOICE_TRANSPORT_PURPOSES = frozenset({"voice_playback", "voice_dictation"})
+VOICE_TRANSPORT_PATH_PREFIXES = ("voice/", "client:voice/")
+
+
+def is_voice_transport(tags: Any) -> bool:
+    """True for the tags (or an attachment/artifact dict carrying them) of voice transport."""
+    if not isinstance(tags, dict):
+        return False
+    if str(tags.get("purpose") or "").strip() in VOICE_TRANSPORT_PURPOSES:
+        return True
+    if str(tags.get("artifact_space") or "").strip() == "voice":
+        return True
+    for key in ("path", "source_path"):
+        value = str(tags.get(key) or "").strip().replace("\\", "/")
+        if value.startswith(VOICE_TRANSPORT_PATH_PREFIXES):
+            return True
+    nested = tags.get("tags")
+    if isinstance(nested, dict) and nested is not tags:
+        return is_voice_transport(nested)
+    return False
+
+
 def _list_replay_artifacts_for_runs(
     *,
     artifact_store: Optional[ArtifactStore],
@@ -858,7 +887,8 @@ def _best_effort_session_turns(
         prompt_verbatim = _extract_user_prompt_verbatim_from_input(
             input_data, display_prompt=prompt, output=getattr(r, "output", None)
         )
-        attachments = _extract_context_attachments_from_input(input_data)
+        # Conversation projection: voice transport is neither an attachment nor an artifact of a turn.
+        attachments = [a for a in _extract_context_attachments_from_input(input_data) if not is_voice_transport(a)]
         status = getattr(getattr(r, "status", None), "value", None) or str(getattr(r, "status", "") or "")
         created_at = str(getattr(r, "created_at", "") or "").strip() or None
         updated_at = str(getattr(r, "updated_at", "") or "").strip() or None
@@ -888,11 +918,15 @@ def _best_effort_session_turns(
 
         artifacts: List[Dict[str, Any]] = []
         if include_artifacts:
-            artifacts = _list_replay_artifacts_for_runs(
-                artifact_store=artifact_store,
-                run_ids=run_ids,
-                limit=RUN_HISTORY_BUNDLE_ARTIFACT_LIMIT,
-            )
+            artifacts = [
+                item
+                for item in _list_replay_artifacts_for_runs(
+                    artifact_store=artifact_store,
+                    run_ids=run_ids,
+                    limit=RUN_HISTORY_BUNDLE_ARTIFACT_LIMIT,
+                )
+                if not is_voice_transport(item.get("tags"))
+            ]
 
         turn: Dict[str, Any] = {}
         if kind == "occurrence":

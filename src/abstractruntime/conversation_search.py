@@ -37,6 +37,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
+from .history_bundle import is_voice_transport
+
 FUZZY_MIN = 0.6
 _SCHEMA_VERSION = "2"
 _LOCKS: Dict[str, threading.Lock] = {}
@@ -371,7 +373,7 @@ class ConversationSearch:
         for meta in generated:
             tags = dict(getattr(meta, "tags", None) or {})
             aid = str(getattr(meta, "artifact_id", "") or "")
-            if tags.get("kind") != "generated_media" or tags.get("purpose") == "voice_playback" or aid in seen:
+            if tags.get("kind") != "generated_media" or is_voice_transport(tags) or aid in seen:
                 continue
             seen.add(aid)
             entry = _media_entry(meta, kind=str(tags.get("modality") or "") or None)

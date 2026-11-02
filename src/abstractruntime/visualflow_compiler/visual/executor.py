@@ -26,7 +26,7 @@ from ...utils.workspace_paths import (
 )
 
 from .agent_ids import visual_react_workflow_id
-from .builtins import get_builtin_handler
+from .builtins import control_compare, get_builtin_handler
 from .code_executor import create_code_handler, ensure_code_permissions_allowed, normalize_code_permissions
 from .execution_metrics import capture_execution_start, finish_execution_metrics
 from .function_library import compile_function_library
@@ -4865,6 +4865,12 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
         # Their runtime semantics are handled in `abstractflow.adapters.control_adapter`.
         if type_str in ("sequence", "parallel"):
             return lambda x: x
+
+        if type_str == "compare":
+            # A refused comparison names its node (ADR 0049; builtins.control_compare).
+            label = data.get("label") if isinstance(data, dict) else None
+            node_name = f"'{label}' (node {node_id})" if isinstance(label, str) and label.strip() else f"(node {node_id})"
+            return _wrap_builtin(lambda inputs: control_compare(inputs, node=node_name), data)
 
         builtin = get_builtin_handler(type_str)
         if builtin:

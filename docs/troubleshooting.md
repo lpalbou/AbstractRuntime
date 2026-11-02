@@ -383,6 +383,20 @@ Cause and fix:
 
 See [automations.md, `feed.item@1`](automations.md#feeditem1).
 
+## A Compare step fails with "One side is a number and the other is text"
+
+Symptom:
+- A run stops at a Compare node: "Compare 'Is five' (node same) ==: a is a number (5) and b is text ('5'). One side is
+  a number and the other is text. Open the flow in the editor and save it to store typed values."
+
+Cause and fix:
+- The flow compares a number (or true/false) with text. A flow saved by AbstractFlow 0.13.0 stored a value typed next to
+  a wired number as text. Open the flow in the AbstractFlow editor and save it: the editor stores the value with the
+  type of its input, and the next run compares `5 == 5`. If one side is meant to be text, wire it so both sides carry
+  text. See [Pin defaults are typed values](workflow-bundles.md#pin-defaults-are-typed-values).
+- An error ending in "these cannot be ordered" means `<`, `<=`, `>` or `>=` met values Python cannot order, often an
+  unset value (`None`): give the input a value, or compare with `==`.
+
 ## MCP worker command is not found
 
 Symptom:

@@ -100,6 +100,15 @@ Authoring guidance:
 - keep route keys unique per target node
 - use one normal data edge or `pinDefaults` for the fallback value, then add `inputRouteOverrides` only for routes that need a different value
 
+## Pin defaults are typed values
+
+A `pinDefaults` value is a JSON value with its type (`5`, `"5"`, `true`, `[]`), and the runtime uses it exactly as
+stored: it never converts a value or reads a type from text. AbstractFlow stores a value typed on a node card with the
+type of its input (ADR 0049 in the AbstractFramework repository). Compare (`compare`) relies on it: a number or
+true/false on one side and text on the other (`5 == "5"`, for every operator), or an order between values Python cannot
+order (`None > 3`), fails the step with an error that names the node, instead of answering `False`. true/false compares
+with numbers as Python's booleans do (`True == 1`).
+
 ## See also
 
 - `architecture.md` — VisualFlow → WorkflowSpec compilation path

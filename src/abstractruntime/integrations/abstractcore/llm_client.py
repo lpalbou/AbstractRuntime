@@ -4303,9 +4303,10 @@ def _load_option_warnings(
     if timed:
         names = ", ".join(timed)
         if str(provider).strip().lower() in _PROCESS_RESIDENCY_PROVIDERS:
-            warnings.append(
-                f"{provider} has no idle/TTL unload: {names} not applied; {model} stays loaded until it is unloaded"
-            )
+            idle_s = _core_process_residency().get_idle_unload()
+            rule = (f"the idle unload setting applies ({idle_s / 60:g} min unused, never while it is kept loaded)"
+                    if idle_s else "the idle unload is off, so it stays loaded until it is unloaded")
+            warnings.append(f"{provider} has no per-load TTL: {names} not applied to {model}; {rule}")
         elif not provider_called:
             warnings.append(f"{model} was already loaded, so this load did not apply {names}")
         else:
@@ -4903,6 +4904,38 @@ def _local_provider_residency_claim(
     return _normalize_residency_size_extras(claim)
 
 
+def _core_process_residency() -> Any:
+    """AbstractCore's process residency (the idle unload, ADR 0012), imported on use."""
+    from abstractcore.providers import process_residency
+
+    return process_residency
+
+
+def _set_model_idle_unload(seconds: Optional[float]) -> Dict[str, Any]:
+    """Relay the host's idle-unload time to AbstractCore: a model loaded in this process that no call has
+    used for `seconds` is unloaded (never a locked one, never during a call); `None`/`0` turns it off."""
+    residency = _core_process_residency()
+    try:
+        value = residency.set_idle_unload(seconds)
+    except ValueError as exc:
+        return {"ok": False, "operation": "set_model_idle_unload", "error": str(exc), "idle_unload_s": residency.get_idle_unload()}
+    return {"ok": True, "operation": "set_model_idle_unload", "idle_unload_s": value}
+
+
+def _stamp_local_record_idle_unload(record: Dict[str, Any]) -> None:
+    """When the model was last used, whether a call is running on it (`in_use`), which owners lock it
+    (`locked_by`) and when it unloads for idleness (`idle_unload_at` None: the setting is off, the model is
+    kept loaded, or a call is running), passed through as-is from AbstractCore's `resident_model_states()`."""
+    residency = _core_process_residency()
+    record["idle_unload_s"] = residency.get_idle_unload()
+    for state in residency.resident_model_states():
+        if state.get("task") == "embedding":
+            continue
+        if state.get("provider") == record["provider"] and state.get("model") == record["model"]:
+            for key in ("last_used_at", "in_use", "locked_by", "idle_unload_at"):
+                record[key] = state.get(key)
+            return
+
 def _local_residency_record(
     *,
     provider: str,
@@ -4971,6 +5004,8 @@ def _local_residency_record(
     # provider claims never include these).
     _stamp_local_record_modalities(record, model=model_s, provider_instance=provider_instance)
     _stamp_local_record_host_identity(record)
+    if resident and provider_s in _PROCESS_RESIDENCY_PROVIDERS:
+        _stamp_local_record_idle_unload(record)
     # Per-model memory figures. `est_weights_bytes` is pure claim truth (MLX /
     # HuggingFace stamp it on `get_model_residency`) and already rode the claim
     # merge above. `cache_bytes` has no claim slot, so it is read the same way
@@ -5104,6 +5139,60 @@ def _local_locked_residency_pairs(owner: Any) -> set:
         except Exception:
             pass
     return pairs
+
+
+def _normalize_lock_pairs(locks: Any) -> List[Tuple[str, str]]:
+    """`[{"provider", "model"}, ...]` (or `(provider, model)` pairs) -> sorted unique normalized pairs.
+    A malformed entry is refused (ValueError), never skipped: a lock that silently vanished would let
+    the idle unload free a model the operator kept loaded."""
+    pairs = set()
+    for item in list(locks or []):
+        if isinstance(item, Mapping):
+            provider, model = item.get("provider"), item.get("model")
+        elif isinstance(item, (list, tuple)) and len(item) == 2:
+            provider, model = item
+        else:
+            raise ValueError(f"a model lock is {{provider, model}}, got {item!r}")
+        provider_s, model_s = str(provider or "").strip().lower(), str(model or "").strip()
+        if not provider_s or not model_s:
+            raise ValueError(f"a model lock needs a provider and a model, got {item!r}")
+        pairs.add((provider_s, model_s))
+    return sorted(pairs)
+
+
+def _apply_model_residency_locks(owner: Any, locks: Any) -> Dict[str, Any]:
+    """Make the client's locked models exactly `locks` (the host's stored "Keep loaded" set).
+
+    A `set_` method on purpose: the gateway's model host replays `set_*` calls when it rebuilds a
+    client after a restart, so the locks a host stored come back with the models, loaded again when
+    needed (a lock requires a resident model). Pairs no longer listed are unlocked; listed pairs that
+    are resident are locked; the others are loaded, then locked. Each pair reports its own outcome:
+    one that cannot load never blocks the others."""
+    desired = _normalize_lock_pairs(locks)
+    current = set(_local_locked_residency_pairs(owner))
+    results: List[Dict[str, Any]] = []
+    for provider_s, model_s in sorted(current - set(desired)):
+        out = owner.unlock_model_residency(provider=provider_s, model=model_s)
+        results.append({"provider": provider_s, "model": model_s, "action": "unlocked", "ok": out.get("ok") is not False, "error": out.get("error")})
+    for provider_s, model_s in desired:
+        if (provider_s, model_s) in current:
+            results.append({"provider": provider_s, "model": model_s, "action": "kept", "ok": True, "error": None})
+            continue
+        out = owner.lock_model_residency(provider=provider_s, model=model_s)
+        action = "locked"
+        if out.get("ok") is False:
+            # Not resident (or not in this pool yet): load it, then lock it.
+            loaded = owner.load_model_residency(task="text_generation", provider=provider_s, model=model_s)
+            if loaded.get("ok") is False or loaded.get("success") is False:
+                out, action = loaded, "load_failed"
+            else:
+                out, action = owner.lock_model_residency(provider=provider_s, model=model_s), "loaded_and_locked"
+        results.append({"provider": provider_s, "model": model_s, "action": action, "ok": out.get("ok") is not False, "error": out.get("error")})
+    return {
+        "ok": all(r["ok"] for r in results),
+        "locks": [{"provider": p, "model": m} for p, m in sorted(_local_locked_residency_pairs(owner))],
+        "results": results,
+    }
 
 
 def _stamp_local_lock_state(record: Dict[str, Any], *, locked: bool) -> Dict[str, Any]:
@@ -8487,6 +8576,16 @@ class LocalAbstractCoreLLMClient:
             ),
             source="abstractruntime.local",
         )
+
+    def set_model_idle_unload(self, seconds: Optional[float]) -> Dict[str, Any]:
+        """Unload a model loaded in this process after `seconds` without a call (`None`/`0`: never); a model
+        kept loaded never unloads. A `set_` name: a host that rebuilds its client replays it."""
+        return _set_model_idle_unload(seconds)
+
+    def set_model_residency_locks(self, locks: Any) -> Dict[str, Any]:
+        """Lock exactly these models (`[{"provider", "model"}]`), loading the missing ones; unlock the
+        others. The host's stored "Keep loaded" set, replayed after a model-host restart."""
+        return _apply_model_residency_locks(self, locks)
 
     def unlock_model_residency(
         self,
@@ -11960,6 +12059,16 @@ class MultiLocalAbstractCoreLLMClient:
             adopt_pair=self._adopt_lock_pair,
             drop_adopted_pair=self._drop_adopted_lock_pair,
         )
+
+    def set_model_idle_unload(self, seconds: Optional[float]) -> Dict[str, Any]:
+        """Unload a model loaded in this process after `seconds` without a call (`None`/`0`: never); a model
+        kept loaded never unloads. A `set_` name: a host that rebuilds its client replays it."""
+        return _set_model_idle_unload(seconds)
+
+    def set_model_residency_locks(self, locks: Any) -> Dict[str, Any]:
+        """Lock exactly these models (`[{"provider", "model"}]`), loading the missing ones; unlock the
+        others. The host's stored "Keep loaded" set, replayed after a model-host restart."""
+        return _apply_model_residency_locks(self, locks)
 
     def unlock_model_residency(
         self,

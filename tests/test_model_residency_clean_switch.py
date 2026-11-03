@@ -29,6 +29,8 @@ import pytest
 import abstractruntime.integrations.abstractcore.llm_client as llm_mod
 from abstractruntime.integrations.abstractcore.llm_client import MultiLocalAbstractCoreLLMClient
 
+pytestmark = pytest.mark.basic
+
 
 class _FakeInflight:
     def __init__(self):
@@ -441,7 +443,7 @@ def test_ttl_on_an_already_loaded_model_is_reported_not_applied(loadable):
     made[("mlx", "vendor/M")] = {"loaded": True}
     out = client.load_model_residency(task="text_generation", provider="mlx", model="vendor/M", options={"ttl_s": 20})
     assert out["ok"] is True and out["unsupported_options"] == ["ttl_s"]
-    assert any("no idle/TTL unload" in w for w in out["warnings"])
+    assert any("has no per-load TTL: ttl_s not applied" in w for w in out["warnings"])
     made[("ollama", "g")] = {"loaded": True}
     out = client.load_model_residency(task="text_generation", provider="ollama", model="g", keep_alive="5m")
     assert out["unsupported_options"] == ["keep_alive"] and "already loaded" in out["warnings"][0]

@@ -59,6 +59,8 @@ _OPTIONAL_HOST_CONTROL_METHODS = (
     "clear_session_prompt_caches",
     "lock_model_residency",
     "unlock_model_residency",
+    "set_model_residency_locks",
+    "set_model_idle_unload",
     "get_context_estimate",
 )
 
@@ -357,6 +359,12 @@ class AbstractCoreHostControlClient(Protocol):
         payload: Optional[Mapping[str, Any]] = None,
         **kwargs: Any,
     ) -> Dict[str, Any]:
+        ...
+
+    def set_model_residency_locks(self, locks: Any) -> Dict[str, Any]:
+        ...
+
+    def set_model_idle_unload(self, seconds: Optional[float]) -> Dict[str, Any]:
         ...
 
     def get_context_estimate(
@@ -882,6 +890,26 @@ class AbstractCoreHostFacade:
         if not callable(method):
             return _optional_control_unsupported("unlock_model_residency")
         return method(payload, **kwargs)
+
+    def set_model_residency_locks(self, locks: Any) -> Dict[str, Any]:
+        """Lock exactly these models (`[{"provider", "model"}]`), loading the missing ones, and unlock
+        the others: the host's stored "Keep loaded" set. A `set_` name so a host that rebuilds its
+        client (the gateway's model host after a restart) replays it, and the locks come back."""
+
+        method = getattr(self._client, "set_model_residency_locks", None)
+        if not callable(method):
+            return _optional_control_unsupported("set_model_residency_locks")
+        return method(locks)
+
+    def set_model_idle_unload(self, seconds: Optional[float]) -> Dict[str, Any]:
+        """Unload a model no call has used for `seconds` (AbstractCore's idle unload, ADR 0012; default 60 min);
+        `None` or `0` never unloads; a model kept loaded never unloads. A `set_` name: a host that rebuilds its
+        client (the gateway's model host after a restart) replays it."""
+
+        method = getattr(self._client, "set_model_idle_unload", None)
+        if not callable(method):
+            return _optional_control_unsupported("set_model_idle_unload")
+        return method(seconds)
 
     def get_context_estimate(
         self,

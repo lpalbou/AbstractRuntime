@@ -12,6 +12,8 @@
 
 ### Changed
 
+- **AbstractCore 2.34.0 or newer** (base install, `apple` and `gpu` settings): the idle unload and its residency rows
+  come from it.
 - **A load with `ttl_s` or `keep_alive` on an in-process model** still lists them under `unsupported_options`; its
   warning now names the idle unload that applies instead ("the idle unload setting applies (60 min unused, never while
   it is kept loaded)"), or says it is off.

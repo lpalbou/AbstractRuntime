@@ -151,6 +151,7 @@
             "file_path": "txt-3d3c403d9c71",
             "mode": "w"
           },
+          "call_id": "call_6SaFzPpwJqXlb2VZSsloQ4ym",
           "id": "rtcall_f1526a72bd65944402a2edd4390ffabb_1",
           "name": "write_file",
           "output": "txt-dad897f6178a",
@@ -162,6 +163,7 @@
             "file_path": "txt-4f027af3854f",
             "mode": "w"
           },
+          "call_id": "call_BIBgg09el5nbCemH4raJXiU4",
           "id": "rtcall_f1526a72bd65944402a2edd4390ffabb_2",
           "name": "write_file",
           "output": "txt-77fc5345c3e9",

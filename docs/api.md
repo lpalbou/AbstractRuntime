@@ -139,8 +139,9 @@ tool-approval waits retain their own contracts.
 An opt-in actor may inherit `_runtime.conversation: {enabled: true}` through native child
 workflows and VisualFlow Agent nodes. This flag does not create an extra inference call.
 Public updates enter replay only through an explicit completed `EMIT_EVENT` named
-`public_update`, with payload `id`, `text`, `run_id`, optional `session_id`, `iteration` and
-`source_call_ids`. The event's owner must match `run_id`; private diary/thinking fences are
+`public_update`, with payload `id`, `text`, `run_id`, optional `session_id`, `iteration`,
+`source_call_ids` and optional `kind` (`"progress"` or `"finding"`, replayed as the message's
+`update_kind`). The event's owner must match `run_id`; private diary/thinking fences are
 excluded. See [replay.md](replay.md#public-conversation-messages).
 
 Actors may attach `public_action` to a proposed `TOOL_CALLS` payload with `text`,

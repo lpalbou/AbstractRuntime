@@ -813,6 +813,10 @@ class ReplayView:
                 if row is None:
                     row = {"id": cid, "name": _s(call.get("name")) or None, "arguments": call.get("arguments"),
                            "status": "running"}
+                    # The model's own call id when the runtime keyed the row by its runtime id:
+                    # what a public update's `source_call_ids` cite.
+                    if _s(call.get("call_id")) and _s(call.get("call_id")) != cid:
+                        row["call_id"] = _s(call.get("call_id"))
                     rows.append(row)
                     by_id[cid] = row
                     for key in sorted({_s(call.get("call_id")), _s(call.get("id")), cid} - {""}):
@@ -1016,9 +1020,12 @@ class ReplayView:
                     and not re.search(r"```\s*diary\b|<\s*diary\b|<\s*think\b", text, flags=re.I)):
                 mid = authored_id if authored_id.startswith(r.run_id + ":") else f"{r.run_id}:{authored_id}"
                 calls = b.get("source_call_ids")
+                # The producer types the update; only an explicit "finding" is one (older
+                # updates carry no kind and report progress).
                 self._message(mid, role="assistant", kind="public_update", text=text, run_id=r.run_id,
                               step_id=step_id, seq=seq, ts=ts, source="emit_event",
-                              extra={"source_call_ids": [c for c in calls if isinstance(c, str)]
+                              extra={"update_kind": "finding" if b.get("kind") == "finding" else "progress",
+                                     "source_call_ids": [c for c in calls if isinstance(c, str)]
                                      if isinstance(calls, list) else [], "iteration": b.get("iteration"),
                                      "session_id": _s(b.get("session_id")) or None})
             return

@@ -10,6 +10,50 @@ Unreleased changes live in [`changelog.d/`](changelog.d/README.md), one file per
 
 ## [Unreleased]
 
+## [0.18.0] - 2026-11-04
+
+### Added
+
+- **The idle unload reaches the host: `set_model_idle_unload(seconds)`** (host facade, `LocalAbstractCoreLLMClient`,
+  `MultiLocalAbstractCoreLLMClient`; framework backlog 1115). It relays AbstractCore's process-wide idle-unload time
+  (ADR 0012, default 60 minutes): a model no call has used for that long is unloaded, a locked model never is, and a
+  running call is never interrupted. `None` or `0` turns it off; a refused value answers `ok: false`. Local residency
+  rows of in-process text models carry `idle_unload_s`, `last_used_at` and `idle_unload_at`, and pass through Core's
+  `in_use` and `locked_by`, so a host can show a model that is in use, or kept loaded by another account.
+- **`set_model_residency_locks(locks)`**: the locked models become exactly the listed ones (resident ones locked,
+  missing ones loaded then locked, the others unlocked), each pair with its own outcome. A lock names a provider and a
+  model; the `base_url` of a configured endpoint is not part of the key. A host stores its "Keep loaded" set and
+  replays it at start; as a `set_` name it is replayed when the gateway's model host rebuilds a client.
+
+### Changed
+
+- **AbstractCore 2.34.0 or newer** (base install, `apple` and `gpu` settings): the idle unload and its residency rows
+  come from it.
+- **A load with `ttl_s` or `keep_alive` on an in-process model** still lists them under `unsupported_options`; its
+  warning now names the idle unload that applies instead ("the idle unload setting applies (60 min unused, never while
+  it is kept loaded)"), or says it is off.
+
+### Fixed
+
+- **A run store whose index cannot attribute a session is refused, never started as a plain chat**
+  (`core/run_attribution.py`, framework backlog 0938). A third-party store with `list_run_index` but no `session_kind`
+  in its rows (an index written before automations v1) used to report "no kinds" and let a `discussion-session:` start
+  through as an ordinary chat, skipping the discussion's read-only anchor. It now raises `SessionAttributionError`
+  naming the missing column; a store with no index at all names both methods it lacks. Built-in stores are unchanged.
+  Upgrading a custom store: add `session_kind` and `role` to its index rows, or implement `session_kinds(session_id)`
+  (see `docs/automations.md`, "Storage guarantees").
+- **A tool that reports its failure as a JSON object keeps its explanation** (`integrations/abstractcore/tool_executor.py`,
+  framework backlog 1005). A failed result's `output` used to be emptied when the tool returned its failure as a JSON
+  string, so the agent and the run ledger saw only the error line (for a web search: "No results found", never the
+  backends tried, the bot-challenge status or the hint). The parsed object is now the result's `output`, as for a tool
+  that returns a dict; a plain text error (`Error: ...`) still keeps an empty output and its message in `error`.
+- **The visual-flow Agent node shows the model that explanation** (`visualflow_compiler/compiler.py`). A failed call
+  whose `output` is an object is rendered as its error line followed by the object (`[web_search]: Error: No results
+  found` then the JSON), under the same `agent_observation_max_chars` limit; a plain text failure still shows its error
+  line alone.
+- Failure payloads are now recorded in the run ledger and the history bundle like success payloads: whatever a tool puts
+  in its failure JSON (its parameters included) is stored with the run.
+
 ## [0.17.0] - 2026-11-03
 
 ### Added

@@ -10,6 +10,7 @@ import ast
 from datetime import datetime
 import json
 import locale
+import math
 import os
 import random
 from typing import Any, Callable, Dict, List, Optional
@@ -452,6 +453,28 @@ def _compare_kind(value: Any) -> str:
     return type(value).__name__
 
 
+def _exact_from_text(text: str, like: Any) -> Any:
+    """`text` as a value of `like`'s type (true/false or a number), or ValueError.
+
+    The Flow editor's literal grammar (`parseLiteralText`), never a guess: true/false is
+    `true` or `false` (trimmed, any case); a number is a decimal literal, ASCII, without `_`
+    and finite (`5`, `-2.5`, `.5`, `1e3`), read with `int()` when it has no `.`/`e`/`E` (so a
+    whole number beyond 2**53 stays exact), else `float()`. `0x10`, `1_000`, `inf`, `nan`,
+    full-width digits and empty text are refused."""
+    t = text.strip()
+    if isinstance(like, bool):
+        lower = t.lower()
+        if lower in ("true", "false"):
+            return lower == "true"
+        raise ValueError(text)
+    if not t or not t.isascii() or "_" in t:
+        raise ValueError(text)
+    value = float(t) if any(c in t for c in ".eE") else int(t)
+    if isinstance(value, float) and not math.isfinite(value):
+        raise ValueError(text)
+    return value
+
+
 def _compare_preview(value: Any) -> str:
     text = repr(value)
     return text if len(text) <= 40 else text[:39] + "…"
@@ -460,13 +483,15 @@ def _compare_preview(value: Any) -> str:
 def control_compare(inputs: Dict[str, Any], node: str = "") -> bool:
     """Compare `a` and `b` with `op` (==, !=, <, <=, >, >=; not set: ==).
 
-    Values compare as stored, by Python's rules for their types; nothing is converted
-    (ADR 0049: the editor stores a typed value with its pin's type). Two cases are
+    Values compare by Python's rules for their types (ADR 0049). One conversion: when one
+    side is a number or true/false and the other is text, the text is read as a value of
+    that type, exactly (`_exact_from_text`: ``5 == "5"``, ``"9" < 10``, ``True == "true"``);
+    it comes from a flow saved by Flow 0.13.0, a form, an API input or a model's answer.
+    Text against text is never converted (``"10" > "9"`` compares text). Two cases are
     refused with a run error instead of answering False:
 
-    - a number or true/false on one side and text on the other, for every operator
-      (``5 == "5"``): a flow saved before typed values stored the text, and its
-      answer would be silently wrong;
+    - text that is not a number (or true/false) against a number (or true/false), for
+      every operator (``5 == "abc"``);
     - an order (<, <=, >, >=) between values Python cannot order (a list and a
       number, no value and a number).
 
@@ -485,11 +510,18 @@ def control_compare(inputs: Dict[str, Any], node: str = "") -> bool:
     for scalar, scalar_pin, text, text_pin in ((a, "a", b, "b"), (b, "b", a, "a")):
         if isinstance(scalar, (bool, int, float)) and isinstance(text, str):
             kind = "true/false" if isinstance(scalar, bool) else "a number"
-            raise ValueError(
-                f"{who} {op}: {scalar_pin} is {kind} ({_compare_preview(scalar)}) and {text_pin} is text "
-                f"({_compare_preview(text)}). One side is {kind} and the other is text. "
-                "Open the flow in the editor and save it to store typed values."
-            )
+            try:
+                converted = _exact_from_text(text, scalar)
+            except ValueError:
+                raise ValueError(
+                    f"{who} {op}: {text_pin} is text ({_compare_preview(text)}), not {kind}; "
+                    f"{scalar_pin} is {kind} ({_compare_preview(scalar)})."
+                ) from None
+            if text_pin == "a":
+                a = converted
+            else:
+                b = converted
+            break
 
     try:
         return bool(compare(a, b))

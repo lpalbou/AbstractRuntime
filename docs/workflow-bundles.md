@@ -102,12 +102,15 @@ Authoring guidance:
 
 ## Pin defaults are typed values
 
-A `pinDefaults` value is a JSON value with its type (`5`, `"5"`, `true`, `[]`), and the runtime uses it exactly as
-stored: it never converts a value or reads a type from text. AbstractFlow stores a value typed on a node card with the
-type of its input (ADR 0049 in the AbstractFramework repository). Compare (`compare`) relies on it: a number or
-true/false on one side and text on the other (`5 == "5"`, for every operator), or an order between values Python cannot
-order (`None > 3`), fails the step with an error that names the node, instead of answering `False`. true/false compares
-with numbers as Python's booleans do (`True == 1`).
+A `pinDefaults` value is a JSON value with its type (`5`, `"5"`, `true`, `[]`), and the runtime uses it as stored.
+AbstractFlow stores a value typed on a node card with the type of its input (ADR 0049 in the AbstractFramework
+repository). Compare (`compare`) makes one conversion: when one side is a number or true/false and the other is text,
+the text is read exactly as that type, by the editor's grammar (a decimal number: `"5"`, `"-2.5"`, `".5"`, `"1e3"`; or
+`true`/`false` in any case), so `5 == "5"` and `"9" < 10` are true, whether the text was saved by AbstractFlow 0.13.0
+or arrives at run time from a form, an API input or a model. Text that is not such a value (`"five"`, `"1_000"`,
+`"0x10"`, `"inf"`, empty), or an order between values Python cannot order (`None > 3`), fails the step with an error
+that names the node, instead of answering `False`. Text against text is never converted (`"10" > "9"` compares text).
+true/false compares with numbers as Python's booleans do (`True == 1`).
 
 ## See also
 

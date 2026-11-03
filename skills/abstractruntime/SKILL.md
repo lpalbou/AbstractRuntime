@@ -235,6 +235,12 @@ starting a fresh run can repeat paid inference or external actions. An optional
 structured repair path can issue another model request; the recipe disables it.
 Keep provider/API credentials outside vars and ledger data.
 
+A host that stops on purpose (a restart, an update) raises `EffectInterrupted`
+into the effect in flight: it is an interruption, not a failure. The run stays
+RUNNING at its last durable step with no terminal record, and the next tick (in
+the next process, on the same stores) sends the effect again as attempt 1. Let
+`EffectInterrupted` propagate; never catch it as an error or mark the run failed.
+
 Persist schemas as data, not `response_model` classes. A schema and an explicit
 conflicting model/format are a deterministic refusal. Runtime's best-effort
 local schema conversion supports nested properties, arrays, enums and defaults,

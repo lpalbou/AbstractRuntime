@@ -61,13 +61,19 @@ It is designed for long-running workflows that must survive restarts and explici
 
 ## What's new in 0.17.0
 
+- **A host stop suspends a run, it never fails it**: a host that stops on purpose raises `EffectInterrupted` into
+  the effect in flight; the runtime writes no terminal record, the run stays running at its last durable step, and
+  the next tick sends the call again as attempt 1 (no retry used, no automation outcome, nothing notified).
 - **Public updates are typed**: a `public_update` in the replay view carries `update_kind`, `"finding"` (a fact or
   piece of evidence the actor established) or `"progress"` (what it is doing), so a client can list a conversation's
   findings. See [docs/replay.md](docs/replay.md#public-conversation-messages).
 - **Replayed tool calls keep the model's call id**: an `activities[].tool_calls[]` row also carries `call_id`, the id
   a public update's `source_call_ids` cite, so a finding resolves to the results it cites.
-- **Compare refuses a number against text** instead of answering False, with an error naming the node and pins.
-  Full list: [CHANGELOG.md](CHANGELOG.md).
+- **Compare reads text next to a number or true/false exactly**: `5 == "5"` and `"9" < 10` are true, text it
+  cannot read as that type (`"five"`, `"0x10"`, empty) fails the step with an error naming the node and pins, and
+  text against text is never converted.
+- **An automation occurrence says why it failed**: when the agent finished without success, the attention item and
+  the notification carry the agent's own error, never "completed". Full list: [CHANGELOG.md](CHANGELOG.md).
 
 ## What's new in 0.16.0
 

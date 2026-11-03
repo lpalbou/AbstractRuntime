@@ -459,13 +459,14 @@ Implementation: `src/abstractruntime/replay/` (ADR 0010). Guide: [replay.md](rep
 
 ### AbstractCore (LLM + tools)
 
-Requires: `pip install abstractruntime` (AbstractCore 2.32.0 or newer is part of the base install).
+Requires: `pip install abstractruntime` (AbstractCore 2.33.0 or newer is part of the base install).
 
 Implementation: `src/abstractruntime/integrations/abstractcore/*`.
 
 Entry points:
 - `create_local_runtime(...)`, `create_remote_runtime(...)`, `create_hybrid_runtime(...)` (`src/abstractruntime/integrations/abstractcore/factory.py`)
 - public discovery facade: `AbstractCoreDiscoveryFacade`, `get_abstractcore_discovery_facade(...)` (`src/abstractruntime/integrations/abstractcore/discovery_facade.py`)
+- model errors a host tells apart, AbstractCore's own classes: `from abstractruntime.integrations.abstractcore.discovery_facade import ModelNotDownloadedError, ModelNotFoundError` (`ModelNotDownloadedError` is a `ModelNotFoundError` whose `model` and `provider` name what to download); a host never imports `abstractcore` for them
 - public host facade: `AbstractCoreHostFacade`, `get_abstractcore_host_facade(...)` (`src/abstractruntime/integrations/abstractcore/host_facade.py`)
 - public voice library facade: `AbstractCoreVoiceFacade`, `get_abstractcore_voice_facade(...)`, `VoiceLibraryError` (`src/abstractruntime/integrations/abstractcore/voice_facade.py`): languages, cloned voices (list by language, read, rename or replace the transcript, delete), cloning from a recording, voice design, the capability catalog; local in process, remote over the AbstractCore server's `/v1` voice routes (see [Voice library](integrations/abstractcore.md#voice-library))
 - email facade: `email_facade` (AbstractCore's mail library for hosts; see [Email](#email))

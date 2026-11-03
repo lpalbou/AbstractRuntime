@@ -12,6 +12,9 @@ Scope:
 - vision provider catalogs
 - vision adapter catalogs
 - cached vision model snapshots
+- the model errors a host tells apart: `ModelNotFoundError` and `ModelNotDownloadedError`
+  (AbstractCore's own classes, resolved on first use so importing this module does not import
+  AbstractCore; `ModelNotDownloadedError.model` / `.provider` name what to download)
 
 Non-goals:
 - durable Runtime effect execution (use `AbstractCoreRunFacade` / `get_abstractcore_run_facade(...)`)
@@ -433,7 +436,22 @@ def get_abstractcore_discovery_facade(runtime: Any) -> AbstractCoreDiscoveryFaca
     return AbstractCoreDiscoveryFacade.from_runtime(runtime)
 
 
+_CORE_MODEL_ERRORS = ("ModelNotFoundError", "ModelNotDownloadedError")
+
+
+def __getattr__(name: str) -> Any:
+    # AbstractCore's exception classes themselves (not copies), so `except ModelNotDownloadedError`
+    # catches exactly what Core raises. Resolved lazily, like `structured_facade.ResponseFormatError`.
+    if name in _CORE_MODEL_ERRORS:
+        from abstractcore import exceptions as core_exceptions
+
+        return getattr(core_exceptions, name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
 __all__ = [
     "AbstractCoreDiscoveryFacade",
+    "ModelNotDownloadedError",
+    "ModelNotFoundError",
     "get_abstractcore_discovery_facade",
 ]

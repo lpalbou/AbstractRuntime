@@ -76,3 +76,83 @@ def test_check_needs_a_fragment_when_src_changes(tmp_path: Path, monkeypatch, ca
     _git(repo, "commit", "-qm", "bad fragment")
     with pytest.raises(ValueError):
         cl.check("main")
+
+
+def _release_repo(tmp_path: Path, monkeypatch, *, pending: bool) -> Path:
+    """A repository at 1.0.0 (with one fragment still in changelog.d/ when `pending`), on a `release`
+    branch off `main` (the same release rule as AbstractCore's check)."""
+    repo = tmp_path / "repo"
+    (repo / "src").mkdir(parents=True)
+    (repo / "changelog.d").mkdir()
+    (repo / "changelog.d" / "README.md").write_text("# not a fragment\n")
+    if pending:
+        (repo / "changelog.d" / "fix.md").write_text("### Fixed\n\n- **a fix**\n")
+    (repo / cl.VERSION_FILE).write_text('[project]\nname = "x"\nversion = "1.0.0"\n')
+    (repo / "src" / "a.py").write_text("x = 1\n")
+    (repo / "CHANGELOG.md").write_text("# Changelog\n\n## [Unreleased]\n\n## [1.0.0] - 2026-01-01\n\n### Added\n\n- old\n")
+    _git(repo, "init", "-q", "-b", "main")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "base")
+    _git(repo, "checkout", "-q", "-b", "release")
+    monkeypatch.setattr(cl, "ROOT", repo)
+    return repo
+
+
+def _bump(repo: Path, version: str, section: bool) -> None:
+    (repo / cl.VERSION_FILE).write_text(f'[project]\nname = "x"\nversion = "{version}"\n')
+    (repo / "src" / "a.py").write_text("x = 2\n")  # a release PR may also change source (a floor guard)
+    if section:
+        text = (repo / "CHANGELOG.md").read_text()
+        (repo / "CHANGELOG.md").write_text(text.replace(
+            "## [Unreleased]\n", f"## [Unreleased]\n\n## [{version}] - 2026-11-03\n\n### Fixed\n\n- **a fix**\n", 1))
+
+
+def test_a_release_pr_with_every_fragment_assembled_passes(tmp_path: Path, monkeypatch, capsys) -> None:
+    repo = _release_repo(tmp_path, monkeypatch, pending=False)
+    _bump(repo, "1.1.0", section=True)
+    _git(repo, "commit", "-qam", "release 1.1.0")
+    assert cl.check("main") == 0
+    assert "release 1.1.0" in capsys.readouterr().out
+
+
+def test_a_release_pr_that_leaves_a_fragment_behind_fails_naming_it(tmp_path: Path, monkeypatch, capsys) -> None:
+    repo = _release_repo(tmp_path, monkeypatch, pending=True)
+    _bump(repo, "1.1.0", section=True)
+    _git(repo, "commit", "-qam", "release 1.1.0, fragment left")
+    assert cl.check("main") == 1
+    assert "Release 1.1.0: changelog.d/ still holds 1 fragment(s) (fix.md)" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("version,section", [("1.0.0", True), ("1.1.0", False)])
+def test_without_both_a_version_bump_and_its_section_it_is_an_ordinary_pr(tmp_path, monkeypatch, capsys, version, section):
+    """A CHANGELOG section without a bump, or a bump without its section, is not a release: the source
+    change still needs a fragment, and none is added here."""
+    repo = _release_repo(tmp_path, monkeypatch, pending=False)
+    _bump(repo, version, section=section)
+    _git(repo, "commit", "-qam", "not a release")
+    assert cl.check("main") == 1
+    out = capsys.readouterr().out
+    assert "adds no changelog fragment" in out or "CHANGELOG.md was edited" in out
+
+
+def test_a_release_pr_with_an_empty_section_fails_naming_the_version(tmp_path: Path, monkeypatch, capsys) -> None:
+    repo = _release_repo(tmp_path, monkeypatch, pending=False)
+    _bump(repo, "1.1.0", section=False)
+    text = (repo / "CHANGELOG.md").read_text()
+    (repo / "CHANGELOG.md").write_text(text.replace("## [Unreleased]\n", "## [Unreleased]\n\n## [1.1.0] - 2026-11-03\n\n", 1))
+    _git(repo, "commit", "-qam", "release 1.1.0, header only")
+    assert cl.check("main") == 1
+    assert "Release 1.1.0: CHANGELOG.md's [1.1.0] section is empty" in capsys.readouterr().out
+
+
+def test_a_leftover_fragment_in_a_subfolder_or_named_md_in_capitals_cannot_hide(tmp_path: Path, monkeypatch, capsys) -> None:
+    repo = _release_repo(tmp_path, monkeypatch, pending=False)
+    (repo / "changelog.d" / "old").mkdir()
+    (repo / "changelog.d" / "old" / "fix.md").write_text("### Fixed\n\n- **a fix**\n")
+    (repo / "changelog.d" / "LOUD.MD").write_text("### Fixed\n\n- **another fix**\n")
+    _bump(repo, "1.1.0", section=True)
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "release 1.1.0, fragments hidden")
+    assert cl.check("main") == 1
+    out = capsys.readouterr().out
+    assert "still holds 2 fragment(s)" in out and "old/fix.md" in out and "LOUD.MD" in out

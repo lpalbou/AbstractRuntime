@@ -4,7 +4,7 @@ description: Operate AbstractRuntime through durable Python workflows, effect re
 license: MIT
 compatibility: Python 3.10+. Model execution needs a configured AbstractCore provider or server; local engines need the apple or gpu install profile. This skill uses the Python API rather than a Gateway HTTP API.
 metadata:
-  package-version: "0.16.0"
+  package-version: "0.17.0"
 ---
 
 # AbstractRuntime
@@ -22,7 +22,7 @@ folder when state must survive a restart.
 Install the version this skill describes (or newer):
 
 ```bash
-python -m pip install "abstractruntime>=0.16.0"
+python -m pip install "abstractruntime>=0.17.0"
 ```
 
 The base profile includes remote-light AbstractCore integration and the MCP
@@ -234,6 +234,12 @@ Inspect recorded state before repeating a model or side-effectful tool call;
 starting a fresh run can repeat paid inference or external actions. An optional
 structured repair path can issue another model request; the recipe disables it.
 Keep provider/API credentials outside vars and ledger data.
+
+A host that stops on purpose (a restart, an update) raises `EffectInterrupted`
+into the effect in flight: it is an interruption, not a failure. The run stays
+RUNNING at its last durable step with no terminal record, and the next tick (in
+the next process, on the same stores) sends the effect again as attempt 1. Let
+`EffectInterrupted` propagate; never catch it as an error or mark the run failed.
 
 Persist schemas as data, not `response_model` classes. A schema and an explicit
 conflicting model/format are a deterministic refusal. Runtime's best-effort

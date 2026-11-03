@@ -4,16 +4,32 @@
 
 It is designed for long-running workflows that must survive restarts and explicitly model blocking (human input, timers, external events, subworkflows) without keeping Python stacks alive.
 
-**Version:** 0.16.0 • **Python:** 3.10+
+**Version:** 0.17.0 • **Python:** 3.10+
 
 **Status:** pre-1.0 (API may evolve). For production use, pin versions and follow `CHANGELOG.md`.
+
+## What's new in 0.17.0
+
+- **A host stop suspends a run, it never fails it**: a host that stops on purpose raises `EffectInterrupted` into
+  the effect in flight; the runtime writes no terminal record, the run stays running at its last durable step, and
+  the next tick sends the call again as attempt 1 (no retry used, no automation outcome, nothing notified).
+- **Public updates are typed**: a `public_update` in the replay view carries `update_kind`, `"finding"` (a fact or
+  piece of evidence the actor established) or `"progress"` (what it is doing), so a client can list a conversation's
+  findings. See [docs/replay.md](docs/replay.md#public-conversation-messages).
+- **Replayed tool calls keep the model's call id**: an `activities[].tool_calls[]` row also carries `call_id`, the id
+  a public update's `source_call_ids` cite, so a finding resolves to the results it cites.
+- **Compare reads text next to a number or true/false exactly**: `5 == "5"` and `"9" < 10` are true, text it
+  cannot read as that type (`"five"`, `"0x10"`, empty) fails the step with an error naming the node and pins, and
+  text against text is never converted.
+- **An automation occurrence says why it failed**: when the agent finished without success, the attention item and
+  the notification carry the agent's own error, never "completed". Full list: [CHANGELOG.md](CHANGELOG.md).
 
 ## What's new in 0.16.0
 
 - **Calibrated decisions**: an `LLM_CALL` whose output says `modality: "decision"` returns typed answers
   (`answers`, `decision`) from a decision model instead of generated text; `run_facade.decide(...)` runs one as a
   durable child run and the `decide` VisualFlow node asks a choice, yes/no or score question. Requires AbstractCore
-  2.32.0. See [docs/integrations/abstractcore.md](docs/integrations/abstractcore.md).
+  2.32.0 or newer (AbstractRuntime 0.17.0 requires 2.33.0). See [docs/integrations/abstractcore.md](docs/integrations/abstractcore.md).
 - **Conversational questions and guidance**: `ASK_USER` can ask an essential question (waits indefinitely) or a timed
   clarification with a declared fallback; `Runtime.steer(..., display_text=)` records human guidance in its exact
   words; opt-in public updates and tool-approval `public_action` context appear in the replay view.
@@ -94,7 +110,7 @@ Remote-light runtime:
 pip install abstractruntime
 ```
 
-The base install includes AbstractCore 2.32.0 or newer (its light install:
+The base install includes AbstractCore 2.33.0 or newer (its light install:
 remote providers, tools, vision, voice, audio, music, and decision integration), plus the
 `abstractruntime-mcp-worker` entry point. It keeps inference remote/light by
 default: local engines such as MLX, vLLM, HuggingFace/Torch, Diffusers, and

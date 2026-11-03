@@ -21,7 +21,7 @@ def _version_tuple(value: str) -> tuple[int, int, int]:
 # ONE floor, and it is the one `pyproject.toml` declares. The comparison tuple
 # is DERIVED from the text rather than written beside it: the two had drifted a
 # patch apart, so the guard admitted a version its own message called too old.
-_MIN_ABSTRACTCORE_VERSION_TEXT = "2.32.0"
+_MIN_ABSTRACTCORE_VERSION_TEXT = "2.33.0"
 _MIN_ABSTRACTCORE_VERSION = _version_tuple(_MIN_ABSTRACTCORE_VERSION_TEXT)
 
 

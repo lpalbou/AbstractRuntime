@@ -2547,7 +2547,14 @@ def _create_visual_agent_effect_handler(
                                     rendered_out = "" if output is None else str(output)
                                 rendered_out = rendered_out.strip()
 
-                                details = str(error or rendered_out).strip() if not success else rendered_out
+                                if success:
+                                    details = rendered_out
+                                elif isinstance(output, (dict, list)) and rendered_out:
+                                    # Backlog 1005: a failed call that reported a structured explanation (the
+                                    # backends tried, a hint) shows it to the model after the error line.
+                                    details = "\n".join(part for part in (str(error or "").strip(), rendered_out) if part)
+                                else:
+                                    details = str(error or rendered_out).strip()
                                 if args is not None:
                                     try:
                                         args_txt = json.dumps(args, ensure_ascii=False, sort_keys=True)

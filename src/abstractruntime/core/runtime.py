@@ -52,6 +52,7 @@ from .step_context import StepContext, effect_step_context, current_step_context
 from .questions import QUESTION_HISTORY_LIMIT, make_question, question_of, resolution_payload
 from .live_deltas import LiveDeltaEmitter, LiveDeltaSink
 from .effect_cancellation import (
+    EffectInterrupted,
     EffectKilled,
     InflightEffect,
     effect_inflight_scope,
@@ -2662,6 +2663,11 @@ class Runtime:
             # by the next save of the in-memory RunState.
             with run_mutation_lock(run_id):
                 state = self._tick_impl(workflow=workflow, run_id=run_id, max_steps=max_steps, step_gate=step_gate)
+        except EffectInterrupted:
+            # The host stopped on purpose mid-effect: not a breakage of this tick
+            # (no `record_error`). The run stays RUNNING at its last durable step;
+            # the host decides what to say and when to tick again.
+            raise
         except EffectKilled:
             # A hard-stop injection that landed BETWEEN effects (its target
             # finished a moment before it was delivered): nothing of this tick's
@@ -4236,9 +4242,21 @@ class Runtime:
             # swaps the live bubble for the durable answer never sees a gap),
             # and on every exit path, exceptions included.
             delta_end_reason = "failed"
+            delta_end_detail: Optional[str] = None
             try:
                 try:
                     outcome = _invoke_registered()
+                except EffectInterrupted:
+                    # The HOST stopped on purpose while this effect was in flight
+                    # (core.effect_cancellation.EffectInterrupted): not a failure of the
+                    # effect. No terminal record, no retry consumed: the ledger tail stays
+                    # STARTED and the next tick re-sends it (the crash-replay path).
+                    delta_end_reason, delta_end_detail = "cancelled", "interrupted"
+                    logger.info(
+                        f"effect interrupted by a host stop: run={run.run_id} node={node_id} "
+                        f"step={rec.step_id}; it is sent again when the host is back"
+                    )
+                    raise
                 except EffectKilled:
                     # HARD STOP (core.effect_cancellation.kill_inflight_effect): the
                     # host injected this into our thread because the effect did not
@@ -4332,7 +4350,7 @@ class Runtime:
                     try:
                         if delta_end_reason == "failed" and inflight.cancelled:
                             delta_end_reason = "cancelled"
-                        delta_emitter.end(delta_end_reason)
+                        delta_emitter.end(delta_end_reason, detail=delta_end_detail)
                     except Exception:  # pragma: no cover - live preview must never break execution
                         logger.warning("live delta_end failed for step %s", rec.step_id, exc_info=True)
 

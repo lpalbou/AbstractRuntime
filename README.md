@@ -8,6 +8,20 @@ It is designed for long-running workflows that must survive restarts and explici
 
 **Status:** pre-1.0 (API may evolve). For production use, pin versions and follow `CHANGELOG.md`.
 
+## What's new in 0.18.0
+
+- **Models unload after being idle**: a host sets how long a local model may sit unused (`set_model_idle_unload`,
+  AbstractCore's default 60 minutes; off with `None` or `0`); a running call is never interrupted and a model kept
+  loaded never unloads. `set_model_residency_locks` relays the host's "Keep loaded" set, and both come back after a
+  model-host restart. Loaded-model rows say when a model was last used, whether it is in use, who keeps it loaded
+  and when it unloads. Requires AbstractCore 2.34.0 or newer.
+- **A failed tool keeps its explanation**: a tool that reports its failure as a JSON object (a web search's backends,
+  bot-challenge status and hint) keeps it in the result, the run ledger and what the visual-flow Agent node shows
+  the model, after the error line.
+- **A store that cannot attribute a session is refused**: a custom run store whose index rows lack `session_kind`
+  no longer lets a discussion start as a plain chat; it raises `SessionAttributionError` naming what to add. Full
+  list: [CHANGELOG.md](CHANGELOG.md).
+
 ## What's new in 0.17.0
 
 - **A host stop suspends a run, it never fails it**: a host that stops on purpose raises `EffectInterrupted` into
@@ -29,7 +43,7 @@ It is designed for long-running workflows that must survive restarts and explici
 - **Calibrated decisions**: an `LLM_CALL` whose output says `modality: "decision"` returns typed answers
   (`answers`, `decision`) from a decision model instead of generated text; `run_facade.decide(...)` runs one as a
   durable child run and the `decide` VisualFlow node asks a choice, yes/no or score question. Requires AbstractCore
-  2.32.0 or newer (AbstractRuntime 0.17.0 requires 2.33.0). See [docs/integrations/abstractcore.md](docs/integrations/abstractcore.md).
+  2.32.0 or newer (AbstractRuntime 0.18.0 requires 2.34.0). See [docs/integrations/abstractcore.md](docs/integrations/abstractcore.md).
 - **Conversational questions and guidance**: `ASK_USER` can ask an essential question (waits indefinitely) or a timed
   clarification with a declared fallback; `Runtime.steer(..., display_text=)` records human guidance in its exact
   words; opt-in public updates and tool-approval `public_action` context appear in the replay view.

@@ -58,10 +58,29 @@ def test_a_local_row_carries_last_used_and_the_unload_time(monkeypatch) -> None:
     record = {"provider": "mlx", "model": "m"}
     lc._stamp_local_record_idle_unload(record)
     assert record["last_used_at"] == 1000.0 and record["idle_unload_at"] == 4600.0
+    assert record["in_use"] is False and record["locked_by"] == []
     assert record["idle_unload_s"] == process_residency.get_idle_unload()
     other = {"provider": "huggingface", "model": "m"}  # the embedding row of the same name is not a text row
     lc._stamp_local_record_idle_unload(other)
     assert "last_used_at" not in other and other["idle_unload_s"] == process_residency.get_idle_unload()
+    assert "in_use" not in other and "locked_by" not in other
+
+
+def test_in_use_and_locked_by_pass_through_unchanged(monkeypatch) -> None:
+    # A model in use, or kept loaded by another account, has no idle_unload_at: without these two keys a
+    # host could not say why. The runtime relays Core's values as-is; it never interprets them.
+    states: List[Dict[str, Any]] = [
+        {"backend": "mlx", "provider": "mlx", "model": "busy", "last_used_at": 5.0, "in_use": True,
+         "locked_by": [], "idle_unload_at": None},
+        {"backend": "mlx", "provider": "mlx", "model": "kept", "last_used_at": 6.0, "in_use": False,
+         "locked_by": ["alice", "gateway"], "idle_unload_at": None},
+    ]
+    monkeypatch.setattr(process_residency, "resident_model_states", lambda: states)
+    busy, kept = {"provider": "mlx", "model": "busy"}, {"provider": "mlx", "model": "kept"}
+    lc._stamp_local_record_idle_unload(busy)
+    lc._stamp_local_record_idle_unload(kept)
+    assert (busy["in_use"], busy["locked_by"], busy["idle_unload_at"]) == (True, [], None)
+    assert (kept["in_use"], kept["locked_by"], kept["idle_unload_at"]) == (False, ["alice", "gateway"], None)
 
 
 def test_the_per_load_ttl_warning_names_the_idle_unload_instead_of_never() -> None:
@@ -86,6 +105,7 @@ def test_a_resident_in_process_row_is_stamped_and_a_non_resident_one_is_not(monk
         "provider_residency_source": "test", "provider_state": "loaded"})
     row = lc._local_residency_record(provider="mlx", model="m")
     assert row["resident"] is True and row["last_used_at"] == 10.0 and row["idle_unload_at"] == 3610.0
+    assert row["in_use"] is False and row["locked_by"] == []
     monkeypatch.setattr(lc, "_local_provider_residency_claim", lambda **kw: {
         "provider_residency_verified": True, "provider_resident": False,
         "provider_residency_source": "test", "provider_state": "unloaded"})

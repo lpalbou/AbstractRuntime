@@ -4,7 +4,8 @@
   `MultiLocalAbstractCoreLLMClient`; framework backlog 1115). It relays AbstractCore's process-wide idle-unload time
   (ADR 0012, default 60 minutes): a model no call has used for that long is unloaded, a locked model never is, and a
   running call is never interrupted. `None` or `0` turns it off; a refused value answers `ok: false`. Local residency
-  rows of in-process text models carry `idle_unload_s`, `last_used_at` and `idle_unload_at`.
+  rows of in-process text models carry `idle_unload_s`, `last_used_at` and `idle_unload_at`, and pass through Core's
+  `in_use` and `locked_by`, so a host can show a model that is in use, or kept loaded by another account.
 - **`set_model_residency_locks(locks)`**: the locked models become exactly the listed ones (resident ones locked,
   missing ones loaded then locked, the others unlocked), each pair with its own outcome. A host stores its "Keep
   loaded" set and replays it at start; as a `set_` name it is replayed when the gateway's model host rebuilds a client.

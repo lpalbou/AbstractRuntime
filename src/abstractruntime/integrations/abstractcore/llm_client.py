@@ -4923,16 +4923,17 @@ def _set_model_idle_unload(seconds: Optional[float]) -> Dict[str, Any]:
 
 
 def _stamp_local_record_idle_unload(record: Dict[str, Any]) -> None:
-    """When the model was last used and when it unloads for idleness (`idle_unload_at` None: the setting is
-    off, the model is kept loaded, or a call is running), from AbstractCore's `resident_model_states()`."""
+    """When the model was last used, whether a call is running on it (`in_use`), which owners lock it
+    (`locked_by`) and when it unloads for idleness (`idle_unload_at` None: the setting is off, the model is
+    kept loaded, or a call is running), passed through as-is from AbstractCore's `resident_model_states()`."""
     residency = _core_process_residency()
     record["idle_unload_s"] = residency.get_idle_unload()
     for state in residency.resident_model_states():
         if state.get("task") == "embedding":
             continue
         if state.get("provider") == record["provider"] and state.get("model") == record["model"]:
-            record["last_used_at"] = state.get("last_used_at")
-            record["idle_unload_at"] = state.get("idle_unload_at")
+            for key in ("last_used_at", "in_use", "locked_by", "idle_unload_at"):
+                record[key] = state.get(key)
             return
 
 def _local_residency_record(

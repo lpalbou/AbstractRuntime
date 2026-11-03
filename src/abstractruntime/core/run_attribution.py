@@ -208,11 +208,19 @@ def store_session_kinds(run_store: Any, session_id: str) -> frozenset:
     list_run_index = getattr(run_store, "list_run_index", None)
     if not callable(list_run_index):
         raise SessionAttributionError(
-            f"run store {type(run_store).__name__} has no run index; session {sid} cannot be attributed"
+            f"run store {type(run_store).__name__} has no run index (neither session_kinds() nor "
+            f"list_run_index()); session {sid} cannot be attributed"
         )
-    return frozenset(
-        k for k in (r.get("session_kind") for r in list_run_index(session_id=sid, limit=1_000_000)) if k
-    )
+    rows = list(list_run_index(session_id=sid, limit=1_000_000))
+    # An index whose rows do not carry the attribution column (a store written before automations v1)
+    # cannot tell a discussion from a chat: refuse rather than start it as a plain chat (fail closed).
+    missing = [r for r in rows if not isinstance(r, Mapping) or "session_kind" not in r]
+    if missing:
+        raise SessionAttributionError(
+            f"run store {type(run_store).__name__}: its list_run_index() rows carry no session_kind; "
+            f"session {sid} cannot be attributed (add session_kind and role to the index, or implement session_kinds())"
+        )
+    return frozenset(k for k in (r.get("session_kind") for r in rows) if k)
 
 
 _KIND_PRECEDENCE = ("discussion", "automation", "occurrence", "chat")

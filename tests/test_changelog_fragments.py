@@ -133,3 +133,26 @@ def test_without_both_a_version_bump_and_its_section_it_is_an_ordinary_pr(tmp_pa
     assert cl.check("main") == 1
     out = capsys.readouterr().out
     assert "adds no changelog fragment" in out or "CHANGELOG.md was edited" in out
+
+
+def test_a_release_pr_with_an_empty_section_fails_naming_the_version(tmp_path: Path, monkeypatch, capsys) -> None:
+    repo = _release_repo(tmp_path, monkeypatch, pending=False)
+    _bump(repo, "1.1.0", section=False)
+    text = (repo / "CHANGELOG.md").read_text()
+    (repo / "CHANGELOG.md").write_text(text.replace("## [Unreleased]\n", "## [Unreleased]\n\n## [1.1.0] - 2026-11-03\n\n", 1))
+    _git(repo, "commit", "-qam", "release 1.1.0, header only")
+    assert cl.check("main") == 1
+    assert "Release 1.1.0: CHANGELOG.md's [1.1.0] section is empty" in capsys.readouterr().out
+
+
+def test_a_leftover_fragment_in_a_subfolder_or_named_md_in_capitals_cannot_hide(tmp_path: Path, monkeypatch, capsys) -> None:
+    repo = _release_repo(tmp_path, monkeypatch, pending=False)
+    (repo / "changelog.d" / "old").mkdir()
+    (repo / "changelog.d" / "old" / "fix.md").write_text("### Fixed\n\n- **a fix**\n")
+    (repo / "changelog.d" / "LOUD.MD").write_text("### Fixed\n\n- **another fix**\n")
+    _bump(repo, "1.1.0", section=True)
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "release 1.1.0, fragments hidden")
+    assert cl.check("main") == 1
+    out = capsys.readouterr().out
+    assert "still holds 2 fragment(s)" in out and "old/fix.md" in out and "LOUD.MD" in out

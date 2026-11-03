@@ -35,7 +35,10 @@ _VERSION_RE = re.compile(r'^version\s*=\s*"([^"]+)"', re.M)
 
 
 def fragment_files(directory: Path = FRAGMENTS) -> List[Path]:
-    return sorted(p for p in directory.glob("*.md") if p.name.lower() != "readme.md")
+    """Every fragment: `*.md` at any depth, extension in any case (a leftover in a subfolder or named
+    `.MD` must not hide), except README files."""
+    return sorted(p for p in directory.rglob("*") if p.is_file() and p.suffix.lower() == ".md"
+                  and p.name.lower() != "readme.md")
 
 
 def parse(text: str, *, name: str = "fragment") -> List[Tuple[str, str]]:
@@ -152,11 +155,18 @@ def check(base: str) -> int:
     changed, added = changed_files(base)
     version = release_version(base, changed)
     if version is not None:
-        left = [p.name for p in fragment_files(ROOT / "changelog.d")]
+        left = [p.relative_to(ROOT / "changelog.d").as_posix() for p in fragment_files(ROOT / "changelog.d")]
         if left:
             print(f"Release {version}: changelog.d/ still holds {len(left)} fragment(s) ({', '.join(left[:8])}"
                   f"{' ...' if len(left) > 8 else ''}). `python scripts/changelog.py assemble {version}` writes them "
                   "into CHANGELOG.md and removes them; remove the ones already assembled.")
+            return 1
+        text = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
+        start = _release_section_re(version).search(text)
+        rest = text[start.end():] if start else ""
+        nxt = re.search(r"^## \[", rest, re.M)
+        if not rest[: nxt.start() if nxt else len(rest)].strip():
+            print(f"Release {version}: CHANGELOG.md's [{version}] section is empty; it must say what the release changes.")
             return 1
         print(f"changelog: release {version}, CHANGELOG.md has its section and every fragment is assembled")
         return 0

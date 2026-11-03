@@ -1,4 +1,8 @@
+import pytest
+
 from abstractruntime.integrations.abstractcore.tool_executor import MappingToolExecutor
+
+pytestmark = pytest.mark.basic
 
 
 def test_mapping_tool_executor_marks_error_string_outputs_as_failure() -> None:

@@ -1214,6 +1214,7 @@ effect payloads, client construction arguments, or Runtime-owned environment var
 <li>Thin-mode clients can run the workflow logic while delegating inference to a server.</li>
 <li>Remote mode supports AbstractCore per-request <code>base_url</code> routing (dynamic endpoint selection).</li>
 <li>Tool execution can be gated by trust/sandbox policy outside the router.</li>
+<li>In every mode, a host stop interrupts an effect (<code>EffectInterrupted</code>: no terminal record, re-issued on the next tick); only a failure the effect itself met is recorded as failed.</li>
 </ul>
 <h3 id="see-also">See Also<a class="headerlink" href="#see-also" title="Permanent link">&para;</a></h3>
 <ul>

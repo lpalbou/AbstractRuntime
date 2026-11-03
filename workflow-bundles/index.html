@@ -690,6 +690,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#pin-defaults-are-typed-values" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Pin defaults are typed values
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#see-also" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1146,6 +1157,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#pin-defaults-are-typed-values" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Pin defaults are typed values
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#see-also" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1249,6 +1271,16 @@ flows/&lt;flow_id&gt;.json
 - use the default route key <code>${sourceNodeId}::${sourceHandle}</code> unless your editor needs a custom stable key
 - keep route keys unique per target node
 - use one normal data edge or <code>pinDefaults</code> for the fallback value, then add <code>inputRouteOverrides</code> only for routes that need a different value</p>
+<h2 id="pin-defaults-are-typed-values">Pin defaults are typed values<a class="headerlink" href="#pin-defaults-are-typed-values" title="Permanent link">&para;</a></h2>
+<p>A <code>pinDefaults</code> value is a JSON value with its type (<code>5</code>, <code>"5"</code>, <code>true</code>, <code>[]</code>), and the runtime uses it as stored.
+AbstractFlow stores a value typed on a node card with the type of its input (ADR 0049 in the AbstractFramework
+repository). Compare (<code>compare</code>) makes one conversion: when one side is a number or true/false and the other is text,
+the text is read exactly as that type, by the editor's grammar (a decimal number: <code>"5"</code>, <code>"-2.5"</code>, <code>".5"</code>, <code>"1e3"</code>; or
+<code>true</code>/<code>false</code> in any case), so <code>5 == "5"</code> and <code>"9" &lt; 10</code> are true, whether the text was saved by AbstractFlow 0.13.0
+or arrives at run time from a form, an API input or a model. Text that is not such a value (<code>"five"</code>, <code>"1_000"</code>,
+<code>"0x10"</code>, <code>"inf"</code>, empty), or an order between values Python cannot order (<code>None &gt; 3</code>), fails the step with an error
+that names the node, instead of answering <code>False</code>. Text against text is never converted (<code>"10" &gt; "9"</code> compares text).
+true/false compares with numbers as Python's booleans do (<code>True == 1</code>).</p>
 <h2 id="see-also">See also<a class="headerlink" href="#see-also" title="Permanent link">&para;</a></h2>
 <ul>
 <li><code>architecture.md</code> — VisualFlow → WorkflowSpec compilation path</li>

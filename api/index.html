@@ -1759,8 +1759,9 @@ tool-approval waits retain their own contracts.</p>
 <p>An opt-in actor may inherit <code>_runtime.conversation: {enabled: true}</code> through native child
 workflows and VisualFlow Agent nodes. This flag does not create an extra inference call.
 Public updates enter replay only through an explicit completed <code>EMIT_EVENT</code> named
-<code>public_update</code>, with payload <code>id</code>, <code>text</code>, <code>run_id</code>, optional <code>session_id</code>, <code>iteration</code> and
-<code>source_call_ids</code>. The event's owner must match <code>run_id</code>; private diary/thinking fences are
+<code>public_update</code>, with payload <code>id</code>, <code>text</code>, <code>run_id</code>, optional <code>session_id</code>, <code>iteration</code>,
+<code>source_call_ids</code> and optional <code>kind</code> (<code>"progress"</code> or <code>"finding"</code>, replayed as the message's
+<code>update_kind</code>). The event's owner must match <code>run_id</code>; private diary/thinking fences are
 excluded. See <a href="../replay/#public-conversation-messages">replay.md</a>.</p>
 <p>Actors may attach <code>public_action</code> to a proposed <code>TOOL_CALLS</code> payload with <code>text</code>,
 <code>update_id</code>, <code>run_id</code>, positive integer <code>iteration</code> and <code>call_ids</code>. The text is the
@@ -2027,11 +2028,12 @@ applies the same rule.</p>
 </ul>
 <h2 id="runtime-owned-integrations">Runtime-owned integrations<a class="headerlink" href="#runtime-owned-integrations" title="Permanent link">&para;</a></h2>
 <h3 id="abstractcore-llm-tools">AbstractCore (LLM + tools)<a class="headerlink" href="#abstractcore-llm-tools" title="Permanent link">&para;</a></h3>
-<p>Requires: <code>pip install abstractruntime</code> (AbstractCore 2.32.0 or newer is part of the base install).</p>
+<p>Requires: <code>pip install abstractruntime</code> (AbstractCore 2.33.0 or newer is part of the base install).</p>
 <p>Implementation: <code>src/abstractruntime/integrations/abstractcore/*</code>.</p>
 <p>Entry points:
 - <code>create_local_runtime(...)</code>, <code>create_remote_runtime(...)</code>, <code>create_hybrid_runtime(...)</code> (<code>src/abstractruntime/integrations/abstractcore/factory.py</code>)
 - public discovery facade: <code>AbstractCoreDiscoveryFacade</code>, <code>get_abstractcore_discovery_facade(...)</code> (<code>src/abstractruntime/integrations/abstractcore/discovery_facade.py</code>)
+- model errors a host tells apart, AbstractCore's own classes: <code>from abstractruntime.integrations.abstractcore.discovery_facade import ModelNotDownloadedError, ModelNotFoundError</code> (<code>ModelNotDownloadedError</code> is a <code>ModelNotFoundError</code> whose <code>model</code> and <code>provider</code> name what to download); a host never imports <code>abstractcore</code> for them
 - public host facade: <code>AbstractCoreHostFacade</code>, <code>get_abstractcore_host_facade(...)</code> (<code>src/abstractruntime/integrations/abstractcore/host_facade.py</code>)
 - public voice library facade: <code>AbstractCoreVoiceFacade</code>, <code>get_abstractcore_voice_facade(...)</code>, <code>VoiceLibraryError</code> (<code>src/abstractruntime/integrations/abstractcore/voice_facade.py</code>): languages, cloned voices (list by language, read, rename or replace the transcript, delete), cloning from a recording, voice design, the capability catalog; local in process, remote over the AbstractCore server's <code>/v1</code> voice routes (see <a href="../integrations/abstractcore/#voice-library">Voice library</a>)
 - email facade: <code>email_facade</code> (AbstractCore's mail library for hosts; see <a href="#email">Email</a>)

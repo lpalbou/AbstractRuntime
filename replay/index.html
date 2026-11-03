@@ -1081,7 +1081,10 @@ from raw records.</p>
 <h2 id="public-conversation-messages">Public conversation messages<a class="headerlink" href="#public-conversation-messages" title="Permanent link">&para;</a></h2>
 <p>Explicit completed <code>public_update</code> events become assistant messages with
 <code>kind: "public_update"</code>, stable run-scoped <code>id</code>, <code>text</code>, <code>run_id</code>, optional <code>session_id</code>,
-<code>iteration</code>, <code>source_call_ids</code>, and normal ledger provenance. Replay does not turn reasoning,
+<code>iteration</code>, <code>source_call_ids</code>, <code>update_kind</code>, and normal ledger provenance. <code>update_kind</code> is
+the producer's type for the update: <code>"finding"</code> (a fact or piece of evidence the actor
+established) or <code>"progress"</code> (what it is doing); an event without a <code>kind</code> of <code>"finding"</code>
+replays as <code>"progress"</code>. Replay copies the type and never infers it from the text. Replay does not turn reasoning,
 raw tool output or a marker inside model text into public speech. Diary/thinking fences
 are excluded. These are actor-authored updates; their wording alone is not proof of a fact
 or of completed work.</p>
@@ -1216,7 +1219,7 @@ fences. The original structured output remains available in the technical run ou
 </tr>
 <tr>
 <td><code>activities[]</code></td>
-<td>one per execution: <code>kind</code>, <code>name</code>, <code>status</code>, <code>node_id</code>, <code>execution_id</code>, <code>seqs</code>, <code>step_ids</code>, <code>tool_calls[]</code> (each call's status, output, error), <code>wait</code> (<code>kind</code>, <code>wait_key</code>, <code>ended_by</code>: <code>resume</code>, <code>later_step</code>, <code>terminal</code>), <code>usage</code>, <code>child_run_id</code>, <code>progress</code></td>
+<td>one per execution: <code>kind</code>, <code>name</code>, <code>status</code>, <code>node_id</code>, <code>execution_id</code>, <code>seqs</code>, <code>step_ids</code>, <code>tool_calls[]</code> (each call's <code>id</code>, status, output, error, and <code>call_id</code>, the model's own call id, when <code>id</code> is a runtime call id; public updates cite <code>call_id</code>), <code>wait</code> (<code>kind</code>, <code>wait_key</code>, <code>ended_by</code>: <code>resume</code>, <code>later_step</code>, <code>terminal</code>), <code>usage</code>, <code>child_run_id</code>, <code>progress</code></td>
 </tr>
 <tr>
 <td><code>artifacts[]</code></td>

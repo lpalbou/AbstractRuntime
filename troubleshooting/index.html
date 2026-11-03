@@ -628,6 +628,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#a-compare-step-fails-with-is-text-not-a-number" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        A Compare step fails with "is text (...), not a number"
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#mcp-worker-command-is-not-found" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1454,6 +1465,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#a-compare-step-fails-with-is-text-not-a-number" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        A Compare step fails with "is text (...), not a number"
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#mcp-worker-command-is-not-found" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1499,7 +1521,7 @@ python<span class="w"> </span>-m<span class="w"> </span>pip<span class="w"> </sp
 - Install or upgrade the base Runtime package. LLM/tools integration, common
   remote-light multimodal dependencies, and the MCP worker entry point are part
   of the base install.
-- The current AbstractCore integration expects <code>abstractcore&gt;=2.32.0</code>.</p>
+- The current AbstractCore integration expects <code>abstractcore&gt;=2.33.0</code>.</p>
 <p>Verify:</p>
 <div class="highlight"><pre><span></span><code>python<span class="w"> </span>-c<span class="w"> </span><span class="s2">"import abstractruntime.integrations.abstractcore as ac; print(ac.__all__[:5])"</span>
 </code></pre></div>
@@ -1767,6 +1789,18 @@ processes use the same folder and the same AbstractRuntime version.</p>
   document without an RSS 1.0 channel, an HTML page, or a document above 5 MB is refused. Point the connection at
   the site's feed address; the next poll clears the error.</p>
 <p>See <a href="../automations/#feeditem1">automations.md, <code>feed.item@1</code></a>.</p>
+<h2 id="a-compare-step-fails-with-is-text-not-a-number">A Compare step fails with "is text (...), not a number"<a class="headerlink" href="#a-compare-step-fails-with-is-text-not-a-number" title="Permanent link">&para;</a></h2>
+<p>Symptom:
+- A run stops at a Compare node: "Compare 'Is five' (node same) ==: b is text ('five'), not a number; a is a number
+  (5)."</p>
+<p>Cause and fix:
+- One side is a number (or true/false) and the other is text that is not one. Compare reads text next to a number as
+  that number (<code>"5"</code>, <code>" 5 "</code>, <code>"-2.5"</code>, <code>"1e3"</code>) and text next to true/false as <code>true</code> or <code>false</code> (any case), so
+  <code>5 == "5"</code> is true. Anything else is refused: words (<code>"five"</code>), <code>"1_000"</code>, <code>"0x10"</code>, <code>"inf"</code>, <code>"nan"</code>, full-width
+  digits, and empty text. Give that input a number (or true/false), or, if both sides are meant to be text, wire them
+  so both carry text. See <a href="../workflow-bundles/#pin-defaults-are-typed-values">Pin defaults are typed values</a>.
+- An error ending in "these cannot be ordered" means <code>&lt;</code>, <code>&lt;=</code>, <code>&gt;</code> or <code>&gt;=</code> met values Python cannot order, often an
+  unset value (<code>None</code>): give the input a value, or compare with <code>==</code>.</p>
 <h2 id="mcp-worker-command-is-not-found">MCP worker command is not found<a class="headerlink" href="#mcp-worker-command-is-not-found" title="Permanent link">&para;</a></h2>
 <p>Symptom:
 - <code>abstractruntime-mcp-worker</code> is not available on the command line.</p>

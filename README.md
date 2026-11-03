@@ -4,9 +4,19 @@
 
 It is designed for long-running workflows that must survive restarts and explicitly model blocking (human input, timers, external events, subworkflows) without keeping Python stacks alive.
 
-**Version:** 0.16.0 • **Python:** 3.10+
+**Version:** 0.17.0 • **Python:** 3.10+
 
 **Status:** pre-1.0 (API may evolve). For production use, pin versions and follow `CHANGELOG.md`.
+
+## What's new in 0.17.0
+
+- **Public updates are typed**: a `public_update` in the replay view carries `update_kind`, `"finding"` (a fact or
+  piece of evidence the actor established) or `"progress"` (what it is doing), so a client can list a conversation's
+  findings. See [docs/replay.md](docs/replay.md#public-conversation-messages).
+- **Replayed tool calls keep the model's call id**: an `activities[].tool_calls[]` row also carries `call_id`, the id
+  a public update's `source_call_ids` cite, so a finding resolves to the results it cites.
+- **Compare refuses a number against text** instead of answering False, with an error naming the node and pins.
+  Full list: [CHANGELOG.md](CHANGELOG.md).
 
 ## What's new in 0.16.0
 

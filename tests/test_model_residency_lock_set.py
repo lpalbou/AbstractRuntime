@@ -11,6 +11,8 @@ import pytest
 from abstractruntime.integrations.abstractcore import llm_client as lc
 from abstractruntime.integrations.abstractcore.host_facade import AbstractCoreHostFacade
 
+pytestmark = pytest.mark.basic
+
 
 class _Pool:
     """The three calls `_apply_model_residency_locks` makes, with a client-side lock set."""

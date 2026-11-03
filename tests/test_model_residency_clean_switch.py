@@ -29,6 +29,8 @@ import pytest
 import abstractruntime.integrations.abstractcore.llm_client as llm_mod
 from abstractruntime.integrations.abstractcore.llm_client import MultiLocalAbstractCoreLLMClient
 
+pytestmark = pytest.mark.basic
+
 
 class _FakeInflight:
     def __init__(self):

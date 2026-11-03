@@ -13,6 +13,8 @@ from abstractcore.providers import process_residency
 from abstractruntime.integrations.abstractcore import llm_client as lc
 from abstractruntime.integrations.abstractcore.host_facade import AbstractCoreHostFacade
 
+pytestmark = pytest.mark.basic
+
 
 @pytest.fixture(autouse=True)
 def _restore_idle_unload():

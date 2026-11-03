@@ -922,7 +922,9 @@ except core.HostActionRefused as refused:
 - Chat compaction summarizes a run with the model the run uses. Only a run with no model of its own is summarized with the current default model; the summarizer does not keep the model that was the default at startup.
 - A load with `ttl_s` or `keep_alive` for an in-process model, or for a model that is already loaded, lists them under `unsupported_options` with a warning. A load that fails part-way unloads what it loaded.
 - Changing a capability default (image, voice, music) unloads the models the old capability routes had loaded before the new routes take effect.
-- MLX has no idle or time-based unload. A load with `ttl_s` or `keep_alive` on MLX reports them under `unsupported_options`, with a warning, and the model stays loaded until it is unloaded.
+- An in-process model (MLX, transformers, GGUF) has no per-load TTL: a load with `ttl_s` or `keep_alive` reports them under `unsupported_options`, with a warning. AbstractCore's idle unload applies instead (ADR 0012): a model no call has used for the idle-unload time (60 minutes by default) is unloaded; a locked model never is, and a running call is never interrupted. The next call loads it again.
+- `set_model_idle_unload(seconds)` (host facade and both local clients) sets that time for the process; `None` or `0` turns it off. A refused value (negative, not a number) answers `ok: false` and leaves the setting unchanged. Local residency rows of in-process text models carry `idle_unload_s`, `last_used_at` and `idle_unload_at` (epoch seconds; `None` when the setting is off, the model is locked or a call is running).
+- `set_model_residency_locks(locks)` makes the locked models exactly `locks` (`[{"provider", "model"}]`): listed models that are resident are locked, missing ones are loaded then locked, the others are unlocked; each pair reports its own outcome. A host stores its "Keep loaded" set and calls it at start. Both setters are `set_` names, so a host that rebuilds its client (the gateway's model host after a restart) replays them.
 
 ## Model residency locks and context estimates
 

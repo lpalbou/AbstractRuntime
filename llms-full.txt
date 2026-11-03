@@ -5576,8 +5576,12 @@ Automations rely on four store guarantees. Hosts that bring their own store must
   chat. The JSON store also removes run temp files older than 10 minutes, left behind by a crash, when it opens.
 - **A run index for sessions.** `Runtime.start` checks the attribution of every root run that names a session. A
   store without a run index (no `session_kinds` and no `list_run_index`) cannot answer, and the start is refused with
-  `SessionAttributionError` rather than risk starting an unanchored run in a discussion session. Strict history reads
-  and `latest_occurrence` (which uses the store's `latest_occurrence_row`) need the index too.
+  `SessionAttributionError` rather than risk starting an unanchored run in a discussion session. A store whose
+  `list_run_index` rows do not carry `session_kind` (an index written before automations v1) cannot tell a discussion
+  from a chat either: its session-bearing starts are refused the same way, never started as a plain chat. To upgrade
+  a custom store, add `session_kind` and `role` to its index rows, or implement `session_kinds(session_id)`. The
+  built-in stores already do. Strict history reads and `latest_occurrence` (which uses the store's
+  `latest_occurrence_row`) need the index too.
 
 ### Crash safety
 

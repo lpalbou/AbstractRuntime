@@ -37,6 +37,7 @@ from .core.models import (
 )
 from .core.health import RuntimeHealth
 from .core.runtime import Runtime, StaleResumeError, run_mutation_lock
+from .core.effect_cancellation import EffectInterrupted
 from .core.run_identity import IdentityConflict, RunIdentityConflict, creation_digest
 from .core.run_lifecycle import is_draft_lifecycle
 from .session_turns import select_session_turns
@@ -171,6 +172,7 @@ __all__ = [
     "is_draft_lifecycle",
     "select_session_turns",
     "run_mutation_lock",
+    "EffectInterrupted",
     # Scheduler
     "WorkflowRegistry",
     "Scheduler",

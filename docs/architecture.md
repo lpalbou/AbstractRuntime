@@ -259,6 +259,12 @@ ONE ordering law ([backlog 0045](backlog/planned/runtime_systemic_reliability/00
    completion/resume path increments `RuntimeHealth` (`record_error`) and
    logs a warning. Best-effort observability records (progress events,
    status events) may stay quiet; records that replay depends on may not.
+4. **A requested host stop is a crash the host announces: identical replay, no terminal record.**
+   A host that stops on purpose (a gateway stop or restart, a model-host restart for an update)
+   raises `EffectInterrupted` (`core/effect_cancellation.py`) into the effect in flight. The
+   runtime appends nothing terminal and re-raises; the run stays RUNNING, and the next tick sends
+   the effect again under the same idempotency key as attempt 1 (no retry consumed). Only a
+   failure the effect itself met is recorded as failed.
 
 Kill-and-replay coverage for this law lives in the crash harness
 (`tests/harness.py`, backlog 0045): for every persistence point, kill →

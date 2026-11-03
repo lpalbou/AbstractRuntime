@@ -80,7 +80,7 @@ It is designed for long-running workflows that must survive restarts and explici
 - **Calibrated decisions**: an `LLM_CALL` whose output says `modality: "decision"` returns typed answers
   (`answers`, `decision`) from a decision model instead of generated text; `run_facade.decide(...)` runs one as a
   durable child run and the `decide` VisualFlow node asks a choice, yes/no or score question. Requires AbstractCore
-  2.32.0. See [docs/integrations/abstractcore.md](docs/integrations/abstractcore.md).
+  2.32.0 or newer (AbstractRuntime 0.17.0 requires 2.33.0). See [docs/integrations/abstractcore.md](docs/integrations/abstractcore.md).
 - **Conversational questions and guidance**: `ASK_USER` can ask an essential question (waits indefinitely) or a timed
   clarification with a declared fallback; `Runtime.steer(..., display_text=)` records human guidance in its exact
   words; opt-in public updates and tool-approval `public_action` context appear in the replay view.
@@ -2553,7 +2553,7 @@ Implementation pointers (this repo):
 pip install abstractruntime
 ```
 
-The base install includes AbstractCore 2.32.0 or newer. That is the supported baseline for the `decision` output modality (the `output.decision` route and `/v1/decisions`), the current server auth split (`Authorization` for server auth, `X-AbstractCore-Provider-API-Key` for provider overrides), generated-media contracts, image upscaling, capability catalog, prompt-cache control-plane endpoints (including session attribution via `/acore/prompt_cache/key_meta`), host memory snapshots, the host-wide loaded-model sweep used by residency listings, the process-wide MLX residency report and eject used by model unload, durable bloc prompt-cache helpers, bindings and lifecycle operations, task-aware model residency for text/image/video/TTS/STT, current tool catalog, AbstractCore's public output-selector contract, async/sync text-generation output-selector parity, video generation endpoints, the public local vision-cache catalog helper used by Runtime discovery, vision adapter discovery plus batch/LoRA media controls, and the released shared workspace/file-filter utility surface used by Runtime packaging and integration checks.
+The base install includes AbstractCore 2.33.0 or newer. That is the supported baseline for the `decision` output modality (the `output.decision` route and `/v1/decisions`), the current server auth split (`Authorization` for server auth, `X-AbstractCore-Provider-API-Key` for provider overrides), generated-media contracts, image upscaling, capability catalog, prompt-cache control-plane endpoints (including session attribution via `/acore/prompt_cache/key_meta`), host memory snapshots, the host-wide loaded-model sweep used by residency listings, the process-wide MLX residency report and eject used by model unload, durable bloc prompt-cache helpers, bindings and lifecycle operations, task-aware model residency for text/image/video/TTS/STT, current tool catalog, AbstractCore's public output-selector contract, async/sync text-generation output-selector parity, video generation endpoints, the public local vision-cache catalog helper used by Runtime discovery, vision adapter discovery plus batch/LoRA media controls, and the released shared workspace/file-filter utility surface used by Runtime packaging and integration checks.
 
 The base install also includes the remote-light media/capability plugins needed
 for AbstractCore's multimodal `generate(..., output=...)` path. Local

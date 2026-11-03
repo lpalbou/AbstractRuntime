@@ -29,7 +29,7 @@ It is designed for long-running workflows that must survive restarts and explici
 - **Calibrated decisions**: an `LLM_CALL` whose output says `modality: "decision"` returns typed answers
   (`answers`, `decision`) from a decision model instead of generated text; `run_facade.decide(...)` runs one as a
   durable child run and the `decide` VisualFlow node asks a choice, yes/no or score question. Requires AbstractCore
-  2.32.0. See [docs/integrations/abstractcore.md](docs/integrations/abstractcore.md).
+  2.32.0 or newer (AbstractRuntime 0.17.0 requires 2.33.0). See [docs/integrations/abstractcore.md](docs/integrations/abstractcore.md).
 - **Conversational questions and guidance**: `ASK_USER` can ask an essential question (waits indefinitely) or a timed
   clarification with a declared fallback; `Runtime.steer(..., display_text=)` records human guidance in its exact
   words; opt-in public updates and tool-approval `public_action` context appear in the replay view.

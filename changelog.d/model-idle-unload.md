@@ -7,8 +7,9 @@
   rows of in-process text models carry `idle_unload_s`, `last_used_at` and `idle_unload_at`, and pass through Core's
   `in_use` and `locked_by`, so a host can show a model that is in use, or kept loaded by another account.
 - **`set_model_residency_locks(locks)`**: the locked models become exactly the listed ones (resident ones locked,
-  missing ones loaded then locked, the others unlocked), each pair with its own outcome. A host stores its "Keep
-  loaded" set and replays it at start; as a `set_` name it is replayed when the gateway's model host rebuilds a client.
+  missing ones loaded then locked, the others unlocked), each pair with its own outcome. A lock names a provider and a
+  model; the `base_url` of a configured endpoint is not part of the key. A host stores its "Keep loaded" set and
+  replays it at start; as a `set_` name it is replayed when the gateway's model host rebuilds a client.
 
 ### Changed
 

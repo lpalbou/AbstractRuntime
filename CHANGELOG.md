@@ -10,6 +10,51 @@ Unreleased changes live in [`changelog.d/`](changelog.d/README.md), one file per
 
 ## [Unreleased]
 
+## [0.17.0] - 2026-11-03
+
+### Added
+
+- **`EffectInterrupted`: a host stop interrupts an effect, it never fails it** (`core/effect_cancellation.py`,
+  exported as `abstractruntime.EffectInterrupted`; gateway backlog 1103). A host that stops on purpose (a gateway stop
+  or restart, a model-host restart for an update) raises it into the effect in flight. The runtime writes no terminal
+  record and re-raises: the ledger tail stays STARTED, the run stays RUNNING at its last durable step, and the next
+  tick (after the host is back) sends the effect again under the same idempotency key as attempt 1, so no retry is
+  consumed and nothing reaches an automation's outcome. A BaseException like `EffectKilled`, so no `except Exception`
+  on the way turns it into a failure. The interrupted call's live text ends `cancelled` with `detail: "interrupted"`.
+- **Public updates carry their type in replay** (`replay/view.py`). A `public_update` message has
+  `update_kind`: `"finding"` when the actor typed the event `kind: "finding"` (a fact or piece of
+  evidence it established), otherwise `"progress"` (what it is doing), including events written
+  before the field existed. Clients use it as given, for example to list the findings of a
+  conversation. See [docs/replay.md](docs/replay.md#public-conversation-messages).
+- **Replayed tool calls keep the model's call id** (`replay/view.py`). An `activities[].tool_calls[]`
+  row keyed by a runtime call id (`id`) also carries `call_id`, the model's own id, which is what a
+  public update's `source_call_ids` cite; a client can now resolve a finding to the results it cites.
+
+### Changed
+
+- **Compare reads text next to a number or true/false exactly** (`visual/builtins.py` `_exact_from_text`, ADR 0049 as
+  amended 2026-11-03: "we must have automatic conversion"). When one side is a number or true/false and the other is
+  text, the text is read as that type by the Flow editor's literal grammar (a decimal number, ASCII, no `_`, finite,
+  a whole number kept exact beyond 2**53; or `true`/`false` in any case), so `5 == "5"` and `"9" < 10` are true. This
+  covers flows saved by AbstractFlow 0.13.0 (a typed value stored as text next to a wired number) and text arriving at
+  run time from a form, an API input or a model, with no re-save. `"1_000"`, `"0x10"`, `"inf"`, `"nan"`, full-width
+  digits and empty text are refused. Text against text is never converted (`"10" > "9"` compares text). The table is
+  `tests/fixtures/visualflow/compare_text_operands.json`.
+- **Compare refuses values it cannot compare instead of answering False** (`visual/builtins.py` `control_compare`,
+  ADR 0049). Text that is not a number next to a number, or not `true`/`false` next to true/false (`5 == "five"`,
+  every operator; see the next entry for text that is one), and `<`/`<=`/`>`/`>=` between values Python cannot order
+  (`None > 3`, a list and a number), now fail the step with an error naming the node and pins: "Compare 'Is five'
+  (node same) ==: b is text ('five'), not a number; a is a number (5)." Before, these answered False silently.
+  Equality of same-type values and Python's equality across other types (`None == 5`) are unchanged; true/false
+  compares with numbers as Python's booleans do (`True == 1`).
+- **AbstractCore floor 2.33.0** in the base install and the `apple` and `gpu` extras (was 2.32.0).
+
+### Fixed
+
+- **An automation occurrence whose agent completed with `success: false` names the agent's reason**
+  (`automations/attention.py`). The attention item and the `automation_failed` email said "completed" (the run's status
+  word); the reason is now read from the Agent node's `meta.error`, and when there is none it says so plainly.
+
 ## [0.16.0] - 2026-11-02
 
 ### Added

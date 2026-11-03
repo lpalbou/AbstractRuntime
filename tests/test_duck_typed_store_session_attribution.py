@@ -10,6 +10,8 @@ import pytest
 
 from abstractruntime.core.run_attribution import SessionAttributionError, session_attribution, store_session_kinds
 
+pytestmark = pytest.mark.basic
+
 
 class _NoIndex:
     pass

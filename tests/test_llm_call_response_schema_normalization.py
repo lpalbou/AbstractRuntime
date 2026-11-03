@@ -18,14 +18,14 @@ class _CaptureLLM:
         return {"content": "ok", "metadata": {}}
 
 
-def _model_field_names(model: Any) -> set[str]:
-    fields = getattr(model, "model_fields", None)
-    if isinstance(fields, dict):
-        return set(fields.keys())
-    fields = getattr(model, "__fields__", None)
-    if isinstance(fields, dict):
-        return set(fields.keys())
-    return set()
+def _request_schema(llm: _CaptureLLM) -> Dict[str, Any]:
+    assert isinstance(llm.kwargs, dict)
+    params = llm.kwargs["params"]
+    assert "response_model" not in params
+    json.dumps(params)  # Captured requests are process-safe schema DATA.
+    schema = params["response_schema"]
+    assert isinstance(schema, dict)
+    return schema
 
 
 def test_llm_call_response_schema_field_map_is_coerced_to_object_schema() -> None:
@@ -48,9 +48,7 @@ def test_llm_call_response_schema_field_map_is_coerced_to_object_schema() -> Non
     assert isinstance(llm.kwargs, dict)
     params = llm.kwargs.get("params")
     assert isinstance(params, dict)
-    response_model = params.get("response_model")
-    assert response_model is not None
-    assert "choice" in _model_field_names(response_model)
+    assert "choice" in _request_schema(llm)["properties"]
 
 
 def test_llm_call_response_schema_inner_wrapper_is_unwrapped() -> None:
@@ -71,9 +69,7 @@ def test_llm_call_response_schema_inner_wrapper_is_unwrapped() -> None:
     assert outcome.status == "completed"
 
     assert isinstance(llm.kwargs, dict)
-    response_model = llm.kwargs.get("params", {}).get("response_model")
-    assert response_model is not None
-    assert _model_field_names(response_model) == {"choice"}
+    assert set(_request_schema(llm)["properties"]) == {"choice"}
 
 
 def test_llm_call_response_schema_outer_wrapper_is_unwrapped() -> None:
@@ -94,9 +90,7 @@ def test_llm_call_response_schema_outer_wrapper_is_unwrapped() -> None:
     assert outcome.status == "completed"
 
     assert isinstance(llm.kwargs, dict)
-    response_model = llm.kwargs.get("params", {}).get("response_model")
-    assert response_model is not None
-    assert _model_field_names(response_model) == {"choice"}
+    assert set(_request_schema(llm)["properties"]) == {"choice"}
 
 
 def test_llm_call_response_schema_missing_type_is_treated_as_object_when_properties_exist() -> None:
@@ -115,9 +109,7 @@ def test_llm_call_response_schema_missing_type_is_treated_as_object_when_propert
     assert outcome.status == "completed"
 
     assert isinstance(llm.kwargs, dict)
-    response_model = llm.kwargs.get("params", {}).get("response_model")
-    assert response_model is not None
-    assert _model_field_names(response_model) == {"choice"}
+    assert set(_request_schema(llm)["properties"]) == {"choice"}
 
 
 def test_llm_call_response_schema_string_json_is_parsed() -> None:
@@ -137,9 +129,7 @@ def test_llm_call_response_schema_string_json_is_parsed() -> None:
     assert outcome.status == "completed"
 
     assert isinstance(llm.kwargs, dict)
-    response_model = llm.kwargs.get("params", {}).get("response_model")
-    assert response_model is not None
-    assert _model_field_names(response_model) == {"answer"}
+    assert set(_request_schema(llm)["properties"]) == {"answer"}
 
 
 def test_llm_call_response_schema_required_default_stays_required() -> None:
@@ -159,13 +149,13 @@ def test_llm_call_response_schema_required_default_stays_required() -> None:
     assert outcome.status == "completed"
 
     assert isinstance(llm.kwargs, dict)
-    response_model = llm.kwargs.get("params", {}).get("response_model")
-    assert response_model is not None
-    fields = getattr(response_model, "model_fields", None)
-    if isinstance(fields, dict) and hasattr(fields["answer"], "is_required"):
-        assert fields["answer"].is_required()
+    sent_schema = _request_schema(llm)
+    assert sent_schema["required"] == ["answer"]
+    assert sent_schema["properties"]["answer"]["default"] == "fallback"
+    from abstractruntime.integrations.abstractcore.structured_output import response_model_from_json_schema
+
     with pytest.raises(Exception):
-        response_model()
+        response_model_from_json_schema(sent_schema, name="RequiredAnswer")()
 
 
 def test_llm_call_response_schema_non_object_schema_still_errors() -> None:

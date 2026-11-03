@@ -104,7 +104,7 @@ class TickCandidate:
     store: str
     run_id: str
     workflow_id: str
-    wait_kind: str  # "until" | "event_deadline"
+    wait_kind: str  # "until" | "event_deadline" | "question_deadline"
     due_at: str  # ISO deadline that made it due
     channel: str  # door-stamped channel; "unstamped" when absent
     waiting_since: str  # run.updated_at when the scan saw it
@@ -185,7 +185,8 @@ class TickSource:
             waiting = getattr(run, "waiting", None)
             if waiting is None:
                 continue
-            kind = "until" if waiting.reason == WaitReason.UNTIL else "event_deadline"
+            kind = ("until" if waiting.reason == WaitReason.UNTIL else
+                    "question_deadline" if waiting.reason == WaitReason.USER else "event_deadline")
             out.append(
                 TickCandidate(
                     store=self.name,

@@ -12,6 +12,7 @@ They are designed to keep `RunState.vars` JSON-safe.
 from __future__ import annotations
 
 import json
+import pickle
 import hashlib
 import os
 import mimetypes
@@ -25,6 +26,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple, Type
 from ...core.event_keys import build_tool_approval_wait_key
 from ...core.models import Effect, EffectType, RunState, RunStatus, WaitReason, WaitState
 from ...core.live_deltas import LiveDeltaEmitter
+from ...core.step_context import current_step_context
 from ...core.progress_channel import current_effect_delta_callback, current_effect_progress_callback
 from ...core.effect_cancellation import annotate_current_effect, current_effect_cancel_event
 from ...core.runtime import EffectOutcome, EffectHandler
@@ -32,6 +34,7 @@ from ...core.tool_scope import ToolScopeError, resolve_tool_scope
 from ...storage.base import RunStore
 from ...storage.artifacts import ArtifactStore, is_artifact_ref, get_artifact_id
 from .llm_client import AbstractCoreLLMClient, _models_agree
+from .structured_output import prepare_response_model as _pydantic_model_from_json_schema
 from .output_specs import (
     is_abstractcore_output_request,
     output_request_has_generated_media,
@@ -363,6 +366,8 @@ def _resolved_action_id_from_output(summary: Dict[str, Any]) -> str:
         if task == "text_to_audio":
             return "generated_sound"
         return "generated_music"
+    if modality == "decision":
+        return "decision"
     return "generate_text"
 
 
@@ -460,7 +465,8 @@ def _augment_output_request_for_runtime(output: Any, *, run: RunState) -> Any:
 
         modality = str(s.get("modality") or "").strip().lower()
         task = str(s.get("task") or "").strip()
-        tags = _runtime_output_tags(run, generated_media=modality != "text")
+        # A decision is typed answers, not generated media (no bytes, no artifact).
+        tags = _runtime_output_tags(run, generated_media=modality not in {"text", "decision"})
         existing_tags = s.get("tags")
         if isinstance(existing_tags, dict):
             tags.update({str(k): str(v) for k, v in existing_tags.items() if v is not None})
@@ -635,119 +641,6 @@ def _normalize_response_schema(raw: Any) -> Optional[Dict[str, Any]]:
     return normalized if isinstance(normalized, dict) and normalized else None
 
 
-def _pydantic_model_from_json_schema(schema: Dict[str, Any], *, name: str) -> Type[Any]:
-    """Best-effort conversion from a JSON schema dict to a Pydantic model.
-
-    This exists so structured output requests can remain JSON-safe in durable
-    effect payloads (we persist the schema, not the Python class).
-    """
-    try:
-        from pydantic import BaseModel, Field, create_model
-    except Exception as e:  # pragma: no cover
-        raise RuntimeError(f"Pydantic is required for structured outputs: {e}")
-
-    from typing import Literal, Union
-
-    NoneType = type(None)
-
-    def _python_type(sub_schema: Any, *, nested_name: str) -> Any:
-        if not isinstance(sub_schema, dict):
-            return Any
-        # Enums: represent as Literal[...] so Pydantic can enforce allowed values.
-        enum_raw = sub_schema.get("enum")
-        if isinstance(enum_raw, list) and enum_raw:
-            try:
-                return Literal.__getitem__(tuple(enum_raw))  # type: ignore[attr-defined]
-            except Exception:
-                return Any
-
-        t = sub_schema.get("type")
-        if isinstance(t, list) and t:
-            # Union types (e.g. ["string","null"]).
-            variants: list[Any] = []
-            for tt in t:
-                if tt == "null":
-                    variants.append(NoneType)
-                    continue
-                if isinstance(tt, str) and tt:
-                    variants.append(_python_type(dict(sub_schema, type=tt), nested_name=nested_name))
-            # Drop Any from unions to avoid masking concrete variants.
-            variants2 = [v for v in variants if v is not Any]
-            variants = variants2 or variants
-            if not variants:
-                return Any
-            if len(variants) == 1:
-                return variants[0]
-            try:
-                return Union.__getitem__(tuple(variants))  # type: ignore[attr-defined]
-            except Exception:
-                return Any
-        if t == "string":
-            return str
-        if t == "integer":
-            return int
-        if t == "number":
-            return float
-        if t == "boolean":
-            return bool
-        if t == "array":
-            items = sub_schema.get("items")
-            return list[_python_type(items, nested_name=f"{nested_name}Item")]  # type: ignore[index]
-        if t == "object":
-            props = sub_schema.get("properties")
-            if isinstance(props, dict) and props:
-                return _model(sub_schema, name=nested_name)
-            return Dict[str, Any]
-        return Any
-
-    def _model(obj_schema: Dict[str, Any], *, name: str) -> Type[BaseModel]:
-        schema_type = obj_schema.get("type")
-        if schema_type is None and isinstance(obj_schema.get("properties"), dict):
-            schema_type = "object"
-        if isinstance(schema_type, list) and "object" in schema_type:
-            schema_type = "object"
-        if schema_type != "object":
-            raise ValueError("response_schema must be a JSON schema object")
-        props = obj_schema.get("properties")
-        if not isinstance(props, dict) or not props:
-            raise ValueError("response_schema must define properties")
-        required_raw = obj_schema.get("required")
-        required: Set[str] = set()
-        if isinstance(required_raw, list):
-            required = {str(x) for x in required_raw if isinstance(x, str)}
-
-        fields: Dict[str, Tuple[Any, Any]] = {}
-        for prop_name, prop_schema in props.items():
-            if not isinstance(prop_name, str) or not prop_name.strip():
-                continue
-            # Keep things simple: only support identifier-like names to avoid aliasing issues.
-            if not prop_name.isidentifier():
-                raise ValueError(
-                    f"Invalid property name '{prop_name}'. Use identifier-style names (letters, digits, underscore)."
-                )
-            t = _python_type(prop_schema, nested_name=f"{name}_{prop_name}")
-            description = None
-            default_value = None
-            has_default = False
-            if isinstance(prop_schema, dict):
-                raw_description = prop_schema.get("description")
-                if isinstance(raw_description, str) and raw_description.strip():
-                    description = raw_description.strip()
-                if "default" in prop_schema:
-                    default_value = prop_schema.get("default")
-                    has_default = True
-
-            if prop_name in required:
-                fields[prop_name] = (t, Field(..., description=description))
-            else:
-                field_default = default_value if has_default else None
-                fields[prop_name] = (Optional[t], Field(field_default, description=description))
-
-        return create_model(name, **fields)  # type: ignore[call-arg]
-
-    return _model(schema, name=name)
-
-
 def _validate_structured_output_candidate(candidate: Any, *, response_model: Type[Any]) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
     try:
         validated = response_model.model_validate(candidate)
@@ -814,6 +707,10 @@ def _trace_context(run: RunState) -> Dict[str, str]:
         "workflow_id": str(run.workflow_id),
         "node_id": str(run.current_node),
     }
+    step = current_step_context(run.run_id)
+    if step is not None:
+        ctx["step_id"] = step.step_id
+        ctx["attempt"] = str(step.attempt)
     if run.actor_id:
         ctx["actor_id"] = str(run.actor_id)
     session_id = getattr(run, "session_id", None)
@@ -1931,7 +1828,20 @@ def make_llm_call_handler(*, llm: AbstractCoreLLMClient, artifact_store: Optiona
                 structured_response_model = _pydantic_model_from_json_schema(
                     response_schema, name=structured_model_name
                 )
-                params_for_call["response_model"] = structured_response_model
+                # Keep the original schema as data. The execution client creates
+                # Core's response class in the process that actually calls Core.
+                params_for_call["response_schema"] = response_schema
+                params_for_call["response_schema_name"] = structured_model_name
+                # A wrapper author may supply both the normalized effect schema
+                # and its source OpenAI format. Consume only an identical copy;
+                # distinct explicit formats remain a conflicting request.
+                source_format = params_for_call.get("response_format")
+                if (
+                    isinstance(source_format, dict)
+                    and source_format.get("type") == "json_schema"
+                    and _normalize_response_schema(source_format) == response_schema
+                ):
+                    params_for_call.pop("response_format")
 
             structured_failed = False
             structured_error: Optional[str] = None
@@ -2605,6 +2515,11 @@ def _llm_error_is_retryable(exc: Exception) -> bool:
     is not a contract), (2) abstractcore exception types, (3) a conservative message fallback
     for our own providers' "API error (NNN)" / OpenAI SDK "Error code: NNN" dialects.
     """
+    # A request that cannot be encoded is unchanged by resampling. In
+    # particular, do not retry generated-class serialization failures.
+    if isinstance(exc, pickle.PickleError):
+        return False
+
     # Harmony generation artifact (gpt-oss on vLLM, maintainer directive
     # 2026-07-09 "maybe it's something our parser could self-correct"): the
     # server's strict openai-harmony parser 400s when the MODEL'S OWN sampled
@@ -3353,6 +3268,55 @@ def _refined_auto_names(calls: List[Dict[str, Any]], run: "RunState", *, auto: S
     except Exception:  # noqa: BLE001 - a refiner-pass failure fails toward asking
         return set()
     return {name for name, ok in verdict.items() if ok}
+
+
+def approval_public_action(run: RunState, payload: Dict[str, Any],
+                            host_calls: List[Dict[str, Any]], waiting_calls: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """Validate public action context and return it narrowed to the waiting calls.
+
+    Hosts that gate before the Core executor can share this presentation validator.
+    Pass the original effect payload, its host calls and the exact gated subset;
+    use the returned metadata before replacing a delegated payload's tool_calls.
+    This function grants no permission and never changes tool approval policy.
+
+    The adapter binds a public update to the exact proposed effect batch. Policy/
+    scope may withhold calls before approval; narrow the binding to that actual
+    wait, never expand it or attach another batch's words.
+    """
+    action = payload.get("public_action")
+    fields = {"text", "update_id", "run_id", "iteration", "call_ids"}
+    if not isinstance(action, dict) or set(action) != fields or action.get("run_id") != run.run_id:
+        return None
+    text, update_id, iteration = action.get("text"), action.get("update_id"), action.get("iteration")
+    prefix = run.run_id + ":public_update:"
+    if (not isinstance(text, str) or not text.strip() or len(text) > 600
+            or re.search(r"```\s*diary\b|<\s*diary\b|<\s*think\b", text, flags=re.I)
+            or not isinstance(update_id, str) or not update_id.startswith(prefix)
+            or len(update_id) > len(prefix) + 20 or re.fullmatch(r"[1-9][0-9]*", update_id[len(prefix):]) is None
+            or type(iteration) is not int or iteration < 1):
+        return None
+    proposed = payload.get("tool_calls")
+    if not isinstance(proposed, list) or any(not isinstance(call, dict) for call in proposed):
+        return None
+    ids = [call.get("call_id") for call in proposed]
+    if (not ids or any(not isinstance(cid, str) or not cid for cid in ids)
+            or len(set(ids)) != len(ids) or action.get("call_ids") != ids):
+        return None
+    candidates = {call.get("call_id"): call for call in host_calls if isinstance(call, dict)}
+    narrowed = []
+    for call in waiting_calls:
+        if not isinstance(call, dict):
+            return None
+        cid = call.get("call_id")
+        original = candidates.get(cid) if isinstance(cid, str) else None
+        if (cid not in ids or original is None or cid in narrowed
+                or call.get("name") != original.get("name") or call.get("arguments") != original.get("arguments")):
+            return None
+        narrowed.append(cid)
+    if not narrowed:
+        return None
+    return {"text": text, "update_id": update_id, "run_id": run.run_id,
+            "iteration": iteration, "call_ids": narrowed}
 
 
 def make_tool_calls_handler(
@@ -4590,6 +4554,10 @@ def make_tool_calls_handler(
                     tool_calls_for_wait = host_tool_calls
 
                 details: Dict[str, Any] = {"mode": mode, "tool_calls": _jsonable(tool_calls_for_wait)}
+                if str(mode) == "approval_required":
+                    public_action = approval_public_action(run, payload, host_tool_calls, tool_calls_for_wait)
+                    if public_action is not None:
+                        details["public_action"] = public_action
                 executor_details = result.get("details")
                 if isinstance(executor_details, dict) and executor_details:
                     details["executor"] = _jsonable(executor_details)

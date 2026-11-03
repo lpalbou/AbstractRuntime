@@ -253,3 +253,35 @@ def test_remote_llm_client_forwards_thinking_to_chat_completions():
         params={},
     )
     assert "thinking" not in sender.calls[2]["json"]
+
+
+def test_remote_structured_schema_is_forwarded_as_original_json_response_format():
+    sender = StubSender()
+    client = RemoteAbstractCoreLLMClient(server_base_url="http://localhost:8080", model="fake", request_sender=sender)
+    schema = {"type": "object", "properties": {
+        "nested": {"type": "object", "properties": {"n": {"type": "integer"}}, "required": ["n"]},
+        "flag": {"type": "boolean", "default": False}}, "required": ["nested"]}
+    client.generate(prompt="answer", params={"response_schema": schema, "response_schema_name": "NestedReply"})
+    body = sender.calls[0]["json"]
+    assert body["response_format"] == {
+        "type": "json_schema", "json_schema": {"name": "NestedReply", "schema": schema}}
+    assert "response_model" not in body
+
+
+def test_remote_existing_response_format_is_not_dropped():
+    sender = StubSender()
+    client = RemoteAbstractCoreLLMClient(server_base_url="http://localhost:8080", model="fake", request_sender=sender)
+    client.generate(prompt="answer", params={"response_format": {"type": "json_object"}})
+    assert sender.calls[0]["json"]["response_format"] == {"type": "json_object"}
+
+
+def test_remote_refuses_untransportable_custom_validators_before_http():
+    import pytest
+    from pydantic import BaseModel
+    class Custom(BaseModel):
+        n: int
+    sender = StubSender()
+    client = RemoteAbstractCoreLLMClient(server_base_url="http://localhost:8080", model="fake", request_sender=sender)
+    with pytest.raises(ValueError, match="cannot transport response_model validators"):
+        client.generate(prompt="answer", params={"response_model": Custom})
+    assert not sender.calls

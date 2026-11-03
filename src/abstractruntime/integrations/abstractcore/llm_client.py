@@ -41,6 +41,7 @@ from typing import Any, Dict, List, Mapping, Optional, Protocol, Sequence, Tuple
 from urllib.parse import quote, urlencode
 
 from .logging import get_logger
+from .structured_output import StructuredOutputRequestError, pop_response_schema, prepare_response_model as response_model_from_json_schema
 from .output_specs import (
     capability_default_reasoning_for_text as _capability_default_reasoning_for_text,
     capability_default_route_keys_for_spec as _capability_default_route_keys_for_spec,
@@ -573,8 +574,9 @@ def _media_only_output_request(
     capability_defaults: Any,
 ) -> bool:
     """True when the request asks ONLY for non-text outputs (image, video, voice, music, a
-    transcription) and no tools: it never needs the text model (0.7.0 end-to-end: a TTS request
-    built the default text client first and failed when that client could not be built).
+    transcription, a decision) and no tools: it never needs the text model (0.7.0 end-to-end: a
+    TTS request built the default text client first and failed when that client could not be
+    built; a decision-only request runs its decision model through core's pool the same way).
     Decided on AbstractCore's own route resolution (the same specs the local client runs)."""
 
     output = params.get("output")
@@ -1756,7 +1758,12 @@ class AbstractCoreLLMClient(Protocol):
         media: Optional[List[Any]] = None,
         params: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
-        """Return a JSON-safe dict with at least: content/tool_calls/usage/model."""
+        """Return a JSON-safe dict with at least content/tool_calls/usage/model.
+
+        Structured requests carry original JSON ``response_schema`` and optional
+        ``response_schema_name`` in params. The execution client materializes
+        the provider's response class; callers never need to transport one.
+        """
 
     def stream_tts(
         self,
@@ -4508,6 +4515,19 @@ def _mlx_process_row_extras(row: Dict[str, Any]) -> Dict[str, Any]:
     if isinstance(row.get("kv_cache_bytes"), int):
         extras["kv_cache_bytes"] = int(row["kv_cache_bytes"])
         extras["kv_cache_estimated"] = True
+    # The model's slot pool (core ADR 0011): how many generations can run on the one weights
+    # instance, how many run and wait now, and why another slot is not built -- so the Resources
+    # table shows the queued state (OVH 8080 pass four: only /host/state carried it).
+    for key in ("slots", "slots_max", "active", "queued", "copies"):
+        value = row.get(key)
+        if isinstance(value, int) and not isinstance(value, bool):
+            extras[key] = int(value)
+    if row.get("slot_refusal_reason"):
+        extras["slot_refusal_reason"] = str(row["slot_refusal_reason"])
+    if isinstance(row.get("slot_bytes"), int):
+        extras["slot_bytes"] = int(row["slot_bytes"])
+    if row.get("shared_weights") is not None:
+        extras["shared_weights"] = bool(row.get("shared_weights"))
     return extras
 
 
@@ -4534,8 +4554,12 @@ def _merge_process_residency_into_text_records(
     rows = _process_residency_rows_for(lane)
     if not rows:
         return records
-    copies_note = " (each a full copy of the weights)" if lane == "huggingface" else ""
+    # Core ADR 0011: GGUF holders share one weights instance; a row whose `copies` is above 1
+    # (transformers holders, or an older Core) still says each holds a copy.
+    copies_note = ""
     for row in rows:
+        copies_note = (" (each a full copy of the weights)" if lane == "huggingface"
+                       and int(row.get("copies") or row.get("holders") or 0) > 1 and not row.get("shared_weights") else "")
         names = [str(n) for n in (row.get("models") or []) if str(n).strip()]
         if not names:
             names = [str(row.get("model_path") or "").strip()]
@@ -6746,6 +6770,56 @@ def _first_media_identity(
     return None, None
 
 
+def _normalize_decision_result(resp: Any, metadata: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """The decision half of a normalized result (`output="decision"`), or None when the
+    response carries no decision.
+
+    AbstractCore answers a decision with `metadata["decision"]` = the System One body
+    (`{model, answers, usage, latency_ms[, truncated]}`) next to
+    `MultimodalGenerateResponse.decision`; the remote lane carries the server's body the
+    same way. A decision is typed answers, never bytes: there is no
+    artifact and no store involved. `metadata` is updated in place (`decision` = the
+    JSON body) and the returned keys override the text/media ones of the result:
+    `content` (the answers as JSON, as core's `metadata.content`), `decision`,
+    `answers` (= `decision.answers`, the shortcut flows use), `usage`, and
+    `provider` / `model` = the DECISION model that answered -- never the text
+    provider whose `generate()` carried the call (core's `metadata.provider` still
+    names that one)."""
+
+    body_raw = metadata.get("decision")  # core sets it on every lane (local and remote)
+    if not isinstance(body_raw, dict):
+        return None
+    body = _jsonable(dict(body_raw))
+    answers = body.get("answers") if isinstance(body.get("answers"), dict) else {}
+    decision_obj = _field(resp, "decision", None)
+
+    def _text(value: Any) -> Optional[str]:
+        return str(value).strip() if isinstance(value, str) and value.strip() else None
+
+    provider = _text(metadata.get("decision_provider")) or _text(getattr(decision_obj, "provider", None))
+    model = _text(metadata.get("decision_model"))
+    if model is None:
+        # The body names the model as `provider/model` on every lane; `model` is the bare id.
+        from abstractcore.decision.pool import split_handle  # type: ignore
+
+        handle_provider, handle_model = split_handle(_text(body.get("model")) or "")
+        provider = provider or handle_provider
+        model = handle_model or None
+    content = metadata.get("content")
+    if not isinstance(content, str):
+        content = json.dumps(answers, ensure_ascii=False)
+    usage = body.get("usage") if isinstance(body.get("usage"), dict) else None
+    metadata["decision"] = body
+    return {
+        "content": content,
+        "decision": body,
+        "answers": answers,
+        "usage": usage,
+        "provider": provider,
+        "model": model,
+    }
+
+
 def _normalize_multimodal_response(
     resp: Any,
     *,
@@ -6793,6 +6867,7 @@ def _normalize_multimodal_response(
     metadata = _jsonable(_field(resp, "metadata", {}) or {})
     if not isinstance(metadata, dict):
         metadata = {"value": metadata}
+    decision = _normalize_decision_result(resp, metadata)
 
     media_provider, media_model = _first_media_identity(outputs=outputs, resources=resources)
     legacy_runtime_provider = None
@@ -6855,6 +6930,8 @@ def _normalize_multimodal_response(
         "trace_id": text.get("trace_id") if isinstance(text, dict) else None,
         "gen_time": text.get("gen_time") if isinstance(text, dict) else None,
     }
+    if decision is not None:
+        result.update(decision)
     return result
 
 
@@ -8819,6 +8896,10 @@ class LocalAbstractCoreLLMClient:
 
         try:
             params = _normalize_prompt_cache_binding_params(params)
+            schema_request = pop_response_schema(params)
+            if schema_request is not None:
+                schema, schema_name = schema_request
+                params["response_model"] = response_model_from_json_schema(schema, name=schema_name)
             prompt_cache_attribution = params.pop("_prompt_cache_attribution", None)
             # The runtime's PER-CALL live delta callback (core.live_deltas),
             # never a provider kwarg and never the per-client `on_token`
@@ -8955,6 +9036,16 @@ class LocalAbstractCoreLLMClient:
                 )
                 resolved_generate_route_summary = resolved_generate_route.to_summary()
                 specs = [dict(spec) for spec in resolved_generate_route.output_specs]
+                if any(str(spec.get("modality") or "").strip().lower() == "decision" for spec in specs):
+                    # A decision (text in, calibrated typed answers out) is not media: it
+                    # has no bytes, needs no artifact store and never takes the media-only
+                    # fast path below. It rides the provider call as
+                    # `generate(prompt, output=[spec])` with the RESOLVED spec, so the
+                    # `output.decision` route (provider / model and its flat
+                    # `decision_*` options) is on the spec and core's base provider runs
+                    # it through its decision pool (`_decision_model_for_spec`) -- on any
+                    # text provider, the capability host included.
+                    params["output"] = specs
                 media_only = bool(specs) and all(
                     isinstance(spec, dict)
                     and (
@@ -11939,8 +12030,9 @@ class MultiLocalAbstractCoreLLMClient:
             prompt=prompt, messages=messages, media=media, params=params,
             capability_defaults=getattr(self, "_capability_defaults", None),
         ):
-            # Image / video / voice / music / transcription only: never build (or load) the
-            # text model for it; the capability host runs the same capability plugins.
+            # Image / video / voice / music / transcription / decision only: never build (or
+            # load) the text model for it; the capability host runs the same capability
+            # plugins (a decision: core's decision pool, from the resolved spec's route).
             client = self._media_host_client()
             result = client.generate(
                 prompt=prompt, messages=messages, system_prompt=system_prompt, tools=tools, media=media, params=params,
@@ -16456,7 +16548,78 @@ class RemoteAbstractCoreLLMClient:
                 raise ValueError("Remote transcription requires exactly one audio media item.")
             return self._remote_transcription(spec=spec, media=media, headers=headers, params=params)
 
+        if modality == "decision":
+            if media:
+                raise ValueError("Remote decision output does not accept input media; the state is the prompt (text).")
+            if not text:
+                raise ValueError("Remote decision requires prompt or text: the state the questions are about.")
+            return self._remote_decision(spec=spec, state=text, headers=headers, params=params)
+
         raise ValueError(f"Unsupported remote multimodal output: modality={modality!r} task={task!r}")
+
+    def _remote_decision(
+        self,
+        *,
+        spec: Dict[str, Any],
+        state: str,
+        headers: Dict[str, str],
+        params: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """`POST {base}/v1/decisions`, the core server's System One route.
+
+        Body `{model, state, questions, truncate}`: `model` = `provider/model` from the
+        resolved spec (the bare model when it names no provider; omitted when it names
+        neither, the server then uses its most recent resident decision model or its
+        configured `output.decision` default), `state` = the prompt, `questions` as
+        given, `truncate` when set. The server answers with the System One body
+        (`model` = `provider/model`), mapped into the same normalized result as the
+        local lane (`_normalize_decision_result`). Same headers, transport and
+        status errors as `_remote_tts` / `_remote_music`: the sender raises on
+        400 (invalid request), 404 (model not downloaded) and 422 (context overflow)
+        with the server's `detail.error.{message,type}` on the response.
+        """
+
+        questions = spec.get("questions")
+        if not isinstance(questions, dict) or not questions:
+            raise ValueError(
+                "output='decision' needs questions=: a mapping of question name to a question "
+                "({'type': 'choice'|'noul'|'score', 'instructions': ..., 'criteria': ...})."
+            )
+        endpoint_provider = str(spec.get("provider") or "").strip().lower()
+        endpoint_model = str(spec.get("model") or "").strip()
+        body: Dict[str, Any] = {"state": str(state or ""), "questions": questions}
+        if endpoint_provider and endpoint_model:
+            body["model"] = f"{endpoint_provider}/{endpoint_model}"
+        elif endpoint_model:
+            body["model"] = endpoint_model
+        if spec.get("truncate") is not None:
+            body["truncate"] = bool(spec.get("truncate"))
+
+        url = _join_core_v1_url(self._server_base_url, "/decisions")
+        raw = self._sender.post(url, headers=headers, json=body, timeout=self._timeout_s)
+        wire, _resp_headers = _unwrap_http_response(raw)
+        if not isinstance(wire, dict) or not isinstance(wire.get("answers"), dict):
+            raise ValueError(f"Remote decision returned no answers (POST {url}).")
+        # The server names the model that answered as `provider/model` (its contract);
+        # that is the identity the result reports, the request's route is only a fallback.
+        from abstractcore.decision.pool import split_handle  # type: ignore
+
+        wire_model = str(wire.get("model") or "").strip()
+        decision_provider, decision_model = split_handle(wire_model)
+        decision_provider = decision_provider or endpoint_provider or None
+        decision_model = decision_model or endpoint_model or None
+        metadata: Dict[str, Any] = {
+            "decision": wire,
+            "content": json.dumps(wire.get("answers"), ensure_ascii=False),
+            "model": wire_model or body.get("model"),
+            "provider": "abstractcore-server",
+            "decision_provider": decision_provider,
+            "decision_model": decision_model,
+            "_provider_request": {"url": url, "payload": body},
+        }
+        return _normalize_multimodal_response(
+            {"outputs": {}, "resources": {}, "decision": wire, "metadata": metadata},
+        )
 
     def _resolve_media_for_call(
         self,
@@ -16562,6 +16725,9 @@ class RemoteAbstractCoreLLMClient:
         params: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         params = _normalize_prompt_cache_binding_params(params)
+        schema_request = pop_response_schema(params)
+        if params.get("response_model") is not None:
+            raise StructuredOutputRequestError("Remote generation cannot transport response_model validators; use response_schema data")
         prompt_cache_attribution = params.pop("_prompt_cache_attribution", None)
         # REMOTE MODE DOES NOT STREAM LIVE DELTAS. The AbstractCore server call
         # below is a single non-streaming request (`"stream": False`), so the
@@ -16728,6 +16894,18 @@ class RemoteAbstractCoreLLMClient:
             # This keeps runtime authority even when the actual provider call happens server-side.
             "timeout_s": self._timeout_s,
         }
+
+        if schema_request is not None:
+            schema, schema_name = schema_request
+            # Validate the Runtime schema contract locally; send the ORIGINAL
+            # schema, rather than a derived Pydantic schema with different refs.
+            response_model_from_json_schema(schema, name=schema_name)
+            body["response_format"] = {
+                "type": "json_schema",
+                "json_schema": {"name": schema_name, "schema": schema},
+            }
+        elif params.get("response_format") is not None:
+            body["response_format"] = params["response_format"]
 
         # Dynamic routing support (AbstractCore server feature).
         base_url = params.pop("base_url", None)

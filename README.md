@@ -4,9 +4,26 @@
 
 It is designed for long-running workflows that must survive restarts and explicitly model blocking (human input, timers, external events, subworkflows) without keeping Python stacks alive.
 
-**Version:** 0.15.3 • **Python:** 3.10+
+**Version:** 0.16.0 • **Python:** 3.10+
 
 **Status:** pre-1.0 (API may evolve). For production use, pin versions and follow `CHANGELOG.md`.
+
+## What's new in 0.16.0
+
+- **Calibrated decisions**: an `LLM_CALL` whose output says `modality: "decision"` returns typed answers
+  (`answers`, `decision`) from a decision model instead of generated text; `run_facade.decide(...)` runs one as a
+  durable child run and the `decide` VisualFlow node asks a choice, yes/no or score question. Requires AbstractCore
+  2.32.0. See [docs/integrations/abstractcore.md](docs/integrations/abstractcore.md).
+- **Conversational questions and guidance**: `ASK_USER` can ask an essential question (waits indefinitely) or a timed
+  clarification with a declared fallback; `Runtime.steer(..., display_text=)` records human guidance in its exact
+  words; opt-in public updates and tool-approval `public_action` context appear in the replay view.
+- **Model residency in words**: fit refusals are never retried and keep their typed fields on the ledger, residency
+  rows carry the slot pool (`slots`, `active`, `queued`, ...) and name who holds a model, and the config facade reads
+  and sets a local model's loaded context (`configured_model_context`, `set_model_context`).
+- **Structured output across process boundaries**: JSON schemas travel as data and validators are built where
+  inference runs, for local, remote and hybrid clients alike.
+- **Voice transport is not a turn attachment** in history bundles and conversation search. Full list:
+  [CHANGELOG.md](CHANGELOG.md#0160---2026-11-02).
 
 ## What's new in 0.15.3
 
@@ -77,8 +94,8 @@ Remote-light runtime:
 pip install abstractruntime
 ```
 
-The base install includes AbstractCore 2.30.0 or newer (its light install:
-remote providers, tools, vision, voice, audio, and music integration), plus the
+The base install includes AbstractCore 2.32.0 or newer (its light install:
+remote providers, tools, vision, voice, audio, music, and decision integration), plus the
 `abstractruntime-mcp-worker` entry point. It keeps inference remote/light by
 default: local engines such as MLX, vLLM, HuggingFace/Torch, Diffusers, and
 sentence-transformer embeddings are not selected unless you choose a hardware
@@ -187,7 +204,7 @@ Drivers + distribution:
 - run history export: `export_run_history_bundle(...)` (`src/abstractruntime/history_bundle.py`)
 
 Runtime-owned integrations:
-- AbstractCore (LLM + tools, `MODEL_RESIDENCY` with residency locks and context estimates, public discovery/host/run facades, cached sessions with per-session prompt-cache listing/clearing, host memory snapshots, local-only prompt-cache export/import admin, durable bloc prompt-cache controls, bindings, lifecycle operations, generated image/video/voice/music outputs with progress events, host email helpers, Telegram host wrappers, and tool approval waits): `docs/integrations/abstractcore.md`
+- AbstractCore (LLM + tools, `MODEL_RESIDENCY` with residency locks and context estimates, public discovery/host/run facades, cached sessions with per-session prompt-cache listing/clearing, host memory snapshots, local-only prompt-cache export/import admin, durable bloc prompt-cache controls, bindings, lifecycle operations, generated image/video/voice/music outputs with progress events, calibrated decisions (`decide`), host email helpers, Telegram host wrappers, and tool approval waits): `docs/integrations/abstractcore.md`
 - AbstractCore models and engines for hosts: `config_facade` passes through the host profile, local-engine status and installs, the model catalog with fit verdicts, installed models, deletes, host jobs (with who-cancelled attribution) and the embeddable console screens: `docs/integrations/abstractcore.md#models-engines-and-host-jobs-config-facade`
 - For outbound comms, use the durable run facade when the send belongs to a run: `get_abstractcore_run_facade(...).send_email(...)` / `send_telegram_message(...)`. If that child run pauses for approval or passthrough execution, resume it through `resume_tool_calls(...)`. Direct host-facade send helpers and the standalone email comms facade remain host-local and nondurable.
 - AbstractMemory TripleStore integration for `MEMORY_KG_*` effects. Runtime
@@ -222,6 +239,14 @@ sr = create_scheduled_runtime(
     ledger_store=JsonlLedgerStore("./data"),
 )
 ```
+
+## For AI agents
+
+Register and use the [`abstractruntime` agent skill](https://github.com/lpalbou/AbstractRuntime/tree/main/skills/abstractruntime)
+to operate durable workflows, waits, storage and AbstractCore integration. Copy
+`skills/abstractruntime/` from the checkout matching your package version into
+your agent's skills directory. Start with its install verification, then use the
+linked documentation for the installed version.
 
 ## Documentation
 

@@ -14,7 +14,7 @@ import keyword
 import re
 import textwrap
 from copy import deepcopy
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from ..flow import Flow
 from ...utils.workspace_paths import (
@@ -26,7 +26,7 @@ from ...utils.workspace_paths import (
 )
 
 from .agent_ids import visual_react_workflow_id
-from .builtins import get_builtin_handler
+from .builtins import control_compare, get_builtin_handler
 from .code_executor import create_code_handler, ensure_code_permissions_allowed, normalize_code_permissions
 from .execution_metrics import capture_execution_start, finish_execution_metrics
 from .function_library import compile_function_library
@@ -576,6 +576,7 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
         "image_to_video",
         "generate_voice",
         "generate_music",
+        "decide",
         "transcribe_audio",
         "listen_voice",
         "tool_calls",
@@ -2472,6 +2473,8 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
             return _create_generate_voice_handler(data, effect_config)
         if effect_type == "generate_music":
             return _create_generate_music_handler(data, effect_config)
+        if effect_type == "decide":
+            return _create_decide_handler(data, effect_config)
         if effect_type == "transcribe_audio":
             return _create_transcribe_audio_handler(data, effect_config)
         if effect_type == "listen_voice":
@@ -3437,6 +3440,114 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
 
         return handler
 
+    def _create_decide_handler(data: Dict[str, Any], config: Dict[str, Any]):
+        """`decide`: one calibrated decision, lowered to an `LLM_CALL` whose output
+        spec is `{"modality": "decision", "questions": ...}`. Single-question form:
+        `state`, `question`, `question_type` (`choice` | `noul` | `score`, default
+        `choice`), `options` (choice: names list or `{name: description}`), `levels`
+        (score: ordered labels) -> `questions = {"answer": {...}}`. Advanced form: a
+        wired non-empty `questions` object replaces the single question. `model`
+        (optional `provider/model` or bare handle), `truncate` (optional bool).
+        Outputs `answer`, the typed pins, `answers`, `decision`, `model`, `content`
+        are filled from the effect result by the compiler."""
+
+        def _single_question(payload: Dict[str, Any]) -> Dict[str, Any]:
+            question_type = (_nonempty_str(_input_or_config(payload, config, "question_type", default="choice")) or "").strip().lower()
+            if question_type not in ("choice", "noul", "score"):
+                raise ValueError("decide `question_type` must be one of choice, noul, score.")
+            question = _nonempty_str(_input_or_config(payload, config, "question"))
+            if not question:
+                raise ValueError("decide requires `question` as a non-empty string (or a `questions` object).")
+            spec: Dict[str, Any] = {"type": question_type, "instructions": question}
+            if question_type == "choice":
+                # Same cleaning as the editor's preflight: names trimmed, blank rows (an option
+                # being typed) and repeats dropped. Forms: ["a", "b"], [{"name": "a",
+                # "description": ...}], {"a": "description"}.
+                options = _input_or_config(payload, config, "options")
+                items: List[Tuple[str, Any]] = []
+                if isinstance(options, dict):
+                    items = [(str(name), description) for name, description in options.items()]
+                elif isinstance(options, list):
+                    for item in options:
+                        if isinstance(item, dict):
+                            items.append((str(item.get("name") or ""), item.get("description")))
+                        else:
+                            items.append((str(item) if item is not None else "", None))
+                else:
+                    raise ValueError("decide `options` must be a list of option names or a {name: description} object for a choice question.")
+                criteria: Dict[str, Any] = {}
+                for name, description in items:
+                    clean = name.strip()
+                    if clean and clean not in criteria:
+                        criteria[clean] = description if isinstance(description, str) and description.strip() else None
+                if not criteria:
+                    raise ValueError("decide `options` needs at least one option name for a choice question.")
+                spec["criteria"] = criteria
+            elif question_type == "score":
+                levels = _input_or_config(payload, config, "levels")
+                if not isinstance(levels, list):
+                    raise ValueError("decide `levels` must be a list of level labels (lowest first) for a score question.")
+                labels = [str(level).strip() for level in levels if _nonempty_str(level)]
+                if len(labels) < 2:
+                    raise ValueError("decide `levels` needs at least two level labels (lowest first) for a score question.")
+                spec["criteria"] = labels
+            return spec
+
+        def handler(input_data: Any):
+            payload = _dict_input(input_data)
+            state = _input_or_config(payload, config, "state", default="")
+            if not isinstance(state, str) or not state.strip():
+                raise ValueError("decide requires `state` as a non-empty string.")
+            questions = _input_or_config(payload, config, "questions")
+            if questions is not None and not isinstance(questions, dict):
+                raise ValueError("decide requires `questions` as a non-empty object.")
+            if not questions:
+                questions = {"answer": _single_question(payload)}
+
+            output_spec: Dict[str, Any] = {"modality": "decision", "questions": dict(questions)}
+
+            truncate_raw = _input_or_config(payload, config, "truncate", default=None)
+            if truncate_raw is not None:
+                output_spec["truncate"] = _coerce_bool(truncate_raw)
+
+            # `provider` comes from the node's own pin only (the editor's decision-provider
+            # picker): `effectConfig.provider` is the text runtime of llm_call-style nodes,
+            # never a decision selector. A `provider/model` handle in `model` still names its
+            # own provider (AbstractCore splits it).
+            provider = _nonempty_str(_dict_input(payload).get("provider"))
+            model = _nonempty_str(_input_or_config(payload, config, "model"))
+            if provider:
+                output_spec["provider"] = provider.strip().lower()
+            if model:
+                output_spec["model"] = model
+
+            pending: Dict[str, Any] = {
+                "type": "llm_call",
+                "prompt": state,
+                "system_prompt": "",
+                "tools": [],
+                "params": {},
+                "output": output_spec,
+            }
+            return {
+                "answer": None,
+                "choice": None,
+                "confidence": None,
+                "probabilities": None,
+                "noul": None,
+                "verdict": None,
+                "score": None,
+                "level": None,
+                "answers": None,
+                "decision": None,
+                "model": None,
+                "content": None,
+                "success": None,
+                "_pending_effect": pending,
+            }
+
+        return handler
+
     def _create_transcribe_audio_handler(data: Dict[str, Any], config: Dict[str, Any]):
         def handler(input_data: Any):
             payload = _dict_input(input_data)
@@ -3517,17 +3628,20 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
             choices = input_data.get("choices", []) if isinstance(input_data, dict) else []
             allow_free_text = config.get("allowFreeText", True)
 
+            question = input_data.get("question") if isinstance(input_data, dict) else None
+            if question is None:
+                question = config.get("question")
+            pending = {
+                "type": "ask_user", "prompt": prompt, "choices": choices, "allow_free_text": allow_free_text,
+            }
+            if question is not None:
+                pending["question"] = question
             return {
                 "response": f"[User prompt: {prompt}]",
                 "prompt": prompt,
                 "choices": choices,
                 "allow_free_text": allow_free_text,
-                "_pending_effect": {
-                    "type": "ask_user",
-                    "prompt": prompt,
-                    "choices": choices,
-                    "allow_free_text": allow_free_text,
-                },
+                "_pending_effect": pending,
             }
 
         return handler
@@ -4751,6 +4865,12 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
         # Their runtime semantics are handled in `abstractflow.adapters.control_adapter`.
         if type_str in ("sequence", "parallel"):
             return lambda x: x
+
+        if type_str == "compare":
+            # A refused comparison names its node (ADR 0049; builtins.control_compare).
+            label = data.get("label") if isinstance(data, dict) else None
+            node_name = f"'{label}' (node {node_id})" if isinstance(label, str) and label.strip() else f"(node {node_id})"
+            return _wrap_builtin(lambda inputs: control_compare(inputs, node=node_name), data)
 
         builtin = get_builtin_handler(type_str)
         if builtin:

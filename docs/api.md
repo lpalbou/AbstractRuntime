@@ -71,7 +71,7 @@ Implementation: `src/abstractruntime/core/runtime.py`.
   - optional `step_gate()` is consulted at every step boundary; when it returns `False` the tick returns the persisted state and the run stays `RUNNING` (a later tick continues where it stopped)
 - `Runtime.resume(workflow, run_id, wait_key, payload, max_steps=...) -> RunState`
   - validates the `wait_key`, writes `payload` to `WaitState.result_key` (if set), and continues from `WaitState.resume_to_node`
-  - a wait is resumed at most once: a resume of a run that is no longer waiting, or that waits on another key, raises `StaleResumeError` (a `ValueError`), for example when another caller resumed it first
+  - a wait is resumed at most once: a resume of a run that is no longer waiting, or that waits on another key, raises `StaleResumeError` (a `ValueError`); replies to recognized conversational questions are instead retained without answering or resuming another question (below)
   - the check and the commit run under a per-run lock, and tools approved with `{"approved": true}` execute while that lock is held, so a long tool delays a competing resume of the same run, which is then refused
 - `run_mutation_lock(run_id)` (package root): the per-run, per-process, re-entrant lock that `tick` holds for the whole tick and `resume` for its commit; take it around your own read-modify-save of a run so a tick cannot overwrite your change
 - `Runtime.get_state(run_id) -> RunState` and `Runtime.get_ledger(run_id) -> list[dict]`
@@ -88,6 +88,96 @@ Effect cancellation helpers (`src/abstractruntime/core/effect_cancellation.py`):
 - `inflight_effects(run_ids=None)` lists executing effects (run, step, provider, model, elapsed time)
 - `request_model_effects_cancel(provider, model, cancelled_by="model_eject")` stops the effects using a model before it is unloaded; local `unload_model_residency` calls it for you
 - `kill_inflight_effect(step_id, killed_by=...)` is an in-process hard stop for a call that ignores its cancel event (it cannot interrupt a thread blocked inside one native call)
+
+### Conversational questions and deadlines
+
+`ASK_USER` retains its indefinite legacy behavior when `payload.question` is absent.
+For a conversational question, add exactly one of these policies alongside the existing
+`prompt`, `choices` and `allow_free_text` fields:
+
+```json
+{"importance": "essential"}
+```
+
+```json
+{"importance": "clarification", "timeout_s": 120, "fallback": "Compare both options before choosing."}
+```
+
+Essential questions have no deadline or fallback. Clarifications require a numeric duration
+from 120 through 300 seconds and a nonempty, predeclared safe fallback. Extra policy fields
+are refused. Time passing never grants tool approval or permission to perform an action.
+Flows may supply the same object through the AskUser `question` input or `effectConfig.question`.
+
+Every logical issuance has a fresh `wait_key` (`question:<id>`). Its persisted
+`waiting.details.question` contains `id`, `purpose: "conversation"`, `importance`,
+`published_at`, `deadline` and `fallback` (the last two are null for essential questions).
+The existing `waiting.prompt` remains the question text. Resume with the exact key and
+`{"response": "the person's words"}`. Empty responses and approval payloads are refused.
+
+The server arbitrates at commit time: a response before the deadline wins; at or after it,
+expiry wins even if the due scan has not run. An answer result carries
+`question: {id, outcome: "answered"}`. Expiry produces
+`{timed_out: true, fallback: "...", question: {id, outcome: "expired"}}` with no `response`.
+Hosts and actors must present this as a host-authored continuation, never as human speech.
+Cancellation records a `cancelled` outcome and does not continue the workflow.
+
+Explicit pause suppresses timeout continuation. The original deadline survives pause and
+restart; after explicit resume, an overdue question resolves before further work. A reply to
+a paused, expired or already resolved recognized question is retained in the ledger, with
+its reason, and does not answer a newer question. The small outcome index retains 64 entries;
+full outcomes and retained replies remain in the ledger. Outcome receipts are authoritative
+across a crash before the following checkpoint save.
+
+Memory, JSON and SQLite run stores index these USER deadlines through their existing due-wait
+queries. The existing scheduler/host runner advances them; Runtime does not install a timer
+service. Resolution uses process-local locks and the existing single-writer authority for
+the store; it is not a distributed multi-writer transaction. Legacy EVENT deadlines and
+tool-approval waits retain their own contracts.
+
+### Public conversation and accepted guidance
+
+An opt-in actor may inherit `_runtime.conversation: {enabled: true}` through native child
+workflows and VisualFlow Agent nodes. This flag does not create an extra inference call.
+Public updates enter replay only through an explicit completed `EMIT_EVENT` named
+`public_update`, with payload `id`, `text`, `run_id`, optional `session_id`, `iteration`,
+`source_call_ids` and optional `kind` (`"progress"` or `"finding"`, replayed as the message's
+`update_kind`). The event's owner must match `run_id`; private diary/thinking fences are
+excluded. See [replay.md](replay.md#public-conversation-messages).
+
+Actors may attach `public_action` to a proposed `TOOL_CALLS` payload with `text`,
+`update_id`, `run_id`, positive integer `iteration` and `call_ids`. The text is the
+actor's public stated purpose (nonblank, at most 600 characters), not execution
+proof. The adapter owns its binding to an accepted public update and unchanged
+proposed calls. Runtime checks the owning run and exact effect call IDs, then
+narrows the metadata to the actual calls requiring approval. Mismatched targets,
+unknown or duplicate IDs, malformed metadata and private fences withhold the
+explanation without changing the approval policy. Valid context appears at
+`waiting.details.public_action` and the canonical replay interaction's `details`.
+Clients verify its run and exact pending IDs before presenting it. An absent
+explanation must not be replaced with private reasoning or a guessed purpose.
+Hosts with an earlier approval boundary can share
+`abstractruntime.integrations.abstractcore.effect_handlers.approval_public_action(run, payload, host_calls, waiting_calls)`.
+Pass the original effect payload and host calls plus the exact gated subset. The return
+value is validated narrowed metadata or `None`; compute it before replacing a delegated
+payload's `tool_calls`, and carry only that returned context forward. This helper grants
+no permission and changes no approval policy.
+
+For human input during work, `Runtime.steer(run_id, message, display_text=words, speaker=...)`
+keeps the existing durable guidance path and adds a public acceptance receipt only when
+`display_text` is explicitly supplied. `message` may contain quoted context; `display_text`
+preserves the person's exact original words (nonblank, at most 65,536 characters).
+Operational steering without this field does not become public human history.
+Hosts may supply `client_message_id` for correlation; it is preserved on the reserved
+receipt and replay message, independently of the sidecar sequence and message id.
+An accepted receipt means the words were durably queued; the actor's later response is the
+evidence that it considered or adopted them. It does not undo an action already performed.
+
+If the sidecar append succeeds and the public-receipt append fails, admission still succeeds:
+the exact words remain in the sidecar and the host logs a repair warning. Delivery repairs
+the receipt before acknowledging that source. A terminal run does not promise another actor
+boundary; its retained sidecar remains recoverable rather than being reported as refused.
+Entity visits use the narrower participant-checked visit door and fresh attributed recall,
+described in [entity-runtime.md](entity-runtime.md#live-visit-corrections).
 
 Tool scope: an explicit `allowed_tools` list in `run.vars["_runtime"]`, in a child run's `_runtime`, or in a `TOOL_CALLS` payload is a ceiling intersected across the run tree (`src/abstractruntime/core/tool_scope.py`). Approval policy can remove a prompt but can never grant a tool outside it; a missing key means unrestricted and an empty list denies every tool.
 
@@ -187,6 +277,13 @@ Implementation: `src/abstractruntime/core/policy.py`.
 - `EffectPolicy` protocol and implementations: `DefaultEffectPolicy`, `RetryPolicy`, `NoRetryPolicy`
 - `compute_idempotency_key(...)` helper
 
+The AbstractCore runtime factories default to three total LLM attempts and one
+tool attempt, with exponential backoff starting at one second and capped at
+30 seconds. Supply `effect_policy=NoRetryPolicy()` to disable Runtime retries;
+the provider may have its own retry policy. Deterministic structured-request
+and serialization refusals are nonretryable. Inspect a returned run's status
+and error even when `tick(...)` itself returns normally.
+
 Docs: `architecture.md` (reliability section).
 
 ## WorkflowBundles (`.flow`) and VisualFlow distribution
@@ -201,8 +298,8 @@ VisualFlow compiler helpers are available from `abstractruntime.visualflow_compi
 - `compile_visualflow(...)` and `compile_visualflow_tree(...)` compile VisualFlow JSON into executable `WorkflowSpec` objects.
 
 VisualFlow authoring note (media and document nodes):
-- Runtime recognizes first-class VisualFlow media nodes such as `generate_image`, `edit_image`, `image_to_image`, `upscale_image`, `image_upscale`, `generate_video`, `text_to_video`, `image_to_video`, `generate_voice`, `generate_music`, `transcribe_audio`, and `listen_voice`.
-- Generated-media and transcription nodes lower to a durable `EffectType.LLM_CALL` with an `output` selector (for example `{"modality":"music","task":"music_generation"}`), while `listen_voice` lowers to `WAIT_EVENT`. Hosts should persist the authoring node type rather than pre-lowering to `llm_call`.
+- Runtime recognizes first-class VisualFlow media nodes such as `generate_image`, `edit_image`, `image_to_image`, `upscale_image`, `image_upscale`, `generate_video`, `text_to_video`, `image_to_video`, `generate_voice`, `generate_music`, `decide`, `transcribe_audio`, and `listen_voice`.
+- Generated-media and transcription nodes lower to a durable `EffectType.LLM_CALL` with an `output` selector (for example `{"modality":"music","task":"music_generation"}`), while `listen_voice` lowers to `WAIT_EVENT`. The `decide` node asks ONE question about a state (inputs `state`, `question`, `question_type` = `choice` | `noul` | `score`, `options` for a choice, `levels` for a score, `provider`, `model`, `truncate`) and fills the typed output pins of that type (`answer` plus `choice`/`confidence`/`probabilities`, `noul`/`verdict`, or `score`/`level`/`confidence`/`probabilities`, with `model` and `success`); a wired `questions` object (several System One questions) replaces the single question and fills `answers`. It lowers to the same `LLM_CALL` with `{"modality":"decision","questions":{...}}` and the state as the prompt; see [decisions](integrations/abstractcore.md#decisions). Hosts should persist the authoring node type rather than pre-lowering to `llm_call`.
 - Runtime also recognizes file/document nodes. `read_file` and `write_file`
   handle UTF-8 text/JSON workspace paths. In Gateway-hosted runs, those paths
   follow the shared canonical contract: `rel/path` for the main workspace root
@@ -332,6 +429,13 @@ This produces a portable record of a run’s state + ledger + artifacts suitable
 When available, it also includes `resolved_actions`: bounded capability/action summaries derived
 from Core route resolution and persisted from `LLM_CALL` results.
 
+Voice transport is never part of a conversation turn: the recording of a spoken question and the
+read-aloud audio synthesized from an answer are left out of each session turn's `attachments` and
+`artifacts`. `is_voice_transport(tags)` (in `abstractruntime.history_bundle`) recognizes them:
+`purpose` `voice_playback` or `voice_dictation`, `artifact_space` `voice`, or a `voice/` or
+`client:voice/` path. The bundle's own `artifacts` section stays complete, and conversation search
+applies the same rule.
+
 ## Replay view (one reconstruction of a run, every client)
 
 Implementation: `src/abstractruntime/replay/` (ADR 0010). Guide: [replay.md](replay.md).
@@ -355,7 +459,7 @@ Implementation: `src/abstractruntime/replay/` (ADR 0010). Guide: [replay.md](rep
 
 ### AbstractCore (LLM + tools)
 
-Requires: `pip install abstractruntime` (AbstractCore 2.30.0 or newer is part of the base install).
+Requires: `pip install abstractruntime` (AbstractCore 2.32.0 or newer is part of the base install).
 
 Implementation: `src/abstractruntime/integrations/abstractcore/*`.
 
@@ -379,7 +483,7 @@ Entry points:
 - local `list_model_residency` merges AbstractCore's host-wide loaded-model sweep into text-generation listings (sweep-only rows carry `source: "provider_server"` and no `task` label), and residency rows normalize provider size extras to `size_bytes` / `size_vram_bytes` while keeping the originals; local text rows also carry registry-declared `modalities` (omitted on a registry miss), host identity (`host_id` / `host_name`), and runtime-owned lock truth (`locked` / `lockable`, with `pinned` a truthful alias of `locked` — never the default-identity flag, which `default` alone carries), while remote listings keep the Core server's row identity
 - host-local prompt-cache export/import admin also lives on the host facade and client delegation layer (`list_prompt_cache_exports`, `prompt_cache_export`, `prompt_cache_import`) and is intentionally local-only
 - host-facade email helpers (`list_email_accounts`, `list_emails`, `read_email`, `send_email`) use the process's own AbstractCore account (single-user installs)
-- run-facade helpers create and resume durable child runs for existing runs (`execute_llm_call`, `execute_tool_calls`, `resume_tool_calls`, `generate_image`, `edit_image`, `upscale_image`, `generate_video`, `image_to_video`, `generate_voice`, `generate_music`, `transcribe_audio`, `send_email`, `send_telegram_message`)
+- run-facade helpers create and resume durable child runs for existing runs (`execute_llm_call`, `execute_tool_calls`, `resume_tool_calls`, `generate_image`, `edit_image`, `upscale_image`, `generate_video`, `image_to_video`, `generate_voice`, `generate_music`, `decide`, `transcribe_audio`, `send_email`, `send_telegram_message`)
 - task-specific image/video helpers preserve batch and adapter controls such as
   `count`/`n`, `seeds`, ordered `lora_adapters`, and video `flow_shift`; local
   subprocess isolation stays within the same public contract.
@@ -396,15 +500,17 @@ Execution controls and cancellation:
 - `media`: a media path, artifact ref (`{"$artifact": "..."}` or `{"artifact_id": "..."}`), media dict, or list of those
 - `output`: AbstractCore output selector; top-level `outputs` is accepted as a runtime alias
 - `params`: provider/model routing, generation controls, prompt-cache keys or `prompt_cache_binding`, structured-output schema options, and tracing metadata
+- `response_schema` / `response_schema_name`: JSON schema data and name for a structured result at `result.data`; local execution creates the validator at the provider boundary. Structured calls do not stream tokens. Remote/hybrid clients forward an OpenAI JSON-schema response format; Python validator classes cannot cross HTTP. See [structured responses](integrations/abstractcore.md#structured-responses).
 
 Multimodal support:
 - common remote-light AbstractCore media, vision, voice, audio, and music dependencies are part of the base Runtime install
 - local clients call AbstractCore's unified `generate(..., media=..., output=...)`
-- remote and hybrid clients support AbstractCore Server chat media content arrays plus image generation, image edits, image upscaling, text-to-video, image-to-video, speech, music generation, and transcription endpoints; pass an output-specific `model` for remote media provider routing, otherwise the server endpoint can use its configured capability default
+- remote and hybrid clients support AbstractCore Server chat media content arrays plus image generation, image edits, image upscaling, text-to-video, image-to-video, speech, music generation, transcription, and decision (`POST /v1/decisions`) endpoints; pass an output-specific `model` for remote media provider routing, otherwise the server endpoint can use its configured capability default
 - remote transcription requires one audio media item that resolves to a local file path or artifact-backed temporary file
 - generated image/video/voice/music/audio bytes require a runtime `ArtifactStore`; the result contains `artifact_id` / `artifact_ref` instead of inline bytes
+- a decision (`output: {"modality": "decision", "questions": {...}}`, the state as the prompt) is typed answers, not bytes: no `ArtifactStore` is needed, and the result carries `content` (the answers as JSON), `decision` (`model`, `answers`, `usage`, `latency_ms`, optional `truncated`), `answers`, and the `provider` / `model` of the decision model; the resolved action id is `decision`. Without a `model` the call uses the `output.decision` capability default, so a text runtime on any provider can answer decisions once that default is set (see [decisions](integrations/abstractcore.md#decisions))
 - streamed TTS playback artifacts carry `purpose=voice_playback`, `artifact_space=voice` and a logical `voice/tts-<id>.wav` path in their tags; hosts can separate read-aloud recordings from user attachments while retaining their artifact refs and provenance
-- with the pooled local client (`MultiLocalAbstractCoreLLMClient`), a request whose outputs are all non-text (image, video, voice, music, transcription) and that carries no tools never builds the text client: it runs on AbstractCore's capability host (`CapabilityHostProvider`, no text model), and so does streaming TTS. A text default that cannot be built (an engine not installed) therefore never blocks speech or image generation
+- with the pooled local client (`MultiLocalAbstractCoreLLMClient`), a request whose outputs are all non-text (image, video, voice, music, transcription, decision) and that carries no tools never builds the text client: it runs on AbstractCore's capability host (`CapabilityHostProvider`, no text model), and so does streaming TTS. A text default that cannot be built (an engine not installed) therefore never blocks speech or image generation
 - media-only normalized results expose `runtime_provider` / `runtime_model` separately from `media_provider` / `media_model`
 - local image/video generation runs in a one-shot subprocess (`execution_mode="local_one_shot_subprocess"`) unless every requested media model is resident (explicitly loaded with `load_model_residency`), in which case it runs in-process on the loaded pipeline (`execution_mode="resident_in_process"`, `resident_load_ids`)
 - a media spec whose `provider` is an endpoint profile (`endpoint:<id>`) never uses the one-shot subprocess: it is an HTTP call to that endpoint, and the host's endpoint-profile resolver (`set_provider_endpoint_profile_resolver`) exists only in this process
@@ -416,7 +522,7 @@ Prompt cache / cached sessions:
 - LLM clients expose cache control methods listed above for host-side preparation and inspection
 - `LLM_CALL.params.prompt_cache_key` selects a cache key for a call; runtime can also derive a session-scoped key from `run.vars["_runtime"]["prompt_cache"]` or the Runtime-owned `ABSTRACTRUNTIME_PROMPT_CACHE` process default
 - `LLM_CALL.params.prompt_cache_binding` is the durable exact-reuse input for bloc-backed prompt caching; if a binding includes `key`, Runtime adopts it as the effective prompt-cache key and refuses mismatches before provider execution
-- Runtime only auto-derives session prompt-cache keys for text/chat calls; non-text output selectors such as image, voice, music, and transcription keep explicit `prompt_cache_binding` support but do not receive an inferred cache key
+- Runtime only auto-derives session prompt-cache keys for text/chat calls; non-text output selectors such as image, voice, music, decision, and transcription keep explicit `prompt_cache_binding` support but do not receive an inferred cache key
 - when Runtime injects the derived session key, the client stamps session attribution (`session_id`, `run_id`, `workflow_id`, `node_id`, `namespace`) into the cache entry's metadata after each generate; caller-supplied `prompt_cache_key`s and binding keys are never stamped, so session-scoped clearing cannot destroy caches shared across sessions
 - `get_abstractcore_host_facade(...)` exposes `get_memory_snapshot()`, `list_session_prompt_caches(session_id=None)`, and `clear_session_prompt_caches(session_id)`; session caches persist until a host clears them, the owning model is unloaded, or the provider evicts them — completing a run does not clear them
 - `get_abstractcore_host_facade(...)` also exposes durable bloc helpers (`upsert_text_bloc`, `get_bloc_record`, `list_blocs`, `get_bloc_kv_manifest`, `ensure_bloc_kv_artifact`, `load_bloc_kv_artifact`, `list_bloc_kv_artifacts`, `delete_bloc_kv_artifact`, `prune_bloc_kv_artifacts`, `delete_bloc`)
@@ -473,6 +579,8 @@ inside an effect handler. Details: [integrations/abstractmemory.md](integrations
 - `integrations/abstractmemory.md` — memory facade, provenance stamping, `MEMORY_REVISE`
 
 ### Host ASGI serving
+
+`abstractruntime.integrations.abstractcore.server_facade.start_core_server(*, host=None, port=None)` starts Core's optional listener in the calling execution process. It returns a Core-owned handle with `url`, `is_running`, `status()` and `stop()`. Core owns configuration, credentials and HTTP request handling; stopping the listener does not unload resident providers. Omitted bind arguments use Core server settings; explicit port `0` selects an ephemeral port. Startup errors raise to the caller. Importing the facade starts nothing. See [host-managed serving](integrations/abstractcore.md#host-managed-serving).
 
 `abstractruntime.integrations.abstractcore.server_facade.serve_core_request(scope, receive, send, *, token: str, allow_unauthenticated: bool = False)` delegates host-admitted ASGI requests with request-scoped Core authentication. See [host-managed serving](integrations/abstractcore.md#host-managed-serving) for network and credential responsibilities.
 

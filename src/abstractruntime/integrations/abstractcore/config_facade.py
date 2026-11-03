@@ -942,6 +942,33 @@ def list_installed_models(provider: Optional[str] = None) -> Dict[str, Any]:
     return dict(fn(provider or None))
 
 
+#: No released AbstractCore carries `config.model_contexts` yet (it is on Core main after 2.31.1):
+#: the too-old answer names what is missing instead of a version floor.
+MODEL_CONTEXTS_REQUIRED = "an AbstractCore newer than 2.31.1 (with abstractcore.config.model_contexts)"
+
+
+def _model_contexts(feature: str) -> Any:
+    try:
+        return _core_module("config.model_contexts", feature)
+    except AbstractCoreTooOld as exc:
+        raise AbstractCoreTooOld(feature, exc.installed, missing=exc.missing, required=MODEL_CONTEXTS_REQUIRED) from exc
+
+
+def configured_model_context(provider: str, model: str, *, config_file: Optional[Any] = None) -> Optional[int]:
+    """The context (tokens) set for this local model, or None (the fit rule chooses at load).
+    AbstractCore ADR 0010 point 8; raises AbstractCoreTooOld, in words, on an older Core."""
+    mod = _model_contexts("Reading a model's set context")
+    return mod.configured_model_context(provider, model, config_file=config_file)
+
+
+def set_model_context(provider: str, model: str, context_length: Optional[int], *, config_file: Optional[Any] = None) -> Any:
+    """Set (or clear, with None) the context this local model is LOADED with: a pin, loaded as is or
+    refused with the readable sentence, never shrunk (AbstractCore ADR 0010 point 8). Raises
+    ValueError for an invalid value and AbstractCoreTooOld, in words, on an older Core."""
+    mod = _model_contexts("Setting a model's context")
+    return mod.set_model_context(provider, model, context_length, config_file=config_file)
+
+
 def model_delete_blockers(provider: str, artifact: str) -> Dict[str, Any]:
     """What would stop a delete: `{found, row, delete_blockers, error}`. Reads only."""
 
@@ -1124,6 +1151,9 @@ __all__ = [
     "model_catalog",
     "list_installed_models",
     "model_delete_blockers",
+    "configured_model_context",
+    "set_model_context",
+    "MODEL_CONTEXTS_REQUIRED",
     "delete_model_artifact",
     "start_model_download_job",
     "host_jobs_list",

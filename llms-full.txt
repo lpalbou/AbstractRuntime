@@ -55,9 +55,26 @@ See llms.txt for the linked index.
 
 It is designed for long-running workflows that must survive restarts and explicitly model blocking (human input, timers, external events, subworkflows) without keeping Python stacks alive.
 
-**Version:** 0.15.3 • **Python:** 3.10+
+**Version:** 0.16.0 • **Python:** 3.10+
 
 **Status:** pre-1.0 (API may evolve). For production use, pin versions and follow `CHANGELOG.md`.
+
+## What's new in 0.16.0
+
+- **Calibrated decisions**: an `LLM_CALL` whose output says `modality: "decision"` returns typed answers
+  (`answers`, `decision`) from a decision model instead of generated text; `run_facade.decide(...)` runs one as a
+  durable child run and the `decide` VisualFlow node asks a choice, yes/no or score question. Requires AbstractCore
+  2.32.0. See [docs/integrations/abstractcore.md](docs/integrations/abstractcore.md).
+- **Conversational questions and guidance**: `ASK_USER` can ask an essential question (waits indefinitely) or a timed
+  clarification with a declared fallback; `Runtime.steer(..., display_text=)` records human guidance in its exact
+  words; opt-in public updates and tool-approval `public_action` context appear in the replay view.
+- **Model residency in words**: fit refusals are never retried and keep their typed fields on the ledger, residency
+  rows carry the slot pool (`slots`, `active`, `queued`, ...) and name who holds a model, and the config facade reads
+  and sets a local model's loaded context (`configured_model_context`, `set_model_context`).
+- **Structured output across process boundaries**: JSON schemas travel as data and validators are built where
+  inference runs, for local, remote and hybrid clients alike.
+- **Voice transport is not a turn attachment** in history bundles and conversation search. Full list:
+  [CHANGELOG.md](CHANGELOG.md#0160---2026-11-02).
 
 ## What's new in 0.15.3
 
@@ -128,8 +145,8 @@ Remote-light runtime:
 pip install abstractruntime
 ```
 
-The base install includes AbstractCore 2.30.0 or newer (its light install:
-remote providers, tools, vision, voice, audio, and music integration), plus the
+The base install includes AbstractCore 2.32.0 or newer (its light install:
+remote providers, tools, vision, voice, audio, music, and decision integration), plus the
 `abstractruntime-mcp-worker` entry point. It keeps inference remote/light by
 default: local engines such as MLX, vLLM, HuggingFace/Torch, Diffusers, and
 sentence-transformer embeddings are not selected unless you choose a hardware
@@ -238,7 +255,7 @@ Drivers + distribution:
 - run history export: `export_run_history_bundle(...)` (`src/abstractruntime/history_bundle.py`)
 
 Runtime-owned integrations:
-- AbstractCore (LLM + tools, `MODEL_RESIDENCY` with residency locks and context estimates, public discovery/host/run facades, cached sessions with per-session prompt-cache listing/clearing, host memory snapshots, local-only prompt-cache export/import admin, durable bloc prompt-cache controls, bindings, lifecycle operations, generated image/video/voice/music outputs with progress events, host email helpers, Telegram host wrappers, and tool approval waits): `docs/integrations/abstractcore.md`
+- AbstractCore (LLM + tools, `MODEL_RESIDENCY` with residency locks and context estimates, public discovery/host/run facades, cached sessions with per-session prompt-cache listing/clearing, host memory snapshots, local-only prompt-cache export/import admin, durable bloc prompt-cache controls, bindings, lifecycle operations, generated image/video/voice/music outputs with progress events, calibrated decisions (`decide`), host email helpers, Telegram host wrappers, and tool approval waits): `docs/integrations/abstractcore.md`
 - AbstractCore models and engines for hosts: `config_facade` passes through the host profile, local-engine status and installs, the model catalog with fit verdicts, installed models, deletes, host jobs (with who-cancelled attribution) and the embeddable console screens: `docs/integrations/abstractcore.md#models-engines-and-host-jobs-config-facade`
 - For outbound comms, use the durable run facade when the send belongs to a run: `get_abstractcore_run_facade(...).send_email(...)` / `send_telegram_message(...)`. If that child run pauses for approval or passthrough execution, resume it through `resume_tool_calls(...)`. Direct host-facade send helpers and the standalone email comms facade remain host-local and nondurable.
 - AbstractMemory TripleStore integration for `MEMORY_KG_*` effects. Runtime
@@ -273,6 +290,14 @@ sr = create_scheduled_runtime(
     ledger_store=JsonlLedgerStore("./data"),
 )
 ```
+
+## For AI agents
+
+Register and use the [`abstractruntime` agent skill](https://github.com/lpalbou/AbstractRuntime/tree/main/skills/abstractruntime)
+to operate durable workflows, waits, storage and AbstractCore integration. Copy
+`skills/abstractruntime/` from the checkout matching your package version into
+your agent's skills directory. Start with its install verification, then use the
+linked documentation for the installed version.
 
 ## Documentation
 
@@ -336,8 +361,8 @@ Remote-light runtime:
 pip install abstractruntime
 ```
 
-This installs AbstractCore 2.30.0 or newer with remote provider, vision,
-voice, audio, music, tool, and MCP-worker support. The base install is
+This installs AbstractCore 2.32.0 or newer with remote provider, vision,
+voice, audio, music, decision, tool, and MCP-worker support. The base install is
 remote-light: it can route multimodal workflows to hosted or OpenAI-compatible
 endpoints, but it does not select local inferencer stacks such as MLX, vLLM,
 HuggingFace/Torch, Diffusers, or sentence-transformer embeddings.
@@ -480,8 +505,6 @@ rt = create_local_runtime(provider="ollama", model="qwen3:4b")
 
 # AbstractRuntime — Architecture
 
-> Updated: 2026-10-01
-> Version: 0.8.2
 > Scope: this describes **what is implemented in this repository**.
 
 AbstractRuntime is a **durable workflow runtime**: it executes workflow graphs as a persisted state machine with explicit waits (user, time, events, jobs, subworkflows). A run can pause for hours/days and resume **without** keeping Python stacks/coroutines alive.
@@ -508,12 +531,13 @@ Key invariants (enforced by code, not convention):
 
 ## AbstractCore capability boundary
 
-AbstractRuntime's job is persistence and orchestration. AbstractCore owns model/provider capability execution: chat, structured output, cached sessions/prompt cache, media input analysis, image generation, video generation, voice/audio generation, music generation, and transcription.
+AbstractRuntime's job is persistence and orchestration. AbstractCore owns model/provider capability execution: chat, structured output, cached sessions/prompt cache, media input analysis, image generation, video generation, voice/audio generation, music generation, transcription, and calibrated decisions (typed answers from a decision model).
 
 The boundary is intentionally narrow:
 - Workflow nodes request model work with `EffectType.LLM_CALL`; the runtime persists the request/result and delegates execution to the configured AbstractCore client.
 - `media` inputs remain JSON-safe in the effect payload. Artifact refs are materialized into temporary provider-ready files for the call, then cleaned up.
 - Generated binary outputs are written to `ArtifactStore` and returned as `artifact_id` / `artifact_ref`, keeping `RunState.vars` and ledger records bounded and JSON-safe.
+- A decision (`output: {"modality": "decision", "questions": {...}}`) is an `LLM_CALL` whose result is typed answers, not bytes: it needs no `ArtifactStore`, and the result carries `answers` and `decision` beside `content`.
 - Remote chat media is sent to AbstractCore Server as provider-ready content arrays, but persisted provider-request metadata redacts data URLs so checkpoints and ledgers do not embed media bytes.
 - Provider sessions and prompt-cache objects are not runtime state. Runtime may carry stable cache keys, while AbstractCore clients/servers manage warm caches. Runtime stamps session attribution onto the session-derived cache keys it injects so hosts can list and clear caches per session through the host facade; caller-owned keys stay unstamped, and completing a run does not clear session caches.
 - Hosts should use Runtime-owned AbstractCore facades for discovery snapshots, prompt-cache/model-residency control operations, and durable run-scoped media/comms child runs instead of reaching through private runtime attachments or importing Core internals directly.
@@ -566,6 +590,34 @@ engine installer, host job registry"]
 
 This keeps the runtime usable by `../abstractgateway` and application layers such as `../abstractflow`, `../abstractassistant`, `../abstractobserver`, and `../abstractcode` without embedding provider-specific model logic in the durable kernel.
 
+### Structured execution and optional HTTP serving
+
+Durable `LLM_CALL` payloads keep schemas as JSON-safe data. The execution request
+carries the normalized original schema and its name. The local execution client
+constructs the provider-facing validator where inference runs; the effect handler validates the
+returned object as well. Hosts can place that execution client in a supervised
+process without transporting generated Python classes. A process boundary does
+not turn native execution into a request to the OpenAI-compatible HTTP API.
+
+```mermaid
+flowchart LR
+  Host["Native host"] --> RT["Runtime effect handler"]
+  RT -->|"schema + name as JSON data"| Exec["Local execution client<br/>in the execution process"]
+  Exec -->|"provider-facing validator"| Core["AbstractCore providers<br/>and resident resources"]
+  Core -->|"result"| RT
+  RT -->|"validated result"| Ledger["LedgerStore"]
+  HTTPClient["Optional Core HTTP client"] -->|"Core server credentials"| HTTP["Core HTTP application"]
+  HTTP --> Core
+  Host -.->|"explicit lifecycle only<br/>start_core_server"| HTTP
+```
+
+The optional listener is Core-owned and independently authenticated. Starting or
+stopping it does not create a Runtime run or unload resident model resources.
+Importing Runtime's server facade starts no listener and imports no HTTP
+application. Native execution does not require this listener. See
+[structured responses](integrations/abstractcore.md#structured-responses) and
+[host-managed serving](integrations/abstractcore.md#host-managed-serving).
+
 ### Live token streaming (outside the ledger)
 
 Live text travels on a side channel next to the durable path. A run opts in with `_runtime.stream: true`, the host registers one sink with `Runtime.set_live_delta_sink(sink)`, and each `LLM_CALL` hands a per-call emitter (`src/abstractruntime/core/live_deltas.py`) to the AbstractCore client. The emitter batches fragments (about 40 ms), splits reasoning from content, holds back tool-call markup, and always closes the call with one `llm.delta_end` after the durable record is appended. Nothing on the live path is persisted, so replay and the ledger are the same with streaming on or off. See [Live token streaming](integrations/abstractcore.md#live-token-streaming).
@@ -587,6 +639,14 @@ set_live_delta_sink"]
 ```
 
 ### Model residency in a shared process
+
+Core-managed local loaders reuse compatible resident weights and refuse a
+conflicting allocation of the same canonical artifact before loading it again.
+Some configurations can share weights with separate KV contexts; configurations
+without safe sharing require reuse of the supported profile or an unload first.
+This coordination is process-local. Independent external servers and arbitrary
+plugin/raw-engine allocations need their own ownership policy; starting another
+server process does not join the execution process's resource pool.
 
 In-process models (MLX, HuggingFace, embeddings) belong to the process, not to one runtime. Every multi-local client registers what it still needs (pooled, per-override, locked, being built, default) with AbstractCore's process residency registry. An unload after a default switch or a failed load goes through `eject_unclaimed`, which checks every owner's claims and unloads under one lock, so one service never unloads a model another service, user, entity runtime or the AbstractCore server still uses. A model that is still generating is unloaded when its call ends. See [Unloading and switching models](integrations/abstractcore.md#unloading-and-switching-models).
 
@@ -770,7 +830,7 @@ The kernel defines the protocol; concrete integrations provide handlers:
   `Runtime.set_publish_event_handler(...)` appends the event to the user's stream (see
   [automations.md](automations.md#publish-to-channel))
 - `SCHEDULE_RUN`: the kernel validates the request and plans a one-shot automation (tools at most the caller's ceiling, never `schedule_run` itself); the host's `Runtime.set_schedule_run_handler(...)` creates it, because only the host knows the target workflow, the owner and the workspace (see [automations.md](automations.md#wakes-schedule_run))
-- `LLM_CALL`, `TOOL_CALLS`, `MODEL_RESIDENCY`: provided by AbstractCore integration (`src/abstractruntime/integrations/abstractcore/effect_handlers.py`). The integration supports local/remote/hybrid execution, cached sessions/prompt-cache control with per-session attribution and clearing, host memory snapshots, discovery/catalog snapshots, model residency including host-wide provider-server rows in listings, residency locks with `force`-gated unload and context-estimate relays, durable run-scoped media child runs, media inputs, generated media outputs, provider progress callbacks as ledger events, provider-key header routing for remote servers, passthrough tools, approval-gated local tool execution, and workspace-scoped file and shell tools (run vars `workspace_*`, inherited by child runs; the host's built-in deny prefixes are enforced without being rendered into the model's prompt).
+- `LLM_CALL`, `TOOL_CALLS`, `MODEL_RESIDENCY`: provided by AbstractCore integration (`src/abstractruntime/integrations/abstractcore/effect_handlers.py`). The integration supports local/remote/hybrid execution, cached sessions/prompt-cache control with per-session attribution and clearing, host memory snapshots, discovery/catalog snapshots, model residency including host-wide provider-server rows in listings, residency locks with `force`-gated unload and context-estimate relays, durable run-scoped media and decision child runs, media inputs, generated media outputs, calibrated decisions (`output.modality: "decision"`), provider progress callbacks as ledger events, provider-key header routing for remote servers, passthrough tools, approval-gated local tool execution, and workspace-scoped file and shell tools (run vars `workspace_*`, inherited by child runs; the host's built-in deny prefixes are enforced without being rendered into the model's prompt).
 - `MEMORY_KG_*`: provided by the AbstractMemory bridge (`src/abstractruntime/integrations/abstractmemory/effect_handlers.py`)
 
 ### Reliability: retries + idempotency
@@ -1087,7 +1147,7 @@ Implementation: `src/abstractruntime/core/runtime.py`.
   - optional `step_gate()` is consulted at every step boundary; when it returns `False` the tick returns the persisted state and the run stays `RUNNING` (a later tick continues where it stopped)
 - `Runtime.resume(workflow, run_id, wait_key, payload, max_steps=...) -> RunState`
   - validates the `wait_key`, writes `payload` to `WaitState.result_key` (if set), and continues from `WaitState.resume_to_node`
-  - a wait is resumed at most once: a resume of a run that is no longer waiting, or that waits on another key, raises `StaleResumeError` (a `ValueError`), for example when another caller resumed it first
+  - a wait is resumed at most once: a resume of a run that is no longer waiting, or that waits on another key, raises `StaleResumeError` (a `ValueError`); replies to recognized conversational questions are instead retained without answering or resuming another question (below)
   - the check and the commit run under a per-run lock, and tools approved with `{"approved": true}` execute while that lock is held, so a long tool delays a competing resume of the same run, which is then refused
 - `run_mutation_lock(run_id)` (package root): the per-run, per-process, re-entrant lock that `tick` holds for the whole tick and `resume` for its commit; take it around your own read-modify-save of a run so a tick cannot overwrite your change
 - `Runtime.get_state(run_id) -> RunState` and `Runtime.get_ledger(run_id) -> list[dict]`
@@ -1104,6 +1164,96 @@ Effect cancellation helpers (`src/abstractruntime/core/effect_cancellation.py`):
 - `inflight_effects(run_ids=None)` lists executing effects (run, step, provider, model, elapsed time)
 - `request_model_effects_cancel(provider, model, cancelled_by="model_eject")` stops the effects using a model before it is unloaded; local `unload_model_residency` calls it for you
 - `kill_inflight_effect(step_id, killed_by=...)` is an in-process hard stop for a call that ignores its cancel event (it cannot interrupt a thread blocked inside one native call)
+
+### Conversational questions and deadlines
+
+`ASK_USER` retains its indefinite legacy behavior when `payload.question` is absent.
+For a conversational question, add exactly one of these policies alongside the existing
+`prompt`, `choices` and `allow_free_text` fields:
+
+```json
+{"importance": "essential"}
+```
+
+```json
+{"importance": "clarification", "timeout_s": 120, "fallback": "Compare both options before choosing."}
+```
+
+Essential questions have no deadline or fallback. Clarifications require a numeric duration
+from 120 through 300 seconds and a nonempty, predeclared safe fallback. Extra policy fields
+are refused. Time passing never grants tool approval or permission to perform an action.
+Flows may supply the same object through the AskUser `question` input or `effectConfig.question`.
+
+Every logical issuance has a fresh `wait_key` (`question:<id>`). Its persisted
+`waiting.details.question` contains `id`, `purpose: "conversation"`, `importance`,
+`published_at`, `deadline` and `fallback` (the last two are null for essential questions).
+The existing `waiting.prompt` remains the question text. Resume with the exact key and
+`{"response": "the person's words"}`. Empty responses and approval payloads are refused.
+
+The server arbitrates at commit time: a response before the deadline wins; at or after it,
+expiry wins even if the due scan has not run. An answer result carries
+`question: {id, outcome: "answered"}`. Expiry produces
+`{timed_out: true, fallback: "...", question: {id, outcome: "expired"}}` with no `response`.
+Hosts and actors must present this as a host-authored continuation, never as human speech.
+Cancellation records a `cancelled` outcome and does not continue the workflow.
+
+Explicit pause suppresses timeout continuation. The original deadline survives pause and
+restart; after explicit resume, an overdue question resolves before further work. A reply to
+a paused, expired or already resolved recognized question is retained in the ledger, with
+its reason, and does not answer a newer question. The small outcome index retains 64 entries;
+full outcomes and retained replies remain in the ledger. Outcome receipts are authoritative
+across a crash before the following checkpoint save.
+
+Memory, JSON and SQLite run stores index these USER deadlines through their existing due-wait
+queries. The existing scheduler/host runner advances them; Runtime does not install a timer
+service. Resolution uses process-local locks and the existing single-writer authority for
+the store; it is not a distributed multi-writer transaction. Legacy EVENT deadlines and
+tool-approval waits retain their own contracts.
+
+### Public conversation and accepted guidance
+
+An opt-in actor may inherit `_runtime.conversation: {enabled: true}` through native child
+workflows and VisualFlow Agent nodes. This flag does not create an extra inference call.
+Public updates enter replay only through an explicit completed `EMIT_EVENT` named
+`public_update`, with payload `id`, `text`, `run_id`, optional `session_id`, `iteration`,
+`source_call_ids` and optional `kind` (`"progress"` or `"finding"`, replayed as the message's
+`update_kind`). The event's owner must match `run_id`; private diary/thinking fences are
+excluded. See [replay.md](replay.md#public-conversation-messages).
+
+Actors may attach `public_action` to a proposed `TOOL_CALLS` payload with `text`,
+`update_id`, `run_id`, positive integer `iteration` and `call_ids`. The text is the
+actor's public stated purpose (nonblank, at most 600 characters), not execution
+proof. The adapter owns its binding to an accepted public update and unchanged
+proposed calls. Runtime checks the owning run and exact effect call IDs, then
+narrows the metadata to the actual calls requiring approval. Mismatched targets,
+unknown or duplicate IDs, malformed metadata and private fences withhold the
+explanation without changing the approval policy. Valid context appears at
+`waiting.details.public_action` and the canonical replay interaction's `details`.
+Clients verify its run and exact pending IDs before presenting it. An absent
+explanation must not be replaced with private reasoning or a guessed purpose.
+Hosts with an earlier approval boundary can share
+`abstractruntime.integrations.abstractcore.effect_handlers.approval_public_action(run, payload, host_calls, waiting_calls)`.
+Pass the original effect payload and host calls plus the exact gated subset. The return
+value is validated narrowed metadata or `None`; compute it before replacing a delegated
+payload's `tool_calls`, and carry only that returned context forward. This helper grants
+no permission and changes no approval policy.
+
+For human input during work, `Runtime.steer(run_id, message, display_text=words, speaker=...)`
+keeps the existing durable guidance path and adds a public acceptance receipt only when
+`display_text` is explicitly supplied. `message` may contain quoted context; `display_text`
+preserves the person's exact original words (nonblank, at most 65,536 characters).
+Operational steering without this field does not become public human history.
+Hosts may supply `client_message_id` for correlation; it is preserved on the reserved
+receipt and replay message, independently of the sidecar sequence and message id.
+An accepted receipt means the words were durably queued; the actor's later response is the
+evidence that it considered or adopted them. It does not undo an action already performed.
+
+If the sidecar append succeeds and the public-receipt append fails, admission still succeeds:
+the exact words remain in the sidecar and the host logs a repair warning. Delivery repairs
+the receipt before acknowledging that source. A terminal run does not promise another actor
+boundary; its retained sidecar remains recoverable rather than being reported as refused.
+Entity visits use the narrower participant-checked visit door and fresh attributed recall,
+described in [entity-runtime.md](entity-runtime.md#live-visit-corrections).
 
 Tool scope: an explicit `allowed_tools` list in `run.vars["_runtime"]`, in a child run's `_runtime`, or in a `TOOL_CALLS` payload is a ceiling intersected across the run tree (`src/abstractruntime/core/tool_scope.py`). Approval policy can remove a prompt but can never grant a tool outside it; a missing key means unrestricted and an empty list denies every tool.
 
@@ -1203,6 +1353,13 @@ Implementation: `src/abstractruntime/core/policy.py`.
 - `EffectPolicy` protocol and implementations: `DefaultEffectPolicy`, `RetryPolicy`, `NoRetryPolicy`
 - `compute_idempotency_key(...)` helper
 
+The AbstractCore runtime factories default to three total LLM attempts and one
+tool attempt, with exponential backoff starting at one second and capped at
+30 seconds. Supply `effect_policy=NoRetryPolicy()` to disable Runtime retries;
+the provider may have its own retry policy. Deterministic structured-request
+and serialization refusals are nonretryable. Inspect a returned run's status
+and error even when `tick(...)` itself returns normally.
+
 Docs: `architecture.md` (reliability section).
 
 ## WorkflowBundles (`.flow`) and VisualFlow distribution
@@ -1217,8 +1374,8 @@ VisualFlow compiler helpers are available from `abstractruntime.visualflow_compi
 - `compile_visualflow(...)` and `compile_visualflow_tree(...)` compile VisualFlow JSON into executable `WorkflowSpec` objects.
 
 VisualFlow authoring note (media and document nodes):
-- Runtime recognizes first-class VisualFlow media nodes such as `generate_image`, `edit_image`, `image_to_image`, `upscale_image`, `image_upscale`, `generate_video`, `text_to_video`, `image_to_video`, `generate_voice`, `generate_music`, `transcribe_audio`, and `listen_voice`.
-- Generated-media and transcription nodes lower to a durable `EffectType.LLM_CALL` with an `output` selector (for example `{"modality":"music","task":"music_generation"}`), while `listen_voice` lowers to `WAIT_EVENT`. Hosts should persist the authoring node type rather than pre-lowering to `llm_call`.
+- Runtime recognizes first-class VisualFlow media nodes such as `generate_image`, `edit_image`, `image_to_image`, `upscale_image`, `image_upscale`, `generate_video`, `text_to_video`, `image_to_video`, `generate_voice`, `generate_music`, `decide`, `transcribe_audio`, and `listen_voice`.
+- Generated-media and transcription nodes lower to a durable `EffectType.LLM_CALL` with an `output` selector (for example `{"modality":"music","task":"music_generation"}`), while `listen_voice` lowers to `WAIT_EVENT`. The `decide` node asks ONE question about a state (inputs `state`, `question`, `question_type` = `choice` | `noul` | `score`, `options` for a choice, `levels` for a score, `provider`, `model`, `truncate`) and fills the typed output pins of that type (`answer` plus `choice`/`confidence`/`probabilities`, `noul`/`verdict`, or `score`/`level`/`confidence`/`probabilities`, with `model` and `success`); a wired `questions` object (several System One questions) replaces the single question and fills `answers`. It lowers to the same `LLM_CALL` with `{"modality":"decision","questions":{...}}` and the state as the prompt; see [decisions](integrations/abstractcore.md#decisions). Hosts should persist the authoring node type rather than pre-lowering to `llm_call`.
 - Runtime also recognizes file/document nodes. `read_file` and `write_file`
   handle UTF-8 text/JSON workspace paths. In Gateway-hosted runs, those paths
   follow the shared canonical contract: `rel/path` for the main workspace root
@@ -1348,6 +1505,13 @@ This produces a portable record of a run’s state + ledger + artifacts suitable
 When available, it also includes `resolved_actions`: bounded capability/action summaries derived
 from Core route resolution and persisted from `LLM_CALL` results.
 
+Voice transport is never part of a conversation turn: the recording of a spoken question and the
+read-aloud audio synthesized from an answer are left out of each session turn's `attachments` and
+`artifacts`. `is_voice_transport(tags)` (in `abstractruntime.history_bundle`) recognizes them:
+`purpose` `voice_playback` or `voice_dictation`, `artifact_space` `voice`, or a `voice/` or
+`client:voice/` path. The bundle's own `artifacts` section stays complete, and conversation search
+applies the same rule.
+
 ## Replay view (one reconstruction of a run, every client)
 
 Implementation: `src/abstractruntime/replay/` (ADR 0010). Guide: [replay.md](replay.md).
@@ -1371,7 +1535,7 @@ Implementation: `src/abstractruntime/replay/` (ADR 0010). Guide: [replay.md](rep
 
 ### AbstractCore (LLM + tools)
 
-Requires: `pip install abstractruntime` (AbstractCore 2.30.0 or newer is part of the base install).
+Requires: `pip install abstractruntime` (AbstractCore 2.32.0 or newer is part of the base install).
 
 Implementation: `src/abstractruntime/integrations/abstractcore/*`.
 
@@ -1395,7 +1559,7 @@ Entry points:
 - local `list_model_residency` merges AbstractCore's host-wide loaded-model sweep into text-generation listings (sweep-only rows carry `source: "provider_server"` and no `task` label), and residency rows normalize provider size extras to `size_bytes` / `size_vram_bytes` while keeping the originals; local text rows also carry registry-declared `modalities` (omitted on a registry miss), host identity (`host_id` / `host_name`), and runtime-owned lock truth (`locked` / `lockable`, with `pinned` a truthful alias of `locked` — never the default-identity flag, which `default` alone carries), while remote listings keep the Core server's row identity
 - host-local prompt-cache export/import admin also lives on the host facade and client delegation layer (`list_prompt_cache_exports`, `prompt_cache_export`, `prompt_cache_import`) and is intentionally local-only
 - host-facade email helpers (`list_email_accounts`, `list_emails`, `read_email`, `send_email`) use the process's own AbstractCore account (single-user installs)
-- run-facade helpers create and resume durable child runs for existing runs (`execute_llm_call`, `execute_tool_calls`, `resume_tool_calls`, `generate_image`, `edit_image`, `upscale_image`, `generate_video`, `image_to_video`, `generate_voice`, `generate_music`, `transcribe_audio`, `send_email`, `send_telegram_message`)
+- run-facade helpers create and resume durable child runs for existing runs (`execute_llm_call`, `execute_tool_calls`, `resume_tool_calls`, `generate_image`, `edit_image`, `upscale_image`, `generate_video`, `image_to_video`, `generate_voice`, `generate_music`, `decide`, `transcribe_audio`, `send_email`, `send_telegram_message`)
 - task-specific image/video helpers preserve batch and adapter controls such as
   `count`/`n`, `seeds`, ordered `lora_adapters`, and video `flow_shift`; local
   subprocess isolation stays within the same public contract.
@@ -1412,15 +1576,17 @@ Execution controls and cancellation:
 - `media`: a media path, artifact ref (`{"$artifact": "..."}` or `{"artifact_id": "..."}`), media dict, or list of those
 - `output`: AbstractCore output selector; top-level `outputs` is accepted as a runtime alias
 - `params`: provider/model routing, generation controls, prompt-cache keys or `prompt_cache_binding`, structured-output schema options, and tracing metadata
+- `response_schema` / `response_schema_name`: JSON schema data and name for a structured result at `result.data`; local execution creates the validator at the provider boundary. Structured calls do not stream tokens. Remote/hybrid clients forward an OpenAI JSON-schema response format; Python validator classes cannot cross HTTP. See [structured responses](integrations/abstractcore.md#structured-responses).
 
 Multimodal support:
 - common remote-light AbstractCore media, vision, voice, audio, and music dependencies are part of the base Runtime install
 - local clients call AbstractCore's unified `generate(..., media=..., output=...)`
-- remote and hybrid clients support AbstractCore Server chat media content arrays plus image generation, image edits, image upscaling, text-to-video, image-to-video, speech, music generation, and transcription endpoints; pass an output-specific `model` for remote media provider routing, otherwise the server endpoint can use its configured capability default
+- remote and hybrid clients support AbstractCore Server chat media content arrays plus image generation, image edits, image upscaling, text-to-video, image-to-video, speech, music generation, transcription, and decision (`POST /v1/decisions`) endpoints; pass an output-specific `model` for remote media provider routing, otherwise the server endpoint can use its configured capability default
 - remote transcription requires one audio media item that resolves to a local file path or artifact-backed temporary file
 - generated image/video/voice/music/audio bytes require a runtime `ArtifactStore`; the result contains `artifact_id` / `artifact_ref` instead of inline bytes
+- a decision (`output: {"modality": "decision", "questions": {...}}`, the state as the prompt) is typed answers, not bytes: no `ArtifactStore` is needed, and the result carries `content` (the answers as JSON), `decision` (`model`, `answers`, `usage`, `latency_ms`, optional `truncated`), `answers`, and the `provider` / `model` of the decision model; the resolved action id is `decision`. Without a `model` the call uses the `output.decision` capability default, so a text runtime on any provider can answer decisions once that default is set (see [decisions](integrations/abstractcore.md#decisions))
 - streamed TTS playback artifacts carry `purpose=voice_playback`, `artifact_space=voice` and a logical `voice/tts-<id>.wav` path in their tags; hosts can separate read-aloud recordings from user attachments while retaining their artifact refs and provenance
-- with the pooled local client (`MultiLocalAbstractCoreLLMClient`), a request whose outputs are all non-text (image, video, voice, music, transcription) and that carries no tools never builds the text client: it runs on AbstractCore's capability host (`CapabilityHostProvider`, no text model), and so does streaming TTS. A text default that cannot be built (an engine not installed) therefore never blocks speech or image generation
+- with the pooled local client (`MultiLocalAbstractCoreLLMClient`), a request whose outputs are all non-text (image, video, voice, music, transcription, decision) and that carries no tools never builds the text client: it runs on AbstractCore's capability host (`CapabilityHostProvider`, no text model), and so does streaming TTS. A text default that cannot be built (an engine not installed) therefore never blocks speech or image generation
 - media-only normalized results expose `runtime_provider` / `runtime_model` separately from `media_provider` / `media_model`
 - local image/video generation runs in a one-shot subprocess (`execution_mode="local_one_shot_subprocess"`) unless every requested media model is resident (explicitly loaded with `load_model_residency`), in which case it runs in-process on the loaded pipeline (`execution_mode="resident_in_process"`, `resident_load_ids`)
 - a media spec whose `provider` is an endpoint profile (`endpoint:<id>`) never uses the one-shot subprocess: it is an HTTP call to that endpoint, and the host's endpoint-profile resolver (`set_provider_endpoint_profile_resolver`) exists only in this process
@@ -1432,7 +1598,7 @@ Prompt cache / cached sessions:
 - LLM clients expose cache control methods listed above for host-side preparation and inspection
 - `LLM_CALL.params.prompt_cache_key` selects a cache key for a call; runtime can also derive a session-scoped key from `run.vars["_runtime"]["prompt_cache"]` or the Runtime-owned `ABSTRACTRUNTIME_PROMPT_CACHE` process default
 - `LLM_CALL.params.prompt_cache_binding` is the durable exact-reuse input for bloc-backed prompt caching; if a binding includes `key`, Runtime adopts it as the effective prompt-cache key and refuses mismatches before provider execution
-- Runtime only auto-derives session prompt-cache keys for text/chat calls; non-text output selectors such as image, voice, music, and transcription keep explicit `prompt_cache_binding` support but do not receive an inferred cache key
+- Runtime only auto-derives session prompt-cache keys for text/chat calls; non-text output selectors such as image, voice, music, decision, and transcription keep explicit `prompt_cache_binding` support but do not receive an inferred cache key
 - when Runtime injects the derived session key, the client stamps session attribution (`session_id`, `run_id`, `workflow_id`, `node_id`, `namespace`) into the cache entry's metadata after each generate; caller-supplied `prompt_cache_key`s and binding keys are never stamped, so session-scoped clearing cannot destroy caches shared across sessions
 - `get_abstractcore_host_facade(...)` exposes `get_memory_snapshot()`, `list_session_prompt_caches(session_id=None)`, and `clear_session_prompt_caches(session_id)`; session caches persist until a host clears them, the owning model is unloaded, or the provider evicts them — completing a run does not clear them
 - `get_abstractcore_host_facade(...)` also exposes durable bloc helpers (`upsert_text_bloc`, `get_bloc_record`, `list_blocs`, `get_bloc_kv_manifest`, `ensure_bloc_kv_artifact`, `load_bloc_kv_artifact`, `list_bloc_kv_artifacts`, `delete_bloc_kv_artifact`, `prune_bloc_kv_artifacts`, `delete_bloc`)
@@ -1489,6 +1655,8 @@ inside an effect handler. Details: [integrations/abstractmemory.md](integrations
 - `integrations/abstractmemory.md` — memory facade, provenance stamping, `MEMORY_REVISE`
 
 ### Host ASGI serving
+
+`abstractruntime.integrations.abstractcore.server_facade.start_core_server(*, host=None, port=None)` starts Core's optional listener in the calling execution process. It returns a Core-owned handle with `url`, `is_running`, `status()` and `stop()`. Core owns configuration, credentials and HTTP request handling; stopping the listener does not unload resident providers. Omitted bind arguments use Core server settings; explicit port `0` selects an ephemeral port. Startup errors raise to the caller. Importing the facade starts nothing. See [host-managed serving](integrations/abstractcore.md#host-managed-serving).
 
 `abstractruntime.integrations.abstractcore.server_facade.serve_core_request(scope, receive, send, *, token: str, allow_unauthenticated: bool = False)` delegates host-admitted ASGI requests with request-scoped Core authentication. See [host-managed serving](integrations/abstractcore.md#host-managed-serving) for network and credential responsibilities.
 
@@ -1703,7 +1871,7 @@ Generated bytes require a runtime `ArtifactStore`. The durable result contains `
 
 ## Does AbstractRuntime implement image, voice, music, or video engines?
 
-No. AbstractRuntime provides the durable graph runner, checkpoint/ledger model, waits, and artifact boundary. AbstractCore provides the LLM/media generation and analysis capabilities. Image, video, voice, transcription, and music all flow through the same JSON-safe `output` selector plus artifact-backed result shape; Runtime does not implement provider engines itself.
+No. AbstractRuntime provides the durable graph runner, checkpoint/ledger model, waits, and artifact boundary. AbstractCore provides the LLM/media generation and analysis capabilities. Image, video, voice, transcription, and music all flow through the same JSON-safe `output` selector plus artifact-backed result shape; Runtime does not implement provider engines itself. Decisions (`{"modality": "decision", "questions": {...}}`) use the same selector and return typed answers (`answers`, `decision`) without an artifact; see [Decisions](integrations/abstractcore.md#decisions).
 
 ## Where should cached session or prompt-cache state live?
 
@@ -1947,13 +2115,42 @@ Fix:
 - Install or upgrade the base Runtime package. LLM/tools integration, common
   remote-light multimodal dependencies, and the MCP worker entry point are part
   of the base install.
-- The current AbstractCore integration expects `abstractcore>=2.20.2`.
+- The current AbstractCore integration expects `abstractcore>=2.32.0`.
 
 Verify:
 
 ```bash
 python -c "import abstractruntime.integrations.abstractcore as ac; print(ac.__all__[:5])"
 ```
+
+## Structured generation is refused before inference
+
+Symptoms:
+- A failed `LLM_CALL` reports an invalid `response_schema`, conflicting structured inputs,
+  or that remote generation cannot transport `response_model` validators.
+
+Use a JSON object schema with nonempty `properties` and identifier-style property
+names. Put `response_schema` and `response_schema_name` on the effect payload,
+and remove a conflicting `response_model` or `response_format`. Send schema
+data through process and HTTP boundaries; generated Python classes do not belong
+in durable effects or `RunState.vars`. These deterministic request refusals are
+not retried, so correct the input before starting another run.
+
+If inference succeeds but validation fails, inspect the recorded response and
+the schema. Local conversion follows Pydantic coercion, while a remote Core
+server applies its own schema validation. Structured responses do not stream
+tokens, even with streaming enabled. See
+[structured responses](integrations/abstractcore.md#structured-responses).
+
+## An optional Core HTTP listener fails to start
+
+`start_core_server(...)` raises for an occupied bind address, unusable server
+configuration or failed Core server startup. Check Core's host/port and its own
+authentication configuration; Gateway credentials are not Core server tokens.
+Native Runtime execution does not require this optional listener. Keep its
+lifecycle separate from native readiness, and inspect the returned handle's
+`status()` after successful startup. Stopping it leaves resident models loaded.
+See [host-managed serving](integrations/abstractcore.md#host-managed-serving).
 
 ## A run is waiting and does not continue
 
@@ -2281,6 +2478,20 @@ Cause and fix:
 
 See [automations.md, `feed.item@1`](automations.md#feeditem1).
 
+## A Compare step fails with "One side is a number and the other is text"
+
+Symptom:
+- A run stops at a Compare node: "Compare 'Is five' (node same) ==: a is a number (5) and b is text ('5'). One side is
+  a number and the other is text. Open the flow in the editor and save it to store typed values."
+
+Cause and fix:
+- The flow compares a number (or true/false) with text. A flow saved by AbstractFlow 0.13.0 stored a value typed next to
+  a wired number as text. Open the flow in the AbstractFlow editor and save it: the editor stores the value with the
+  type of its input, and the next run compares `5 == 5`. If one side is meant to be text, wire it so both sides carry
+  text. See [Pin defaults are typed values](workflow-bundles.md#pin-defaults-are-typed-values).
+- An error ending in "these cannot be ordered" means `<`, `<=`, `>` or `>=` met values Python cannot order, often an
+  unset value (`None`): give the input a value, or compare with `==`.
+
 ## MCP worker command is not found
 
 Symptom:
@@ -2319,7 +2530,7 @@ Implementation pointers (this repo):
 pip install abstractruntime
 ```
 
-The base install includes AbstractCore 2.29.0 or newer. That is the supported baseline for the current server auth split (`Authorization` for server auth, `X-AbstractCore-Provider-API-Key` for provider overrides), generated-media contracts, image upscaling, capability catalog, prompt-cache control-plane endpoints (including session attribution via `/acore/prompt_cache/key_meta`), host memory snapshots, the host-wide loaded-model sweep used by residency listings, the process-wide MLX residency report and eject used by model unload, durable bloc prompt-cache helpers, bindings and lifecycle operations, task-aware model residency for text/image/video/TTS/STT, current tool catalog, AbstractCore's public output-selector contract, async/sync text-generation output-selector parity, video generation endpoints, the public local vision-cache catalog helper used by Runtime discovery, vision adapter discovery plus batch/LoRA media controls, and the released shared workspace/file-filter utility surface used by Runtime packaging and integration checks.
+The base install includes AbstractCore 2.32.0 or newer. That is the supported baseline for the `decision` output modality (the `output.decision` route and `/v1/decisions`), the current server auth split (`Authorization` for server auth, `X-AbstractCore-Provider-API-Key` for provider overrides), generated-media contracts, image upscaling, capability catalog, prompt-cache control-plane endpoints (including session attribution via `/acore/prompt_cache/key_meta`), host memory snapshots, the host-wide loaded-model sweep used by residency listings, the process-wide MLX residency report and eject used by model unload, durable bloc prompt-cache helpers, bindings and lifecycle operations, task-aware model residency for text/image/video/TTS/STT, current tool catalog, AbstractCore's public output-selector contract, async/sync text-generation output-selector parity, video generation endpoints, the public local vision-cache catalog helper used by Runtime discovery, vision adapter discovery plus batch/LoRA media controls, and the released shared workspace/file-filter utility surface used by Runtime packaging and integration checks.
 
 The base install also includes the remote-light media/capability plugins needed
 for AbstractCore's multimodal `generate(..., output=...)` path. Local
@@ -2407,7 +2618,7 @@ print(state.output)
   "messages": [{"role": "user", "content": "..."}],
   "system_prompt": "...",
   "media": ["path/or/artifact-ref"],
-  "output": {"modality": "text|image|video|voice|sound|music", "task": "optional"},
+  "output": {"modality": "text|image|video|voice|sound|music|decision", "task": "optional"},
   "tools": [{"name": "...", "description": "...", "parameters": {...}}],
   "params": {
     "temperature": 0.0,
@@ -2427,6 +2638,56 @@ Notes:
 - `output` may be top-level or inside `params`; top-level `outputs` is accepted as a runtime alias for AbstractCore's `output`.
 - `output.tags`, when present, are merged into the generated artifact metadata. Runtime metadata such as `run_id` and `tags` is used by AbstractRuntime's ArtifactStore boundary and is not forwarded as provider-specific generation kwargs.
 - Host-supplied run defaults such as `run.vars["_runtime"]["provider"]` and `run.vars["_runtime"]["model"]` are persisted as JSON-safe routing metadata; provider clients, auth objects, downloaded model handles, and server sessions are not durable runtime state.
+
+## Structured responses
+
+For a durable structured request, put the JSON schema and its name on the
+`LLM_CALL` payload:
+
+```json
+{
+  "prompt": "Choose chat or tool, and explain your choice.",
+  "response_schema_name": "RouteChoice",
+  "response_schema": {
+    "type": "object",
+    "properties": {
+      "choice": {"type": "string", "enum": ["chat", "tool"]},
+      "reason": {"type": "string"}
+    },
+    "required": ["choice", "reason"]
+  },
+  "structured_output_fallback": false
+}
+```
+
+The original normalized schema and name remain data through execution-client
+boundaries. The local execution client builds Core's Pydantic response class in
+the process calling the provider; the effect handler also validates the result.
+Successful structured results expose the object as `result.data`. The local
+conversion supports object properties, nested objects, arrays, enums, nullable
+types and defaults, with Pydantic's type coercion. It is a best-effort schema
+conversion, not an implementation of every JSON Schema keyword.
+
+Structured calls run without token streaming even when `params.stream` is true;
+the live channel reports `unavailable` with detail `structured_output`. Schema
+conversion errors and conflicting structured inputs fail without inference or
+retries. Do not combine `response_schema` with an explicit `response_model` or a
+different `response_format`. An identical source OpenAI schema wrapper is
+consumed during normalization. The `structured_output_fallback` option controls
+the handler's optional repair path; set it to false when an invalid structured
+response must fail directly.
+
+Remote and hybrid clients send schema data to Core as an OpenAI `response_format`
+of type `json_schema`. The remote server's validation rules apply, so do not
+assume the same coercion behavior as local Pydantic conversion. A raw
+`params.response_format` is preserved for Core. Python validator classes are
+supported only in direct local Python client calls; they are not durable JSON
+state and the remote HTTP client refuses them before sending a request.
+
+See [structured-output host checks](#structured-output-checks-for-hosts-structured-facade)
+for validating an incoming OpenAI response format, and
+[troubleshooting](../troubleshooting.md#structured-generation-is-refused-before-inference)
+for request errors.
 
 ## Execution controls and local concurrency
 
@@ -2612,6 +2873,51 @@ Long-running generated media may expose provider progress callbacks. Runtime off
 
 **It is not carried in the payload either.** `Effect.payload` is JSON to every consumer downstream (ledger, SSE stream, host handlers that `json.dumps` it), so the callback travels BESIDE the effect: `Runtime._execute_effect_with_retry` installs it on the `contextvars.ContextVar` in `abstractruntime/core/progress_channel.py` for the duration of the handler call, and `make_llm_call_handler` reads it there into its own params dict — which is what becomes provider kwargs. An explicit `params["on_progress"]` from the caller always wins; an effect with no progress channel is offered `None`, never the previous effect's callback. A handler that hands work to a bare thread must carry the callback object (it does — `params` holds it), not re-read the ContextVar.
 
+### Decisions
+
+A decision is text in, calibrated typed answers out: an `LLM_CALL` whose output spec is `{"modality": "decision", "questions": {...}}`, with the state (the document the questions are about) as the prompt. Optional spec keys: `truncate` (bool), `provider` and `model` (the decision model). `model` may be a `provider/model` handle such as `mlx/jaredpalmer/kev-4b`, `huggingface/ggml-org/Kev-4B-GGUF:Q4_K_M` or `typesafe/jev-latest`; AbstractCore splits it. Without a model the call takes the `output.decision` capability default, so a text runtime on any provider answers decisions once that default is set, and AbstractCore runs the configured decision model. Each question is a `choice`, `noul` or `score` object (`{"type": ..., "instructions": ..., "criteria": ...}`), or AbstractCore's shorthand: a string is a yes/no (`noul`) question, a list is a `choice`. See AbstractCore's [decision models guide](https://github.com/lpalbou/abstractcore/blob/main/docs/decision-models.md) for the question and answer shapes and the available models.
+
+```python
+Effect(
+    type=EffectType.LLM_CALL,
+    payload={
+        "prompt": "Shoes arrived two weeks late and in the wrong size.",
+        "output": {
+            "modality": "decision",
+            "model": "mlx/jaredpalmer/kev-4b",
+            "questions": {
+                "department": {
+                    "type": "choice",
+                    "instructions": "Which team should handle this?",
+                    "criteria": ["returns", "billing", "shipping"],
+                },
+                "urgent": "Is the customer asking for urgent help?",
+            },
+        },
+    },
+    result_key="triage",
+)
+```
+
+A decision produces no bytes: it needs no `ArtifactStore`, and `outputs` / `resources` are empty. The result carries the answers as JSON in `content`, the System One body in `decision` (`model`, `answers`, `usage`, `latency_ms`, and `truncated` when the state was cut to fit the model), `answers` (= `decision.answers`), and `provider` / `model` naming the decision model that answered. The resolved action id is `decision`. A decision spec receives no derived session prompt-cache key.
+
+```json
+{
+  "content": "{\"department\": {...}, \"urgent\": {...}}",
+  "decision": {"model": "...", "answers": {...}, "usage": {"input_tokens": 212, "output_tokens": 0}, "latency_ms": 41},
+  "answers": {
+    "department": {"type": "choice", "choice": "returns", "confidence": 0.91, "probabilities": {"returns": 0.91, "billing": 0.07, "shipping": 0.02}},
+    "urgent": {"type": "noul", "noul": 0.12}
+  },
+  "provider": "mlx",
+  "model": "jaredpalmer/kev-4b",
+  "outputs": {},
+  "resources": {}
+}
+```
+
+Remote and hybrid runtimes post `POST /v1/decisions` on the AbstractCore server (`model` as `provider/model`, `state`, `questions`, `truncate`) and map the server's body to the same result. For a durable child run on an existing run use `decide(...)` on the [run facade](#durable-run-scoped-media-and-comms-execution); in VisualFlow use the `decide` node.
+
 ### Text phase feedback (prefill vs generation)
 
 The callback is injected for **every** `LLM_CALL`, not only generated-media ones. AbstractCore decides per PROVIDER whether it has an honest signal (`BaseProvider.supports_text_progress_events()`, default `False`); a provider that has none never calls back, and that run's ledger gains no progress records at all. Providers that do (today: every MLX lane) report the prefill→generation boundary, so a client can replace "Thinking…" with what the call is actually doing.
@@ -2636,7 +2942,7 @@ One real record, from a `basic-agent` chat turn on `mlx/Qwen3.5-4B-4bit`:
 
 **Scope.** These records are `scope: "run"` and land in the ledger of the run that made the call. In a chat bundle the `llm_call` runs inside the Agent node's SUBWORKFLOW, so a client sees them only once it follows child ledgers — the same requirement that already applies to the `abstract.status` "Thinking…" event (`result.wait.details.sub_run_id` on the parent's waiting record).
 
-Remote runtimes support chat media by sending OpenAI-compatible data URL content arrays to AbstractCore Server. They also support image generation (`/v1/images/generations`), image edits (`/v1/images/edits` or `/{provider}/v1/images/edits`), image upscaling (`/v1/images/upscale` or `/{provider}/v1/images/upscale`), text-to-video (`/v1/videos/generations`), image-to-video (`/v1/videos/edits` or `/{provider}/v1/videos/edits`), TTS (`/v1/audio/speech`), music generation (`/v1/audio/music`), and STT (`/v1/audio/transcriptions`) with the same artifact-backed result shape. The Runtime/Core request surface forwards task-specific media controls including `count`/`n`, `seeds`, ordered `lora_adapters`, and video `flow_shift`. Remote media endpoint calls do not inherit the chat model by default; pass an output-specific `model` only when you want a remote provider/model instead of the server's configured capability default. Remote STT requires exactly one audio media item that resolves to a local file path or artifact-backed temporary file. Remote image edits, image upscaling, and image-to-video require one source image media item resolving to a local path or artifact-backed temporary file. For voice clone/register or reference-guided TTS, use local execution so AbstractCore can use its in-process capability dispatcher. Runtime does not import `abstractmusic` directly; local music support comes through the configured AbstractCore capability stack.
+Remote runtimes support chat media by sending OpenAI-compatible data URL content arrays to AbstractCore Server. They also support image generation (`/v1/images/generations`), image edits (`/v1/images/edits` or `/{provider}/v1/images/edits`), image upscaling (`/v1/images/upscale` or `/{provider}/v1/images/upscale`), text-to-video (`/v1/videos/generations`), image-to-video (`/v1/videos/edits` or `/{provider}/v1/videos/edits`), TTS (`/v1/audio/speech`), music generation (`/v1/audio/music`), and STT (`/v1/audio/transcriptions`) with the same artifact-backed result shape, and decisions (`/v1/decisions`) with the typed-answer result shape described under [Decisions](#decisions). The Runtime/Core request surface forwards task-specific media controls including `count`/`n`, `seeds`, ordered `lora_adapters`, and video `flow_shift`. Remote media endpoint calls do not inherit the chat model by default; pass an output-specific `model` only when you want a remote provider/model instead of the server's configured capability default. Remote STT requires exactly one audio media item that resolves to a local file path or artifact-backed temporary file. Remote image edits, image upscaling, and image-to-video require one source image media item resolving to a local path or artifact-backed temporary file. For voice clone/register or reference-guided TTS, use local execution so AbstractCore can use its in-process capability dispatcher. Runtime does not import `abstractmusic` directly; local music support comes through the configured AbstractCore capability stack.
 
 Remote multimodal generation currently supports one `output` selector per `LLM_CALL`. Hybrid runtimes use the same remote LLM/media path as remote mode while executing tools locally. Local runtimes can use AbstractCore's in-process multimodal dispatcher for richer capability plugin behavior.
 
@@ -2864,7 +3170,7 @@ Contract notes:
 - This surface is intentionally host-oriented; the runtime effect handlers still only use prompt caching during LLM execution, and gateway/CLI hosts manage prompt caches and durable bloc/KV artifacts through the public facade instead of reaching through to provider internals.
 - Automatic per-session prompt-cache keys are enabled by `run.vars["_runtime"]["prompt_cache"]`, `LLM_CALL.params.prompt_cache_key`, or the Runtime-owned `ABSTRACTRUNTIME_PROMPT_CACHE` process default. Gateway-specific prompt-cache env vars should be translated by Gateway into `_runtime.prompt_cache`.
 - Durable exact reuse uses `LLM_CALL.params.prompt_cache_binding`. If a binding includes `key`, Runtime adopts it as the effective cache key, rejects mismatches before provider execution, and skips auto-derived session-key injection for that call.
-- Automatic prompt-cache key derivation is text/chat-only. Non-text output selectors such as image, voice, music, and transcription may carry an explicit `prompt_cache_binding`, but Runtime does not derive a session cache key for them.
+- Automatic prompt-cache key derivation is text/chat-only. Non-text output selectors such as image, voice, music, decision, and transcription may carry an explicit `prompt_cache_binding`, but Runtime does not derive a session cache key for them.
 - Local Runtime owns the bloc store root policy:
   - default local root: `~/.abstractruntime/blocs`
   - default file-runtime root: `<base_dir>/blocs`
@@ -3387,7 +3693,7 @@ except VoiceLibraryError as err:
 
 ## Durable run-scoped media and comms execution
 
-Hosts sometimes need to trigger image/TTS/music/STT work or outbound comms sends for an existing run. That work should still execute through Runtime so the child run ledger, artifact ownership, and replay surface remain Runtime-authored.
+Hosts sometimes need to trigger image/TTS/music/STT work, a decision, or outbound comms sends for an existing run. That work should still execute through Runtime so the child run ledger, artifact ownership, and replay surface remain Runtime-authored.
 
 Public durable entry points:
 
@@ -3404,6 +3710,7 @@ Public durable entry points:
 - `generate_voice(...)`
 - `stream_voice(...)`
 - `generate_music(...)`
+- `decide(...)`
 - `transcribe_audio(...)`
 - `send_email(...)`
 - `send_telegram_message(...)`
@@ -3490,6 +3797,29 @@ child = facade.generate_video(
 print(child.run_id, child.output["result"]["outputs"]["video"][0]["artifact_id"])
 ```
 
+For a calibrated decision (typed answers, no artifact), use the same child-run boundary:
+
+```python
+child = facade.decide(
+    "existing-parent-run-id",
+    state="Shoes arrived two weeks late and in the wrong size.",
+    questions={
+        "department": {
+            "type": "choice",
+            "instructions": "Which team should handle this?",
+            "criteria": ["returns", "billing", "shipping"],
+        },
+        "urgent": "Is the customer asking for urgent help?",
+    },
+    model="mlx/jaredpalmer/kev-4b",
+)
+
+result = child.output["result"]
+print(child.run_id, result["model"], result["answers"]["department"]["choice"])
+```
+
+`decide(run_id, *, state, questions, model=None, truncate=None, params=None, child_vars=None)` starts a child `LLM_CALL` whose output spec is `{"modality": "decision", "questions": ...}` (plus `truncate` and `model` when given) with `state` as the prompt. A `provider/model` handle travels whole and AbstractCore splits it; omit `model` to use the `output.decision` capability default. The child's result carries `answers`, `decision`, `content`, `provider` and `model` as described under [Decisions](#decisions).
+
 Outbound comms sends that belong to a run should use the same durable child-run surface:
 
 ```python
@@ -3541,6 +3871,35 @@ This is useful when building a `MappingToolExecutor` quickly.
 - `../adr/0002_execution_modes_local_remote_hybrid.md` — rationale for local/remote/hybrid
 
 ## Host-managed serving
+
+Hosts can explicitly start Core's optional independently authenticated listener:
+
+```python
+from abstractruntime.integrations.abstractcore.server_facade import start_core_server
+
+server = start_core_server(host="127.0.0.1", port=0)
+try:
+    assert server.is_running
+    print(server.url)
+finally:
+    server.stop()
+```
+
+Omit `host` and `port` to use Core's persisted server configuration (default
+`127.0.0.1:8000`); port `0` requests an ephemeral port. The Core-owned handle
+provides `url`, `is_running`, `status()` and `stop()`. Startup failures raise to
+the caller. Core owns the listener's authentication and bind-sensitive security
+policy, including its first-run token handling. Stopping the listener leaves
+resident provider resources available to native clients. HTTP requests go to
+Core directly and do not enter Runtime's run/ledger pipeline.
+
+This is an explicit lifecycle operation: importing the facade starts no server
+and loads no HTTP application. Hosts should keep native execution readiness
+independent of optional HTTP readiness. An isolated execution process can hold
+the providers and listener together; restarting that process loses its resident
+models and in-flight requests. The facade does not create another process.
+
+### Host-admitted ASGI requests
 
 Hosts that expose AbstractCore serving routes use
 `abstractruntime.integrations.abstractcore.server_facade.serve_core_request(scope, receive, send, *, token, allow_unauthenticated=False)`.
@@ -6020,6 +6379,21 @@ the words:
   payload is not byte-reconstructible from the ledger alone —
   reconstruction re-resolves refs through doors that enforce authority.
 
+## Live visit corrections
+
+Visit hosts may call `Runtime.queue_visit_guidance(run_id, text=..., speaker=...,
+display_text=...)` for the current stamped participant while a visit actor is working.
+The canonical host validates ownership before calling this narrower door; generic raw
+`Runtime.steer` remains refused for driver-owned visits. The durable sidecar records
+visit and turn identity, attributed words and optional original display text.
+
+Before the next actor reasoning boundary, the visit performs fresh channel-labeled memory
+recall, merges and deduplicates its handles with those already visible, and appends the
+participant's verbatim correction and the refreshed recall. It keeps the existing transcript
+prefix. Empty queues add no model call or recall. A correction from an older turn is retained
+with attribution and is not silently applied to a later turn. Acceptance and delivery receipts
+describe transport; only the actor's later words can acknowledge a change of plan.
+
 ## Durable visit waits: event + deadline
 
 A visit parks on the visitor's next message; the park may carry an idle
@@ -6180,6 +6554,40 @@ delta = view.apply(ledger.list_after(run_id=child_id, after=view.last_seq(child_
 client_copy = apply_delta(doc, delta)      # == view.to_json()
 ```
 
+## Public conversation messages
+
+Explicit completed `public_update` events become assistant messages with
+`kind: "public_update"`, stable run-scoped `id`, `text`, `run_id`, optional `session_id`,
+`iteration`, `source_call_ids`, `update_kind`, and normal ledger provenance. `update_kind` is
+the producer's type for the update: `"finding"` (a fact or piece of evidence the actor
+established) or `"progress"` (what it is doing); an event without a `kind` of `"finding"`
+replays as `"progress"`. Replay copies the type and never infers it from the text. Replay does not turn reasoning,
+raw tool output or a marker inside model text into public speech. Diary/thinking fences
+are excluded. These are actor-authored updates; their wording alone is not proof of a fact
+or of completed work.
+
+Public human guidance becomes `role: "user", kind: "guidance", source: "user_guidance"`
+with `speaker` and `guidance_status: "accepted"`. It must come from Runtime's reserved
+host receipt node `__host_user_guidance__` and idempotency key
+`system:user_guidance:<seq>`, not an arbitrary actor-authored event with the same name.
+The words are the explicit `display_text`, not the operational context wrapper. Acceptance
+does not close an active wait or claim the actor adopted the correction.
+Optional `client_message_id` correlates a pending client message to the host receipt. Its
+command-inbox sequence is independent of the guidance sidecar sequence encoded in the id.
+
+Question metadata remains on question messages. Answers carry `question_id` from the matched
+original wait when that wait declared one; legacy waits without an identity leave it absent.
+Host-authored expiry appears as a system
+`question_outcome`; a retained late reply is `retained_reply` with its status and reason.
+A fallback is never rendered as a human answer. These facts do not trigger notifications;
+notification and audio policy belongs to the consuming host/client.
+
+A final explicit `output.result` object with no prose field can be displayed as JSON. Only
+that result is projected; private siblings in an agent envelope are excluded. The structured
+fallback is withheld when the result itself contains internal fields (such as `scratchpad`,
+`reasoning`, `report`, `messages`, `cycles`, `diary` or underscore-prefixed keys) or diary/thinking
+fences. The original structured output remains available in the technical run output.
+
 ## Contract
 
 - **Pure and deterministic.** There is no I/O and no clock. The input is records plus snapshots,
@@ -6230,7 +6638,7 @@ Each rule below was once a divergence between clients:
 | `interaction` | the person-facing wait, or `null`: `kind` (`tool_approval`, `ask_user`, `event`), `run_id`, `wait_key`, `step_id`, `seq`, `prompt`, `choices`, `allow_free_text`, `details`, `tool_calls` (resolved), `activity_id`, `answer_payload`, and `command` (the resume a client sends to answer it) |
 | `open_waits[]` | every open wait of the tree, with `person_facing` |
 | `messages[]` | verbatim turns: `role`, `kind` (`prompt`, `answer`, `question`, `final`, `event`), `text`, provenance (`run_id`, `step_ids`, `seqs`, `artifact_ids`, `source`) |
-| `activities[]` | one per execution: `kind`, `name`, `status`, `node_id`, `execution_id`, `seqs`, `step_ids`, `tool_calls[]` (each call's status, output, error), `wait` (`kind`, `wait_key`, `ended_by`: `resume`, `later_step`, `terminal`), `usage`, `child_run_id`, `progress` |
+| `activities[]` | one per execution: `kind`, `name`, `status`, `node_id`, `execution_id`, `seqs`, `step_ids`, `tool_calls[]` (each call's `id`, status, output, error, and `call_id`, the model's own call id, when `id` is a runtime call id; public updates cite `call_id`), `wait` (`kind`, `wait_key`, `ended_by`: `resume`, `later_step`, `terminal`), `usage`, `child_run_id`, `progress` |
 | `artifacts[]` | every `{"$artifact": id}` reference, with the run, step, seq and JSON path that produced it |
 | `usage` | tokens and LLM calls summed over the tree |
 | `warnings[]` | what the view could not show (records before a window, an unresolved `$slim`) |
@@ -6474,6 +6882,15 @@ Authoring guidance:
 - use the default route key `${sourceNodeId}::${sourceHandle}` unless your editor needs a custom stable key
 - keep route keys unique per target node
 - use one normal data edge or `pinDefaults` for the fallback value, then add `inputRouteOverrides` only for routes that need a different value
+
+## Pin defaults are typed values
+
+A `pinDefaults` value is a JSON value with its type (`5`, `"5"`, `true`, `[]`), and the runtime uses it exactly as
+stored: it never converts a value or reads a type from text. AbstractFlow stores a value typed on a node card with the
+type of its input (ADR 0049 in the AbstractFramework repository). Compare (`compare`) relies on it: a number or
+true/false on one side and text on the other (`5 == "5"`, for every operator), or an order between values Python cannot
+order (`None > 3`), fails the step with an error that names the node, instead of answering `False`. true/false compares
+with numbers as Python's booleans do (`True == 1`).
 
 ## See also
 
@@ -7098,10 +7515,14 @@ In this repo, the AbstractCore wiring lives under `src/abstractruntime/integrati
 
 ## Guides
 
+- [AbstractRuntime agent skill](../skills/abstractruntime/SKILL.md) — a self-contained operating guide for agents using workflows, durable waits, stores and AbstractCore execution
+- [Structured responses](integrations/abstractcore.md#structured-responses) — JSON schemas across execution boundaries, local and remote validation, and streaming behavior
+- [Host-managed serving](integrations/abstractcore.md#host-managed-serving) — optional Core-owned HTTP lifecycle and host-admitted ASGI requests
+
 - `faq.md` — common questions (recommended)
 - `manual_testing.md` — manual smoke tests and how to run the test suite
 - `artifacts.md` — Runtime artifact identity, descriptors, provenance, catalog search, and access stats
-- `integrations/abstractcore.md` — wiring `LLM_CALL` / `TOOL_CALLS`, the `config_facade` models/engines/host-jobs passthroughs for hosts, the `structured_facade` response_format check for hosts, cached sessions with per-session prompt-cache listing/clearing, host memory snapshots, model-residency listings, locks and model switching, live token streaming, workspace-scoped tools, durable bloc prompt-cache control, media inputs, generated media outputs, video progress events, and tool approval waits via AbstractCore
+- `integrations/abstractcore.md` — wiring `LLM_CALL` / `TOOL_CALLS`, the `config_facade` models/engines/host-jobs passthroughs for hosts, the `structured_facade` response_format check for hosts, cached sessions with per-session prompt-cache listing/clearing, host memory snapshots, model-residency listings, locks and model switching, live token streaming, workspace-scoped tools, durable bloc prompt-cache control, media inputs, generated media outputs, calibrated decisions (`output.modality: "decision"`, `run_facade.decide`, the `decide` node), video progress events, and tool approval waits via AbstractCore
 - `integrations/abstractmemory.md` — the AbstractMemory memory facade (ADR 0011): open a mind, stamp provenance from the step context, reconstruct a source from the ledger (`get_record`), history and revisions, and the `MEMORY_REVISE` effect / `memory_revise` node
 - `tools-comms.md` — enabling the optional comms toolset (email/WhatsApp/Telegram)
 - `email.md` — email for each user: run-scoped account binding and the host resolver, sending without asking (self and pre-authorised recipients), the durable event inbox and mail feeder, the `email.received@1` trigger on the primary or any other mailbox of the user, mail verbs for flows (changes and sends only on a Read and write mailbox: `email_mailbox_read_only`, `email_mailbox_cannot_send`), and the send-email action

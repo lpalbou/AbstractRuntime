@@ -749,3 +749,59 @@ def test_replay_profile_preserves_every_field_the_fold_reads() -> None:
     assert sw["effect"]["payload"]["sub_workflow_id"] == "child-wf"
     assert sw["effect"]["payload"]["wrap_as_tool_result"] is True
     assert sw["result"]["output"]["answer"] == "done"
+
+
+def test_session_turns_never_carry_voice_transport_but_the_run_bundle_archive_does() -> None:
+    """ADR 0047: a spoken question's recording and an answer's read-aloud audio are transport.
+    The conversation projection (session turns) drops them from `artifacts` and `attachments`;
+    the run bundle's own artifacts section stays complete."""
+    from abstractruntime.history_bundle import is_voice_transport
+
+    run_store = IndexedOnlyRunStore()
+    ledger_store = InMemoryLedgerStore()
+    artifact_store = InMemoryArtifactStore()
+    run_id = "run_voice_transport"
+    image_att = {"$artifact": "artifact_image", "target": "client", "source_path": "client:photo.png", "content_type": "image/png"}
+    dictation_att = {"$artifact": "artifact_dictation", "target": "client", "source_path": "client:voice/dictation/q.wav", "content_type": "audio/wav"}
+    run_store.save(
+        RunState(
+            run_id=run_id,
+            workflow_id="wf_chat",
+            status=RunStatus.COMPLETED,
+            current_node="answer",
+            vars={"context": {"messages": [{"role": "user", "content": "what is in this photo?"}], "attachments": [dictation_att, image_att]}},
+            output={"response": "a cat"},
+            error=None,
+            created_at="2026-11-02T00:00:00+00:00",
+            updated_at="2026-11-02T00:00:10+00:00",
+            actor_id="tester",
+            session_id="sess-voice",
+            parent_run_id=None,
+            waiting=None,
+        )
+    )
+    artifact_store.store(b"tts", content_type="audio/wav", run_id=run_id, artifact_id="artifact_tts",
+                         tags={"kind": "generated_media", "modality": "voice", "task": "tts", "purpose": "voice_playback",
+                               "artifact_space": "voice", "path": "voice/tts-artifact_tts.wav"})
+    artifact_store.store(b"q", content_type="audio/wav", run_id=run_id, artifact_id="artifact_dictation",
+                         tags={"kind": "attachment", "modality": "audio", "path": "client:voice/dictation/q.wav"})
+    artifact_store.store(b"png", content_type="image/png", run_id=run_id, artifact_id="artifact_image",
+                         tags={"kind": "attachment", "modality": "image", "path": "client:photo.png"})
+
+    bundle = export_run_history_bundle(
+        run_id=run_id, run_store=run_store, ledger_store=ledger_store, artifact_store=artifact_store,
+        include_subruns=False, include_session=True, session_turn_limit=20, ledger_mode="tail", ledger_max_items=20,
+    )
+    turns = (bundle.get("session") or {}).get("turns") or []
+    assert [t["run_id"] for t in turns] == [run_id]
+    assert [a["artifact_id"] for a in turns[0]["artifacts"]] == ["artifact_image"], turns[0]["artifacts"]
+    assert turns[0]["attachments"] == [image_att], turns[0]["attachments"]
+    archive = (bundle.get("ledgers") or {}).get(run_id, {}).get("artifacts") or []
+    assert sorted(a["artifact_id"] for a in archive) == ["artifact_dictation", "artifact_image", "artifact_tts"]
+
+    assert is_voice_transport({"purpose": "voice_playback"}) and is_voice_transport({"purpose": "voice_dictation"})
+    assert is_voice_transport({"artifact_space": "voice"}) and is_voice_transport({"path": "voice/tts-1.wav"})
+    assert is_voice_transport({"source_path": "client:voice/dictation/a.wav"}) and is_voice_transport({"tags": {"path": "voice/x.wav"}})
+    assert not is_voice_transport({"kind": "attachment", "modality": "audio", "path": "client:my-recording.wav"})
+    assert not is_voice_transport({"kind": "generated_media", "modality": "voice", "task": "tts", "path": "requested.wav"})
+    assert not is_voice_transport(None) and not is_voice_transport("voice/")

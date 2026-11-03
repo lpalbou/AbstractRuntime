@@ -208,3 +208,36 @@ def test_a_remote_servers_4xx_refusal_is_not_retried() -> None:
     assert _llm_error_is_retryable(_HTTPStatusError(422)) is False
     assert _llm_error_is_retryable(_HTTPStatusError(429)) is True
     assert _llm_error_is_retryable(_HTTPStatusError(503)) is True
+
+
+def test_request_serialization_errors_are_not_retried():
+    import pickle
+    for error in (pickle.PickleError("cannot encode"), pickle.PicklingError("dynamic class"), pickle.UnpicklingError("bad request")):
+        assert _llm_error_is_retryable(error) is False
+
+
+def test_actual_serialization_failure_stops_after_one_attempt():
+    import pickle
+    from abstractruntime.integrations.abstractcore.effect_handlers import make_llm_call_handler
+    calls = []
+    class Client:
+        def generate(self, **_kwargs):
+            calls.append(1)
+            raise pickle.PicklingError("generated class cannot cross")
+    handler = make_llm_call_handler(llm=Client())
+    workflow = WorkflowSpec(workflow_id="encode-failure", entry_node="call", nodes={
+        "call": lambda run, ctx: StepPlan(node_id="call", effect=Effect(type=EffectType.LLM_CALL, payload={"prompt": "hi"}), next_node="call")})
+    ledger = InMemoryLedgerStore()
+    runtime = Runtime(run_store=InMemoryRunStore(), ledger_store=ledger,
+                      effect_handlers={EffectType.LLM_CALL: handler},
+                      effect_policy=RetryPolicy(llm_max_attempts=3, backoff_base=0))
+    run_id = runtime.start(workflow=workflow)
+    state = runtime.tick(workflow=workflow, run_id=run_id)
+    assert len(calls) == 1
+    assert "generated class cannot cross" in state.error
+    assert len([r for r in ledger.list(run_id) if r["status"] == "failed"]) == 1
+
+
+def test_structured_request_shape_refusal_is_non_retryable():
+    from abstractruntime.integrations.abstractcore.structured_output import StructuredOutputRequestError
+    assert _llm_error_is_retryable(StructuredOutputRequestError("conflicting structured request")) is False

@@ -1233,6 +1233,80 @@ def build_visit_workflow(
                 f"react_middle.entry {react_middle.entry!r} is not in its own node map"
             )
         nodes.update(react_middle.nodes)
+        actor_reason = nodes[str(react_middle.entry)]
+
+        def guidance_boundary(run: RunState, ctx: Any) -> StepPlan:
+            pending = _ns(run, "_runtime").get("visit_guidance_pending")
+            if not isinstance(pending, list) or not pending:
+                return actor_reason(run, ctx)
+            # Pop into a durable effect stage; the queue watermark already
+            # belongs to this tick, never to a concurrent host writer.
+            stage = _ns(run, "_visit_guidance")
+            stage.clear()
+            stage["messages"] = list(pending)
+            _ns(run, "_runtime")["visit_guidance_pending"] = []
+            turn = _ns(run, "_turn")
+            fresh = [m for m in pending if m.get("turn_id") == turn.get("turn_id")]
+            stage["fresh"] = fresh
+            if not fresh:
+                return StepPlan(node_id=str(react_middle.entry), effect=Effect(
+                    type=EffectType.EMIT_EVENT, payload={"name": "abstract.visit_guidance_retained",
+                    "payload": {"messages": pending, "reason": "turn_ended"}}),
+                    next_node=str(react_middle.entry))
+            return StepPlan(node_id=str(react_middle.entry), effect=Effect(
+                type=EffectType.MEMORY_RECALL, payload={
+                    "cue_text": "\n\n".join(str(m["content"]) for m in fresh),
+                    "scopes": ladder, "view": "working_set", "participants": list(_ns(run, "_visit")["participants"]),
+                    "budget": dict(_ns(run, "_visit")["budget"]),
+                    "turn_id": f"{turn['turn_id']}:guidance:{fresh[-1]['seq']}",
+                    "channel": "workplace",
+                }, result_key="_visit_guidance.recall"), next_node="VISIT_GUIDANCE_RENDER")
+
+        def render_guidance(run: RunState, ctx: Any) -> StepPlan:
+            stage, turn, visit = _ns(run, "_visit_guidance"), _ns(run, "_turn"), _ns(run, "_visit")
+            fresh = list(stage.get("fresh") or [])
+            recall = stage.get("recall") or {}
+            # Merge by stable memory identity, favoring this fresh recall.
+            handles = list(recall.get("handles") or []) + list(turn.get("displayed") or [])
+            merged, seen = [], set()
+            for handle in handles:
+                key = handle.get("record_id")
+                if key and key not in seen:
+                    seen.add(key)
+                    merged.append(handle)
+            displayed = [h for h in _serialize_under_budget(merged, int(visit["budget"].get("token_budget") or 0))
+                         if h.get("admission") != "self"]
+            turn["displayed"] = displayed
+            block = _memories_block(displayed, recall.get("as_of_seq"))
+            parts = [f"{m['speaker']} (operator-visit, correction):\n{m['content']}" for m in fresh]
+            raw = "\n\n".join(parts)
+            content = raw + ("\n\n" + block if block else "")
+            _ns(run, "context").setdefault("messages", []).append({
+                "role": "user", "content": content,
+                "metadata": {"kind": "visit_guidance", "channel": "operator-visit",
+                             "seqs": [m["seq"] for m in fresh]},
+            })
+            # Formation and next-open reconstruction retain the attributed raw
+            # words, not just a transient instruction to the actor.
+            turn["text"] = str(turn.get("text") or "") + "\n\n" + raw
+            turn["rendered_user"] = str(turn.get("rendered_user") or "") + "\n\n" + content
+            runtime_ns = _ns(run, "_runtime")
+            runtime_ns["last_visit_guidance"] = {"status": "delivered", "seqs": [m["seq"] for m in fresh]}
+            runtime_ns["llm_payload_extras"] = {
+                "anchor_record_ids": [h.get("record_id") for h in displayed],
+                "anchor_graph_ids": [str((h.get("provenance") or {}).get("record_id") or "") for h in displayed
+                                     if (h.get("provenance") or {}).get("record_id")],
+            }
+            retained = [m for m in stage.get("messages", []) if m not in fresh]
+            stage.clear()
+            return StepPlan(node_id="VISIT_GUIDANCE_RENDER", effect=Effect(type=EffectType.EMIT_EVENT,
+                payload={"name": "abstract.visit_guidance_delivered", "payload": {
+                    "messages": fresh, "retained_messages": retained, "channel": "operator-visit",
+                    "memory_ids": [h.get("record_id") for h in displayed]}}),
+                next_node=str(react_middle.entry))
+
+        nodes[str(react_middle.entry)] = guidance_boundary
+        nodes["VISIT_GUIDANCE_RENDER"] = render_guidance
         nodes["REASON"] = bridge_node  # RENDER routes in unchanged
         nodes[HARVEST_NODE] = harvest_node  # the middle's declared exit
     return WorkflowSpec(

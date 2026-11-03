@@ -124,6 +124,7 @@
             "command": "txt-af2d1fb87a72",
             "timeout": 60
           },
+          "call_id": "583083766",
           "error": "Denied by user",
           "id": "rtcall_f37341d299f46c59bac696a5140c99cd_1",
           "name": "execute_command",

@@ -346,6 +346,12 @@ def compile_pin_expression(
         except Exception as e:
             raise PinExpressionError(
                 f"pin expression on {where} failed: {type(e).__name__}: {e} — expression: {preview}"
+                + (
+                    f" (a plain word is read as a Python name; for the text {expression.strip()!r} write "
+                    f"{expression.strip()!r} with quotes, or set the pin's value instead of an expression)"
+                    if isinstance(e, NameError) and expression.strip().isidentifier()
+                    else ""
+                )
             ) from e
         # The view is an evaluation-time artifact and must never escape into
         # node outputs / persisted run state (not JSON serializable, aliases

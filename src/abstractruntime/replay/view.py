@@ -43,6 +43,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import re
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Set, Tuple
 
 from ..automations.attention import ANSWER_PAYLOADS
@@ -63,7 +64,8 @@ TERMINAL_STATUSES = frozenset({"completed", "failed", "cancelled"})
 # for). Conversation-sized fields (`messages`, `system_prompt`) are never read by the view.
 _VIEW_PAYLOAD_FIELDS = ("tool_calls", "prompt", "message", "text", "content", "provider", "model", "workflow_id")
 _TEXT_KEYS = ("answer", "response", "message", "text", "content", "output")
-_OBSERVABILITY_EVENTS = frozenset({"abstract.status", "abstract.progress", "abstractcode.status"})
+_OBSERVABILITY_EVENTS = frozenset({"abstract.status", "abstract.progress", "abstractcode.status",
+                                   "abstract.question_reply_retained", "user_guidance"})
 _MAX_WALK_DEPTH = 12
 
 
@@ -104,8 +106,30 @@ def _output_text(output: Any) -> str:
     (`automations.attention.normalize_occurrence_output`)."""
     if isinstance(output, dict) and isinstance(output.get("result"), dict) and not any(
             k in output for k in ("response", "answer", "notify")):
-        return _text_of(output["result"]) or _text_of(output)
+        text = _text_of(output["result"]) or _text_of(output)
+        if text:
+            return text
+        # Flow end's explicit `result` pin can be a structured deliverable
+        # without any prose key. Only that pin is public: never dump the full
+        # agent envelope (scratchpad, reports, reasoning, tool transcript).
+        if _public_structured_result(output["result"]):
+            return json.dumps(output["result"], ensure_ascii=False, indent=2, sort_keys=True)
+        return ""
     return _text_of(output)
+
+
+def _public_structured_result(value: Any, depth: int = 0) -> bool:
+    if depth > _MAX_WALK_DEPTH:
+        return False
+    if isinstance(value, dict):
+        private = {"scratchpad", "reasoning", "thought", "thoughts", "report", "messages", "cycles", "diary"}
+        return all(isinstance(key, str) and not key.startswith("_") and key.lower() not in private
+                   and _public_structured_result(item, depth + 1) for key, item in value.items())
+    if isinstance(value, list):
+        return all(_public_structured_result(item, depth + 1) for item in value)
+    if isinstance(value, str):
+        return re.search(r"```\s*diary\b|<\s*diary\b|<\s*think\b", value, flags=re.I) is None
+    return value is None or isinstance(value, (bool, int, float))
 
 
 def _artifact_refs(value: Any, path: str = "", depth: int = 0) -> List[Tuple[str, str]]:
@@ -789,6 +813,10 @@ class ReplayView:
                 if row is None:
                     row = {"id": cid, "name": _s(call.get("name")) or None, "arguments": call.get("arguments"),
                            "status": "running"}
+                    # The model's own call id when the runtime keyed the row by its runtime id:
+                    # what a public update's `source_call_ids` cite.
+                    if _s(call.get("call_id")) and _s(call.get("call_id")) != cid:
+                        row["call_id"] = _s(call.get("call_id"))
                     rows.append(row)
                     by_id[cid] = row
                     for key in sorted({_s(call.get("call_id")), _s(call.get("id")), cid} - {""}):
@@ -882,10 +910,14 @@ class ReplayView:
         act = self._activities.get(aid)
         if act is not None:
             act["wait"] = {"kind": kind, "wait_key": key or None, "until": wait.get("until"), "ended_by": None}
+            question_id = _s(_obj(_obj(details).get("question")).get("id"))
+            if kind == "ask_user" and question_id:
+                act["wait"]["question_id"] = question_id
         if kind == "ask_user" and _s(wait.get("prompt")):
             self._message(f"{r.run_id}:{step_id}:question", role="assistant", kind="question",
                           text=_s(wait.get("prompt")), run_id=r.run_id, step_id=step_id, seq=seq, ts=ts,
-                          source="wait", extra={"choices": wait.get("choices"), "wait_key": key or None})
+                          source="wait", extra={"choices": wait.get("choices"), "wait_key": key or None,
+                                                "question": copy.deepcopy(_obj(details).get("question"))})
         self._dirty["runs"].add(r.run_id)
 
     def _close_wait(self, r: _Run, ended_by: str, ts: str, step_id: str, seq: int) -> None:
@@ -946,16 +978,77 @@ class ReplayView:
             self._dirty["runs"].add(r.run_id)
         if kind == "ask_user":
             text = _text_of(answer) if not isinstance(answer, str) else answer.strip()
+            question_id = _obj(_obj(act).get("wait")).get("question_id")
+            if question_id and isinstance(answer, dict) and isinstance(answer.get("response"), str) and answer["response"].strip():
+                text = answer["response"]  # original words, including intentional whitespace
             if not text and isinstance(answer, dict):
                 text = _s(answer.get("response")) or _s(answer.get("value"))
             if text:
                 self._message(f"{r.run_id}:{step_id}:answer", role="user", kind="answer", text=text, run_id=r.run_id,
-                              step_id=step_id, seq=seq, ts=ts, source="resume", extra={"wait_key": key or None})
+                              step_id=step_id, seq=seq, ts=ts, source="resume",
+                              extra={"wait_key": key or None,
+                                     "question_id": question_id})
         self._note_artifacts(r.run_id, step_id, seq, answer, ts)
 
     def _fold_event(self, r: _Run, rec: Dict[str, Any], payload: Dict[str, Any], name: str, ts: str, seq: int,
                     step_id: str) -> None:
         body = payload.get("payload")
+        if name == "user_guidance" and _s(rec.get("status")) == "completed":
+            b = _obj(body)
+            host_receipt = (_s(rec.get("node_id")) == "__host_user_guidance__"
+                            and type(b.get("seq")) is int and b["seq"] > 0
+                            and b.get("status") == "accepted"
+                            and b.get("id") == f"{r.run_id}:guidance:{b['seq']}"
+                            and _s(rec.get("idempotency_key")) == f"system:user_guidance:{b['seq']}")
+            if host_receipt and _s(b.get("run_id")) == r.run_id and _s(b.get("id")) and _s(b.get("text")):
+                mid = _s(b["id"])
+                if not mid.startswith(r.run_id + ":"):
+                    return
+                self._message(mid, role="user", kind="guidance", text=b["text"], run_id=r.run_id,
+                              step_id=step_id, seq=seq, ts=ts, source="user_guidance",
+                              extra={"speaker": _s(b.get("speaker")), "guidance_status": "accepted",
+                                     "session_id": b.get("session_id"),
+                                     **({"client_message_id": b["client_message_id"]}
+                                        if isinstance(b.get("client_message_id"), str) and b["client_message_id"] else {})})
+            return
+        if name == "public_update" and _s(rec.get("status")) == "completed":
+            # Only the explicit public event is communication. Never reinterpret
+            # LLM content/reasoning, markers, or tool prose as a public update.
+            b = _obj(body)
+            text, authored_id = _s(b.get("text")), _s(b.get("id"))
+            if (text and authored_id and _s(b.get("run_id")) == r.run_id
+                    and not re.search(r"```\s*diary\b|<\s*diary\b|<\s*think\b", text, flags=re.I)):
+                mid = authored_id if authored_id.startswith(r.run_id + ":") else f"{r.run_id}:{authored_id}"
+                calls = b.get("source_call_ids")
+                # The producer types the update; only an explicit "finding" is one (older
+                # updates carry no kind and report progress).
+                self._message(mid, role="assistant", kind="public_update", text=text, run_id=r.run_id,
+                              step_id=step_id, seq=seq, ts=ts, source="emit_event",
+                              extra={"update_kind": "finding" if b.get("kind") == "finding" else "progress",
+                                     "source_call_ids": [c for c in calls if isinstance(c, str)]
+                                     if isinstance(calls, list) else [], "iteration": b.get("iteration"),
+                                     "session_id": _s(b.get("session_id")) or None})
+            return
+        question_receipt = (_s(rec.get("node_id")) == "__host_question__"
+                            and _s(rec.get("idempotency_key")).startswith("system:question:"))
+        if name == "abstract.question_resolved" and question_receipt and _s(rec.get("status")) == "completed":
+            b = _obj(body)
+            q = _obj(b.get("question"))
+            if q.get("outcome") == "expired":
+                self._message(f"{r.run_id}:question:{q.get('id')}:expired", role="system", kind="question_outcome",
+                              text=f"No answer arrived before the deadline. Continuing with: {q.get('fallback')}",
+                              run_id=r.run_id, step_id=step_id, seq=seq, ts=ts, source="emit_event",
+                              extra={"question": copy.deepcopy(q)})
+            return
+        if name == "abstract.question_reply_retained" and question_receipt and _s(rec.get("status")) == "completed":
+            b = _obj(body)
+            text = _obj(b.get("payload")).get("response")
+            if isinstance(text, str) and text.strip():
+                self._message(f"{r.run_id}:{step_id}:retained_reply", role="user", kind="retained_reply", text=text,
+                              run_id=r.run_id, step_id=step_id, seq=seq, ts=ts, source="emit_event",
+                              extra={"question_id": b.get("question_id"), "reply_status": "retained",
+                                     "reason": b.get("reason")})
+            return
         if name in ("abstract.status", "abstractcode.status"):
             b = _obj(body)
             text = _s(b.get("status")) or _s(b.get("text")) or _s(b.get("value"))

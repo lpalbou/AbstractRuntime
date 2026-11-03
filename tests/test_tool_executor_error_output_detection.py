@@ -78,3 +78,52 @@ def test_a_braced_error_string_that_is_not_json_keeps_an_empty_output() -> None:
     row = MappingToolExecutor.from_tools([tool_returns_braced_error]).execute(
         tool_calls=[{"name": "tool_returns_braced_error", "arguments": {}, "call_id": "c1"}])["results"][0]
     assert row["success"] is False and row["output"] is None and row["error"] == "{not json}"
+
+
+def _agent_observation_for(row: dict) -> str:
+    """The tool observation the visual-flow Agent node writes into the run context for this result row."""
+    from abstractruntime.core.models import RunState
+    from abstractruntime.visualflow_compiler.compiler import compile_visualflow
+
+    spec = compile_visualflow({"id": "f", "name": "f", "nodes": [{"id": "agent", "type": "agent", "data": {"agentConfig": {}}}],
+                               "edges": [], "entryNode": "agent"})
+    run = RunState.new(workflow_id=spec.workflow_id, entry_node="agent", vars={"context": {}})
+    run.vars["_temp"] = {"agent": {"agent": {
+        "phase": "subworkflow",
+        "resolved_inputs": {"task": "Search the web.", "context": {}, "provider": "lmstudio", "model": "dummy",
+                            "include_context": True, "tools": [row["name"]]},
+        "sub": {"sub_run_id": "sub-1", "output": {"answer": "done", "iterations": 1}, "node_traces": {"act": {"steps": [{
+            "ts": "2026-11-03T00:00:00+00:00", "node_id": "act", "status": "completed",
+            "effect": {"type": "tool_calls", "payload": {"tool_calls": [{"name": row["name"], "arguments": {}, "call_id": row["call_id"]}]}},
+            "result": {"results": [row]},
+        }]}}},
+    }}}
+    spec.nodes["agent"](run, None)
+    observations = [m for m in run.vars["context"]["messages"] if (m.get("metadata") or {}).get("kind") == "tool_observation"]
+    assert len(observations) == 1
+    return str(observations[0]["content"])
+
+
+def test_the_agent_node_shows_the_model_a_failed_call_s_explanation_after_its_error() -> None:
+    """Backlog 1005: the kept object reaches the model, not only the ledger. The visual-flow Agent node used to
+    render a failed call as its error line alone ("[web_search]: Error: No results found")."""
+    payload = ('{"success": false, "error": "No results found", "hint": "retry fewer searches at once", '
+               '"backend_attempts": [{"backend": "html", "status": 202}]}')
+
+    def web_search() -> str:
+        return payload
+
+    row = MappingToolExecutor.from_tools([web_search]).execute(
+        tool_calls=[{"name": "web_search", "arguments": {}, "call_id": "c1"}])["results"][0]
+    content = _agent_observation_for(row)
+    assert content.startswith("[web_search]: Error: No results found\n")
+    assert "retry fewer searches at once" in content and '"status": 202' in content
+
+
+def test_the_agent_node_still_shows_only_the_error_for_a_plain_text_failure() -> None:
+    def tool_returns_error() -> str:
+        return "Error: Something went wrong"
+
+    row = MappingToolExecutor.from_tools([tool_returns_error]).execute(
+        tool_calls=[{"name": "tool_returns_error", "arguments": {}, "call_id": "c1"}])["results"][0]
+    assert _agent_observation_for(row) == "[tool_returns_error]: Error: Something went wrong"

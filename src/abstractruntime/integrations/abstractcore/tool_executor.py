@@ -428,12 +428,24 @@ class MappingToolExecutor:
                 return cleaned or text
             return None
 
+        def _json_object_from_string(value: str) -> Optional[Dict[str, Any]]:
+            text = value.strip()
+            if not (text.startswith("{") and text.endswith("}")):
+                return None
+            try:
+                parsed = json.loads(text)
+            except Exception:
+                return None
+            return parsed if isinstance(parsed, dict) else None
+
         def _make_result(*, call_id: str, runtime_call_id: Optional[str], name: str, output: Any) -> Dict[str, Any]:
             error = _error_from_output(output)
             if error is not None:
-                # Preserve structured outputs for provenance/evidence. For string-only error outputs
-                # (the historical convention), keep output empty and store the message in `error`.
-                output_json = None if isinstance(output, str) else _jsonable(output)
+                # Preserve structured outputs for provenance/evidence, including a tool that reports its
+                # failure as a JSON object string (backlog 1005: the agent and the ledger see the tool's own
+                # explanation: backends tried, hint, warnings). A plain text error ("Error: ...") keeps an
+                # empty output and the message in `error`.
+                output_json = _json_object_from_string(output) if isinstance(output, str) else _jsonable(output)
                 return {
                     "call_id": call_id,
                     "runtime_call_id": runtime_call_id,

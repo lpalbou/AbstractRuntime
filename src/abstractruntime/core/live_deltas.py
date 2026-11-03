@@ -69,6 +69,7 @@ END_REASONS = ("completed", "failed", "cancelled", "unavailable")
 # differently from "the run was stopped").
 CANCEL_DETAILS = (
     "reinvoked",  # a stray kill interrupted this call; the runtime re-runs it under a new call id
+    "interrupted",  # the host stopped on purpose (EffectInterrupted); the call is sent again when it is back
 )
 # Why a call did not stream. Every "no stream" outcome is named, never silent.
 UNAVAILABLE_DETAILS = (

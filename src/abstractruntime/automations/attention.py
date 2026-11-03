@@ -119,7 +119,17 @@ def normalize_occurrence_output(child: RunState, *, artifact_store: Any = None, 
     )
     error = None
     if not success:
-        error = str(child.error or get(payload, "error") or get(out, "error") or child.status.value)
+        # An agent-interface target that completed with `success: false` carries its reason in
+        # `meta.error` (the Agent node's output); the run's status word ("completed") is never a reason.
+        meta = get(payload, "meta") if "meta" in payload else get(out, "meta")
+        meta_error = meta.get("error") if isinstance(meta, dict) else None
+        error = str(
+            child.error
+            or get(payload, "error")
+            or get(out, "error")
+            or meta_error
+            or (child.status.value if child.status != RunStatus.COMPLETED else "The run finished without success and gave no reason.")
+        )
     notify = get(payload, "notify") if "notify" in payload else get(out, "notify")
     return {"answer": answer, "success": success, "notify": notify, "error": error}
 

@@ -30,6 +30,7 @@ effect payloads, client construction arguments, or Runtime-owned environment var
 - Thin-mode clients can run the workflow logic while delegating inference to a server.
 - Remote mode supports AbstractCore per-request `base_url` routing (dynamic endpoint selection).
 - Tool execution can be gated by trust/sandbox policy outside the router.
+- In every mode, a host stop interrupts an effect (`EffectInterrupted`: no terminal record, re-issued on the next tick); only a failure the effect itself met is recorded as failed.
 
 ### See Also
 - Implementation: [`backlog/completed/005_abstractcore_integration.md`](../backlog/completed/005_abstractcore_integration.md)

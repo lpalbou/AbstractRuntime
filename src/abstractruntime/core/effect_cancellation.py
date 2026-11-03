@@ -291,6 +291,20 @@ class EffectKilled(BaseException):
     """
 
 
+class EffectInterrupted(BaseException):
+    """Raised by a HOST that is stopping on purpose (a gateway stop or restart, an operator Restart, a
+    model-host restart for an update) into an effect that was in flight: the effect did not fail, its
+    host went away. The runtime records NO terminal step for it and re-raises: the ledger tail stays
+    STARTED, the run stays RUNNING, and the next tick (or the next start of the host) sends the effect
+    again under the same idempotency key, as after a crash. No retry attempt is consumed.
+
+    A BaseException ON PURPOSE, like `EffectKilled`: it must unwind through every `except Exception`
+    between the provider and the runtime (provider error swallowers, effect handlers, retry layers,
+    a host's tick loop) so none of them turns it into a failure. Only a host that KNOWS it requested
+    the stop raises it; a failure the effect itself met (a crash, a refused request) stays a failure.
+    """
+
+
 def kill_inflight_effect(step_id: str, *, killed_by: str = "kill_switch", reason: Optional[str] = None) -> Dict[str, Any]:
     """HARD STOP of one in-flight effect, in process: set its cancel event and
     inject `EffectKilled` into the thread executing it. Returns what was done:
@@ -340,6 +354,7 @@ def inflight_effects(run_ids: Optional[Iterable[str]] = None) -> List[Dict[str, 
 
 
 __all__ = [
+    "EffectInterrupted",
     "EffectKilled",
     "InflightEffect",
     "kill_inflight_effect",

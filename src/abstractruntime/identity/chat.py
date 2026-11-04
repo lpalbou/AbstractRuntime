@@ -1057,6 +1057,7 @@ class ChatSession:
         model_info: Optional[Dict[str, str]] = None,
         thinking: Optional[str] = None,
         out: Callable[[str], None] = print,
+        identity_since: Optional[str] = None,
     ) -> None:
         from abstractmemory import ENTITY_CONTEXT_FLOOR, entity_recall_budget
 
@@ -1173,8 +1174,12 @@ class ChatSession:
         self._memory_reader = HomeMemoryReader(home, ladder=self.ladder, tag_map=self._memory_tags)
 
         # The prelude: a refused render ABORTS the summon (never truncated identity).
+        # `identity_since` is the previous summon's time when the host knows it
+        # (ADR 0052 section 7): the identity cue then tells only a newer change;
+        # None tells the change that made the current identity.
         prelude = render_summon_prelude(
-            home.ms, home.diary, entity_id=home.entity_id, budget=prelude_budget, spark=home.spark
+            home.ms, home.diary, entity_id=home.entity_id, budget=prelude_budget, spark=home.spark,
+            home_dir=home.home_dir, identity_since=identity_since,
         )
         if prelude["refused"]:
             for w in prelude["warnings"]:

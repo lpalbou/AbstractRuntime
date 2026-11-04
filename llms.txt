@@ -73,6 +73,7 @@
 - [Publish to channel](docs/automations.md#publish-to-channel): `PUBLISH_EVENT` `{channel, type?, title, body?, subject?, data?, alert?, recipient?, channels?}` handed to `Runtime.set_publish_event_handler(handler)`; `recipient` defaults to `"me"`, `channels` (from `tray`, `watch`, `phone`, `email`, `console`; absent = all) needs `alert: true`; the visual envelope is stripped (`strip_visual_envelope`) and a node's `type` pin travels as `event_type`
 - [Tool approval](docs/tool-approval.md): tool risk tiers, the run-policy rank ceiling, per-call refiners, and the session tool policy (a conversation's standing approve/deny, applied before any approval wait)
 - [Entity runtime](docs/entity-runtime.md): per-entity runtimes, homes, the one-writer lease, act-only diary privacy, and durable visit waits
+- [Track record and reputation](docs/track-record.md): `entity_track_record` / `session_track_record` / `compute_reputation` — counted runs (turn roots a person or a trigger started, occurrences once), outcome signals (run, occurrence, task, work order; `feedback_user` / `feedback_agent` typed, no source yet), task kind `<phase or role>/<workflow_id>`, tokens from `metrics_many`, trust `(s+1)/(s+f+2)` per kind with support and the last 20 outcomes; `basis: "completion-rate only"`
 - [Models, engines and host jobs](docs/integrations/abstractcore.md#models-engines-and-host-jobs-config-facade): `config_facade` passthroughs for hosts; `host_job_cancel(job_id, *, by="api", user=None)` records who cancelled a job
 
 ## Durability & observability

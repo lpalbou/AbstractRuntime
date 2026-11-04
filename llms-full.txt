@@ -28,6 +28,7 @@ See llms.txt for the linked index.
 - docs/tools-comms.md
 - docs/email.md
 - docs/entity-runtime.md
+- docs/track-record.md
 - docs/mcp-worker.md
 - docs/evidence.md
 - docs/replay.md
@@ -6455,6 +6456,146 @@ ledger-keeps-the-ref end-to-end pin, and the three-backend due-scan.
 
 
 ==============================================================================
+# FILE: docs/track-record.md
+==============================================================================
+
+# Track record and reputation
+
+What an entity (or a regular agent's session) has done, and how much its past outcomes say we can trust it
+for each kind of task. Both are **computed from records the runtime and the entity home already keep**:
+nothing new is stored, no run records anything extra, and the same records always give the same answer.
+Module: `abstractruntime.identity.track_record` (ADR 0052 §5-§6, framework backlog 1119).
+
+> Today "success" means **the work completed** (or the entity said it was done). Nobody has judged whether
+> it was good. Every answer says so in its `basis` field: `"completion-rate only"`. Feedback from people
+> and other agents has a place in the model (below) but no way in yet: that is backlog 1120.
+
+## Quick start
+
+```python
+from abstractruntime.identity import compute_reputation, entity_track_record, session_track_record
+from abstractruntime.identity.entity_runtime import open_entity_runtime
+
+er = open_entity_runtime(home_dir)          # or the stores your host already holds
+record = entity_track_record(home_dir, er.run_store, er.ledger_store)
+print(record.runs, record.successes, record.failures, record.tokens.total)
+
+reputation = compute_reputation(record)
+print(reputation.overall.describe())        # "trust 0.83 over 12 outcomes" / "no experience yet"
+for kind, cell in reputation.by_task_kind.items():
+    print(kind, cell.describe())
+
+# A regular agent: the same rules over one session of the host's store
+session_record = session_track_record("sess_9f2a", run_store, ledger_store)
+```
+
+`since="2026-11-01T00:00:00+00:00"` keeps only what started at or after that time.
+
+## What counts
+
+A track record counts **turn roots** — the runs a session shows as its turns — that came from outside:
+
+| Counted | Never counted |
+|---|---|
+| a run a person started (`_meta.origin.kind == "person"`) | sub-runs (their tokens count with the run above them) |
+| a run an automation's trigger started (`"trigger"`) | automation controllers |
+| every automation occurrence, **once**, however many attempts it took | the session memory run (`__session_memory__`) and any reserved `__…__` workflow |
+| | runs another run or the system started (origin `agent` or `system`), and runs with no recorded origin |
+
+This is what stops an entity from raising its own trust by starting easy runs: only work someone or
+something outside asked for counts.
+
+> An entity visit run carries an origin only when the gateway records one at visit open. Until it does,
+> visits do not appear in an entity's record — that is reported, never guessed.
+
+For an entity, two files of its home add outcomes that are not runs:
+
+- `task_inbox.jsonl` — a task whose latest status is `done`;
+- `work_order.done.md` — each verdict the entity gave when it finished a work order (`done:` or
+  `blocked:`), as the work lane archives it.
+
+## Outcomes and their signals
+
+Each counted thing gives at most one outcome, and the evidence names where it was read:
+
+| Signal | Read from | Outcome |
+|---|---|---|
+| `run_completed` / `run_failed` | the run's status | success / failure (cancelled, running and waiting are not outcomes) |
+| `occurrence_completed` / `occurrence_failed` | the automation's `automation.completed` decision for that occurrence | success / failure (cancelled is not an outcome; no decision yet = in progress) |
+| `task_done` | the task inbox | success |
+| `work_order_done` / `work_order_blocked` | the work-order archive | success / failure |
+| `feedback_user` / `feedback_agent` | **nothing yet** (backlog 1120) | a person's or an agent's verdict on the work, with who gave it (`by`) |
+
+`assessed` counts feedback outcomes; it is 0 until feedback exists.
+
+## Task kinds
+
+Trust is per **task kind**: `<phase or role>/<workflow_id>`.
+
+- the phase of the run's entity stamp (`visit`, `work`, `personal`; a stamp minted before phases existed
+  is a visit), else
+- the run's attribution role: `occurrence`, `discussion`, or `chat` when it has none,
+- then the workflow the run executed.
+
+Examples: `visit/entity-visit-react`, `occurrence/daily-digest`, `chat/basic-agent`. Tasks and work orders
+are `work/task_inbox` and `work/work_order`. The kind is read from ids only — never from what anyone wrote.
+
+## The track record
+
+| Field | Meaning |
+|---|---|
+| `subject` | `entity:<slug>` or `session:<session_id>` |
+| `fingerprint` | an entity's `ActorFingerprint` from its manifest (`kind="entity"`, metadata `entity_id`, `home_id`, `spark_hash`); `None` for a session |
+| `sessions`, `runs` | distinct sessions and counted runs |
+| `successes`, `failures`, `cancelled`, `in_progress` | the outcomes above |
+| `assessed` | feedback outcomes (0 today) |
+| `tokens` | `{input, output, total}` of every `llm_call` of the counted runs and their sub-runs |
+| `by_task_kind` | the same counts per kind, with `tokens_total`, `first_at`, `last_at`, `last_outcome_at` |
+| `recent_outcomes` | the last 20 outcomes, oldest first |
+| `as_of` | the newest time read (a host caches on it) |
+| `basis` | `"completion-rate only"` |
+
+Tokens use the SQLite ledger's `metrics_many` query (`tokens_input`, `tokens_output`, `tokens_total`); on
+other ledgers the same rules run over the run's records (`token_counts_of_records`). Input is
+`usage.input_tokens` (else `prompt_tokens`), output is `output_tokens` (else `completion_tokens`), total is
+`total_tokens`.
+
+## Reputation
+
+For each task kind:
+
+```
+trust   = (successes + 1) / (successes + failures + 2)
+support = successes + failures
+```
+
+So 4 successes and 1 failure read `trust 0.71 over 5 outcomes`. A kind with no outcome reads
+`trust 0.5, support 0` and is shown as **"no experience yet"** — never as trusted. `overall` is the mean of
+the kinds weighted by their support. `evidence` is the record's last 20 outcomes, each with its run (when
+there is one), kind, outcome, time and signal, so every number can be checked. There is no recency
+weighting and no learning: the same record always gives the same reputation.
+
+## Cost
+
+One run-index listing (the entity's whole home store, or the session's runs), one run load per candidate
+turn root (its origin and stamp are in the run, not in the index), one token query per 300 counted runs
+and sub-runs on SQLite (other ledgers are read run by run), one read of each automation's controller ledger
+when it has a counted occurrence, and one read of each home file. A host serving it often caches the
+answer per `as_of`.
+
+A session's record covers the runs listed under that session; a sub-run started into another session is
+outside it.
+
+## Errors
+
+`TrackRecordError` (a `ValueError`) is raised, never papered over, when a record is not in the shape its
+writer guarantees: a run in the index that cannot be loaded, an unknown run status, an unknown stamp phase,
+an occurrence decision naming a run that is not one of its attempts, a task-inbox line that is not JSON
+(except the last line, which a crash mid-append can leave torn), or a manifest without `slug`, `entity_id`,
+`home_id` or `spark_hash`.
+
+
+==============================================================================
 # FILE: docs/mcp-worker.md
 ==============================================================================
 
@@ -7569,6 +7710,7 @@ In this repo, the AbstractCore wiring lives under `src/abstractruntime/integrati
 
 - `automations.md` — automations: a workflow run on a schedule, on an event or on request as a durable controller run; triggers (`schedule@1`, `schedule@2` calendar rules in a time zone, `manual@1`, `email.received@1`, `feed.item@1` RSS 2.0 / RSS 1.0 / Atom, `webhook.received@1` Standard Webhooks, entry-point sources), per-user trigger connections, the CloudEvents envelope (`input_data.event`), run origin (`_meta.origin`), wakes (`SCHEDULE_RUN`: work later in the same session, with at most the caller's tools), Publish to channel (`PUBLISH_EVENT`, alerts with `recipient` and `channels`), commands, independent or growing context, discussions forked at any occurrence (own writable workspace, the automation's workspace mounted read-only), tool approval, typed waits, notifications and retries, and the storage guarantees (create-if-absent, per-run lock, turn roots, session kinds, one writer process per store)
 - `entity-runtime.md` — per-entity runtimes for summoned entities: homes, the one-writer lease, act-only diary privacy (`$act_only` refs), durable visit waits with deadlines
+- `track-record.md` — an entity's or a session's track record (sessions, runs, successes, failures, tokens) and reputation (trust per task kind with its evidence), computed from existing records; completion rates until feedback exists
 - `evidence.md` — artifact-backed evidence capture for external-boundary tools
 - `mcp-worker.md` — MCP worker CLI (`abstractruntime-mcp-worker`)
 - `replay.md` — the replay view: one reconstruction of a run tree (status, the interaction to answer, messages, one activity per execution, artifacts, usage, the workflow it executes) that every client renders; the durable cursor (`seq`, `list_after`); conformance fixtures

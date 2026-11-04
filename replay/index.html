@@ -1138,7 +1138,11 @@ from raw records.</p>
 <code>iteration</code>, <code>source_call_ids</code>, <code>update_kind</code>, and normal ledger provenance. <code>update_kind</code> is
 the producer's type for the update: <code>"finding"</code> (a fact or piece of evidence the actor
 established) or <code>"progress"</code> (what it is doing); an event without a <code>kind</code> of <code>"finding"</code>
-replays as <code>"progress"</code>. Replay copies the type and never infers it from the text. Replay does not turn reasoning,
+replays as <code>"progress"</code>. Replay copies the type and never infers it from the text. When the run's snapshot
+carries <code>vars["_runtime"]["identity_ref"]</code> (the gateway stamps it on visit, summon, meet and session runs),
+each of that run's public updates carries it as <code>identity_ref</code> (<code>{"of", "rev"}</code>); a run without one, or with
+a malformed one, gives no field, never an invented one. A snapshot read after the updates were folded stamps
+them then, and the ref is part of the snapshot digest, so the cursor token changes with it. Replay does not turn reasoning,
 raw tool output or a marker inside model text into public speech. Diary/thinking fences
 are excluded. These are actor-authored updates; their wording alone is not proof of a fact
 or of completed work.</p>

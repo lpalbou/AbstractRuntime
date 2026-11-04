@@ -1394,7 +1394,8 @@ string form <code>&lt;subject&gt;#&lt;n&gt;</code>.</p>
 <code>{"of", "rev"}</code>, beside the signed entity stamp (<code>vars["_runtime"]["entity"]</code>) and never inside
 it: presentation is not authority. <code>stamp_run_identity_ref(vars, ref)</code> puts it there;
 <code>read_run_identity_ref(vars)</code> returns it, or <code>None</code> when the run carries none (a reference is never
-made up). An old rev resolves through <code>identity_at_rev</code>.</p>
+made up). An old rev resolves through <code>identity_at_rev</code>. The replay view copies it onto the run's public
+updates (<code>identity_ref</code>, see <a href="../replay/#public-conversation-messages">replay.md</a>).</p>
 <h2 id="the-fingerprint">The fingerprint<a class="headerlink" href="#the-fingerprint" title="Permanent link">&para;</a></h2>
 <p><code>identity_fingerprint(manifest, book_head=diary.head())</code> names the individual:
 <code>actor_id = ActorFingerprint.from_metadata(kind="entity", display_name=&lt;slug&gt;,

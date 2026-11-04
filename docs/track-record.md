@@ -134,3 +134,43 @@ an occurrence decision naming a run that is not one of its attempts, a task-inbo
 (except the last line, which a crash mid-append can leave torn), a manifest without `slug`, `entity_id`,
 `home_id` or `spark_hash`, a malformed run identity ref, or a session whose newest run names another
 subject's ref. An unreadable `identity.json` raises `IdentityUnreadable`.
+
+## Acquaintances
+
+Whom an entity (or a session) has met: two lists, the other **entities** and the **humans**, each with
+when it first and last met them, how many interactions, and on which kinds of task. Like the track record
+it is computed from existing records and never stored (nothing goes into `identity.json`). Module:
+`abstractruntime.identity.acquaintances`.
+
+```python
+from abstractruntime.identity import entity_acquaintances, session_acquaintances
+
+acq = entity_acquaintances(home_dir, er.run_store)
+for a in acq.entities:      # first met first
+    print(a.id, a.first_seen, a.last_seen, a.interactions, dict(a.kinds))
+for a in acq.humans:
+    print(a.id, a.interactions)
+print(dict(acq.not_counted))  # interactions with no usable identifier, by reason
+
+session_acquaintances("sess_9f2a", run_store)  # a regular agent's session
+```
+
+Where an interaction is read (identifiers only; no text is ever read):
+
+| Source | Gives |
+|---|---|
+| a run's door-stamped participants, `_runtime.entity.participants` (visits, summons, both legs of an entity meet) | each participant other than the entity itself: `entity:<slug>` → entities, `person:<user>` → humans; one interaction per run |
+| a run a person started, `_meta.origin` with kind `person` | its `actor` (`<tenant>:<user>`) → humans |
+| a task in `task_inbox.jsonl` | the `by` of its `added` event → humans (kind `work/task_inbox`) |
+
+Only turn roots are read (never sub-runs, which carry their root's stamp; never the reserved `__…__` runs),
+whatever their origin: a visit is an interaction even when no origin was recorded for it.
+
+Not counted, and counted in `not_counted` instead: a participant of another kind (`agent:<name>`, a
+shared-room agent, is neither an entity nor a human), a participant without a namespace, and a person-started
+run whose origin names no actor. Work orders record no author, so they name no one. The two human id forms
+are kept as recorded and never merged: the door stamp's `person:<user>` has no tenant, the origin's
+`<tenant>:<user>` does, so one person can appear in each form.
+
+`identity_ref` names the subject's identity as for the track record. Cost: one run-index listing, one run
+load per turn root, one read of the task inbox.

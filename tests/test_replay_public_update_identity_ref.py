@@ -25,6 +25,15 @@ def snapshot(run, ref=None, **runtime):
     return {"run_id": run, "workflow_id": "visit", "status": "running", "vars": run_vars}
 
 
+def guidance(run, seq):
+    """The host's receipt of a person's words: a `guidance` message of the same run, not a public update."""
+    return {"run_id": run, "seq": seq, "step_id": f"s{seq}", "node_id": "__host_user_guidance__", "status": "completed",
+            "idempotency_key": "system:user_guidance:1", "started_at": f"2027-01-01T12:00:{seq:02d}+00:00",
+            "effect": {"type": "emit_event", "payload": {"name": "user_guidance", "payload": {
+                "seq": 1, "status": "accepted", "id": f"{run}:guidance:1", "run_id": run, "text": "No stairs."}}},
+            "result": {"emitted": True}}
+
+
 def updates(view):
     return [m for m in view.to_json()["messages"] if m["kind"] == "public_update"]
 
@@ -47,12 +56,16 @@ def test_a_child_run_s_update_names_the_child_s_ref_not_the_parent_s():
 
 def test_a_snapshot_read_after_the_records_stamps_the_updates_already_folded():
     view = ReplayView("R")
-    view.apply([event("R", 1)])
+    view.apply([event("R", 1), guidance("R", 2)])
     assert "identity_ref" not in updates(view)[0]
     delta = view.apply(runs_by_id={"R": snapshot("R", identity_ref("entity:castor", 3))})
     assert updates(view)[0]["identity_ref"] == {"of": "entity:castor", "rev": 3}
+    # Only public updates carry it: the person's words in the same run are not the entity's.
+    words = [m for m in view.to_json()["messages"] if m["kind"] == "guidance"]
+    assert len(words) == 1 and "identity_ref" not in words[0]
     assert "R:public_update:1" in str(delta)  # the stamped message travels in the delta
-    fresh = replay({"R": [event("R", 1)]}, {"R": snapshot("R", identity_ref("entity:castor", 3))}, root_run_id="R")
+    fresh = replay({"R": [event("R", 1), guidance("R", 2)]}, {"R": snapshot("R", identity_ref("entity:castor", 3))},
+                   root_run_id="R")
     assert view.to_json()["messages"] == fresh.to_json()["messages"]
 
 

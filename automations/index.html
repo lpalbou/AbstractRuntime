@@ -467,6 +467,60 @@
   
   
     <li class="md-nav__item">
+      <a href="../digital-identity/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Digital Identity
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../track-record/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Track Record
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../tools-comms/" class="md-nav__link">
         
   
@@ -1296,10 +1350,10 @@
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_21" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_23" >
         
           
-          <label class="md-nav__link" for="__nav_21" id="__nav_21_label" tabindex="0">
+          <label class="md-nav__link" for="__nav_23" id="__nav_23_label" tabindex="0">
             
   
   
@@ -1317,8 +1371,8 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_21_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_21">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_23_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_23">
             <span class="md-nav__icon md-icon"></span>
             
   
@@ -3222,8 +3276,12 @@ discussion seeding always read strictly.</p>
   chat. The JSON store also removes run temp files older than 10 minutes, left behind by a crash, when it opens.</li>
 <li><strong>A run index for sessions.</strong> <code>Runtime.start</code> checks the attribution of every root run that names a session. A
   store without a run index (no <code>session_kinds</code> and no <code>list_run_index</code>) cannot answer, and the start is refused with
-  <code>SessionAttributionError</code> rather than risk starting an unanchored run in a discussion session. Strict history reads
-  and <code>latest_occurrence</code> (which uses the store's <code>latest_occurrence_row</code>) need the index too.</li>
+  <code>SessionAttributionError</code> rather than risk starting an unanchored run in a discussion session. A store whose
+  <code>list_run_index</code> rows do not carry <code>session_kind</code> (an index written before automations v1) cannot tell a discussion
+  from a chat either: its session-bearing starts are refused the same way, never started as a plain chat. To upgrade
+  a custom store, add <code>session_kind</code> and <code>role</code> to its index rows, or implement <code>session_kinds(session_id)</code>. The
+  built-in stores already do. Strict history reads and <code>latest_occurrence</code> (which uses the store's
+  <code>latest_occurrence_row</code>) need the index too.</li>
 </ul>
 <h3 id="crash-safety">Crash safety<a class="headerlink" href="#crash-safety" title="Permanent link">&para;</a></h3>
 <p>Each transition, whether a command or a controller step, is a <em>decision</em>:</p>

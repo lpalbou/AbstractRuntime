@@ -16,7 +16,7 @@
         <link rel="prev" href="../tool-approval/">
       
       
-        <link rel="next" href="../tools-comms/">
+        <link rel="next" href="../digital-identity/">
       
       
         
@@ -591,6 +591,60 @@
   
   
     <li class="md-nav__item">
+      <a href="../digital-identity/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Digital Identity
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../track-record/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Track Record
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../tools-comms/" class="md-nav__link">
         
   
@@ -896,10 +950,10 @@
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_21" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_23" >
         
           
-          <label class="md-nav__link" for="__nav_21" id="__nav_21_label" tabindex="0">
+          <label class="md-nav__link" for="__nav_23" id="__nav_23_label" tabindex="0">
             
   
   
@@ -917,8 +971,8 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_21_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_21">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_23_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_23">
             <span class="md-nav__icon md-icon"></span>
             
   
@@ -1210,6 +1264,9 @@ the door half (auth, stamps, serving) is AbstractGateway's.</p>
   manifest.json            # entity_id (birth marker — never a lookup key)
   spark.yaml               # the attested seed
   substrate.yaml           # operator's ONE mind choice (provider+model)
+  identity.json            # look and voice (digital-identity.md)
+  .identity.lock           # one identity write at a time
+  state_history.jsonl      # biography: state, phase_changed and identity_changed rows
   memory.sqlite3           # graph + journal (abstractmemory)
   home.sqlite3             # diary book + command inbox
   runtime_castor.sqlite3   # run store + ledger (THIS page)

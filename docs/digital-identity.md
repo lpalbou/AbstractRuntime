@@ -81,7 +81,11 @@ the row stays, and the next write takes the rev after it: a rev is never given t
 from these rows (a rev whose file never landed raises `LookupError`), so a copied home knows every
 look and voice it ever had. `life_sleep_stats` skips these rows like every other marker row.
 
-The caller serialises writes to one home; the gateway holds the entity's lock while it writes.
+One write at a time per home: every write holds `<home>/.identity.lock` from its first read to
+the file replace, and a second writer (another thread, another process, the gateway's start-up
+pass racing a change from an app) waits its turn. Two writers never read the same rev, so a rev
+is never given twice, and two default passes racing on one home write it once. The check hook
+runs under the lock: keep it short. The lock file is never removed.
 
 ## The recorded default
 

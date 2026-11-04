@@ -14,8 +14,9 @@ What this module guarantees:
   half-way (the next rev is above both the file's and the biography's newest rev), and not when
   two writers race: every write holds `<home>/.identity.lock` from its read to its file replace.
 - Every write appends one `identity_changed` row to `<home>/state_history.jsonl` BEFORE the file
-  moves (the `phase_changed` file and row shape), so the home itself remembers every look and
-  voice it ever had; `identity_at_rev` answers "which voice was this at rev N" from those rows.
+  moves (the file and row shape of the phase rows life.py writes), so the home itself remembers
+  every look and voice it ever had; `identity_at_rev` answers "which voice was this at rev N"
+  from those rows.
 - The recorded default (section 2) is a pure function of the entity id and the gateway's default
   voice: `default_identity`. `record_default_identity` writes it as rev 1 once, and never
   overwrites a record.
@@ -476,7 +477,7 @@ def _identity_write_lock(home_dir: Path) -> Iterator[None]:
 
 
 def _append_biography_row(home_dir: Path, row: Dict[str, Any]) -> None:
-    """Append one row and flush it to disk. Unlike `phase_changed` this is NOT best-effort: the
+    """Append one row and flush it to disk. Unlike the phase rows in life.py this is NOT best-effort: the
     identity file never moves unless its biography row is on disk first."""
     with (Path(home_dir) / BIOGRAPHY_FILENAME).open("a", encoding="utf-8") as fh:
         fh.write(json.dumps(row, ensure_ascii=False) + "\n")
@@ -496,7 +497,7 @@ def write_identity(
 ) -> DigitalIdentity:
     """Record a new identity for the home and return it.
 
-    The biography row has the `phase_changed` field names, so one reader handles both:
+    The biography row has the same field names as the phase rows in life.py, so one reader handles both:
     `{marker: identity_changed, rev, from, to, written_by, cause, at, provenance}` — `from` and
     `to` are whole records (`from` is None for the first one), `written_by` is `set_by`, `cause`
     says why (the caller's word, for example `chosen` or `recorded_default`) and `provenance`

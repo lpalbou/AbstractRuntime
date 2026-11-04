@@ -5,7 +5,8 @@
   `<home>/identity.json` holds the avatar design, its colour and the voice (`schema_version` 1). `write_identity` checks
   every bound (`IdentityInvalid` names the field), runs the gateway's `check` hook, appends an `identity_changed` row to
   `state_history.jsonl` (the `phase_changed` field names) before the file is replaced atomically, and never gives a
-  `rev` twice. A file it cannot read in full raises `IdentityUnreadable` on read and on write, never "no identity".
+  `rev` twice: one write at a time per home (`<home>/.identity.lock`, held from the read to the file replace). A
+  file it cannot read in full raises `IdentityUnreadable` on read and on write, never "no identity".
   `default_identity` is the recorded default anyone can recompute (SHA-256 of the entity id, eight engraved Watch
   designs, an HSL colour, the gateway's default voice as a value); `record_default_identity` writes it once and never
   overwrites. `identity_at_rev` answers an old rev from the biography. The reference `entity:castor#3` rides

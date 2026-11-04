@@ -15,18 +15,20 @@ Sub-runs, controllers, owner runs and every run another run or the system starte
 
 Outcome signals (one per counted unit; the signal is named on each evidence row):
 
-- `run_status`: a counted run's status — completed = success, failed = failure, cancelled = cancelled,
-  running / waiting = in progress;
-- `occurrence`: the automation controller's `automation.completed` decision for the occurrence
-  (`automations/controller.py` `complete_occurrence`) — completed / failed / cancelled; no decision yet =
-  in progress;
-- `task` (entity homes): a task of `<home>/task_inbox.jsonl` whose folded status is `done` = success;
-- `work_order` (entity homes): a verdict of `<home>/work_order.done.md` — `done:` = success,
-  `blocked:` = failure.
+- `run_completed` / `run_failed`: a counted run's status (cancelled = cancelled, running / waiting = in
+  progress; neither is an outcome);
+- `occurrence_completed` / `occurrence_failed`: the automation controller's `automation.completed` decision
+  for the occurrence (`automations/controller.py` `complete_occurrence`); a cancelled occurrence is
+  cancelled; no decision yet = in progress;
+- `task_done` (entity homes): a task of `<home>/task_inbox.jsonl` whose folded status is `done`;
+- `work_order_done` / `work_order_blocked` (entity homes): a verdict of `<home>/work_order.done.md`;
+- `feedback_user` / `feedback_agent`: a judgement of the work by a person or another agent (who, when,
+  verdict, task kind — the `OutcomeEvidence` fields). The type has room for them; NO source produces them
+  today (operator ruling 2026-11-04: reputation needs external feedback; the intake is backlog 1120).
 
 "Success" therefore means "it completed" (or "the entity said done"), never "it was good": no one has
-assessed the work. `assessed` stays 0 and `basis` says "completion-rate only" until the assessment signal
-lands (framework backlog 1120).
+judged the work. `assessed` (the count of feedback outcomes) stays 0 and `basis` says
+"completion-rate only" until feedback lands.
 
 Task kind (ADR §5, ATTACK B4): `<phase or role>/<workflow_id>` — the phase of the run's entity stamp
 (`vars._runtime.entity.phase`), else its attribution role (`chat` when it has none), then its
@@ -65,7 +67,19 @@ EVIDENCE_WINDOW = 20
 COMPLETION_RATE_ONLY = "completion-rate only"
 #: Origins whose runs count (ATTACK B6): a person asked, or an automation's trigger fired.
 COUNTED_ORIGIN_KINDS = ("person", "trigger")
-SIGNALS = ("run_status", "occurrence", "task", "work_order", "assessment")
+#: Every outcome signal. The two feedback kinds are typed but produced by no source yet (backlog 1120).
+SIGNALS = (
+    "run_completed",
+    "run_failed",
+    "occurrence_completed",
+    "occurrence_failed",
+    "task_done",
+    "work_order_done",
+    "work_order_blocked",
+    "feedback_user",
+    "feedback_agent",
+)
+FEEDBACK_SIGNALS = ("feedback_user", "feedback_agent")
 TASK_INBOX_KIND = f"{PHASE_WORK}/task_inbox"
 WORK_ORDER_KIND = f"{PHASE_WORK}/work_order"
 
@@ -94,13 +108,16 @@ class TokenCounts:
 
 @dataclass(frozen=True)
 class OutcomeEvidence:
-    """One success or failure and where it was read. `run_id` is None for a task or a work order (no run)."""
+    """One success or failure and where it was read: what (`task_kind`, `run_id` — None for a task or a
+    work order, which have no run), the verdict (`outcome`), when (`at`), the `signal` it came from, and
+    for feedback who gave it (`by`: `<tenant>:<user>` or an agent's id; None for every other signal)."""
 
     run_id: Optional[str]
     task_kind: str
     outcome: str  # success | failure
     at: str
     signal: str  # one of SIGNALS
+    by: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -262,7 +279,8 @@ def token_counts_of_records(records: Iterable[Any]) -> TokenCounts:
     total = `total_tokens`."""
     tin = tout = ttot = 0
     for rec in records or []:
-        if not isinstance(rec, Mapping) or str(rec.get("status") or "") != "completed":
+        # In-memory ledgers keep the enum; persisted ones its value.
+        if not isinstance(rec, Mapping) or str(getattr(rec.get("status"), "value", rec.get("status")) or "") != "completed":
             continue
         effect = rec.get("effect") if isinstance(rec.get("effect"), Mapping) else {}
         if str(effect.get("type") or "") != "llm_call":
@@ -308,13 +326,23 @@ class _Unit:
     session_id: Optional[str]
     task_kind: str
     state: str  # success | failure | cancelled | in_progress
-    signal: str
+    signal: str  # the source: run | occurrence | task | work_order
     first_at: Optional[str]
     last_at: Optional[str]
     outcome_at: Optional[str]
     token_run_ids: List[str] = field(default_factory=list)
 
 
+# (source, outcome) -> the evidence signal kind.
+_SIGNAL_OF = {
+    ("run", "success"): "run_completed",
+    ("run", "failure"): "run_failed",
+    ("occurrence", "success"): "occurrence_completed",
+    ("occurrence", "failure"): "occurrence_failed",
+    ("task", "success"): "task_done",
+    ("work_order", "success"): "work_order_done",
+    ("work_order", "failure"): "work_order_blocked",
+}
 _RUN_STATES = {"completed": "success", "failed": "failure", "cancelled": "cancelled", "running": "in_progress", "waiting": "in_progress"}
 _OCCURRENCE_STATES = {"completed": "success", "failed": "failure", "cancelled": "cancelled"}
 
@@ -392,7 +420,7 @@ def _run_units(run_store: Any, ledger_store: Any, rows: List[Dict[str, Any]], si
                 session_id=row.get("session_id"),
                 task_kind=task_kind_of(run, role=row.get("role")),
                 state=state,
-                signal="run_status",
+                signal="run",
                 first_at=row.get("created_at"),
                 last_at=row.get("updated_at"),
                 outcome_at=row.get("updated_at") if state in ("success", "failure") else None,
@@ -527,7 +555,7 @@ def _fold(
                 raise TrackRecordError(f"{u.signal} outcome of {u.run_id or u.task_kind} has no time")
             if k["last_outcome_at"] is None or u.outcome_at > k["last_outcome_at"]:
                 k["last_outcome_at"] = u.outcome_at
-            outcomes.append(OutcomeEvidence(u.run_id, u.task_kind, u.state, u.outcome_at, u.signal))
+            outcomes.append(OutcomeEvidence(u.run_id, u.task_kind, u.state, u.outcome_at, _SIGNAL_OF[(u.signal, u.state)]))
 
     outcomes.sort(key=lambda e: (e.at, e.signal, e.run_id or "", e.task_kind))
     stamps = [str(r.get("updated_at") or "") for r in rows] + [str(u.last_at or "") for u in units]
@@ -544,7 +572,7 @@ def _fold(
         failures=counts["failure"],
         cancelled=counts["cancelled"],
         in_progress=counts["in_progress"],
-        assessed=0,
+        assessed=sum(1 for e in outcomes if e.signal in FEEDBACK_SIGNALS),
         tokens=total_tokens,
         by_task_kind={name: TaskKindRecord(**kinds[name]) for name in sorted(kinds)},
         recent_outcomes=tuple(outcomes[-EVIDENCE_WINDOW:]),
@@ -636,6 +664,7 @@ __all__ = [
     "COMPLETION_RATE_ONLY",
     "COUNTED_ORIGIN_KINDS",
     "EVIDENCE_WINDOW",
+    "FEEDBACK_SIGNALS",
     "OutcomeEvidence",
     "Reputation",
     "SIGNALS",

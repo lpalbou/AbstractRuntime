@@ -39,6 +39,7 @@ DOCUMENTS = [
     "docs/tools-comms.md",
     "docs/email.md",
     "docs/entity-runtime.md",
+    "docs/digital-identity.md",
     "docs/mcp-worker.md",
     "docs/evidence.md",
     "docs/replay.md",

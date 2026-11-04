@@ -4,9 +4,14 @@
 
 It is designed for long-running workflows that must survive restarts and explicitly model blocking (human input, timers, external events, subworkflows) without keeping Python stacks alive.
 
-**Version:** 0.18.0 • **Python:** 3.10+
+**Version:** 0.18.1 • **Python:** 3.10+
 
 **Status:** pre-1.0 (API may evolve). For production use, pin versions and follow `CHANGELOG.md`.
+
+## What's new in 0.18.1
+
+- **A public update names the identity its run started with**: the replay view copies the run's `identity_ref` onto
+  its public updates, so a host serving cached views shows who spoke; a run without one gets no field.
 
 ## What's new in 0.18.0
 

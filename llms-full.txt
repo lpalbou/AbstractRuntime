@@ -6790,6 +6790,46 @@ an occurrence decision naming a run that is not one of its attempts, a task-inbo
 `home_id` or `spark_hash`, a malformed run identity ref, or a session whose newest run names another
 subject's ref. An unreadable `identity.json` raises `IdentityUnreadable`.
 
+## Acquaintances
+
+Whom an entity (or a session) has met: two lists, the other **entities** and the **humans**, each with
+when it first and last met them, how many interactions, and on which kinds of task. Like the track record
+it is computed from existing records and never stored (nothing goes into `identity.json`). Module:
+`abstractruntime.identity.acquaintances`.
+
+```python
+from abstractruntime.identity import entity_acquaintances, session_acquaintances
+
+acq = entity_acquaintances(home_dir, er.run_store)
+for a in acq.entities:      # first met first
+    print(a.id, a.first_seen, a.last_seen, a.interactions, dict(a.kinds))
+for a in acq.humans:
+    print(a.id, a.interactions)
+print(dict(acq.not_counted))  # interactions with no usable identifier, by reason
+
+session_acquaintances("sess_9f2a", run_store)  # a regular agent's session
+```
+
+Where an interaction is read (identifiers only; no text is ever read):
+
+| Source | Gives |
+|---|---|
+| a run's door-stamped participants, `_runtime.entity.participants` (visits, summons, both legs of an entity meet) | each participant other than the entity itself: `entity:<slug>` → entities, `person:<user>` → humans; one interaction per run |
+| a run a person started, `_meta.origin` with kind `person` | its `actor` (`<tenant>:<user>`) → humans |
+| a task in `task_inbox.jsonl` | the `by` of its `added` event → humans (kind `work/task_inbox`) |
+
+Only turn roots are read (never sub-runs, which carry their root's stamp; never the reserved `__…__` runs),
+whatever their origin: a visit is an interaction even when no origin was recorded for it.
+
+Not counted, and counted in `not_counted` instead: a participant of another kind (`agent:<name>`, a
+shared-room agent, is neither an entity nor a human), a participant without a namespace, and a person-started
+run whose origin names no actor. Work orders record no author, so they name no one. The two human id forms
+are kept as recorded and never merged: the door stamp's `person:<user>` has no tenant, the origin's
+`<tenant>:<user>` does, so one person can appear in each form.
+
+`identity_ref` names the subject's identity as for the track record. Cost: one run-index listing, one run
+load per turn root, one read of the task inbox.
+
 
 ==============================================================================
 # FILE: docs/mcp-worker.md
@@ -7907,7 +7947,7 @@ In this repo, the AbstractCore wiring lives under `src/abstractruntime/integrati
 - `automations.md` — automations: a workflow run on a schedule, on an event or on request as a durable controller run; triggers (`schedule@1`, `schedule@2` calendar rules in a time zone, `manual@1`, `email.received@1`, `feed.item@1` RSS 2.0 / RSS 1.0 / Atom, `webhook.received@1` Standard Webhooks, entry-point sources), per-user trigger connections, the CloudEvents envelope (`input_data.event`), run origin (`_meta.origin`), wakes (`SCHEDULE_RUN`: work later in the same session, with at most the caller's tools), Publish to channel (`PUBLISH_EVENT`, alerts with `recipient` and `channels`), commands, independent or growing context, discussions forked at any occurrence (own writable workspace, the automation's workspace mounted read-only), tool approval, typed waits, notifications and retries, and the storage guarantees (create-if-absent, per-run lock, turn roots, session kinds, one writer process per store)
 - `entity-runtime.md` — per-entity runtimes for summoned entities: homes, the one-writer lease, act-only diary privacy (`$act_only` refs), durable visit waits with deadlines
 - `digital-identity.md` — an entity's look and voice: `identity.json` in the home, the recorded default, the `identity_changed` biography row, the identity reference on runs, the fingerprint, the summon cue
-- `track-record.md` — an entity's or a session's track record (sessions, runs, successes, failures, tokens) and reputation (trust per task kind with its evidence), computed from existing records; completion rates until feedback exists
+- `track-record.md` — an entity's or a session's track record (sessions, runs, successes, failures, tokens) and reputation (trust per task kind with its evidence), computed from existing records; completion rates until feedback exists; and its acquaintances (the entities and humans it met)
 - `evidence.md` — artifact-backed evidence capture for external-boundary tools
 - `mcp-worker.md` — MCP worker CLI (`abstractruntime-mcp-worker`)
 - `replay.md` — the replay view: one reconstruction of a run tree (status, the interaction to answer, messages, one activity per execution, artifacts, usage, the workflow it executes) that every client renders; the durable cursor (`seq`, `list_after`); conformance fixtures

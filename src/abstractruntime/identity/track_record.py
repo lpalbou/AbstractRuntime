@@ -484,17 +484,16 @@ def _run_units(
     return units
 
 
-def _task_units(home_dir: Path, since: Optional[str]) -> List[_Unit]:
-    """Tasks of `<home>/task_inbox.jsonl` (written by AbstractGateway's `entity_tasks.py`) whose folded
-    status is `done`. Each line is `{"event": "added"|"status", "task_id", "at", "status"?}`; the newest
-    status event of a task is its status. A line that is not JSON is the one torn tail the writer allows
-    (a crash mid-append) when it is the LAST line; anywhere else it fails loudly."""
+def read_task_events(home_dir: Path) -> List[Dict[str, Any]]:
+    """The events of `<home>/task_inbox.jsonl` (written by AbstractGateway's `entity_tasks.py`), in file
+    order: `{"event": "added"|"status", "task_id", "at", "by", "status"?}`. A line that is not JSON is the
+    one torn tail the writer allows (a crash mid-append) when it is the LAST line; anywhere else it fails
+    loudly. No file = []."""
     path = Path(home_dir) / _TASK_INBOX_FILENAME
     if not path.is_file():
         return []
     raw_lines = [ln for ln in path.read_text(encoding="utf-8").split("\n") if ln.strip()]
-    added: Dict[str, str] = {}
-    status: Dict[str, Tuple[str, str]] = {}
+    events: List[Dict[str, Any]] = []
     for n, raw in enumerate(raw_lines):
         try:
             ev = json.loads(raw)
@@ -504,6 +503,15 @@ def _task_units(home_dir: Path, since: Optional[str]) -> List[_Unit]:
             raise TrackRecordError(f"{path}: line {n + 1} is not JSON ({exc})") from exc
         if not isinstance(ev, dict) or not ev.get("task_id"):
             raise TrackRecordError(f"{path}: line {n + 1} is not a task event")
+        events.append(ev)
+    return events
+
+
+def _task_units(home_dir: Path, since: Optional[str]) -> List[_Unit]:
+    """Tasks whose folded status is `done` (the newest status event of a task is its status)."""
+    added: Dict[str, str] = {}
+    status: Dict[str, Tuple[str, str]] = {}
+    for ev in read_task_events(home_dir):
         tid = str(ev["task_id"])
         if ev.get("event") == "added":
             added.setdefault(tid, str(ev.get("at") or ""))
@@ -605,6 +613,18 @@ def _index_rows(run_store: Any, *, session_id: Optional[str] = None) -> List[Dic
     return rows
 
 
+def read_manifest(home_dir: Path) -> Dict[str, Any]:
+    """`<home>/manifest.json` (the gateway's identity card of the home) as a dict; fails loudly."""
+    manifest_path = Path(home_dir) / "manifest.json"
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise TrackRecordError(f"{manifest_path}: {exc}") from exc
+    if not isinstance(manifest, dict):
+        raise TrackRecordError(f"{manifest_path} is not a JSON object")
+    return manifest
+
+
 def entity_track_record(
     home_dir: Any, run_store: Any, ledger_store: Any, *, book_head: Optional[str], since: Optional[str] = None
 ) -> TrackRecord:
@@ -616,12 +636,7 @@ def entity_track_record(
     `since` (ISO-8601, compared as text like every stored time) keeps what started at or after it."""
     home = Path(home_dir)
     manifest_path = home / "manifest.json"
-    try:
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        raise TrackRecordError(f"{manifest_path}: {exc}") from exc
-    if not isinstance(manifest, dict):
-        raise TrackRecordError(f"{manifest_path} is not a JSON object")
+    manifest = read_manifest(home)
     try:
         fingerprint = identity_fingerprint(manifest, book_head=book_head)
     except ValueError as exc:

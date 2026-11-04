@@ -58,7 +58,14 @@ from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 from ..core.run_attribution import is_turn_root
 from ..core.run_origin import origin_of
 from ..session_turns import is_internal_workflow_id
-from .fingerprint import ActorFingerprint
+from .digital_identity import (
+    IdentityFingerprint,
+    IdentityRef,
+    identity_fingerprint,
+    identity_ref,
+    read_identity,
+    read_run_identity_ref,
+)
 from .tool_policy import PHASE_VISIT, PHASE_WORK, canonical_phase
 
 #: How many outcomes a reputation shows as its evidence (ADR §6).
@@ -135,7 +142,8 @@ class TaskKindRecord:
 @dataclass(frozen=True)
 class TrackRecord:
     subject: str  # entity:<slug> | session:<session_id>
-    fingerprint: Optional[ActorFingerprint]
+    identity_ref: Optional[IdentityRef]  # the subject's identity now (ADR §3); None when none is recorded
+    fingerprint: Optional[IdentityFingerprint]
     computed_at: str
     as_of: Optional[str]  # the newest timestamp read (runs' updated_at, home-file events)
     since: Optional[str]
@@ -153,6 +161,7 @@ class TrackRecord:
 
     def to_dict(self) -> Dict[str, Any]:
         out = asdict(self)
+        out["identity_ref"] = self.identity_ref.to_dict() if self.identity_ref is not None else None
         out["fingerprint"] = self.fingerprint.to_dict() if self.fingerprint is not None else None
         out["by_task_kind"] = {k: asdict(v) for k, v in self.by_task_kind.items()}
         out["recent_outcomes"] = [asdict(e) for e in self.recent_outcomes]
@@ -178,6 +187,7 @@ class TrustCell:
 @dataclass(frozen=True)
 class Reputation:
     subject: str
+    identity_ref: Optional[IdentityRef]
     computed_at: str
     overall: TrustCell
     by_task_kind: Mapping[str, TrustCell]
@@ -187,6 +197,7 @@ class Reputation:
     def to_dict(self) -> Dict[str, Any]:
         return {
             "subject": self.subject,
+            "identity_ref": self.identity_ref.to_dict() if self.identity_ref is not None else None,
             "computed_at": self.computed_at,
             "overall": {**asdict(self.overall), "text": self.overall.describe()},
             "by_task_kind": {k: {**asdict(v), "text": v.describe()} for k, v in self.by_task_kind.items()},
@@ -239,18 +250,6 @@ def has_counted_origin(run: Any) -> bool:
     """Run half of the counted-run rule for non-occurrences: origin person or trigger."""
     origin = origin_of(getattr(run, "vars", None))
     return origin is not None and origin["kind"] in COUNTED_ORIGIN_KINDS
-
-
-def entity_fingerprint(manifest: Mapping[str, Any]) -> ActorFingerprint:
-    """ADR §4: `kind="entity"`, the slug as display name, `{entity_id, home_id, spark_hash}` as metadata."""
-    missing = [k for k in ("slug", "entity_id", "home_id", "spark_hash") if not str(manifest.get(k) or "").strip()]
-    if missing:
-        raise TrackRecordError(f"manifest lacks {', '.join(missing)}")
-    return ActorFingerprint.from_metadata(
-        kind="entity",
-        display_name=str(manifest["slug"]),
-        metadata={k: str(manifest[k]) for k in ("entity_id", "home_id", "spark_hash")},
-    )
 
 
 def _innermost(store: Any) -> Any:
@@ -369,6 +368,15 @@ def _descendants(roots: Sequence[str], children: Mapping[str, List[str]]) -> Lis
     return out
 
 
+def _note_ref(refs: List[Tuple[str, str, IdentityRef]], row: Mapping[str, Any], run: Any) -> None:
+    try:
+        ref = read_run_identity_ref(getattr(run, "vars", None) or {})
+    except ValueError as exc:
+        raise TrackRecordError(f"run {row.get('run_id')}: {exc}") from exc
+    if ref is not None:
+        refs.append((str(row.get("created_at") or ""), str(row.get("run_id") or ""), ref))
+
+
 def _load(run_store: Any, run_id: str) -> Any:
     run = run_store.load(run_id)
     if run is None:
@@ -389,7 +397,11 @@ def _occurrence_decisions(ledger_store: Any, automation_id: str) -> Dict[int, Di
     return out
 
 
-def _run_units(run_store: Any, ledger_store: Any, rows: List[Dict[str, Any]], since: Optional[str]) -> List[_Unit]:
+def _run_units(
+    run_store: Any, ledger_store: Any, rows: List[Dict[str, Any]], since: Optional[str], refs: List[Tuple[str, str, IdentityRef]]
+) -> List[_Unit]:
+    """The counted runs and occurrences. `refs` receives `(created_at, run_id, ref)` of every loaded run that
+    carries an identity ref (`_runtime.identity_ref`)."""
     children: Dict[str, List[str]] = {}
     for row in rows:
         parent = str(row.get("parent_run_id") or "").strip()
@@ -410,6 +422,7 @@ def _run_units(run_store: Any, ledger_store: Any, rows: List[Dict[str, Any]], si
         run = _load(run_store, rid)
         if not has_counted_origin(run):
             continue
+        _note_ref(refs, row, run)
         status = str(row.get("status") or "")
         if status not in _RUN_STATES:
             raise TrackRecordError(f"run {rid} has an unknown status {status!r}")
@@ -454,6 +467,7 @@ def _run_units(run_store: Any, ledger_store: Any, rows: List[Dict[str, Any]], si
             shown = attempts[-1]  # the newest attempt (created_at order)
             outcome_at = None
         run = _load(run_store, str(shown["run_id"]))
+        _note_ref(refs, shown, run)
         units.append(
             _Unit(
                 run_id=str(shown["run_id"]),
@@ -518,7 +532,8 @@ def _work_order_units(home_dir: Path, since: Optional[str]) -> List[_Unit]:
 def _fold(
     *,
     subject: str,
-    fingerprint: Optional[ActorFingerprint],
+    ref: Optional[IdentityRef],
+    fingerprint: Optional[IdentityFingerprint],
     rows: List[Dict[str, Any]],
     units: List[_Unit],
     ledger_store: Any,
@@ -562,6 +577,7 @@ def _fold(
     stamps = [s for s in stamps if s]
     return TrackRecord(
         subject=subject,
+        identity_ref=ref,
         fingerprint=fingerprint,
         computed_at=_utc_now_iso(),
         as_of=max(stamps) if stamps else None,
@@ -589,9 +605,14 @@ def _index_rows(run_store: Any, *, session_id: Optional[str] = None) -> List[Dic
     return rows
 
 
-def entity_track_record(home_dir: Any, run_store: Any, ledger_store: Any, *, since: Optional[str] = None) -> TrackRecord:
+def entity_track_record(
+    home_dir: Any, run_store: Any, ledger_store: Any, *, book_head: Optional[str], since: Optional[str] = None
+) -> TrackRecord:
     """An entity's track record: its home's run store and ledger (`identity.entity_runtime`), its task inbox
-    and its work-order archive. Subject `entity:<slug>`; fingerprint from `<home>/manifest.json` (ADR §4).
+    and its work-order archive. Subject `entity:<slug>`; `identity_ref` = `entity:<slug>#<rev>` of the home's
+    `identity.json` (None while the home has none; an unreadable one raises `IdentityUnreadable`);
+    fingerprint = `identity_fingerprint(<home>/manifest.json, book_head=book_head)` (ADR §4) — `book_head`
+    is the diary's chain head (`EntityRuntime.home.diary.head()`, None for an empty diary).
     `since` (ISO-8601, compared as text like every stored time) keeps what started at or after it."""
     home = Path(home_dir)
     manifest_path = home / "manifest.json"
@@ -601,11 +622,17 @@ def entity_track_record(home_dir: Any, run_store: Any, ledger_store: Any, *, sin
         raise TrackRecordError(f"{manifest_path}: {exc}") from exc
     if not isinstance(manifest, dict):
         raise TrackRecordError(f"{manifest_path} is not a JSON object")
-    fingerprint = entity_fingerprint(manifest)
+    try:
+        fingerprint = identity_fingerprint(manifest, book_head=book_head)
+    except ValueError as exc:
+        raise TrackRecordError(f"{manifest_path}: {exc}") from exc
+    subject = f"entity:{fingerprint.display_name}"
+    recorded = read_identity(home)
     rows = _index_rows(run_store)
-    units = _run_units(run_store, ledger_store, rows, since) + _task_units(home, since) + _work_order_units(home, since)
+    units = _run_units(run_store, ledger_store, rows, since, []) + _task_units(home, since) + _work_order_units(home, since)
     return _fold(
-        subject=f"entity:{manifest['slug']}",
+        subject=subject,
+        ref=identity_ref(subject, recorded.rev) if recorded is not None else None,
         fingerprint=fingerprint,
         rows=rows,
         units=units,
@@ -616,14 +643,21 @@ def entity_track_record(home_dir: Any, run_store: Any, ledger_store: Any, *, sin
 
 def session_track_record(session_id: str, run_store: Any, ledger_store: Any, *, since: Optional[str] = None) -> TrackRecord:
     """A regular agent's track record: the same rules over one session's runs (ADR §5). Subject
-    `session:<session_id>`. No fingerprint: a session's agent fingerprint is abstractagent's own. A sub-run
-    started into ANOTHER session is outside this listing, so its tokens are not part of this record."""
+    `session:<session_id>`; `identity_ref` = the ref the session's newest counted run carries
+    (`_runtime.identity_ref`, ADR §9), None when none does. No fingerprint: a session's agent fingerprint is
+    abstractagent's own. A sub-run started into ANOTHER session is outside this listing, so its tokens are
+    not part of this record."""
     sid = str(session_id or "").strip()
     if not sid:
         raise TrackRecordError("session_id is required")
+    subject = f"session:{sid}"
     rows = _index_rows(run_store, session_id=sid)
-    units = _run_units(run_store, ledger_store, rows, since)
-    return _fold(subject=f"session:{sid}", fingerprint=None, rows=rows, units=units, ledger_store=ledger_store, since=since)
+    refs: List[Tuple[str, str, IdentityRef]] = []
+    units = _run_units(run_store, ledger_store, rows, since, refs)
+    ref = max(refs, key=lambda r: (r[0], r[1]))[2] if refs else None
+    if ref is not None and ref.of != subject:
+        raise TrackRecordError(f"session {sid}: its newest run carries the identity ref {ref} of another subject")
+    return _fold(subject=subject, ref=ref, fingerprint=None, rows=rows, units=units, ledger_store=ledger_store, since=since)
 
 
 def compute_reputation(record: TrackRecord) -> Reputation:
@@ -652,6 +686,7 @@ def compute_reputation(record: TrackRecord) -> Reputation:
     )
     return Reputation(
         subject=record.subject,
+        identity_ref=record.identity_ref,
         computed_at=record.computed_at,
         overall=overall,
         by_task_kind=dict(cells),
@@ -674,7 +709,6 @@ __all__ = [
     "TrackRecordError",
     "TrustCell",
     "compute_reputation",
-    "entity_fingerprint",
     "entity_track_record",
     "has_counted_origin",
     "is_counted_candidate",

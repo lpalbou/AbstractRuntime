@@ -14,7 +14,7 @@ from typing import Any, Dict, Optional
 import pytest
 
 from abstractruntime.core.models import RunState, RunStatus, StepRecord, StepStatus
-from abstractruntime.identity.fingerprint import ActorFingerprint
+from abstractruntime.identity.digital_identity import identity_fingerprint, identity_ref, record_default_identity, stamp_run_identity_ref
 from abstractruntime.identity.track_record import (
     COMPLETION_RATE_ONLY,
     EVIDENCE_WINDOW,
@@ -23,7 +23,6 @@ from abstractruntime.identity.track_record import (
     OutcomeEvidence,
     TrackRecordError,
     compute_reputation,
-    entity_fingerprint,
     entity_track_record,
     ledger_token_counts,
     session_track_record,
@@ -194,7 +193,7 @@ def _comparable(record) -> Dict[str, Any]:
 def test_fixture_counts(tmp_path: Path, backend: str) -> None:
     run_store, ledger = _stores(backend, tmp_path)
     _fixture(run_store, ledger)
-    record = entity_track_record(_home(tmp_path), run_store, ledger)
+    record = entity_track_record(_home(tmp_path), run_store, ledger, book_head="f00d")
     assert (record.sessions, record.runs, record.successes, record.failures, record.cancelled, record.in_progress) == (3, 9, 5, 3, 1, 0)
     assert record.subject == "entity:castor"
     assert record.assessed == 0
@@ -206,7 +205,7 @@ def test_fixture_counts(tmp_path: Path, backend: str) -> None:
 def test_counted_kinds_and_signals(tmp_path: Path) -> None:
     run_store, ledger = _stores("sqlite", tmp_path)
     _fixture(run_store, ledger)
-    record = entity_track_record(_home(tmp_path), run_store, ledger)
+    record = entity_track_record(_home(tmp_path), run_store, ledger, book_head="f00d")
     kinds = {k: (v.runs, v.successes, v.failures, v.cancelled, v.tokens_total) for k, v in record.by_task_kind.items()}
     assert kinds == {
         "chat/chat-flow": (6, 3, 2, 1, 175),
@@ -266,7 +265,7 @@ def test_task_done_and_work_order_verdicts_count_once_each(tmp_path: Path) -> No
         "Write the doc.\n\n---\n[2026-11-04T12:00:00+00:00] blocked: no access to the wiki\n",
         encoding="utf-8",
     )
-    record = entity_track_record(home, run_store, ledger)
+    record = entity_track_record(home, run_store, ledger, book_head=None)
     assert (record.runs, record.sessions, record.successes, record.failures) == (0, 0, 2, 1)
     assert [(e.signal, e.outcome, e.run_id, e.task_kind) for e in record.recent_outcomes] == [
         ("task_done", "success", None, "work/task_inbox"),
@@ -281,7 +280,7 @@ def test_task_inbox_torn_line_in_the_middle_fails_loudly(tmp_path: Path) -> None
     home = _home(tmp_path)
     (home / "task_inbox.jsonl").write_text('{"event": "add\n{"event": "added", "task_id": "t1", "at": "x"}\n', encoding="utf-8")
     with pytest.raises(TrackRecordError, match="line 1"):
-        entity_track_record(home, run_store, ledger)
+        entity_track_record(home, run_store, ledger, book_head=None)
 
 
 # --- task kind ------------------------------------------------------------------------------------------
@@ -316,7 +315,7 @@ def test_trust_formula() -> None:
 def test_reputation_from_fixture(tmp_path: Path) -> None:
     run_store, ledger = _stores("sqlite", tmp_path)
     _fixture(run_store, ledger)
-    reputation = compute_reputation(entity_track_record(_home(tmp_path), run_store, ledger))
+    reputation = compute_reputation(entity_track_record(_home(tmp_path), run_store, ledger, book_head="f00d"))
     chat = reputation.by_task_kind["chat/chat-flow"]
     assert (chat.successes, chat.failures, chat.support) == (3, 2, 5)  # the cancelled run is not support
     assert chat.trust == pytest.approx(4 / 7)
@@ -376,7 +375,7 @@ def test_session_scope(tmp_path: Path) -> None:
 def test_since_keeps_what_started_at_or_after(tmp_path: Path) -> None:
     run_store, ledger = _stores("sqlite", tmp_path)
     _fixture(run_store, ledger)
-    record = entity_track_record(_home(tmp_path), run_store, ledger, since=_ts(11))
+    record = entity_track_record(_home(tmp_path), run_store, ledger, book_head="f00d", since=_ts(11))
     assert (record.runs, record.successes, record.failures, record.cancelled) == (4, 1, 2, 1)
     assert record.since == _ts(11)
 
@@ -411,30 +410,50 @@ def test_deterministic_across_reads_and_backends(tmp_path: Path) -> None:
         run_store, ledger = _stores(backend, sub)
         _fixture(run_store, ledger)
         home = _home(sub)
-        first = entity_track_record(home, run_store, ledger)
-        second = entity_track_record(home, run_store, ledger)
+        first = entity_track_record(home, run_store, ledger, book_head=None)
+        second = entity_track_record(home, run_store, ledger, book_head=None)
         assert _comparable(first) == _comparable(second)
         assert compute_reputation(first).to_dict()["by_task_kind"] == compute_reputation(second).to_dict()["by_task_kind"]
         results.append(_comparable(first))
     assert results[0] == results[1] == results[2]
 
 
-# --- fingerprint ----------------------------------------------------------------------------------------
+# --- fingerprint and identity ref (Q1's helpers, ADR §3-§4) ----------------------------------------------
 
 
-def test_entity_fingerprint_is_deterministic_and_names_the_individual() -> None:
-    fp = entity_fingerprint(MANIFEST)
-    assert fp == entity_fingerprint(dict(MANIFEST))
-    assert fp.kind == "entity" and fp.display_name == "castor"
-    assert fp.actor_id.startswith("ar_") and len(fp.actor_id) == 27
-    assert fp == ActorFingerprint.from_metadata(
-        kind="entity", display_name="castor",
-        metadata={"entity_id": "entity:castor", "home_id": "home-1a2b3c4d", "spark_hash": "f" * 64},
-    )
-    for key in ("entity_id", "home_id", "spark_hash"):
-        assert entity_fingerprint({**MANIFEST, key: MANIFEST[key] + "x"}).actor_id != fp.actor_id
+def test_entity_record_carries_the_identity_fingerprint_and_ref(tmp_path: Path) -> None:
+    run_store, ledger = _stores("sqlite", tmp_path)
+    home = _home(tmp_path)
+    record = entity_track_record(home, run_store, ledger, book_head="f00d")
+    assert record.fingerprint == identity_fingerprint(MANIFEST, book_head="f00d")
+    assert record.identity_ref is None  # no identity.json yet: a ref is never invented
+    record_default_identity(home, entity_id=MANIFEST["entity_id"], gateway_default_voice=None, provenance="test")
+    record = entity_track_record(home, run_store, ledger, book_head="f00d")
+    assert record.identity_ref == identity_ref("entity:castor", 1)
+    assert record.to_dict()["identity_ref"] == {"of": "entity:castor", "rev": 1}
+    assert compute_reputation(record).identity_ref == record.identity_ref
     with pytest.raises(TrackRecordError, match="home_id"):
-        entity_fingerprint({k: v for k, v in MANIFEST.items() if k != "home_id"})
+        (home / "manifest.json").write_text(json.dumps({k: v for k, v in MANIFEST.items() if k != "home_id"}), encoding="utf-8")
+        entity_track_record(home, run_store, ledger, book_head=None)
+
+
+def test_session_record_carries_its_newest_runs_ref(tmp_path: Path) -> None:
+    run_store, ledger = _stores("memory", tmp_path)
+    older, newer = _run("a", minute=1), _run("b", minute=5)
+    stamp_run_identity_ref(older.vars, identity_ref("session:s1", 1))
+    stamp_run_identity_ref(newer.vars, identity_ref("session:s1", 2))
+    run_store.save(older)
+    run_store.save(newer)
+    run_store.save(_run("c", minute=9))  # carries none: the newest ref still wins
+    record = session_track_record("s1", run_store, ledger)
+    assert record.identity_ref == identity_ref("session:s1", 2)
+    assert record.fingerprint is None
+    assert session_track_record("s2", run_store, ledger).identity_ref is None
+    foreign = _run("d", minute=12, session="s3")
+    stamp_run_identity_ref(foreign.vars, identity_ref("session:elsewhere", 1))
+    run_store.save(foreign)
+    with pytest.raises(TrackRecordError, match="another subject"):
+        session_track_record("s3", run_store, ledger)
 
 
 # --- room for external feedback (operator ruling 2026-11-04; intake = backlog 1120) ---------------------
@@ -448,7 +467,7 @@ def test_feedback_signals_are_typed_but_produced_by_no_source(tmp_path: Path) ->
     assert judged.by == "default:laurent"
     run_store, ledger = _stores("sqlite", tmp_path)
     _fixture(run_store, ledger)
-    record = entity_track_record(_home(tmp_path), run_store, ledger)
+    record = entity_track_record(_home(tmp_path), run_store, ledger, book_head="f00d")
     assert record.assessed == 0
     assert not any(e.signal in FEEDBACK_SIGNALS or e.by is not None for e in record.recent_outcomes)
     assert record.basis == compute_reputation(record).basis == "completion-rate only"

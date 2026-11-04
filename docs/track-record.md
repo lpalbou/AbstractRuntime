@@ -16,7 +16,7 @@ from abstractruntime.identity import compute_reputation, entity_track_record, se
 from abstractruntime.identity.entity_runtime import open_entity_runtime
 
 er = open_entity_runtime(home_dir)          # or the stores your host already holds
-record = entity_track_record(home_dir, er.run_store, er.ledger_store)
+record = entity_track_record(home_dir, er.run_store, er.ledger_store, book_head=er.home.diary.head())
 print(record.runs, record.successes, record.failures, record.tokens.total)
 
 reputation = compute_reputation(record)
@@ -84,7 +84,8 @@ are `work/task_inbox` and `work/work_order`. The kind is read from ids only — 
 | Field | Meaning |
 |---|---|
 | `subject` | `entity:<slug>` or `session:<session_id>` |
-| `fingerprint` | an entity's `ActorFingerprint` from its manifest (`kind="entity"`, metadata `entity_id`, `home_id`, `spark_hash`); `None` for a session |
+| `identity_ref` | the subject's identity now ([digital identity](digital-identity.md)): `entity:<slug>#<rev>` of the home's `identity.json`, or for a session the ref its newest counted run carries; `None` when none is recorded (never invented) |
+| `fingerprint` | an entity's `identity_fingerprint(manifest, book_head=...)` (`actor_id` from `entity_id`, `home_id`, `spark_hash`, served with the diary head); `None` for a session (its agent's fingerprint is abstractagent's) |
 | `sessions`, `runs` | distinct sessions and counted runs |
 | `successes`, `failures`, `cancelled`, `in_progress` | the outcomes above |
 | `assessed` | feedback outcomes (0 today) |
@@ -130,5 +131,6 @@ outside it.
 `TrackRecordError` (a `ValueError`) is raised, never papered over, when a record is not in the shape its
 writer guarantees: a run in the index that cannot be loaded, an unknown run status, an unknown stamp phase,
 an occurrence decision naming a run that is not one of its attempts, a task-inbox line that is not JSON
-(except the last line, which a crash mid-append can leave torn), or a manifest without `slug`, `entity_id`,
-`home_id` or `spark_hash`.
+(except the last line, which a crash mid-append can leave torn), a manifest without `slug`, `entity_id`,
+`home_id` or `spark_hash`, a malformed run identity ref, or a session whose newest run names another
+subject's ref. An unreadable `identity.json` raises `IdentityUnreadable`.

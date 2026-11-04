@@ -10,6 +10,95 @@ Unreleased changes live in [`changelog.d/`](changelog.d/README.md), one file per
 
 ## [Unreleased]
 
+## [0.18.0] - 2026-11-04
+
+### Added
+
+- **Acquaintances of an entity or a session** (`identity/acquaintances.py`, framework backlog 1119):
+  `entity_acquaintances(home_dir, run_store)` and `session_acquaintances(session_id, run_store)` answer two
+  lists, the other entities and the humans it interacted with, each with first and last seen, the number of
+  interactions and the task kinds. Computed from existing records, never stored: the participants the
+  gateway stamps on visit, summon and meet runs, the person who started a run (`_meta.origin`), and who left
+  a task in the task inbox. Identifiers only; interactions with no usable identifier (an `agent:` participant,
+  a participant without a namespace, a person-started run without an actor) are listed under `not_counted`,
+  never guessed. See `docs/track-record.md#acquaintances`.
+- **An entity's digital identity: its look and its voice, one record in its home**
+  (`abstractruntime.identity.digital_identity`, framework ADR 0052 draft, backlog 1119; `docs/digital-identity.md`).
+  `<home>/identity.json` holds the avatar design, its colour and the voice (`schema_version` 1). `write_identity` checks
+  every bound (`IdentityInvalid` names the field), runs the gateway's `check` hook, appends an `identity_changed` row to
+  `state_history.jsonl` (the `phase_changed` field names) before the file is replaced atomically, and never gives a
+  `rev` twice: one write at a time per home (`<home>/.identity.lock`, held from the read to the file replace). A
+  file it cannot read in full raises `IdentityUnreadable` on read and on write, never "no identity".
+  `default_identity` is the recorded default anyone can recompute (SHA-256 of the entity id, eight engraved Watch
+  designs, an HSL colour, the gateway's default voice as a value); `record_default_identity` writes it once and never
+  overwrites. `identity_at_rev` answers an old rev from the biography. The reference `entity:castor#3` rides
+  `vars._runtime.identity_ref` beside the signed entity stamp (`stamp_run_identity_ref`, `read_run_identity_ref`,
+  `parse_identity_ref`). `identity_fingerprint` derives the individual's `actor_id` from the manifest, with the diary's
+  chain head. Homes without `identity.json` are untouched.
+- **The summon tells the entity when its look or voice changed**: one sentence ("Your voice changed on 4 November (by
+  laurent): now fr-male-rene.") in the summon prelude, after the identity core, when the change is newer than the
+  previous summon (`render_summon_prelude(home_dir=, identity_since=)`, `ChatSession(identity_since=)`,
+  `build_visit_workflow(identity_since=)` or `_visit.identity_since` seeded by the door).
+- **The idle unload reaches the host: `set_model_idle_unload(seconds)`** (host facade, `LocalAbstractCoreLLMClient`,
+  `MultiLocalAbstractCoreLLMClient`; framework backlog 1115). It relays AbstractCore's process-wide idle-unload time
+  (ADR 0012, default 60 minutes): a model no call has used for that long is unloaded, a locked model never is, and a
+  running call is never interrupted. `None` or `0` turns it off; a refused value answers `ok: false`. Local residency
+  rows of in-process text models carry `idle_unload_s`, `last_used_at` and `idle_unload_at`, and pass through Core's
+  `in_use` and `locked_by`, so a host can show a model that is in use, or kept loaded by another account.
+- **`set_model_residency_locks(locks)`**: the locked models become exactly the listed ones (resident ones locked,
+  missing ones loaded then locked, the others unlocked), each pair with its own outcome. A lock names a provider and a
+  model; the `base_url` of a configured endpoint is not part of the key. A host stores its "Keep loaded" set and
+  replays it at start; as a `set_` name it is replayed when the gateway's model host rebuilds a client.
+- **Track record and reputation of an entity or a session** (`identity/track_record.py`, ADR 0052 §5-§6,
+  framework backlog 1119). `entity_track_record(home_dir, run_store, ledger_store, *, book_head)` and
+  `session_track_record(session_id, run_store, ledger_store)` answer sessions, runs, successes, failures,
+  cancelled, in progress and tokens (input, output, total), per task kind (`<phase or role>/<workflow_id>`,
+  from ids only) and overall; `compute_reputation(record)` gives trust per task kind,
+  `(successes + 1) / (successes + failures + 2)` with its support, the support-weighted overall, and the
+  last 20 outcomes as evidence ("no experience yet" when there is none). Everything is computed from
+  existing records; nothing is stored. Only work from outside counts: turn roots a person or a trigger
+  started and automation occurrences (once each, however many attempts); sub-runs, controllers, the
+  session memory run and runs another run or the system started never do. Outcomes come from the run
+  status, the occurrence's `automation.completed` decision, an entity task marked `done`, and the work
+  order verdicts (`done:` / `blocked:`). Feedback from people and agents (`feedback_user`,
+  `feedback_agent`) is typed but has no source yet, so every answer says `basis: "completion-rate only"`.
+  Each answer names its subject's `identity_ref` and, for an entity, its `identity_fingerprint`.
+  See `docs/track-record.md`.
+- **`metrics_many` also returns `tokens_input` and `tokens_output`** (SQLite ledger): `usage.input_tokens`
+  (else `prompt_tokens`) and `output_tokens` (else `completion_tokens`) of completed `llm_call` records.
+  Existing keys are unchanged.
+- **`identity.life.read_work_order_verdicts(home_dir)`**: the verdicts the work lane archived in
+  `work_order.done.md`, oldest first.
+
+### Changed
+
+- **AbstractCore 2.34.0 or newer** (base install, `apple` and `gpu` settings): the idle unload and its residency rows
+  come from it.
+- **A load with `ttl_s` or `keep_alive` on an in-process model** still lists them under `unsupported_options`; its
+  warning now names the idle unload that applies instead ("the idle unload setting applies (60 min unused, never while
+  it is kept loaded)"), or says it is off.
+
+### Fixed
+
+- **A run store whose index cannot attribute a session is refused, never started as a plain chat**
+  (`core/run_attribution.py`, framework backlog 0938). A third-party store with `list_run_index` but no `session_kind`
+  in its rows (an index written before automations v1) used to report "no kinds" and let a `discussion-session:` start
+  through as an ordinary chat, skipping the discussion's read-only anchor. It now raises `SessionAttributionError`
+  naming the missing column; a store with no index at all names both methods it lacks. Built-in stores are unchanged.
+  Upgrading a custom store: add `session_kind` and `role` to its index rows, or implement `session_kinds(session_id)`
+  (see `docs/automations.md`, "Storage guarantees").
+- **A tool that reports its failure as a JSON object keeps its explanation** (`integrations/abstractcore/tool_executor.py`,
+  framework backlog 1005). A failed result's `output` used to be emptied when the tool returned its failure as a JSON
+  string, so the agent and the run ledger saw only the error line (for a web search: "No results found", never the
+  backends tried, the bot-challenge status or the hint). The parsed object is now the result's `output`, as for a tool
+  that returns a dict; a plain text error (`Error: ...`) still keeps an empty output and its message in `error`.
+- **The visual-flow Agent node shows the model that explanation** (`visualflow_compiler/compiler.py`). A failed call
+  whose `output` is an object is rendered as its error line followed by the object (`[web_search]: Error: No results
+  found` then the JSON), under the same `agent_observation_max_chars` limit; a plain text failure still shows its error
+  line alone.
+- Failure payloads are now recorded in the run ledger and the history bundle like success payloads: whatever a tool puts
+  in its failure JSON (its parameters included) is stored with the run.
+
 ## [0.17.0] - 2026-11-03
 
 ### Added

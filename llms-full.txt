@@ -57,9 +57,31 @@ See llms.txt for the linked index.
 
 It is designed for long-running workflows that must survive restarts and explicitly model blocking (human input, timers, external events, subworkflows) without keeping Python stacks alive.
 
-**Version:** 0.17.0 • **Python:** 3.10+
+**Version:** 0.18.0 • **Python:** 3.10+
 
 **Status:** pre-1.0 (API may evolve). For production use, pin versions and follow `CHANGELOG.md`.
+
+## What's new in 0.18.0
+
+- **Models unload after being idle**: a host sets how long a local model may sit unused (`set_model_idle_unload`,
+  AbstractCore's default 60 minutes; off with `None` or `0`); a running call is never interrupted and a model kept
+  loaded never unloads. `set_model_residency_locks` relays the host's "Keep loaded" set, and both come back after a
+  model-host restart. Loaded-model rows say when a model was last used, whether it is in use, who keeps it loaded
+  and when it unloads. Requires AbstractCore 2.34.0 or newer.
+- **A failed tool keeps its explanation**: a tool that reports its failure as a JSON object (a web search's backends,
+  bot-challenge status and hint) keeps it in the result, the run ledger and what the visual-flow Agent node shows
+  the model, after the error line.
+- **A store that cannot attribute a session is refused**: a custom run store whose index rows lack `session_kind`
+  no longer lets a discussion start as a plain chat; it raises `SessionAttributionError` naming what to add.
+- **An entity has a recorded look and voice**: one record in its home holds its avatar and its voice, with a default
+  from birth and every change remembered (the entity is told when its look or voice changed). See
+  [docs/digital-identity.md](docs/digital-identity.md).
+- **An entity has a track record and a first reputation**: both are computed from what it has done (runs, outcomes,
+  tokens per kind of task); until feedback from people and agents exists, the reputation is the completion rate
+  only. See [docs/track-record.md](docs/track-record.md).
+- **An entity knows its acquaintances**: the entities and people it has interacted with are listed from its own
+  records, with when they first and last met. See [docs/track-record.md](docs/track-record.md#acquaintances). Full
+  list: [CHANGELOG.md](CHANGELOG.md).
 
 ## What's new in 0.17.0
 
@@ -82,7 +104,7 @@ It is designed for long-running workflows that must survive restarts and explici
 - **Calibrated decisions**: an `LLM_CALL` whose output says `modality: "decision"` returns typed answers
   (`answers`, `decision`) from a decision model instead of generated text; `run_facade.decide(...)` runs one as a
   durable child run and the `decide` VisualFlow node asks a choice, yes/no or score question. Requires AbstractCore
-  2.32.0 or newer (AbstractRuntime 0.17.0 requires 2.33.0). See [docs/integrations/abstractcore.md](docs/integrations/abstractcore.md).
+  2.32.0 or newer (AbstractRuntime 0.18.0 requires 2.34.0). See [docs/integrations/abstractcore.md](docs/integrations/abstractcore.md).
 - **Conversational questions and guidance**: `ASK_USER` can ask an essential question (waits indefinitely) or a timed
   clarification with a declared fallback; `Runtime.steer(..., display_text=)` records human guidance in its exact
   words; opt-in public updates and tool-approval `public_action` context appear in the replay view.
@@ -3464,7 +3486,7 @@ except core.HostActionRefused as refused:
 - Changing a capability default (image, voice, music) unloads the models the old capability routes had loaded before the new routes take effect.
 - An in-process model (MLX, transformers, GGUF) has no per-load TTL: a load with `ttl_s` or `keep_alive` reports them under `unsupported_options`, with a warning. AbstractCore's idle unload applies instead (ADR 0012): a model no call has used for the idle-unload time (60 minutes by default) is unloaded; a locked model never is, and a running call is never interrupted. The next call loads it again.
 - `set_model_idle_unload(seconds)` (host facade and both local clients) sets that time for the process; `None` or `0` turns it off. A refused value (negative, not a number) answers `ok: false` and leaves the setting unchanged. Local residency rows of in-process text models carry `idle_unload_s`, `last_used_at` and `idle_unload_at` (epoch seconds; `None` when the setting is off, the model is locked or a call is running), and Core's `in_use` (a call is running on it) and `locked_by` (the owners whose lock keeps it loaded, other accounts included), passed through unchanged.
-- `set_model_residency_locks(locks)` makes the locked models exactly `locks` (`[{"provider", "model"}]`): listed models that are resident are locked, missing ones are loaded then locked, the others are unlocked; each pair reports its own outcome. A host stores its "Keep loaded" set and calls it at start. Both setters are `set_` names, so a host that rebuilds its client (the gateway's model host after a restart) replays them.
+- `set_model_residency_locks(locks)` makes the locked models exactly `locks` (`[{"provider", "model"}]`): listed models that are resident are locked, missing ones are loaded then locked, the others are unlocked; each pair reports its own outcome. A lock names a provider and a model; the `base_url` of a configured endpoint is not part of the key. A host stores its "Keep loaded" set and calls it at start. Both setters are `set_` names, so a host that rebuilds its client (the gateway's model host after a restart) replays them.
 
 ## Model residency locks and context estimates
 

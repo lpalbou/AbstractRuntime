@@ -53,6 +53,12 @@ def test_runtime_base_is_remote_light_with_multimodal_and_mcp_support() -> None:
     assert "multimodal = [" not in text
     assert "mcp-worker = [" not in text
     assert '"abstractcore>=2.34.0"' in text
+    # The output-spec guard's floor IS the declared floor: below it, the idle unload relay would meet a Core
+    # without `process_residency.set_idle_unload` (#37 review).
+    from abstractruntime.integrations.abstractcore.output_specs import _MIN_ABSTRACTCORE_VERSION_TEXT
+
+    floors = re.findall(r'"abstractcore(?:\[[^\]]*\])?>=([0-9.]+)"', text)
+    assert floors and set(floors) == {_MIN_ABSTRACTCORE_VERSION_TEXT}, (floors, _MIN_ABSTRACTCORE_VERSION_TEXT)
     # Only AbstractCore's three install settings: light (no extra), apple, gpu.
     assert re.findall(r'"abstractcore\[([^\]]*)\]', text) == ["apple", "gpu"]
     assert '"openai<3.0.0,>=1.109.1"' in text

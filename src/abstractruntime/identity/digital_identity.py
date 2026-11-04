@@ -55,6 +55,7 @@ __all__ = [
     "IdentityInvalid",
     "IdentityRef",
     "IdentityUnreadable",
+    "RECORDED_DEFAULT_CAUSE",
     "VoiceChoice",
     "default_identity",
     "identity_at_rev",
@@ -90,6 +91,8 @@ DEFAULT_STYLE_POOL: Tuple[str, ...] = (
     "watch-crystal",
     "watch-aurora",
 )
+# The biography row's `cause` when the recorded default is written.
+RECORDED_DEFAULT_CAUSE = "recorded_default"
 DEFAULT_SATURATION = 0.62
 DEFAULT_LIGHTNESS = 0.52
 
@@ -454,10 +457,17 @@ def write_identity(
     avatar: AvatarChoice,
     voice: Optional[VoiceChoice],
     set_by: str,
+    cause: str,
     provenance: str,
     check: Optional[Callable[[DigitalIdentity], None]] = None,
 ) -> DigitalIdentity:
     """Record a new identity for the home and return it.
+
+    The biography row has the `phase_changed` field names, so one reader handles both:
+    `{marker: identity_changed, rev, from, to, written_by, cause, at, provenance}` — `from` and
+    `to` are whole records (`from` is None for the first one), `written_by` is `set_by`, `cause`
+    says why (the caller's word, for example `chosen` or `recorded_default`) and `provenance`
+    which door or pass wrote it.
 
     In order: the current file is read (an unreadable one refuses: overwriting it would lose
     what a newer writer meant); the new record gets the next rev and `set_at` from this clock;
@@ -475,6 +485,9 @@ def write_identity(
         raise IdentityInvalid("avatar", "must be an AvatarChoice")
     if voice is not None and not isinstance(voice, VoiceChoice):
         raise IdentityInvalid("voice", "must be a VoiceChoice or None")
+    cause_text = str(cause or "").strip()
+    if not cause_text:
+        raise IdentityInvalid("cause", "is required: say why the identity changed")
     provenance_text = str(provenance or "").strip()
     if not provenance_text:
         raise IdentityInvalid("provenance", "is required: say which door or pass wrote this identity")
@@ -498,7 +511,8 @@ def write_identity(
             "rev": rev,
             "from": previous.to_dict() if previous is not None else None,
             "to": record.to_dict(),
-            "by": set_by,
+            "written_by": set_by,
+            "cause": cause_text,
             "at": set_at,
             "provenance": provenance_text,
         },
@@ -568,13 +582,20 @@ def record_default_identity(
 ) -> Tuple[DigitalIdentity, bool]:
     """Write the recorded default as the home's first identity, once. Returns (record, written):
     a home that already has a record keeps it untouched (`written` False) — a later change of the
-    gateway's default voice never reaches a recorded identity. `set_by` is `default`."""
+    gateway's default voice never reaches a recorded identity. `set_by` is `default` and the
+    biography row's `cause` is `recorded_default`."""
     existing = read_identity(home_dir)
     if existing is not None:
         return existing, False
     avatar, voice = default_identity(entity_id, gateway_default_voice)
     record = write_identity(
-        home_dir, avatar=avatar, voice=voice, set_by="default", provenance=provenance, check=check
+        home_dir,
+        avatar=avatar,
+        voice=voice,
+        set_by="default",
+        cause=RECORDED_DEFAULT_CAUSE,
+        provenance=provenance,
+        check=check,
     )
     return record, True
 

@@ -173,6 +173,7 @@ def build_visit_workflow(
     model_info: Optional[Dict[str, str]] = None,
     visit_id: Optional[str] = None,
     react_middle: Optional[ReactMiddle] = None,
+    identity_since: Optional[str] = None,
 ) -> WorkflowSpec:
     """Build the visit workflow over one OPEN home.
 
@@ -191,7 +192,13 @@ def build_visit_workflow(
     is the door-stamped correlation key for two-sided visits (item 14):
     when present it is stamped as `attributes.visit_id` on every episode
     and the reflection summary — both legs of a cross-runtime visit carry
-    the SAME string, correlating as DATA, never as shared rows."""
+    the SAME string, correlating as DATA, never as shared rows.
+
+    `identity_since` is the previous summon's time (aware ISO-8601) for the
+    identity cue (ADR 0052 section 7); the door seeds it as
+    `_visit.identity_since` at run creation like `_visit.idle_seconds`, and
+    the seeded value wins. None tells the change that made the current
+    identity."""
 
     stamp_participants = [p for p in (participants or []) if str(p).strip()] or ["person:operator"]
     if home.entity_id not in stamp_participants:
@@ -225,6 +232,8 @@ def build_visit_workflow(
             prelude = render_summon_prelude(
                 home.ms, home.diary,
                 entity_id=home.entity_id, budget=prelude_budget, spark=home.spark,
+                home_dir=home.home_dir,
+                identity_since=visit.get("identity_since", identity_since),
             )
             if prelude.get("refused"):
                 # Identity is never truncated: the visit ends before it

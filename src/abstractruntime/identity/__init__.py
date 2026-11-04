@@ -20,6 +20,7 @@ from .digital_identity import (
     stamp_run_identity_ref,
     write_identity,
 )
+from .acquaintances import Acquaintance, Acquaintances, entity_acquaintances, session_acquaintances
 from .diary import DiaryEntry, DiaryStore, build_diary_effect_handlers, diary_chain_id, verify_diary_chain
 from .fingerprint import ActorFingerprint
 from .prelude import render_summon_prelude
@@ -75,6 +76,11 @@ __all__ = [
     "entity_track_record",
     "session_track_record",
     "task_kind_of",
+    # Acquaintances (derived: the entities and humans met)
+    "Acquaintance",
+    "Acquaintances",
+    "entity_acquaintances",
+    "session_acquaintances",
 ]
 
 

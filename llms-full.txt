@@ -78,7 +78,10 @@ It is designed for long-running workflows that must survive restarts and explici
   [docs/digital-identity.md](docs/digital-identity.md).
 - **An entity has a track record and a first reputation**: both are computed from what it has done (runs, outcomes,
   tokens per kind of task); until feedback from people and agents exists, the reputation is the completion rate
-  only. See [docs/track-record.md](docs/track-record.md). Full list: [CHANGELOG.md](CHANGELOG.md).
+  only. See [docs/track-record.md](docs/track-record.md).
+- **An entity knows its acquaintances**: the entities and people it has interacted with are listed from its own
+  records, with when they first and last met. See [docs/track-record.md](docs/track-record.md#acquaintances). Full
+  list: [CHANGELOG.md](CHANGELOG.md).
 
 ## What's new in 0.17.0
 

@@ -153,6 +153,87 @@ def test_a_failed_biography_append_writes_nothing(home: Path) -> None:
     assert not (home / "identity.json").exists()
 
 
+def _pausing_check(first_in: "threading.Event", release: "threading.Event"):
+    """A check hook that pauses the FIRST writer inside its write until `release` is set (or
+    0.5 s pass), so a second writer can try to interleave."""
+    import threading
+
+    lock = threading.Lock()
+    state = {"paused": False}
+
+    def check(_record: DigitalIdentity) -> None:
+        with lock:
+            pause = not state["paused"]
+            state["paused"] = True
+        if pause:
+            first_in.set()
+            release.wait(0.5)
+
+    return check
+
+
+def test_racing_writers_never_share_a_rev(home: Path) -> None:
+    import threading
+
+    record_default_identity(home, entity_id=CASTOR, gateway_default_voice=QWEN, provenance="birth")
+    first_in, second_done = threading.Event(), threading.Event()
+    check = _pausing_check(first_in, second_done)
+    results: Dict[str, DigitalIdentity] = {}
+
+    def first() -> None:
+        results["a"] = _write(home, set_by="user:a", check=check)
+
+    def second() -> None:
+        first_in.wait(5)
+        results["b"] = _write(home, set_by="user:b", voice=_voice(PIPER), check=check)
+        second_done.set()
+
+    threads = [threading.Thread(target=first), threading.Thread(target=second)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(10)
+
+    # Without the lock the second writer reads rev 1 while the first is paused, and both write
+    # rev 2. With it, the second waits: revs 2 then 3, each row moving on from the one before.
+    rows = _rows(home)
+    assert [r["rev"] for r in rows] == [1, 2, 3]
+    assert [r["written_by"] for r in rows] == ["default", "user:a", "user:b"]
+    assert rows[2]["from"] == rows[1]["to"]
+    assert (results["a"].rev, results["b"].rev) == (2, 3)
+    assert read_identity(home) == results["b"]
+    assert identity_at_rev(home, 2) == results["a"]
+    assert (home / ".identity.lock").exists()
+
+
+def test_racing_default_passes_write_it_once(home: Path) -> None:
+    import threading
+
+    first_in, second_done = threading.Event(), threading.Event()
+    check = _pausing_check(first_in, second_done)
+    results: List[Any] = []
+
+    def first() -> None:
+        results.append(record_default_identity(
+            home, entity_id=CASTOR, gateway_default_voice=QWEN, provenance="birth", check=check))
+
+    def second() -> None:
+        first_in.wait(5)
+        results.append(record_default_identity(
+            home, entity_id=CASTOR, gateway_default_voice=QWEN, provenance="boot pass", check=check))
+        second_done.set()
+
+    threads = [threading.Thread(target=first), threading.Thread(target=second)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(10)
+
+    assert [r["rev"] for r in _rows(home)] == [1]
+    assert sorted(written for _record, written in results) == [False, True]
+    assert read_identity(home).rev == 1
+
+
 def test_check_hook_refuses_before_anything_is_written(home: Path) -> None:
     seen: List[DigitalIdentity] = []
 

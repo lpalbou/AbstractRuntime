@@ -11,7 +11,8 @@ What this module guarantees:
   newer schema, a corrupt or partial file, an unknown field, a value out of bounds) raises
   `IdentityUnreadable` on read AND on write; it is never treated as "no identity".
 - `rev` starts at 1 and grows by one per write, never reused, not even after a write that failed
-  half-way (the next rev is above both the file's and the biography's newest rev).
+  half-way (the next rev is above both the file's and the biography's newest rev), and not when
+  two writers race: every write holds `<home>/.identity.lock` from its read to its file replace.
 - Every write appends one `identity_changed` row to `<home>/state_history.jsonl` BEFORE the file
   moves (the `phase_changed` file and row shape), so the home itself remembers every look and
   voice it ever had; `identity_at_rev` answers "which voice was this at rev N" from those rows.
@@ -33,10 +34,11 @@ import colorsys
 import hashlib
 import json
 import os
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple
+from typing import Any, Callable, Dict, Iterator, List, Mapping, Optional, Tuple
 
 from .fingerprint import ActorFingerprint
 
@@ -48,6 +50,7 @@ __all__ = [
     "DigitalIdentity",
     "IDENTITY_CHANGED_MARKER",
     "IDENTITY_FILENAME",
+    "IDENTITY_LOCK_FILENAME",
     "IDENTITY_MAX_BYTES",
     "IDENTITY_REF_KEY",
     "IDENTITY_SCHEMA_VERSION",
@@ -71,6 +74,9 @@ __all__ = [
 ]
 
 IDENTITY_FILENAME = "identity.json"
+# The writers' lock: one write at a time per home, across threads and processes. The file is
+# never removed (removing it would let two writers lock two different files).
+IDENTITY_LOCK_FILENAME = ".identity.lock"
 IDENTITY_SCHEMA_VERSION = 1
 IDENTITY_MAX_BYTES = 4096
 BIOGRAPHY_FILENAME = "state_history.jsonl"
@@ -442,6 +448,33 @@ def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+@contextmanager
+def _identity_write_lock(home_dir: Path) -> Iterator[None]:
+    """Hold `<home>/.identity.lock` exclusively, waiting for any other holder. The lock belongs
+    to the open file, so two threads of one process exclude each other as two processes do,
+    and a writer that dies releases it."""
+    with (Path(home_dir) / IDENTITY_LOCK_FILENAME).open("a+b") as fh:
+        if os.name == "nt":
+            import msvcrt
+
+            fh.seek(0)
+            # Blocks, retrying for about 10 seconds, then raises OSError: loud, never unlocked.
+            msvcrt.locking(fh.fileno(), msvcrt.LK_LOCK, 1)
+            try:
+                yield
+            finally:
+                fh.seek(0)
+                msvcrt.locking(fh.fileno(), msvcrt.LK_UNLCK, 1)
+        else:
+            import fcntl
+
+            fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+
+
 def _append_biography_row(home_dir: Path, row: Dict[str, Any]) -> None:
     """Append one row and flush it to disk. Unlike `phase_changed` this is NOT best-effort: the
     identity file never moves unless its biography row is on disk first."""
@@ -476,11 +509,29 @@ def write_identity(
     to refuse; the `identity_changed` row is appended to the biography; then the file is
     replaced atomically. A refusal at any step before the row writes nothing.
 
-    The caller serialises writes to one home (the gateway holds the entity's lock); the rev rule
-    still never reuses a rev if two writers race."""
+    The whole sequence holds the home's identity lock (`.identity.lock`), so writers in other
+    threads or processes wait their turn: two writers never read the same rev, and a rev is
+    never reused. `check` runs under the lock; keep it short."""
     home_dir = Path(home_dir)
     if not home_dir.is_dir():
         raise FileNotFoundError(f"no entity home at {home_dir}")
+    with _identity_write_lock(home_dir):
+        return _write_identity_locked(
+            home_dir, avatar=avatar, voice=voice, set_by=set_by, cause=cause, provenance=provenance, check=check
+        )
+
+
+def _write_identity_locked(
+    home_dir: Path,
+    *,
+    avatar: AvatarChoice,
+    voice: Optional[VoiceChoice],
+    set_by: str,
+    cause: str,
+    provenance: str,
+    check: Optional[Callable[[DigitalIdentity], None]],
+) -> DigitalIdentity:
+    """`write_identity`'s steps; the caller holds `_identity_write_lock(home_dir)`."""
     if not isinstance(avatar, AvatarChoice):
         raise IdentityInvalid("avatar", "must be an AvatarChoice")
     if voice is not None and not isinstance(voice, VoiceChoice):
@@ -583,20 +634,25 @@ def record_default_identity(
     """Write the recorded default as the home's first identity, once. Returns (record, written):
     a home that already has a record keeps it untouched (`written` False) — a later change of the
     gateway's default voice never reaches a recorded identity. `set_by` is `default` and the
-    biography row's `cause` is `recorded_default`."""
-    existing = read_identity(home_dir)
-    if existing is not None:
-        return existing, False
+    biography row's `cause` is `recorded_default`. The look-then-write holds the home's identity
+    lock, so two passes racing on one home write it once."""
     avatar, voice = default_identity(entity_id, gateway_default_voice)
-    record = write_identity(
-        home_dir,
-        avatar=avatar,
-        voice=voice,
-        set_by="default",
-        cause=RECORDED_DEFAULT_CAUSE,
-        provenance=provenance,
-        check=check,
-    )
+    home_dir = Path(home_dir)
+    if not home_dir.is_dir():
+        raise FileNotFoundError(f"no entity home at {home_dir}")
+    with _identity_write_lock(home_dir):
+        existing = read_identity(home_dir)
+        if existing is not None:
+            return existing, False
+        record = _write_identity_locked(
+            home_dir,
+            avatar=avatar,
+            voice=voice,
+            set_by="default",
+            cause=RECORDED_DEFAULT_CAUSE,
+            provenance=provenance,
+            check=check,
+        )
     return record, True
 
 

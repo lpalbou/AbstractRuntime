@@ -28,7 +28,11 @@ Explicit completed `public_update` events become assistant messages with
 `iteration`, `source_call_ids`, `update_kind`, and normal ledger provenance. `update_kind` is
 the producer's type for the update: `"finding"` (a fact or piece of evidence the actor
 established) or `"progress"` (what it is doing); an event without a `kind` of `"finding"`
-replays as `"progress"`. Replay copies the type and never infers it from the text. Replay does not turn reasoning,
+replays as `"progress"`. Replay copies the type and never infers it from the text. When the run's snapshot
+carries `vars["_runtime"]["identity_ref"]` (the gateway stamps it on visit, summon, meet and session runs),
+each of that run's public updates carries it as `identity_ref` (`{"of", "rev"}`); a run without one, or with
+a malformed one, gives no field, never an invented one. A snapshot read after the updates were folded stamps
+them then, and the ref is part of the snapshot digest, so the cursor token changes with it. Replay does not turn reasoning,
 raw tool output or a marker inside model text into public speech. Diary/thinking fences
 are excluded. These are actor-authored updates; their wording alone is not proof of a fact
 or of completed work.

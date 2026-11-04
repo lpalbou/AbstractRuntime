@@ -134,7 +134,8 @@ parse_identity_ref("session:sess_9f2a#1")  # a regular agent's identity rides it
 `{"of", "rev"}`, beside the signed entity stamp (`vars["_runtime"]["entity"]`) and never inside
 it: presentation is not authority. `stamp_run_identity_ref(vars, ref)` puts it there;
 `read_run_identity_ref(vars)` returns it, or `None` when the run carries none (a reference is never
-made up). An old rev resolves through `identity_at_rev`.
+made up). An old rev resolves through `identity_at_rev`. The replay view copies it onto the run's public
+updates (`identity_ref`, see [replay.md](replay.md#public-conversation-messages)).
 
 ## The fingerprint
 

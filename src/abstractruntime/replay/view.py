@@ -49,6 +49,7 @@ from typing import Any, Dict, Iterable, List, Mapping, Optional, Set, Tuple
 from ..automations.attention import ANSWER_PAYLOADS
 from ..core.vars import is_paused_vars
 from ..history_bundle import _extract_usage_from_ledger_record, _extract_user_prompt_from_input
+from ..identity.digital_identity import read_run_identity_ref
 from ..storage.ledger_slim import is_slim_marker, resolve_slim_value
 from .delta import token_run_names
 from .executions import ExecutionTracker, is_completion_record, is_progress_record
@@ -152,6 +153,18 @@ def _artifact_refs(value: Any, path: str = "", depth: int = 0) -> List[Tuple[str
     return out
 
 
+def _run_identity_ref(run_vars: Any) -> Optional[Dict[str, Any]]:
+    """The `{of, rev}` identity ref the host stamped on the run (`vars._runtime.identity_ref`), or None:
+    absent or malformed, the view carries no ref rather than an invented one."""
+    if not isinstance(run_vars, Mapping):
+        return None
+    try:
+        ref = read_run_identity_ref(run_vars)
+    except (TypeError, ValueError):
+        return None
+    return ref.to_dict() if ref is not None else None
+
+
 def _snapshot(run: Any) -> Dict[str, Any]:
     """A run snapshot (RunState or its dict) as the plain fields the view reads."""
     if run is None:
@@ -173,7 +186,7 @@ def _snapshot(run: Any) -> Dict[str, Any]:
     prompt = _extract_user_prompt_from_input(source)[0] if isinstance(source, dict) else ""
     out = d.get("output")
     # Only what the view reads is kept (a snapshot's vars can be conversation-sized).
-    return {
+    snap = {
         "run_id": _s(d.get("run_id")),
         "workflow_id": _s(d.get("workflow_id")),
         "status": _enum(d.get("status")),
@@ -187,6 +200,11 @@ def _snapshot(run: Any) -> Dict[str, Any]:
         "updated_at": _s(d.get("updated_at")),
         "paused": bool(is_paused_vars(d.get("vars"))),
     }
+    # Only when the host stamped one: a run without a ref keeps the same snapshot digest (cursor token).
+    ref = _run_identity_ref(d.get("vars"))
+    if ref is not None:
+        snap["identity_ref"] = ref
+    return snap
 
 
 def _snapshot_digest(snap: Dict[str, Any]) -> str:
@@ -522,9 +540,12 @@ class ReplayView:
             return
         r = self._run(rid)
         if r.snapshot != snap:
+            ref_changed = r.snapshot.get("identity_ref") != snap.get("identity_ref")
             r.snapshot = snap
             r.snap_digest = _snapshot_digest(snap)
             self._dirty["runs"].add(rid)
+            if ref_changed:
+                self._stamp_identity_ref(rid)
         if snap.get("workflow_id") and r.workflow_id != snap["workflow_id"]:
             r.workflow_id = snap["workflow_id"]
             self._dirty["runs"].add(rid)
@@ -1027,7 +1048,11 @@ class ReplayView:
                               extra={"update_kind": "finding" if b.get("kind") == "finding" else "progress",
                                      "source_call_ids": [c for c in calls if isinstance(c, str)]
                                      if isinstance(calls, list) else [], "iteration": b.get("iteration"),
-                                     "session_id": _s(b.get("session_id")) or None})
+                                     "session_id": _s(b.get("session_id")) or None,
+                                     # The identity the host stamped on this run (visit, summon, meet,
+                                     # session), as `{of, rev}`; none when the run carries none.
+                                     "identity_ref": dict(r.snapshot["identity_ref"])
+                                     if r.snapshot.get("identity_ref") else None})
             return
         question_receipt = (_s(rec.get("node_id")) == "__host_question__"
                             and _s(rec.get("idempotency_key")).startswith("system:question:"))
@@ -1146,6 +1171,21 @@ class ReplayView:
                 wait["denied_by"] = "session_policy"
 
     # ----------------------------------------------------------------- messages, artifacts
+
+    def _stamp_identity_ref(self, run_id: str) -> None:
+        """Put the run's identity ref on its public updates already folded (a snapshot read after
+        its records), or take it off when the snapshot no longer carries one."""
+        ref = self._runs[run_id].snapshot.get("identity_ref")
+        for mid, msg in self._messages.items():
+            if msg.get("run_id") != run_id or msg.get("kind") != "public_update" or msg.get("identity_ref") == ref:
+                continue
+            msg = dict(msg)
+            if ref is None:
+                msg.pop("identity_ref", None)
+            else:
+                msg["identity_ref"] = dict(ref)
+            self._messages[mid] = msg
+            self._dirty["messages"].add(mid)
 
     def _message(self, mid: str, *, role: str, kind: str, text: str, run_id: str, step_id: str, seq: int, ts: str,
                  source: str, artifact_ids: Optional[List[str]] = None, extra: Optional[Dict[str, Any]] = None) -> None:

@@ -14,6 +14,23 @@ Unreleased changes live in [`changelog.d/`](changelog.d/README.md), one file per
 
 ### Added
 
+- **An entity's digital identity: its look and its voice, one record in its home**
+  (`abstractruntime.identity.digital_identity`, framework ADR 0052 draft, backlog 1119; `docs/digital-identity.md`).
+  `<home>/identity.json` holds the avatar design, its colour and the voice (`schema_version` 1). `write_identity` checks
+  every bound (`IdentityInvalid` names the field), runs the gateway's `check` hook, appends an `identity_changed` row to
+  `state_history.jsonl` (the `phase_changed` field names) before the file is replaced atomically, and never gives a
+  `rev` twice: one write at a time per home (`<home>/.identity.lock`, held from the read to the file replace). A
+  file it cannot read in full raises `IdentityUnreadable` on read and on write, never "no identity".
+  `default_identity` is the recorded default anyone can recompute (SHA-256 of the entity id, eight engraved Watch
+  designs, an HSL colour, the gateway's default voice as a value); `record_default_identity` writes it once and never
+  overwrites. `identity_at_rev` answers an old rev from the biography. The reference `entity:castor#3` rides
+  `vars._runtime.identity_ref` beside the signed entity stamp (`stamp_run_identity_ref`, `read_run_identity_ref`,
+  `parse_identity_ref`). `identity_fingerprint` derives the individual's `actor_id` from the manifest, with the diary's
+  chain head. Homes without `identity.json` are untouched.
+- **The summon tells the entity when its look or voice changed**: one sentence ("Your voice changed on 4 November (by
+  laurent): now fr-male-rene.") in the summon prelude, after the identity core, when the change is newer than the
+  previous summon (`render_summon_prelude(home_dir=, identity_since=)`, `ChatSession(identity_since=)`,
+  `build_visit_workflow(identity_since=)` or `_visit.identity_since` seeded by the door).
 - **The idle unload reaches the host: `set_model_idle_unload(seconds)`** (host facade, `LocalAbstractCoreLLMClient`,
   `MultiLocalAbstractCoreLLMClient`; framework backlog 1115). It relays AbstractCore's process-wide idle-unload time
   (ADR 0012, default 60 minutes): a model no call has used for that long is unloaded, a locked model never is, and a
@@ -24,6 +41,26 @@ Unreleased changes live in [`changelog.d/`](changelog.d/README.md), one file per
   missing ones loaded then locked, the others unlocked), each pair with its own outcome. A lock names a provider and a
   model; the `base_url` of a configured endpoint is not part of the key. A host stores its "Keep loaded" set and
   replays it at start; as a `set_` name it is replayed when the gateway's model host rebuilds a client.
+- **Track record and reputation of an entity or a session** (`identity/track_record.py`, ADR 0052 §5-§6,
+  framework backlog 1119). `entity_track_record(home_dir, run_store, ledger_store, *, book_head)` and
+  `session_track_record(session_id, run_store, ledger_store)` answer sessions, runs, successes, failures,
+  cancelled, in progress and tokens (input, output, total), per task kind (`<phase or role>/<workflow_id>`,
+  from ids only) and overall; `compute_reputation(record)` gives trust per task kind,
+  `(successes + 1) / (successes + failures + 2)` with its support, the support-weighted overall, and the
+  last 20 outcomes as evidence ("no experience yet" when there is none). Everything is computed from
+  existing records; nothing is stored. Only work from outside counts: turn roots a person or a trigger
+  started and automation occurrences (once each, however many attempts); sub-runs, controllers, the
+  session memory run and runs another run or the system started never do. Outcomes come from the run
+  status, the occurrence's `automation.completed` decision, an entity task marked `done`, and the work
+  order verdicts (`done:` / `blocked:`). Feedback from people and agents (`feedback_user`,
+  `feedback_agent`) is typed but has no source yet, so every answer says `basis: "completion-rate only"`.
+  Each answer names its subject's `identity_ref` and, for an entity, its `identity_fingerprint`.
+  See `docs/track-record.md`.
+- **`metrics_many` also returns `tokens_input` and `tokens_output`** (SQLite ledger): `usage.input_tokens`
+  (else `prompt_tokens`) and `output_tokens` (else `completion_tokens`) of completed `llm_call` records.
+  Existing keys are unchanged.
+- **`identity.life.read_work_order_verdicts(home_dir)`**: the verdicts the work lane archived in
+  `work_order.done.md`, oldest first.
 
 ### Changed
 

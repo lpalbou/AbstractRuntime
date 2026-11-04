@@ -19,8 +19,13 @@ It is designed for long-running workflows that must survive restarts and explici
   bot-challenge status and hint) keeps it in the result, the run ledger and what the visual-flow Agent node shows
   the model, after the error line.
 - **A store that cannot attribute a session is refused**: a custom run store whose index rows lack `session_kind`
-  no longer lets a discussion start as a plain chat; it raises `SessionAttributionError` naming what to add. Full
-  list: [CHANGELOG.md](CHANGELOG.md).
+  no longer lets a discussion start as a plain chat; it raises `SessionAttributionError` naming what to add.
+- **An entity has a recorded look and voice**: one record in its home holds its avatar and its voice, with a default
+  from birth and every change remembered (the entity is told when its look or voice changed). See
+  [docs/digital-identity.md](docs/digital-identity.md).
+- **An entity has a track record and a first reputation**: both are computed from what it has done (runs, outcomes,
+  tokens per kind of task); until feedback from people and agents exists, the reputation is the completion rate
+  only. See [docs/track-record.md](docs/track-record.md). Full list: [CHANGELOG.md](CHANGELOG.md).
 
 ## What's new in 0.17.0
 

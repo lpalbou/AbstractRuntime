@@ -104,11 +104,19 @@ def render_summon_prelude(
     diary_tail: int = 3,
     gradation_top_k: int = 5,
     scope: str = "self",
+    home_dir: Optional[Any] = None,
+    identity_since: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Render the summon prelude. Returns
     {text, sections, section_tokens, refused, warnings, as_of_seq,
     spark_version}. Refusals are loud but reportable (refused=True, empty
     text), never exceptions — the host decides how to surface them.
+
+    `home_dir` (the summon's home) adds the identity cue (ADR 0052 section
+    7): one sentence about the change that made the current look and voice,
+    told when it is newer than `identity_since` (the previous summon, aware
+    ISO-8601) or whenever `identity_since` is None. It is a degradable
+    section, fitted before the diary tail.
     """
     warnings: List[str] = []
     as_of_seq = int(memory_system.current_seq()) if callable(getattr(memory_system, "current_seq", None)) else -1
@@ -264,6 +272,25 @@ def render_summon_prelude(
             kept.pop()  # degrade from the tail (lowest-ranked first)
         return None, 0, len(lines)
 
+    # The identity cue (ADR 0052 section 7) is fitted before everything else
+    # that may degrade: it is one sentence, and it is news the entity has
+    # not heard yet.
+    if home_dir is not None:
+        from .digital_identity import identity_change_cue
+
+        try:
+            cue = identity_change_cue(home_dir, since=identity_since)
+        except Exception as e:  # noqa: BLE001 - an unreadable identity is named, never a dead summon
+            cue = None
+            warnings.append(f"#FALLBACK identity cue unavailable: {e}")
+        if cue:
+            text, _kept, _total = _fit([cue], "")
+            if text is not None:
+                sections["identity"] = cue
+                remaining -= _token_estimate(cue)
+            else:
+                warnings.append("#FALLBACK identity cue dropped to fit summon budget")
+
     # Degrade order: diary tail is fitted FIRST (it survives budget pressure
     # longer); standing shrinks/drops first because it fits into whatever is
     # left after the diary.
@@ -287,7 +314,7 @@ def render_summon_prelude(
         else:
             warnings.append(f"#FALLBACK standing dropped to fit summon budget (0 of {total} targets)")
 
-    order = ["header", "values", "purposes", "traits", "limits", "diary", "standing"]
+    order = ["header", "values", "purposes", "traits", "limits", "identity", "diary", "standing"]
     body = "\n".join(sections[n] for n in order if n in sections)
     text = f"{envelope[0]}\n{body}\n{envelope[1]}"
 

@@ -103,7 +103,9 @@ def test_sqlite_ledger_store_count_many_and_metrics_many(tmp_path: Path) -> None
     assert store.count_many([run_id, "missing"]) == {run_id: 3}
 
     metrics = store.metrics_many([run_id, "missing"])
-    assert metrics.get(run_id) == {"steps": 2, "llm_calls": 1, "tool_calls": 2, "tokens_total": 12}
+    assert metrics.get(run_id) == {
+        "steps": 2, "llm_calls": 1, "tool_calls": 2, "tokens_total": 12, "tokens_input": 10, "tokens_output": 2,
+    }
 
 
 def test_sqlite_ledger_store_append_is_concurrency_safe(tmp_path: Path) -> None:

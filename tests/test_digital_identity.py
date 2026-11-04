@@ -297,7 +297,7 @@ def test_the_good_dict_itself_reads(home: Path) -> None:
 
 def test_newer_schema_names_the_upgrade(home: Path) -> None:
     (home / "identity.json").write_text(UNREADABLE["newer schema"], encoding="utf-8")
-    with pytest.raises(IdentityUnreadable, match="newer"):
+    with pytest.raises(IdentityUnreadable, match="is newer than this runtime knows .*upgrade AbstractRuntime"):
         read_identity(home)
 
 

@@ -260,7 +260,9 @@ def test_task_done_and_work_order_verdicts_count_once_each(tmp_path: Path) -> No
     ]
     (home / "task_inbox.jsonl").write_text("".join(json.dumps(e) + "\n" for e in events) + '{"event": "sta', encoding="utf-8")
     (home / "work_order.done.md").write_text(
-        "Fix the build.\n\n---\n[2026-11-04T11:00:00+00:00] done: the build is green\n"
+        # The order's own text quotes a verdict-looking line: not the writer's layout, never read as a verdict.
+        "Fix the build.\n\nThe old log said:\n[2026-11-04T09:00:00+00:00] done: copied from a log\n\n"
+        "---\n[2026-11-04T11:00:00+00:00] done: the build is green\n"
         "Write the doc.\n\n---\n[2026-11-04T12:00:00+00:00] blocked: no access to the wiki\n",
         encoding="utf-8",
     )

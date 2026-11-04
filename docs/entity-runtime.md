@@ -15,6 +15,9 @@ entities/castor/
   manifest.json            # entity_id (birth marker — never a lookup key)
   spark.yaml               # the attested seed
   substrate.yaml           # operator's ONE mind choice (provider+model)
+  identity.json            # look and voice (digital-identity.md)
+  .identity.lock           # one identity write at a time
+  state_history.jsonl      # biography: state, phase_changed and identity_changed rows
   memory.sqlite3           # graph + journal (abstractmemory)
   home.sqlite3             # diary book + command inbox
   runtime_castor.sqlite3   # run store + ledger (THIS page)

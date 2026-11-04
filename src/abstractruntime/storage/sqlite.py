@@ -1525,7 +1525,12 @@ class SqliteLedgerStore(LedgerStore):
         return out
 
     def metrics_many(self, run_ids: List[str]) -> Dict[str, Dict[str, int]]:
-        """Return best-effort per-run metrics derived from completed ledger records."""
+        """Return best-effort per-run metrics derived from completed ledger records.
+
+        `tokens_input` / `tokens_output` read `result.usage.input_tokens` (else `prompt_tokens`) and
+        `output_tokens` (else `completion_tokens`) of completed `llm_call` records; `tokens_total` reads
+        `total_tokens`. `identity.track_record.token_counts_of_records` applies the same rules to plain
+        records (stores without this query)."""
         ids = [str(r or "").strip() for r in (run_ids or []) if str(r or "").strip()]
         if not ids:
             return {}
@@ -1559,7 +1564,29 @@ class SqliteLedgerStore(LedgerStore):
                         THEN COALESCE(json_extract(record_json, '$.result.usage.total_tokens'), 0)
                       ELSE 0
                     END
-                  ) AS tokens_total
+                  ) AS tokens_total,
+                  SUM(
+                    CASE
+                      WHEN json_extract(record_json, '$.effect.type') = 'llm_call'
+                        THEN COALESCE(
+                          json_extract(record_json, '$.result.usage.input_tokens'),
+                          json_extract(record_json, '$.result.usage.prompt_tokens'),
+                          0
+                        )
+                      ELSE 0
+                    END
+                  ) AS tokens_input,
+                  SUM(
+                    CASE
+                      WHEN json_extract(record_json, '$.effect.type') = 'llm_call'
+                        THEN COALESCE(
+                          json_extract(record_json, '$.result.usage.output_tokens'),
+                          json_extract(record_json, '$.result.usage.completion_tokens'),
+                          0
+                        )
+                      ELSE 0
+                    END
+                  ) AS tokens_output
                 FROM completed
                 GROUP BY run_id;
                 """,
@@ -1579,6 +1606,8 @@ class SqliteLedgerStore(LedgerStore):
                     "llm_calls": _i(row["llm_calls"]),
                     "tool_calls": _i(row["tool_calls"]),
                     "tokens_total": _i(row["tokens_total"]),
+                    "tokens_input": _i(row["tokens_input"]),
+                    "tokens_output": _i(row["tokens_output"]),
                 }
         return out
 

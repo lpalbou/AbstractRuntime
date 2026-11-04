@@ -120,7 +120,7 @@ def archive_work_order(home_dir: Path, *, verdict: str) -> None:
         if not p.exists():
             return
         text = p.read_text(encoding="utf-8")
-        done = Path(home_dir) / "work_order.done.md"
+        done = Path(home_dir) / WORK_ORDER_ARCHIVE_FILENAME
         stamp = f"\n\n---\n[{datetime.now(timezone.utc).isoformat()}] {verdict.strip()}\n"
         with done.open("a", encoding="utf-8") as f:
             f.write(text.rstrip() + stamp)
@@ -130,6 +130,47 @@ def archive_work_order(home_dir: Path, *, verdict: str) -> None:
 
 
 _WORK_BLOCK_RE = re.compile(r"```work[^\n`]*\n(.*?)```", re.DOTALL | re.IGNORECASE)
+
+
+WORK_ORDER_ARCHIVE_FILENAME = "work_order.done.md"
+
+
+def read_work_order_verdicts(home_dir: Path) -> List[Dict[str, str]]:
+    """The verdicts `archive_work_order` appended, oldest first:
+    `[{"at": <ISO>, "verdict": "done"|"blocked", "line": <the verdict line>}]`.
+
+    Reads back the writer's own layout (a blank line, `---`, then
+    `[<ISO time>] <verdict line>`), and the verdict word is the line's own
+    `done:` / `blocked:` prefix that `parse_work_verdict` already required.
+    A missing archive is `[]`. Nothing here reads the order's text; an order
+    whose text itself contains that exact three-line layout would be read as
+    a verdict (the archive has no stronger delimiter)."""
+    from datetime import datetime
+
+    path = Path(home_dir) / WORK_ORDER_ARCHIVE_FILENAME
+    if not path.is_file():
+        return []
+    lines = path.read_text(encoding="utf-8").split("\n")
+    out: List[Dict[str, str]] = []
+    for i in range(2, len(lines)):
+        line = lines[i]
+        if lines[i - 1] != "---" or lines[i - 2] != "" or not line.startswith("["):
+            continue
+        close = line.find("] ")
+        if close < 0:
+            continue
+        at = line[1:close]
+        verdict_line = line[close + 2:].strip()
+        try:
+            datetime.fromisoformat(at)
+        except ValueError:
+            continue
+        head = verdict_line.lower()
+        if head.startswith("done:"):
+            out.append({"at": at, "verdict": "done", "line": verdict_line})
+        elif head.startswith("blocked:"):
+            out.append({"at": at, "verdict": "blocked", "line": verdict_line})
+    return out
 
 
 # ----------------------------------------------------------- the day gate

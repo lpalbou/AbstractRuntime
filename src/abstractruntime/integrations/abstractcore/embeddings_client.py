@@ -28,15 +28,10 @@ class AbstractCoreEmbeddingsClient:
         model: str,
         manager_kwargs: dict[str, Any] | None = None,
     ) -> None:
-        # Monorepo import hygiene:
-        # When running from the repo root, `abstractcore/` (project folder) can be imported as a
-        # namespace package and shadow the real python package at `abstractcore/abstractcore/`.
-        # In that situation, `abstractcore.embeddings.manager` may not resolve even though the
-        # implementation exists. Prefer the public import, but fall back to the concrete path.
-        try:
-            from abstractcore.embeddings.manager import EmbeddingManager  # type: ignore
-        except Exception:  # pragma: no cover
-            from abstractcore.abstractcore.embeddings.manager import EmbeddingManager  # type: ignore
+        # Use the installed public package. Import failures (including a missing
+        # dependency) must retain their cause; a checkout-shaped fallback masks
+        # that failure and is not a valid installed-package import.
+        from abstractcore.embeddings.manager import EmbeddingManager
 
         prov = str(provider or "").strip().lower()
         mod = str(model or "").strip()

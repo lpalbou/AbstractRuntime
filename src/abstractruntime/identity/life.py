@@ -35,6 +35,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from .chat import (
     ENTITY_LLM_READ_IDLE_TIMEOUT_S,
+    ENTITY_LLM_TIMEOUT_FLOOR_S,
     ChatHome,
     ChatSession,
     _entity_patience_window,
@@ -1013,8 +1014,11 @@ LOOP_PHASES = ("day", "between", "stopped")
 # its status at every tick boundary, so a "day" whose updated_at froze past
 # this bound is a corpse regardless of what the pid says. A tick = one LLM
 # turn + memory writes; since 2026-11-07 one entity LLM attempt may itself
-# last up to ENTITY_LLM_TIMEOUT_FLOOR_S (1800s), the same as this bound.
-LOOP_STATUS_STALE_SECONDS = 1800.0
+# last up to ENTITY_LLM_TIMEOUT_FLOOR_S (1800s), and a retry may start just
+# before the budget ends, so a healthy tick can run ~2x that. The bound is two
+# full attempts plus ten minutes for memory writes, so a slow live loop is never
+# read as a corpse (a dead pid is still caught at once by the liveness probe).
+LOOP_STATUS_STALE_SECONDS = 2 * ENTITY_LLM_TIMEOUT_FLOOR_S + 600.0
 
 # SLEEP IS BOUNDED (laurent's ruling, entity spec v5 decision:sleep-is-bounded,
 # c2465): a sleep lasts at most ~1h, then the entity wakes. An explicit

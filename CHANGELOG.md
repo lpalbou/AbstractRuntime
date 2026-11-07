@@ -23,6 +23,10 @@ Unreleased changes live in [`changelog.d/`](changelog.d/README.md), one file per
   raised to the per-attempt timeout, so an attempt that used its whole window is not retried while a fast failure
   (a reset connection) still retries inside it; `0` still means no budget. The entity read-idle bound (stream-only,
   so inert on these non-streaming calls) goes from 60 to 1800 seconds as well.
+- **A slow live loop is no longer read as dead** (`identity/life.py`). The loop-corpse bound
+  `LOOP_STATUS_STALE_SECONDS` was 1800 seconds, now the length of one entity LLM attempt. It is now two full attempts
+  plus ten minutes (4200 seconds), derived from the timeout floor, so a healthy tick never looks frozen. A dead loop
+  process is still detected at once by its pid.
 
 ## [0.18.3] - 2026-11-07
 

@@ -1156,6 +1156,32 @@ def local_get_voice_catalog(
     return _filter_voice_catalog_response(payload, provider=provider, model=model, providers_only=providers_only)
 
 
+def _catalog_unavailable_reason(catalog: Any) -> Optional[str]:
+    reason = catalog.get("unavailable_reason") if isinstance(catalog, dict) else None
+    return reason.strip() if isinstance(reason, str) and reason.strip() else None
+
+
+def _tts_listing_failure_reason(voice: Any, catalog: Any, *, provider: Optional[str], exc: Exception) -> str:
+    """The `error` of a TTS listing whose engine raised: AbstractVoice's own reason first (0968).
+
+    A voice engine that cannot run often raises while it is being built, before any
+    catalog comes back, so the bare exception text ("No module named ...") used to be
+    the whole answer. The catalog it already returned, or else the engine-free
+    providers-only catalog, says why in plain words (`unavailable_reason`); the
+    exception is kept, worded for a person, only when neither does.
+    """
+    reason = _catalog_unavailable_reason(catalog)
+    if reason is None and voice is not None and hasattr(voice, "voice_catalog"):
+        try:
+            reason = _catalog_unavailable_reason(voice.voice_catalog(provider=provider, providers_only=True))
+        except Exception:
+            reason = None
+    if reason is not None:
+        return reason
+    detail = str(exc).strip() or type(exc).__name__
+    return f"the text-to-speech engine could not list its models: {detail}"
+
+
 def local_list_tts_models(
     *,
     base_url: Optional[str] = None,
@@ -1163,6 +1189,8 @@ def local_list_tts_models(
     voice_openai_api_key: Optional[str] = None,
     provider: Optional[str] = None,
 ) -> Dict[str, Any]:
+    voice: Any = None
+    catalog: Any = {}
     try:
         voice = _runtime_capability_registry(
             voice_base_url=base_url,
@@ -1186,7 +1214,7 @@ def local_list_tts_models(
                 },
                 source="abstractvoice.local",
                 available=False,
-                error=str(exc),
+                error=_tts_listing_failure_reason(voice, catalog, provider=provider, exc=exc),
             ),
             provider=provider,
             model_keys=("models_by_provider", "tts_models_by_provider"),

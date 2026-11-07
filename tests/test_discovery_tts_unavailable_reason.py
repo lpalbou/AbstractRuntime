@@ -50,3 +50,59 @@ def test_the_error_is_the_catalogs_unavailable_reason(monkeypatch: pytest.Monkey
     voice.list_tts_models = lambda provider=None: ["m"]
     ok = dq.local_list_tts_models(provider="x")
     assert ok["available"] is True and ok["error"] is None
+
+
+# 0968: an engine that RAISES while the listing is built (it cannot run, so building it
+# fails) used to answer with the bare exception text. The reason AbstractVoice gives
+# in plain words wins; the exception is kept, worded for a person, only as a fallback.
+
+
+def _raising_voice(full_catalog_error: Exception, light_catalog: object) -> SimpleNamespace:
+    def voice_catalog(provider=None, providers_only=False):
+        if providers_only:
+            if isinstance(light_catalog, Exception):
+                raise light_catalog
+            return light_catalog
+        raise full_catalog_error
+
+    return SimpleNamespace(voice_catalog=voice_catalog, list_tts_models=lambda provider=None: [])
+
+
+def test_a_raising_engine_answers_with_the_engine_free_catalogs_reason(monkeypatch: pytest.MonkeyPatch) -> None:
+    voice = _raising_voice(
+        ModuleNotFoundError("No module named 'kokoro'"),
+        {"tts_providers": [], "unavailable_reason": "Kokoro is not installed; install abstractvoice[kokoro]"},
+    )
+    monkeypatch.setattr(dq, "_runtime_capability_registry", lambda **_: SimpleNamespace(voice=voice))
+    out = dq.local_list_tts_models(provider="kokoro")
+    assert out["available"] is False and out["models"] == []
+    assert out["error"] == "Kokoro is not installed; install abstractvoice[kokoro]"
+
+
+def test_a_listing_that_raises_after_the_catalog_keeps_the_catalogs_reason(monkeypatch: pytest.MonkeyPatch) -> None:
+    def list_tts_models(provider=None):
+        raise RuntimeError("engine build failed")
+
+    voice = SimpleNamespace(
+        voice_catalog=lambda provider=None, providers_only=False: {"unavailable_reason": "no OpenAI API key is configured"},
+        list_tts_models=list_tts_models,
+    )
+    monkeypatch.setattr(dq, "_runtime_capability_registry", lambda **_: SimpleNamespace(voice=voice))
+    assert dq.local_list_tts_models(provider="openai")["error"] == "no OpenAI API key is configured"
+
+
+def test_with_no_reason_the_exception_is_worded_for_a_person(monkeypatch: pytest.MonkeyPatch) -> None:
+    for light in ({"tts_providers": ["piper"], "unavailable_reason": None}, RuntimeError("light failed too")):
+        voice = _raising_voice(RuntimeError("weights are corrupt"), light)
+        monkeypatch.setattr(dq, "_runtime_capability_registry", lambda **_: SimpleNamespace(voice=voice))
+        out = dq.local_list_tts_models(provider="piper")
+        assert out["available"] is False
+        assert out["error"] == "the text-to-speech engine could not list its models: weights are corrupt"
+
+
+def test_an_empty_exception_still_names_what_went_wrong(monkeypatch: pytest.MonkeyPatch) -> None:
+    def broken_registry(**_):
+        raise ImportError()
+
+    monkeypatch.setattr(dq, "_runtime_capability_registry", broken_registry)
+    assert dq.local_list_tts_models()["error"] == "the text-to-speech engine could not list its models: ImportError"

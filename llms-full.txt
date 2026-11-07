@@ -53,15 +53,20 @@ See llms.txt for the linked index.
 
 # AbstractRuntime
 
-**Release 0.18.2:** Embedding imports use the public AbstractCore module and preserve actionable import errors. See [release notes](CHANGELOG.md).
+**Release 0.18.3:** A voice engine that cannot run says why in plain words when its models are listed. See [release notes](CHANGELOG.md).
 
 **AbstractRuntime** is a durable workflow runtime (interrupt → checkpoint → resume) with an append-only execution ledger.
 
 It is designed for long-running workflows that must survive restarts and explicitly model blocking (human input, timers, external events, subworkflows) without keeping Python stacks alive.
 
-**Version:** 0.18.2 • **Python:** 3.10+
+**Version:** 0.18.3 • **Python:** 3.10+
 
 **Status:** pre-1.0 (API may evolve). For production use, pin versions and follow `CHANGELOG.md`.
+
+## What's new in 0.18.3
+
+Listing text-to-speech models when the voice engine cannot run now gives AbstractVoice's own reason in
+plain words (for example that the engine is not installed or no API key is set) instead of a bare Python error.
 
 ## What's new in 0.18.2
 

@@ -10,6 +10,17 @@ Unreleased changes live in [`changelog.d/`](changelog.d/README.md), one file per
 
 ## [Unreleased]
 
+## [0.18.3] - 2026-11-07
+
+### Fixed
+
+- **A voice engine that cannot run says why in plain words** (`integrations/abstractcore/discovery_queries.py`,
+  framework backlog 0968). When the engine raised while `local_list_tts_models` was building the listing, the
+  listing's `error` was the bare exception text (for example "No module named 'kokoro'"). It is now AbstractVoice's
+  own `unavailable_reason`: from the catalog already returned, or else from the engine-free providers-only catalog.
+  Only when neither gives one is the exception kept, worded for a person: "the text-to-speech engine could not list
+  its models: ...".
+
 ## [0.18.2] - 2026-11-07
 
 ### Fixed

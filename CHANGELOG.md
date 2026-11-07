@@ -10,6 +10,20 @@ Unreleased changes live in [`changelog.d/`](changelog.d/README.md), one file per
 
 ## [Unreleased]
 
+## [0.18.4] - 2026-11-07
+
+### Changed
+
+- **Entity LLM calls wait at least 1800 seconds** (`identity/chat.py`, `identity/life.py`, ADR-0027 §3). The entity
+  Ephemeral's own-time loop stopped itself after three turns in a row hit "timed out after 120.0s (configured
+  timeout)" on a slow but healthy remote model. Every entity lane (visits, own time, the sleep narrator) now reads one
+  patience window: `ABSTRACTRUNTIME_ENTITY_LLM_TIMEOUT_S` defaults to 1800 (was 120), and a value below 1800 is raised
+  to 1800 with one stderr line saying so; `0` still means no client timeout. The wall-clock retry budget
+  `ABSTRACTRUNTIME_ENTITY_RETRY_BUDGET_S` defaults to 1800 (was 180) and is never shorter than one attempt: it is
+  raised to the per-attempt timeout, so an attempt that used its whole window is not retried while a fast failure
+  (a reset connection) still retries inside it; `0` still means no budget. The entity read-idle bound (stream-only,
+  so inert on these non-streaming calls) goes from 60 to 1800 seconds as well.
+
 ## [0.18.3] - 2026-11-07
 
 ### Fixed

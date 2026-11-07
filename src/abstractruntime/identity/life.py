@@ -33,7 +33,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-from .chat import ChatSession, ChatHome
+from .chat import (
+    ENTITY_LLM_READ_IDLE_TIMEOUT_S,
+    ChatHome,
+    ChatSession,
+    _entity_patience_window,
+)
 from .tool_policy import PHASE_PERSONAL, PHASE_SLEEP, PHASE_WORK
 
 # The own-time note is INFORMATIONAL, never a mission. It describes the
@@ -70,30 +75,11 @@ that too (the same block, starting "blocked:" instead of "done:"). An
 honest blocked is worth more than a pretended done."""
 
 
-# #[WARNING:TIMEOUT] Entity PATIENCE WINDOW (ADR-0027 §3: an explicit,
-# documented, auditable safeguard — not a hidden performance knob). This is a
-# TOTAL per-attempt LLM budget, so it CAN cut a healthy long generation on a
-# slow local model; it is deliberately low because these are INTERACTIVE lanes
-# where a human is watching "Thinking...", and it fails loudly (the 180s
-# wall-clock retry budget bounds the whole ladder at ~3 minutes). Operators
-# running big local models MUST raise it: ABSTRACTRUNTIME_ENTITY_LLM_TIMEOUT_S
-# (0 = no client timeout) and ABSTRACTRUNTIME_ENTITY_RETRY_BUDGET_S.
-def _entity_patience_window() -> "tuple[float | None, float | None]":
-    """(per-attempt total, wall-clock retry budget) — env-overridable."""
-    import os as _os
-
-    def _f(name: str, default: float):
-        raw = str(_os.getenv(name) or "").strip()
-        if raw:
-            try:
-                default = float(raw)
-            except ValueError:
-                pass
-        return None if default <= 0 else default
-
-    return _f("ABSTRACTRUNTIME_ENTITY_LLM_TIMEOUT_S", 120.0), _f(
-        "ABSTRACTRUNTIME_ENTITY_RETRY_BUDGET_S", 180.0
-    )
+# #[WARNING:TIMEOUT] Entity PATIENCE WINDOW (ADR-0027 §3): ONE definition,
+# in chat.py, shared by the visit lane, the own-time loop and the sleep
+# narrator — 1800s minimum per attempt, retry budget never shorter than one
+# attempt (operator ruling 2026-11-07). Read its comment for the rule.
+# (imported at the top of this module).
 
 
 def read_work_order(home_dir: Path) -> Optional[str]:
@@ -1025,8 +1011,9 @@ LOOP_PHASES = ("day", "between", "stopped")
 # read the corpse as running forever — the visit doors would then negotiate
 # an auto-yield nobody answers and 409 on every open. A LIVE day heartbeats
 # its status at every tick boundary, so a "day" whose updated_at froze past
-# this bound is a corpse regardless of what the pid says. Generous: a tick =
-# one LLM turn (<= ~3 min timeout) + memory writes, never half an hour.
+# this bound is a corpse regardless of what the pid says. A tick = one LLM
+# turn + memory writes; since 2026-11-07 one entity LLM attempt may itself
+# last up to ENTITY_LLM_TIMEOUT_FLOOR_S (1800s), the same as this bound.
 LOOP_STATUS_STALE_SECONDS = 1800.0
 
 # SLEEP IS BOUNDED (laurent's ruling, entity spec v5 decision:sleep-is-bounded,
@@ -3990,20 +3977,20 @@ def build_session_factory(
         # report turn must not be cut mid-thought by a caller's own pin).
         # PATIENCE WINDOW (core c3954, the 30-min wedge post-mortem): the
         # config default_timeout (600s) x 3 retries stacked to 30m01s on a
-        # wedged substrate while the operator watched "Thinking...".
-        # Interactive lanes NAME their window: 120s per attempt + a 180s
-        # wall-clock retry budget - a dead substrate costs ~3 loud minutes,
-        # never 30 silent ones. Older cores without the budget kwarg get
-        # the timeout alone (labeled).
+        # wedged substrate while the operator watched "Thinking...", so
+        # entity lanes NAME their window. Since 2026-11-07 it is at least
+        # 1800s per attempt (three 120s cuts in a row on a slow but healthy
+        # remote model stopped the own-time loop), and the wall-clock retry
+        # budget is never shorter than one attempt. Older cores without the
+        # budget kwarg get the timeout alone (labeled).
         kwargs: dict[str, Any] = {
             "model": day_model,
             **dict(zip(("timeout", "retry_wall_clock_budget_s"), _entity_patience_window())),
-            # READ-IDLE (0152 face 2, core c5051): the per-attempt 120s is
-            # the absolute budget; a stream silent for 60s on an
-            # interactive lane is already dead - abort at the socket, let
-            # the retry budget do its loud work. Older cores ignore the
-            # unknown kwarg via the same TypeError ladder below.
-            "read_idle_timeout_s": 60,
+            # READ-IDLE (0152 face 2, core c5051): stream-only in core, so
+            # inert on these non-streaming calls; it carries the same 1800s
+            # floor as the total. Older cores ignore the unknown kwarg via
+            # the same TypeError ladder below.
+            "read_idle_timeout_s": ENTITY_LLM_READ_IDLE_TIMEOUT_S,
         }
         if max_output_tokens is not None:
             kwargs["max_output_tokens"] = max_output_tokens

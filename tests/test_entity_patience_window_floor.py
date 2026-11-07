@@ -70,3 +70,11 @@ def test_every_entity_lane_reads_the_same_window():
     assert life_mod._entity_patience_window is chat_mod._entity_patience_window
     assert chat_mod.ENTITY_LLM_TIMEOUT_FLOOR_S == 1800.0
     assert chat_mod.ENTITY_LLM_READ_IDLE_TIMEOUT_S >= 1800.0
+
+
+def test_a_negative_value_is_a_typo_not_a_switch_off(monkeypatch):
+    from abstractruntime.identity.chat import ENTITY_LLM_TIMEOUT_FLOOR_S, _entity_patience_window
+
+    monkeypatch.setenv("ABSTRACTRUNTIME_ENTITY_LLM_TIMEOUT_S", "-1800")
+    monkeypatch.setenv("ABSTRACTRUNTIME_ENTITY_RETRY_BUDGET_S", "-5")
+    assert _entity_patience_window() == (ENTITY_LLM_TIMEOUT_FLOOR_S, ENTITY_LLM_TIMEOUT_FLOOR_S)

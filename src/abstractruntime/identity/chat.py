@@ -157,9 +157,9 @@ def _entity_patience_window() -> "tuple[float | None, float | None]":
                 value = float(raw)
             except ValueError:
                 value = default
-            if not math.isfinite(value):
-                value = default
-        return None if value <= 0 else value
+            if not math.isfinite(value) or value < 0:
+                value = default  # a typo (e.g. -1800) never silently disables the guard; 0 does, on purpose
+        return None if value == 0 else value
 
     timeout = _f("ABSTRACTRUNTIME_ENTITY_LLM_TIMEOUT_S", ENTITY_LLM_TIMEOUT_FLOOR_S)
     if timeout is not None and timeout < ENTITY_LLM_TIMEOUT_FLOOR_S:

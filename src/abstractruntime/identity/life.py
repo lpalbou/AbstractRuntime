@@ -80,7 +80,6 @@ honest blocked is worth more than a pretended done."""
 # in chat.py, shared by the visit lane, the own-time loop and the sleep
 # narrator — 1800s minimum per attempt, retry budget never shorter than one
 # attempt (operator ruling 2026-11-07). Read its comment for the rule.
-# (imported at the top of this module).
 
 
 def read_work_order(home_dir: Path) -> Optional[str]:
@@ -1011,13 +1010,11 @@ LOOP_PHASES = ("day", "between", "stopped")
 # belong to an UNRELATED live process, and the pid-liveness probe alone would
 # read the corpse as running forever — the visit doors would then negotiate
 # an auto-yield nobody answers and 409 on every open. A LIVE day heartbeats
-# its status at every tick boundary, so a "day" whose updated_at froze past
-# this bound is a corpse regardless of what the pid says. A tick = one LLM
-# turn + memory writes; since 2026-11-07 one entity LLM attempt may itself
-# last up to ENTITY_LLM_TIMEOUT_FLOOR_S (1800s), and a retry may start just
-# before the budget ends, so a healthy tick can run ~2x that. The bound is two
-# full attempts plus ten minutes for memory writes, so a slow live loop is never
-# read as a corpse (a dead pid is still caught at once by the liveness probe).
+# its status at every tick boundary AND before every LLM call
+# (touch_loop_heartbeat), so the bound covers the longest gap between two
+# calls: one generate (an 1800 s attempt, plus a retry that may start just
+# before the 1800 s budget ends) plus ten minutes of tool work and memory
+# writes. A dead pid is still caught at once by the liveness probe.
 LOOP_STATUS_STALE_SECONDS = 2 * ENTITY_LLM_TIMEOUT_FLOOR_S + 600.0
 
 # SLEEP IS BOUNDED (laurent's ruling, entity spec v5 decision:sleep-is-bounded,
@@ -1200,6 +1197,52 @@ def write_loop_status(
         )
     except OSError:
         pass
+
+
+def touch_loop_heartbeat(home_dir: Path) -> None:
+    """Refresh `updated_at` of THIS process's open day, nothing else.
+
+    A tick is a whole turn: one LLM call plus up to MAX_TOOL_ROUNDS_PER_TURN
+    tool-round calls, each allowed the 1800 s entity floor. The tick-boundary
+    status write alone let a slow but healthy day outlive
+    LOOP_STATUS_STALE_SECONDS, read as a corpse, and the gateway's repair
+    sweep could then spawn a second loop on the same home (review of 0.18.4,
+    2026-11-07). The loop calls this before every LLM call, so the bound
+    measures the gap between two calls. Only a "day" written by this pid is
+    touched (never revives a stopped or foreign status). Best-effort, like
+    write_loop_status: the loop must never die over its status."""
+    import json
+    import os
+    from datetime import datetime, timezone
+
+    path = Path(home_dir) / "loop_status"
+    try:
+        current = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return
+    if not isinstance(current, dict) or current.get("phase") != "day" or current.get("pid") != os.getpid():
+        return
+    current["updated_at"] = datetime.now(timezone.utc).isoformat()
+    try:
+        path.write_text(json.dumps(current) + "\n", encoding="utf-8")
+    except OSError:
+        pass
+
+
+def _beat_before_each_call(llm: Any, home_dir: Path) -> Any:
+    """Make `llm.generate` refresh the loop heartbeat before each call.
+    functools.wraps keeps the signature ChatSession inspects."""
+    import functools
+
+    original = llm.generate
+
+    @functools.wraps(original)
+    def generate(*args: Any, **kwargs: Any) -> Any:
+        touch_loop_heartbeat(home_dir)
+        return original(*args, **kwargs)
+
+    llm.generate = generate
+    return llm
 
 
 def read_loop_status(home_dir: Path) -> Dict[str, Any]:
@@ -4006,6 +4049,9 @@ def build_session_factory(
             kwargs.pop("retry_wall_clock_budget_s", None)
             out("#FALLBACK core predates retry_wall_clock_budget_s; timeout-only guard")
             llm = create_llm(day_provider, **kwargs)
+
+        # Heartbeat per LLM call, not per tick (see touch_loop_heartbeat).
+        llm = _beat_before_each_call(llm, home_dir)
 
         # THE WORK LANE (laurent seq 155): a standing work order shifts THIS
         # day to phase=work — the work grant applies (incl. execute_command

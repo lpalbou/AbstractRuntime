@@ -14,19 +14,30 @@ Unreleased changes live in [`changelog.d/`](changelog.d/README.md), one file per
 
 ### Changed
 
-- **Entity LLM calls wait at least 1800 seconds** (`identity/chat.py`, `identity/life.py`, ADR-0027 §3). The entity
-  Ephemeral's own-time loop stopped itself after three turns in a row hit "timed out after 120.0s (configured
-  timeout)" on a slow but healthy remote model. Every entity lane (visits, own time, the sleep narrator) now reads one
-  patience window: `ABSTRACTRUNTIME_ENTITY_LLM_TIMEOUT_S` defaults to 1800 (was 120), and a value below 1800 is raised
-  to 1800 with one stderr line saying so; `0` still means no client timeout. The wall-clock retry budget
-  `ABSTRACTRUNTIME_ENTITY_RETRY_BUDGET_S` defaults to 1800 (was 180) and is never shorter than one attempt: it is
-  raised to the per-attempt timeout, so an attempt that used its whole window is not retried while a fast failure
-  (a reset connection) still retries inside it; `0` still means no budget. The entity read-idle bound (stream-only,
-  so inert on these non-streaming calls) goes from 60 to 1800 seconds as well.
-- **A slow live loop is no longer read as dead** (`identity/life.py`). The loop-corpse bound
-  `LOOP_STATUS_STALE_SECONDS` was 1800 seconds, now the length of one entity LLM attempt. It is now two full attempts
-  plus ten minutes (4200 seconds), derived from the timeout floor, so a healthy tick never looks frozen. A dead loop
-  process is still detected at once by its pid.
+- **Entity LLM calls made by the runtime wait at least 1800 seconds** (`identity/chat.py`, `identity/life.py`,
+  ADR-0027 §3). The entity Ephemeral's own-time loop stopped itself after three turns in a row hit "timed out after
+  120.0s (configured timeout)" on a slow but healthy remote model. The runtime's entity lanes (an entity's own time,
+  its sleep narrator and the command-line visit) now read one patience window: `ABSTRACTRUNTIME_ENTITY_LLM_TIMEOUT_S`
+  defaults to 1800 (was 120); a value below 1800 is raised to 1800 with one stderr line; a negative or unreadable value
+  is treated as a typo and gives 1800; `0` still means no client timeout. The retry budget
+  `ABSTRACTRUNTIME_ENTITY_RETRY_BUDGET_S` defaults to 1800 (was 180) and is never shorter than one attempt, so an
+  attempt that used its whole window is not retried while a fast failure (a reset connection) still retries. Visits
+  hosted by the gateway are not in these lanes: they use AbstractCore's `default_timeout` (7200 seconds by default).
+
+### Fixed
+
+- **A slow but healthy own-time day is never read as dead** (`identity/life.py`). The loop wrote its "alive" status only
+  between ticks, and one tick can make up to about 22 LLM calls. With 1800-second calls, a healthy tick could outlast
+  the dead-loop bound, and the gateway's repair sweep could then start a second loop on the same entity. The loop now
+  refreshes its status before every LLM call (only its own open day, never a stopped or foreign status), and the
+  bound `LOOP_STATUS_STALE_SECONDS` is two full attempts plus ten minutes (4200 seconds). A loop whose process exited
+  is still detected at once.
+
+### Known limit
+
+- While an entity's own time is in the middle of a long LLM call, a visit can be refused until the call ends: the
+  gateway visit door waits 55 seconds for the loop to pause. Letting a visit interrupt the loop's call is planned for a
+  later release.
 
 ## [0.18.3] - 2026-11-07
 

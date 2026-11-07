@@ -2675,3 +2675,51 @@ def test_remote_chat_media_preserves_existing_content_array(tmp_path: Path) -> N
     assert content[0]["type"] == "text"
     assert content[0]["text"].endswith("Keep this text.")
     assert content[1]["type"] == "image_url"
+
+
+class _LanguageFactsSender(_RemoteTranscriptionSender):
+    def __init__(self, answer):
+        super().__init__()
+        self.answer = answer
+
+    def post_multipart(self, url, *, headers, data, files, timeout):
+        super().post_multipart(url, headers=headers, data=data, files=files, timeout=timeout)
+        return dict(self.answer)
+
+
+def _transcribe(sender, output):
+    store = InMemoryArtifactStore()
+    meta = store.store(b"wav-input", content_type="audio/wav", tags={"filename": "speech.wav"})
+    client = RemoteAbstractCoreLLMClient(
+        server_base_url="http://core.test",
+        model="openai/gpt-4o-mini",
+        request_sender=sender,
+        artifact_store=store,
+    )
+    return client.generate(prompt="", media=[{"$artifact": meta.artifact_id, "filename": "speech.wav"}], params={"output": output})
+
+
+def test_remote_transcription_carries_the_language_facts_in_metadata() -> None:
+    """Round 18: the server's `language` (what the engine was told; null = detected) and
+    `detected_language` ride the result's metadata — the gateway's "Detected: fr" and its ledger
+    evidence. Deleting `language_facts` in `_remote_transcription` turns this red."""
+    out = _transcribe(
+        _LanguageFactsSender({"text": "bonjour", "language": None, "detected_language": "FR"}),
+        {"modality": "text", "task": "transcription"},
+    )
+    assert out["content"] == "bonjour"
+    assert out["metadata"]["language"] is None
+    assert out["metadata"]["detected_language"] == "fr"
+    assert out["text"]["metadata"]["detected_language"] == "fr"
+
+    fixed = _transcribe(
+        _LanguageFactsSender({"text": "bonjour", "language": "fr", "detected_language": "fr"}),
+        {"modality": "text", "task": "transcription", "language": "fr"},
+    )
+    assert fixed["metadata"]["language"] == "fr" and fixed["metadata"]["detected_language"] == "fr"
+
+
+def test_remote_transcription_from_an_older_server_reports_no_language() -> None:
+    out = _transcribe(_LanguageFactsSender({"text": "hello"}), {"modality": "text", "task": "transcription"})
+    assert out["content"] == "hello"
+    assert out["metadata"]["language"] is None and out["metadata"]["detected_language"] is None

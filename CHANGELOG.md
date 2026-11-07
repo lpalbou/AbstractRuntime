@@ -10,6 +10,36 @@ Unreleased changes live in [`changelog.d/`](changelog.d/README.md), one file per
 
 ## [Unreleased]
 
+## [0.18.4] - 2026-11-07
+
+### Changed
+
+- **Entity LLM calls made by the runtime wait at least 1800 seconds** (`identity/chat.py`, `identity/life.py`,
+  ADR-0027 §3). The entity Ephemeral's own-time loop stopped itself after three turns in a row hit "timed out after
+  120.0s (configured timeout)" on a slow but healthy remote model. The runtime's entity lanes (an entity's own time,
+  its sleep narrator and the command-line visit) now read one patience window: `ABSTRACTRUNTIME_ENTITY_LLM_TIMEOUT_S`
+  defaults to 1800 (was 120); a value below 1800 is raised to 1800 with one stderr line; a negative or unreadable value
+  is treated as a typo and gives 1800; `0` still means no client timeout. The retry budget
+  `ABSTRACTRUNTIME_ENTITY_RETRY_BUDGET_S` defaults to 1800 (was 180) and is never shorter than one attempt, so an
+  attempt that used its whole window is not retried while a fast failure (a reset connection) still retries. Visits
+  hosted by the gateway are not in these lanes: they use AbstractCore's `default_timeout` (7200 seconds by default).
+
+### Fixed
+
+- **A slow but healthy own-time day is never read as dead** (`identity/life.py`). The loop wrote its "alive" status only
+  between ticks, and one tick can make up to about 22 LLM calls. With 1800-second calls, a healthy tick could outlast
+  the dead-loop bound, and the gateway's repair sweep could then start a second loop on the same entity. The loop now
+  refreshes its status before and after every LLM call (only its own open day, never a stopped or foreign status), and the
+  bound `LOOP_STATUS_STALE_SECONDS` is two full attempts plus ten minutes (4200 seconds). A loop whose process exited
+  is still detected at once. The status file is now written atomically, so a reader never sees a half-written file.
+  With `ABSTRACTRUNTIME_ENTITY_LLM_TIMEOUT_S=0` (no timeout, opt-in) a single call can still outlast the bound.
+
+### Known limit
+
+- While an entity's own time is in the middle of a long LLM call, a visit can be refused until the call ends: the
+  gateway visit door waits 55 seconds for the loop to pause. Letting a visit interrupt the loop's call is planned for a
+  later release.
+
 ## [0.18.3] - 2026-11-07
 
 ### Fixed

@@ -53,15 +53,21 @@ See llms.txt for the linked index.
 
 # AbstractRuntime
 
-**Release 0.18.3:** A voice engine that cannot run says why in plain words when its models are listed. See [release notes](CHANGELOG.md).
+**Release 0.18.4:** Entity LLM calls wait at least 30 minutes (1800 seconds) before timing out. See [release notes](CHANGELOG.md).
 
 **AbstractRuntime** is a durable workflow runtime (interrupt → checkpoint → resume) with an append-only execution ledger.
 
 It is designed for long-running workflows that must survive restarts and explicitly model blocking (human input, timers, external events, subworkflows) without keeping Python stacks alive.
 
-**Version:** 0.18.3 • **Python:** 3.10+
+**Version:** 0.18.4 • **Python:** 3.10+
 
 **Status:** pre-1.0 (API may evolve). For production use, pin versions and follow `CHANGELOG.md`.
+
+## What's new in 0.18.4
+
+An entity's own time, its sleep narrator and the command-line visit now wait at least 1800 seconds before timing out,
+instead of 120. A lower `ABSTRACTRUNTIME_ENTITY_LLM_TIMEOUT_S` is raised to 1800 (`0` still means no timeout), and
+the retry budget is never shorter than one call.
 
 ## What's new in 0.18.3
 

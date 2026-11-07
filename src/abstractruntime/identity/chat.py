@@ -117,28 +117,65 @@ _MARKERS_ONLY_RE = re.compile(r"^\s*(?:\[[^\[\]\n]*\]\s*)+$")
 
 # #[WARNING:TIMEOUT] Entity PATIENCE WINDOW (ADR-0027 §3: an explicit,
 # documented, auditable safeguard — not a hidden performance knob). This is a
-# TOTAL per-attempt LLM budget, so it CAN cut a healthy long generation on a
-# slow local model; it is deliberately low because these are INTERACTIVE lanes
-# where a human is watching "Thinking...", and it fails loudly (the 180s
-# wall-clock retry budget bounds the whole ladder at ~3 minutes). Operators
-# running big local models MUST raise it: ABSTRACTRUNTIME_ENTITY_LLM_TIMEOUT_S
-# (0 = no client timeout) and ABSTRACTRUNTIME_ENTITY_RETRY_BUDGET_S.
+# TOTAL per-attempt LLM budget for every entity lane (visit/chat, own time,
+# the sleep narrator). It was 120s per attempt with a 180s retry budget until
+# 2026-11-07, when the entity Ephemeral's own-time loop stopped itself after
+# three turns in a row hit "timed out after 120.0s" on a healthy but slow
+# remote model. Operator ruling: "if that was a timeout, minimum timeout
+# should be 1800s". So:
+# - ABSTRACTRUNTIME_ENTITY_LLM_TIMEOUT_S defaults to 1800; a value below 1800
+#   is RAISED to 1800 (said once on stderr); 0 still means no client timeout.
+# - ABSTRACTRUNTIME_ENTITY_RETRY_BUDGET_S (default 1800; 0 = no budget) is
+#   never shorter than one attempt: it is raised to the per-attempt timeout.
+#   Core's budget only gates whether a RETRY may start (the first attempt is
+#   never cut by it), so budget == timeout means an attempt that used its
+#   whole window is not retried, while fast failures (a reset connection)
+#   still retry inside the same window.
+# Failures stay loud: core names the 1800s and the knob in the error.
+ENTITY_LLM_TIMEOUT_FLOOR_S = 1800.0
+# The read-idle (no-progress) bound threaded beside the total. Core applies it
+# to STREAMING requests only, and the entity lanes do not stream today, so it
+# is inert; it carries the same floor so it can never cut a slow entity turn
+# if a lane starts streaming.
+ENTITY_LLM_READ_IDLE_TIMEOUT_S = ENTITY_LLM_TIMEOUT_FLOOR_S
+_PATIENCE_FLOOR_SAID = False
+
+
 def _entity_patience_window() -> "tuple[float | None, float | None]":
-    """(per-attempt total, wall-clock retry budget) — env-overridable."""
+    """(per-attempt total, wall-clock retry budget) — env-overridable, with the
+    1800s floor: `None` means no client timeout / no retry budget."""
+    import math
     import os as _os
 
-    def _f(name: str, default: float):
+    global _PATIENCE_FLOOR_SAID
+
+    def _f(name: str, default: float) -> "float | None":
         raw = str(_os.getenv(name) or "").strip()
+        value = default
         if raw:
             try:
-                default = float(raw)
+                value = float(raw)
             except ValueError:
-                pass
-        return None if default <= 0 else default
+                value = default
+            if not math.isfinite(value) or value < 0:
+                value = default  # a typo (e.g. -1800) never silently disables the guard; 0 does, on purpose
+        return None if value == 0 else value
 
-    return _f("ABSTRACTRUNTIME_ENTITY_LLM_TIMEOUT_S", 120.0), _f(
-        "ABSTRACTRUNTIME_ENTITY_RETRY_BUDGET_S", 180.0
-    )
+    timeout = _f("ABSTRACTRUNTIME_ENTITY_LLM_TIMEOUT_S", ENTITY_LLM_TIMEOUT_FLOOR_S)
+    if timeout is not None and timeout < ENTITY_LLM_TIMEOUT_FLOOR_S:
+        if not _PATIENCE_FLOOR_SAID:
+            _PATIENCE_FLOOR_SAID = True
+            print(
+                f"#[WARNING:TIMEOUT] ABSTRACTRUNTIME_ENTITY_LLM_TIMEOUT_S={timeout:g} is below "
+                f"the {ENTITY_LLM_TIMEOUT_FLOOR_S:g}s minimum for entity LLM calls; "
+                f"using {ENTITY_LLM_TIMEOUT_FLOOR_S:g}s (0 = no client timeout)",
+                file=sys.stderr,
+            )
+        timeout = ENTITY_LLM_TIMEOUT_FLOOR_S
+    budget = _f("ABSTRACTRUNTIME_ENTITY_RETRY_BUDGET_S", ENTITY_LLM_TIMEOUT_FLOOR_S)
+    if budget is not None:
+        budget = max(budget, timeout if timeout is not None else ENTITY_LLM_TIMEOUT_FLOOR_S)
+    return timeout, budget
 
 
 # The session-summary digest bound. This string is INGESTED as the durable
@@ -3650,18 +3687,17 @@ def main(argv: Optional[List[str]] = None) -> int:
 
         from abstractcore import create_llm  # lazy: keeps the kernel import-light
 
-        # PATIENCE WINDOW (core c3954): a visit turn is a human in front of
-        # "Thinking..." - 120s per attempt, 180s wall-clock retry budget;
-        # wedged substrates fail in minutes, loudly.
+        # PATIENCE WINDOW (core c3954; 1800s floor, operator ruling
+        # 2026-11-07): at least 1800s per attempt and a retry budget never
+        # shorter than one attempt; a wedged substrate still fails loudly.
         llm_kwargs: Dict[str, Any] = {
             "model": model,
             **dict(zip(("timeout", "retry_wall_clock_budget_s"), _entity_patience_window())),
-            # READ-IDLE (0152 face 2, core c5051): the per-attempt 120s is
-            # the absolute budget; a stream silent for 60s on an
-            # interactive lane is already dead - abort at the socket, let
-            # the retry budget do its loud work. Older cores ignore the
-            # unknown kwarg via the same TypeError ladder below.
-            "read_idle_timeout_s": 60,
+            # READ-IDLE (0152 face 2, core c5051): stream-only in core, so
+            # inert on these non-streaming calls; it carries the same 1800s
+            # floor as the total. Older cores ignore the unknown kwarg via
+            # the same TypeError ladder below.
+            "read_idle_timeout_s": ENTITY_LLM_READ_IDLE_TIMEOUT_S,
         }
         if args.max_output_tokens is not None:
             llm_kwargs["max_output_tokens"] = args.max_output_tokens

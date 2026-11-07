@@ -33,7 +33,13 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-from .chat import ChatSession, ChatHome
+from .chat import (
+    ENTITY_LLM_READ_IDLE_TIMEOUT_S,
+    ENTITY_LLM_TIMEOUT_FLOOR_S,
+    ChatHome,
+    ChatSession,
+    _entity_patience_window,
+)
 from .tool_policy import PHASE_PERSONAL, PHASE_SLEEP, PHASE_WORK
 
 # The own-time note is INFORMATIONAL, never a mission. It describes the
@@ -70,30 +76,10 @@ that too (the same block, starting "blocked:" instead of "done:"). An
 honest blocked is worth more than a pretended done."""
 
 
-# #[WARNING:TIMEOUT] Entity PATIENCE WINDOW (ADR-0027 §3: an explicit,
-# documented, auditable safeguard — not a hidden performance knob). This is a
-# TOTAL per-attempt LLM budget, so it CAN cut a healthy long generation on a
-# slow local model; it is deliberately low because these are INTERACTIVE lanes
-# where a human is watching "Thinking...", and it fails loudly (the 180s
-# wall-clock retry budget bounds the whole ladder at ~3 minutes). Operators
-# running big local models MUST raise it: ABSTRACTRUNTIME_ENTITY_LLM_TIMEOUT_S
-# (0 = no client timeout) and ABSTRACTRUNTIME_ENTITY_RETRY_BUDGET_S.
-def _entity_patience_window() -> "tuple[float | None, float | None]":
-    """(per-attempt total, wall-clock retry budget) — env-overridable."""
-    import os as _os
-
-    def _f(name: str, default: float):
-        raw = str(_os.getenv(name) or "").strip()
-        if raw:
-            try:
-                default = float(raw)
-            except ValueError:
-                pass
-        return None if default <= 0 else default
-
-    return _f("ABSTRACTRUNTIME_ENTITY_LLM_TIMEOUT_S", 120.0), _f(
-        "ABSTRACTRUNTIME_ENTITY_RETRY_BUDGET_S", 180.0
-    )
+# #[WARNING:TIMEOUT] Entity PATIENCE WINDOW (ADR-0027 §3): ONE definition,
+# in chat.py, shared by the visit lane, the own-time loop and the sleep
+# narrator — 1800s minimum per attempt, retry budget never shorter than one
+# attempt (operator ruling 2026-11-07). Read its comment for the rule.
 
 
 def read_work_order(home_dir: Path) -> Optional[str]:
@@ -1024,10 +1010,14 @@ LOOP_PHASES = ("day", "between", "stopped")
 # belong to an UNRELATED live process, and the pid-liveness probe alone would
 # read the corpse as running forever — the visit doors would then negotiate
 # an auto-yield nobody answers and 409 on every open. A LIVE day heartbeats
-# its status at every tick boundary, so a "day" whose updated_at froze past
-# this bound is a corpse regardless of what the pid says. Generous: a tick =
-# one LLM turn (<= ~3 min timeout) + memory writes, never half an hour.
-LOOP_STATUS_STALE_SECONDS = 1800.0
+# its status at every tick boundary AND before and after every LLM call
+# (touch_loop_heartbeat), so the bound covers the longest single gap: one
+# generate (an 1800 s attempt, plus a retry that may start just before the
+# 1800 s budget ends), or one tool round, plus ten minutes of margin. A dead pid
+# is still caught at once by the liveness probe. With
+# ABSTRACTRUNTIME_ENTITY_LLM_TIMEOUT_S=0 (no timeout, opt-in) a single call can
+# outlast it.
+LOOP_STATUS_STALE_SECONDS = 2 * ENTITY_LLM_TIMEOUT_FLOOR_S + 600.0
 
 # SLEEP IS BOUNDED (laurent's ruling, entity spec v5 decision:sleep-is-bounded,
 # c2465): a sleep lasts at most ~1h, then the entity wakes. An explicit
@@ -1202,13 +1192,65 @@ def write_loop_status(
             "kind": str(day_cause.get("cause") or ""),
             "detail": str(day_cause.get("detail") or "")[:200],
         }
+    from ..utils.atomic_files import atomic_write_text
+
     try:
-        (Path(home_dir) / "loop_status").write_text(
-            json.dumps(payload) + "\n",
-            encoding="utf-8",
-        )
+        # Atomic (tmp + os.replace): a reader never parses a half-written file.
+        atomic_write_text(Path(home_dir) / "loop_status", json.dumps(payload) + "\n")
     except OSError:
         pass
+
+
+def touch_loop_heartbeat(home_dir: Path) -> None:
+    """Refresh `updated_at` of THIS process's open day, nothing else.
+
+    A tick is a whole turn: one LLM call plus up to MAX_TOOL_ROUNDS_PER_TURN
+    tool-round calls, each allowed the 1800 s entity floor. The tick-boundary
+    status write alone let a slow but healthy day outlive
+    LOOP_STATUS_STALE_SECONDS, read as a corpse, and the gateway's repair
+    sweep could then spawn a second loop on the same home (review of 0.18.4,
+    2026-11-07). The loop calls this before every LLM call, so the bound
+    measures the gap between two calls. Only a "day" written by this pid is
+    touched (never revives a stopped or foreign status). Best-effort, like
+    write_loop_status: the loop must never die over its status."""
+    import json
+    import os
+    from datetime import datetime, timezone
+
+    path = Path(home_dir) / "loop_status"
+    try:
+        current = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return
+    if not isinstance(current, dict) or current.get("phase") != "day" or current.get("pid") != os.getpid():
+        return
+    from ..utils.atomic_files import atomic_write_text
+
+    current["updated_at"] = datetime.now(timezone.utc).isoformat()
+    try:
+        atomic_write_text(path, json.dumps(current) + "\n")
+    except OSError:
+        pass
+
+
+def _beat_before_each_call(llm: Any, home_dir: Path) -> Any:
+    """Make `llm.generate` refresh the loop heartbeat before and after each
+    call, so neither a long call nor the tool round after it can outlast the
+    bound. functools.wraps keeps the signature ChatSession inspects."""
+    import functools
+
+    original = llm.generate
+
+    @functools.wraps(original)
+    def generate(*args: Any, **kwargs: Any) -> Any:
+        touch_loop_heartbeat(home_dir)
+        try:
+            return original(*args, **kwargs)
+        finally:
+            touch_loop_heartbeat(home_dir)
+
+    llm.generate = generate
+    return llm
 
 
 def read_loop_status(home_dir: Path) -> Dict[str, Any]:
@@ -3990,20 +4032,20 @@ def build_session_factory(
         # report turn must not be cut mid-thought by a caller's own pin).
         # PATIENCE WINDOW (core c3954, the 30-min wedge post-mortem): the
         # config default_timeout (600s) x 3 retries stacked to 30m01s on a
-        # wedged substrate while the operator watched "Thinking...".
-        # Interactive lanes NAME their window: 120s per attempt + a 180s
-        # wall-clock retry budget - a dead substrate costs ~3 loud minutes,
-        # never 30 silent ones. Older cores without the budget kwarg get
-        # the timeout alone (labeled).
+        # wedged substrate while the operator watched "Thinking...", so
+        # entity lanes NAME their window. Since 2026-11-07 it is at least
+        # 1800s per attempt (three 120s cuts in a row on a slow but healthy
+        # remote model stopped the own-time loop), and the wall-clock retry
+        # budget is never shorter than one attempt. Older cores without the
+        # budget kwarg get the timeout alone (labeled).
         kwargs: dict[str, Any] = {
             "model": day_model,
             **dict(zip(("timeout", "retry_wall_clock_budget_s"), _entity_patience_window())),
-            # READ-IDLE (0152 face 2, core c5051): the per-attempt 120s is
-            # the absolute budget; a stream silent for 60s on an
-            # interactive lane is already dead - abort at the socket, let
-            # the retry budget do its loud work. Older cores ignore the
-            # unknown kwarg via the same TypeError ladder below.
-            "read_idle_timeout_s": 60,
+            # READ-IDLE (0152 face 2, core c5051): stream-only in core, so
+            # inert on these non-streaming calls; it carries the same 1800s
+            # floor as the total. Older cores ignore the unknown kwarg via
+            # the same TypeError ladder below.
+            "read_idle_timeout_s": ENTITY_LLM_READ_IDLE_TIMEOUT_S,
         }
         if max_output_tokens is not None:
             kwargs["max_output_tokens"] = max_output_tokens
@@ -4015,6 +4057,9 @@ def build_session_factory(
             kwargs.pop("retry_wall_clock_budget_s", None)
             out("#FALLBACK core predates retry_wall_clock_budget_s; timeout-only guard")
             llm = create_llm(day_provider, **kwargs)
+
+        # Heartbeat per LLM call, not per tick (see touch_loop_heartbeat).
+        llm = _beat_before_each_call(llm, home_dir)
 
         # THE WORK LANE (laurent seq 155): a standing work order shifts THIS
         # day to phase=work — the work grant applies (incl. execute_command

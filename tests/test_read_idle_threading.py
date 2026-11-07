@@ -5,7 +5,8 @@ The factory seeds the NO-PROGRESS bound beside the absolute total: 1800s
 default for orchestrated lanes (operator ruling 2026-08-02 — a slow local
 model may legitimately pause between chunks, while the 7200s total protects
 the whole generation); callers override or disable (None = core's
-byte-identical pre-fix behavior); entity lanes thread their own tighter 60s.
+byte-identical pre-fix behavior); entity lanes thread their own bound, floored
+at 1800s like their total (operator ruling 2026-11-07).
 
 STREAM-ONLY: abstractcore applies this bound only when streaming=True
 (providers/_http.py). On a non-streaming request the body arrives only after
@@ -74,15 +75,17 @@ def test_default_value_is_the_committed_number():
     assert DEFAULT_LLM_READ_IDLE_TIMEOUT_S == 1800.0
 
 
-def test_entity_lanes_thread_the_tighter_number():
-    """The patience-window sites carry read_idle=60 beside timeout=120."""
+def test_entity_lanes_thread_the_floored_number():
+    """The patience-window sites carry the entity read-idle bound, which has
+    the same 1800s floor as the total (operator ruling 2026-11-07)."""
     from pathlib import Path
 
     import abstractruntime.identity.chat as chat_mod
     import abstractruntime.identity.life as life_mod
 
+    assert chat_mod.ENTITY_LLM_READ_IDLE_TIMEOUT_S >= 1800.0
     for mod in (chat_mod, life_mod):
         src = Path(mod.__file__).read_text(encoding="utf-8")
-        assert '"read_idle_timeout_s": 60' in src, mod.__name__
+        assert '"read_idle_timeout_s": ENTITY_LLM_READ_IDLE_TIMEOUT_S' in src, mod.__name__
         # The skew ladder pops it for older cores (never a crash).
         assert 'pop("read_idle_timeout_s"' in src, mod.__name__

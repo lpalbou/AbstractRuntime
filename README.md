@@ -6,9 +6,14 @@
 
 It is designed for long-running workflows that must survive restarts and explicitly model blocking (human input, timers, external events, subworkflows) without keeping Python stacks alive.
 
-**Version:** 0.18.1 • **Python:** 3.10+
+**Version:** 0.18.2 • **Python:** 3.10+
 
 **Status:** pre-1.0 (API may evolve). For production use, pin versions and follow `CHANGELOG.md`.
+
+## What's new in 0.18.2
+
+An embedding import failure now reports its real cause (for example a missing dependency) instead of a
+secondary error from a fallback import path.
 
 ## What's new in 0.18.1
 

@@ -1010,11 +1010,13 @@ LOOP_PHASES = ("day", "between", "stopped")
 # belong to an UNRELATED live process, and the pid-liveness probe alone would
 # read the corpse as running forever — the visit doors would then negotiate
 # an auto-yield nobody answers and 409 on every open. A LIVE day heartbeats
-# its status at every tick boundary AND before every LLM call
-# (touch_loop_heartbeat), so the bound covers the longest gap between two
-# calls: one generate (an 1800 s attempt, plus a retry that may start just
-# before the 1800 s budget ends) plus ten minutes of tool work and memory
-# writes. A dead pid is still caught at once by the liveness probe.
+# its status at every tick boundary AND before and after every LLM call
+# (touch_loop_heartbeat), so the bound covers the longest single gap: one
+# generate (an 1800 s attempt, plus a retry that may start just before the
+# 1800 s budget ends), or one tool round, plus ten minutes of margin. A dead pid
+# is still caught at once by the liveness probe. With
+# ABSTRACTRUNTIME_ENTITY_LLM_TIMEOUT_S=0 (no timeout, opt-in) a single call can
+# outlast it.
 LOOP_STATUS_STALE_SECONDS = 2 * ENTITY_LLM_TIMEOUT_FLOOR_S + 600.0
 
 # SLEEP IS BOUNDED (laurent's ruling, entity spec v5 decision:sleep-is-bounded,
@@ -1190,11 +1192,11 @@ def write_loop_status(
             "kind": str(day_cause.get("cause") or ""),
             "detail": str(day_cause.get("detail") or "")[:200],
         }
+    from ..utils.atomic_files import atomic_write_text
+
     try:
-        (Path(home_dir) / "loop_status").write_text(
-            json.dumps(payload) + "\n",
-            encoding="utf-8",
-        )
+        # Atomic (tmp + os.replace): a reader never parses a half-written file.
+        atomic_write_text(Path(home_dir) / "loop_status", json.dumps(payload) + "\n")
     except OSError:
         pass
 
@@ -1222,16 +1224,19 @@ def touch_loop_heartbeat(home_dir: Path) -> None:
         return
     if not isinstance(current, dict) or current.get("phase") != "day" or current.get("pid") != os.getpid():
         return
+    from ..utils.atomic_files import atomic_write_text
+
     current["updated_at"] = datetime.now(timezone.utc).isoformat()
     try:
-        path.write_text(json.dumps(current) + "\n", encoding="utf-8")
+        atomic_write_text(path, json.dumps(current) + "\n")
     except OSError:
         pass
 
 
 def _beat_before_each_call(llm: Any, home_dir: Path) -> Any:
-    """Make `llm.generate` refresh the loop heartbeat before each call.
-    functools.wraps keeps the signature ChatSession inspects."""
+    """Make `llm.generate` refresh the loop heartbeat before and after each
+    call, so neither a long call nor the tool round after it can outlast the
+    bound. functools.wraps keeps the signature ChatSession inspects."""
     import functools
 
     original = llm.generate
@@ -1239,7 +1244,10 @@ def _beat_before_each_call(llm: Any, home_dir: Path) -> Any:
     @functools.wraps(original)
     def generate(*args: Any, **kwargs: Any) -> Any:
         touch_loop_heartbeat(home_dir)
-        return original(*args, **kwargs)
+        try:
+            return original(*args, **kwargs)
+        finally:
+            touch_loop_heartbeat(home_dir)
 
     llm.generate = generate
     return llm

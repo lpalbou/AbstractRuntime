@@ -29,9 +29,10 @@ Unreleased changes live in [`changelog.d/`](changelog.d/README.md), one file per
 - **A slow but healthy own-time day is never read as dead** (`identity/life.py`). The loop wrote its "alive" status only
   between ticks, and one tick can make up to about 22 LLM calls. With 1800-second calls, a healthy tick could outlast
   the dead-loop bound, and the gateway's repair sweep could then start a second loop on the same entity. The loop now
-  refreshes its status before every LLM call (only its own open day, never a stopped or foreign status), and the
+  refreshes its status before and after every LLM call (only its own open day, never a stopped or foreign status), and the
   bound `LOOP_STATUS_STALE_SECONDS` is two full attempts plus ten minutes (4200 seconds). A loop whose process exited
-  is still detected at once.
+  is still detected at once. The status file is now written atomically, so a reader never sees a half-written file.
+  With `ABSTRACTRUNTIME_ENTITY_LLM_TIMEOUT_S=0` (no timeout, opt-in) a single call can still outlast the bound.
 
 ### Known limit
 

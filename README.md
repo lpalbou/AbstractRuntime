@@ -12,7 +12,7 @@ It is designed for long-running workflows that must survive restarts and explici
 
 ## What's new in 0.18.4
 
-An entity's model calls (visits, own time, the sleep narrator) now wait at least 1800 seconds before timing out,
+An entity's own time, its sleep narrator and the command-line visit now wait at least 1800 seconds before timing out,
 instead of 120. A lower `ABSTRACTRUNTIME_ENTITY_LLM_TIMEOUT_S` is raised to 1800 (`0` still means no timeout), and
 the retry budget is never shorter than one call.
 

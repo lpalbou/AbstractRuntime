@@ -57,3 +57,48 @@ def test_heartbeat_tolerates_a_missing_or_corrupt_file(tmp_path):
     touch_loop_heartbeat(tmp_path)
     (tmp_path / "loop_status").write_text("{not json", encoding="utf-8")
     touch_loop_heartbeat(tmp_path)
+
+
+def test_heartbeat_also_after_the_call(tmp_path):
+    """A long call followed by a long tool round must not outlast the bound."""
+    seen = []
+
+    class _Slow:
+        def generate(self, messages, system_prompt=None, **kwargs):
+            seen.append(json.loads((tmp_path / "loop_status").read_text())["updated_at"])
+            _stale_day(tmp_path, os.getpid())  # the call itself takes "hours"
+            return "ok"
+
+    _stale_day(tmp_path, os.getpid())
+    _beat_before_each_call(_Slow(), tmp_path).generate(messages=[])
+    assert read_loop_status(tmp_path).get("running") is True
+
+
+def test_the_own_time_session_factory_installs_the_heartbeat(tmp_path, monkeypatch):
+    """Wiring: the LLM the real own-time factory hands to ChatSession beats."""
+    import abstractcore
+    from test_prompt_overlay import ENTITY_SLUG, _create_home, _FakeResponse
+
+    from abstractruntime.identity.life import build_session_factory
+
+    home = tmp_path / "entities" / ENTITY_SLUG
+    _create_home(home)
+
+    class _LLMStub:
+        def generate(self, **kwargs):
+            return _FakeResponse("ok")
+
+    monkeypatch.setattr(abstractcore, "create_llm", lambda *a, **k: _LLMStub())
+    factory = build_session_factory(
+        home, provider="lmstudio", model="test", base_url="http://x",
+        embedding_model=None, embedding_base_url="http://x",
+        context_window=32768, out=lambda s: None,
+    )
+    session = factory()
+    try:
+        _stale_day(home, os.getpid())
+        assert read_loop_status(home).get("running") is False
+        session.llm.generate(messages=[])
+        assert read_loop_status(home).get("running") is True
+    finally:
+        session.home.close()

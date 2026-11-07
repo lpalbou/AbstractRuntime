@@ -8,7 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Unreleased changes live in [`changelog.d/`](changelog.d/README.md), one file per pull request;
 `python scripts/changelog.py assemble X.Y.Z` writes them here at release.
 
-## [Unreleased]
+## [0.18.2] - 2026-11-07
+
+### Fixed
+
+- Embedding imports preserve their original error and use the public AbstractCore module path.
+
 
 ## [0.18.1] - 2026-11-04
 

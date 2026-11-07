@@ -1,5 +1,7 @@
 # AbstractRuntime
 
+**Release 0.18.2:** Embedding imports use the public AbstractCore module and preserve actionable import errors. See [release notes](CHANGELOG.md).
+
 **AbstractRuntime** is a durable workflow runtime (interrupt → checkpoint → resume) with an append-only execution ledger.
 
 It is designed for long-running workflows that must survive restarts and explicitly model blocking (human input, timers, external events, subworkflows) without keeping Python stacks alive.

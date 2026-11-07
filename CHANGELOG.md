@@ -10,6 +10,13 @@ Unreleased changes live in [`changelog.d/`](changelog.d/README.md), one file per
 
 ## [Unreleased]
 
+## [0.18.2] - 2026-11-07
+
+### Fixed
+
+- Embedding imports preserve their original error and use the public AbstractCore module path.
+
+
 ## [0.18.1] - 2026-11-04
 
 ### Added

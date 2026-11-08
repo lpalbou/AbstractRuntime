@@ -73,6 +73,7 @@ def test_without_a_profile_every_capability_is_the_mind(tmp_path: Path) -> None:
     }
     assert cp.recall_shelf_size(tmp_path, 50) == 50
     assert cp.rebuild_policy(tmp_path) == {"sensitivity": 0.5, "cap_per_turn": 3}
+    assert profile["lookback"] == {"context": "day", "source": "default"}
     assert profile["warnings"] == []
 
 
@@ -165,6 +166,9 @@ def test_round_trip_keeps_only_what_was_chosen(tmp_path: Path) -> None:
         ({"recall": {"shelf_size": 9, "width": 3}}, "recall.width", "unknown field 'width'"),
         ({"memories_rebuilt_per_turn": 1}, "memories_rebuilt_per_turn", "Unknown field"),
         ({"schema_version": 2}, "schema_version", "schema 1"),
+        ({"lookback": {"context": "week"}}, "lookback.context", "Look-back context must be day or tick."),
+        ({"lookback": {"context": True}}, "lookback.context", "Look-back context must be day or tick."),
+        ({"lookback": {"context": "day", "depth": 3}}, "lookback.depth", "unknown field 'depth'"),
     ],
 )
 def test_a_write_outside_the_schema_is_refused_before_the_file_moves(
@@ -249,3 +253,50 @@ def test_the_default_test_turns_red_without_the_inherit_branch(tmp_path: Path) -
         _assert_default_resolves_to_mind(mutant, tmp_path)
     # The same check passes on the real module.
     _assert_default_resolves_to_mind(cp, tmp_path)
+
+
+def _assert_default_lookback_is_the_day(module: types.ModuleType, home: Path) -> None:
+    assert module.lookback_context(home) == "day"
+    assert module.read_cognition_profile(home)["lookback"] == {"context": "day", "source": "default"}
+
+
+def test_lookback_context_reads_the_day_by_default_and_round_trips(tmp_path: Path) -> None:
+    _assert_default_lookback_is_the_day(cp, tmp_path)
+    stored = cp.write_cognition_profile(tmp_path, {"lookback": {"context": "Tick"}, "recall": {"shelf_size": 8}})
+    assert stored == {"schema_version": 1, "recall": {"shelf_size": 8}, "lookback": {"context": "tick"}}
+    assert yaml.safe_load((tmp_path / "cognition.yaml").read_text(encoding="utf-8")) == stored
+    assert cp.lookback_context(tmp_path) == "tick"
+    assert cp.read_cognition_profile(tmp_path)["lookback"] == {"context": "tick", "source": "profile"}
+    # null returns it to the default; the stored form drops it.
+    stored = cp.write_cognition_profile(tmp_path, {"lookback": {"context": None}, "recall": {"shelf_size": 8}})
+    assert "lookback" not in stored
+    _assert_default_lookback_is_the_day(cp, tmp_path)
+
+
+def test_an_invalid_lookback_reads_as_the_day_with_a_warning(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    (tmp_path / "cognition.yaml").write_text(
+        "schema_version: 1\nlookback: {context: week}\nrecall: {shelf_size: 9}\n", encoding="utf-8"
+    )
+    with caplog.at_level(logging.WARNING, logger="abstractruntime.identity.cognition_profile"):
+        profile = cp.read_cognition_profile(tmp_path)
+    assert profile["lookback"] == {"context": "day", "source": "default"}
+    assert profile["recall"]["shelf_size"] == 9
+    assert any("lookback.context" in w for w in profile["warnings"])
+    assert any("lookback.context" in r.getMessage() for r in caplog.records)
+    assert cp.lookback_context(tmp_path) == "day"
+
+
+def test_the_lookback_default_test_turns_red_when_the_default_moves(tmp_path: Path) -> None:
+    tree = ast.parse(inspect.getsource(cp))
+    assigns = [
+        n for n in tree.body
+        if isinstance(n, ast.Assign) and any(getattr(t, "id", None) == "DEFAULT_LOOKBACK_CONTEXT" for t in n.targets)
+    ]
+    assert len(assigns) == 1, "the default moved: update this mutant"
+    assigns[0].value = ast.copy_location(ast.Constant("tick"), assigns[0].value)
+    mutant = types.ModuleType("abstractruntime.identity._cognition_profile_lookback_mutant")
+    mutant.__package__ = "abstractruntime.identity"
+    exec(compile(tree, cp.__file__, "exec"), mutant.__dict__)  # noqa: S102 - the module's own source
+    with pytest.raises(AssertionError):
+        _assert_default_lookback_is_the_day(mutant, tmp_path)
+    _assert_default_lookback_is_the_day(cp, tmp_path)

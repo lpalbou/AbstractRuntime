@@ -157,8 +157,9 @@ Effect(type=EffectType.WAIT_EVENT, payload={
 
 The mind (`substrate.yaml`) is what the entity talks with. The cognition
 profile, `<home>/cognition.yaml`, says which model each other part of its
-thinking uses, how many memories a turn brings to mind, and how readily it
-revisits what it already understood:
+thinking uses, how many memories a turn brings to mind, how readily it
+revisits what it already understood, and what the look-back at the end of a
+tick of its own time sees:
 
 ```yaml
 schema_version: 1
@@ -171,6 +172,8 @@ recall:
 rebuild:
   sensitivity: 0.5                  # 0..1, how easily a new memory or a surprise re-opens what is understood
   cap_per_turn: 3                   # 0..10 memory tasks a turn may run at most; 0 = only while resting
+lookback:
+  context: day                      # what the end-of-tick look-back sees: day or tick
 ```
 
 | Field | Absent means | Range |
@@ -179,10 +182,11 @@ rebuild:
 | `recall.shelf_size` | the host's default (the gateway's is 50) | whole number 1..400 |
 | `rebuild.sensitivity` | 0.5 | number 0..1 |
 | `rebuild.cap_per_turn` | 3 | whole number 0..10 |
+| `lookback.context` | `day` | `day`: the whole day so far (a prefix cache keeps the new tokens per look-back about constant, roughly 770); `tick`: this tick's exchange plus a recap of the day's 12 latest earlier moments |
 
 ```python
 from abstractruntime.identity.cognition_profile import (
-    read_cognition_profile, resolve_capability, recall_shelf_size, rebuild_policy,
+    read_cognition_profile, resolve_capability, recall_shelf_size, rebuild_policy, lookback_context,
 )
 
 resolve_capability(home_dir, "summaries")
@@ -190,6 +194,7 @@ resolve_capability(home_dir, "summaries")
 resolve_capability(home_dir, "summaries", mind={"provider": "lmstudio", "model": "qwen3-4b"})
 recall_shelf_size(home_dir, 50)      # the profile's width, else the default you pass
 rebuild_policy(home_dir)             # {"sensitivity": 0.5, "cap_per_turn": 3}
+lookback_context(home_dir)           # "day" (default) or "tick"
 read_cognition_profile(home_dir)     # every field, each with its source: "profile" or "default"
 ```
 

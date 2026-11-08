@@ -15,6 +15,8 @@ The profile lives in the home, beside the mind (`substrate.yaml`):
         rebuild:
           sensitivity: 0.5                  # 0..1, how easily new memories or surprises re-open what is understood
           cap_per_turn: 3                   # 0..10 memory tasks a turn may run at most; 0 = only while resting
+        lookback:
+          context: day                      # what the end-of-tick look-back sees: "day" (the whole day so far) or "tick"
 
 Rules:
 
@@ -30,6 +32,10 @@ Rules:
 - The recall width has no default here: the host passes its own
   (`recall_shelf_size(home, default)`); the gateway passes
   `DEFAULT_ENTITY_CHAT_SHELF_SIZE`.
+- `lookback.context` says what the look-back at the end of a tick of its own
+  time sees: "day" (the default) = the whole day so far, which a prefix cache
+  keeps at a roughly constant cost of new tokens; "tick" = this tick's
+  exchange plus a short recap of the day's earlier moments.
 - Absent fields read as their defaults. A malformed file, or a malformed
   field, reads as unset and logs a warning naming the field; a read never
   raises. Writes are validated (`CognitionProfileInvalid`, with a sentence a
@@ -78,14 +84,18 @@ DEFAULT_REBUILD_CAP_PER_TURN = 3
 CAP_PER_TURN_MIN = 0
 CAP_PER_TURN_MAX = 10
 
+LOOKBACK_CONTEXTS: Tuple[str, ...] = ("day", "tick")
+DEFAULT_LOOKBACK_CONTEXT = "day"
+
 SOURCE_PROFILE = "profile"
 SOURCE_DEFAULT = "default"
 SOURCE_MIND = "mind"
 
 _CHOICE_KEYS = ("provider", "model", "thinking", "max_input_tokens")
-_TOP_KEYS = ("schema_version", "capabilities", "recall", "rebuild")
+_TOP_KEYS = ("schema_version", "capabilities", "recall", "rebuild", "lookback")
 _RECALL_KEYS = ("shelf_size",)
 _REBUILD_KEYS = ("sensitivity", "cap_per_turn")
+_LOOKBACK_KEYS = ("context",)
 
 
 class CognitionProfileInvalid(ValueError):
@@ -206,6 +216,13 @@ def validate_cap_per_turn(value: Any) -> int:
     return int(value)
 
 
+def validate_lookback_context(value: Any) -> str:
+    context = value.strip().lower() if isinstance(value, str) else None
+    if context not in LOOKBACK_CONTEXTS:
+        raise CognitionProfileInvalid("lookback.context", "Look-back context must be day or tick.")
+    return context
+
+
 def validate_cognition_profile(profile: Any) -> Dict[str, Any]:
     """The stored form of `profile`, strictly validated (raises `CognitionProfileInvalid`).
 
@@ -216,7 +233,7 @@ def validate_cognition_profile(profile: Any) -> Dict[str, Any]:
     unknown = sorted(str(k) for k in profile.keys() if k not in _TOP_KEYS)
     if unknown:
         raise CognitionProfileInvalid(
-            unknown[0], f"Unknown field {unknown[0]!r}. Send capabilities, recall or rebuild."
+            unknown[0], f"Unknown field {unknown[0]!r}. Send capabilities, recall, rebuild or lookback."
         )
     version = profile.get("schema_version", COGNITION_SCHEMA_VERSION)
     if version != COGNITION_SCHEMA_VERSION or isinstance(version, bool):
@@ -241,6 +258,7 @@ def validate_cognition_profile(profile: Any) -> Dict[str, Any]:
     for block, keys, checks in (
         ("recall", _RECALL_KEYS, {"shelf_size": validate_shelf_size}),
         ("rebuild", _REBUILD_KEYS, {"sensitivity": validate_sensitivity, "cap_per_turn": validate_cap_per_turn}),
+        ("lookback", _LOOKBACK_KEYS, {"context": validate_lookback_context}),
     ):
         raw = profile.get(block)
         if raw is None:
@@ -325,6 +343,7 @@ def _stored_with_warnings(home_dir: Path) -> Tuple[Dict[str, Any], List[str]]:
     for block, checks in (
         ("recall", {"shelf_size": validate_shelf_size}),
         ("rebuild", {"sensitivity": validate_sensitivity, "cap_per_turn": validate_cap_per_turn}),
+        ("lookback", {"context": validate_lookback_context}),
     ):
         raw = data.get(block)
         if raw is None:
@@ -356,6 +375,7 @@ def read_cognition_profile(home_dir: Path) -> Dict[str, Any]:
          "recall": {"shelf_size": int | None, "source": "profile" | "default"},
          "rebuild": {"sensitivity": float, "cap_per_turn": int,
                      "sources": {"sensitivity": ..., "cap_per_turn": ...}},
+         "lookback": {"context": "day" | "tick", "source": "profile" | "default"},
          "warnings": [sentences about malformed fields]}
 
     `recall.shelf_size` is None when the profile does not choose one: the width
@@ -381,6 +401,7 @@ def read_cognition_profile(home_dir: Path) -> Dict[str, Any]:
             }
     recall_stored = stored.get("recall") or {}
     rebuild_stored = stored.get("rebuild") or {}
+    lookback_stored = stored.get("lookback") or {}
     return {
         "schema_version": COGNITION_SCHEMA_VERSION,
         "capabilities": capabilities,
@@ -394,6 +415,10 @@ def read_cognition_profile(home_dir: Path) -> Dict[str, Any]:
             "sources": {
                 key: (SOURCE_PROFILE if key in rebuild_stored else SOURCE_DEFAULT) for key in _REBUILD_KEYS
             },
+        },
+        "lookback": {
+            "context": str(lookback_stored.get("context", DEFAULT_LOOKBACK_CONTEXT)),
+            "source": SOURCE_PROFILE if "context" in lookback_stored else SOURCE_DEFAULT,
         },
         "warnings": list(warnings),
     }
@@ -486,12 +511,20 @@ def rebuild_policy(home_dir: Path) -> Dict[str, Any]:
     return {"sensitivity": float(rebuild["sensitivity"]), "cap_per_turn": int(rebuild["cap_per_turn"])}
 
 
+def lookback_context(home_dir: Path) -> str:
+    """What the end-of-tick look-back sees: "day" (the whole day so far; the
+    default) or "tick" (this tick's exchange plus a recap of earlier moments)."""
+    return str(read_cognition_profile(Path(home_dir))["lookback"]["context"])
+
+
 __all__ = [
     "CAPABILITIES",
     "CAPABILITY_LABELS",
     "COGNITION_FILENAME",
     "COGNITION_SCHEMA_VERSION",
     "CognitionProfileInvalid",
+    "LOOKBACK_CONTEXTS",
+    "DEFAULT_LOOKBACK_CONTEXT",
     "DEFAULT_REBUILD_CAP_PER_TURN",
     "DEFAULT_REBUILD_SENSITIVITY",
     "MAX_INPUT_TOKENS_CEILING",
@@ -500,6 +533,7 @@ __all__ = [
     "SHELF_SIZE_MIN",
     "THINKING_VOCABULARY",
     "check_capability_name",
+    "lookback_context",
     "rebuild_policy",
     "recall_shelf_size",
     "read_cognition_profile",
@@ -508,6 +542,7 @@ __all__ = [
     "validate_cap_per_turn",
     "validate_capability_choice",
     "validate_cognition_profile",
+    "validate_lookback_context",
     "validate_shelf_size",
     "validate_sensitivity",
 ]

@@ -33,6 +33,9 @@ from ...core.runtime import EffectOutcome, EffectHandler
 from ...core.tool_scope import ToolScopeError, resolve_tool_scope
 from ...storage.base import RunStore
 from ...storage.artifacts import ArtifactStore, is_artifact_ref, get_artifact_id
+# Root 1168: imported by name, no fallback — an AbstractCore without it is a wrong install, and
+# this module must fail at import rather than fail runs on an unreachable endpoint at 3 a.m.
+from abstractcore.exceptions import EndpointUnreachableError
 from .llm_client import AbstractCoreLLMClient, _models_agree
 from .structured_output import prepare_response_model as _pydantic_model_from_json_schema
 from .output_specs import (
@@ -1384,16 +1387,20 @@ def _note_speculation_degraded(result: Any, *, provider: Any, requested: Any) ->
     spec = meta.get("speculation") if isinstance(meta, dict) else None
     if not isinstance(spec, dict) or spec.get("applied") is not False:
         return
+    # Core's contract (core main 44897db3…904272da): `mode`, `message` (the words), `reason`
+    # (the slug), `num_draft_tokens` / `drafter` when set — read, never re-composed here.
     mode = str(
         spec.get("mode")
         or (requested.get("mode") if isinstance(requested, dict) else "")
         or "native_mtp"
     )
-    who = str(provider or "").strip()
-    notice = (
-        f"speculation requested ({mode}) but the {who + ' ' if who else ''}provider "
-        "has no native MTP adapter; generated without it"
-    )
+    drafts = spec.get("num_draft_tokens")
+    asked = f"{mode}, {int(drafts)} draft tokens" if isinstance(drafts, int) and not isinstance(drafts, bool) else mode
+    message = str(spec.get("message") or "").strip()
+    if not message:
+        who = str(provider or "").strip()
+        message = f"the {who + ' ' if who else ''}provider did not apply it"
+    notice = f"speculation requested ({asked}) was not applied: {message}"
     reason = spec.get("reason")
     if isinstance(reason, str) and reason.strip():
         notice += f" (reason: {reason.strip()})"
@@ -1403,6 +1410,99 @@ def _note_speculation_degraded(result: Any, *, provider: Any, requested: Any) ->
     if notice not in notices:
         notices.append(notice)
     result["notices"] = notices
+
+
+ENDPOINT_UNREACHABLE_WAIT_PREFIX = "endpoint_unreachable"
+
+
+def _endpoint_waits_namespace(run: RunState) -> Dict[str, Any]:
+    """`_runtime.endpoint_waits`: per-node attempt counters for endpoint-unreachable waits
+    (the `attempt` / `since` the ledger and the wait details carry; cleared on success)."""
+    if not isinstance(run.vars, dict):
+        raise TypeError("run.vars must be a dict to record an endpoint wait")
+    runtime_ns = run.vars.get("_runtime")
+    if not isinstance(runtime_ns, dict):
+        runtime_ns = {}
+        run.vars["_runtime"] = runtime_ns
+    waits = runtime_ns.get("endpoint_waits")
+    if not isinstance(waits, dict):
+        waits = {}
+        runtime_ns["endpoint_waits"] = waits
+    return waits
+
+
+def _clear_endpoint_wait(run: RunState) -> None:
+    """The call at this node went through: its outage counter ends here."""
+    try:
+        runtime_ns = run.vars.get("_runtime") if isinstance(run.vars, dict) else None
+        waits = runtime_ns.get("endpoint_waits") if isinstance(runtime_ns, dict) else None
+        if isinstance(waits, dict):
+            waits.pop(str(run.current_node or ""), None)
+            if not waits:
+                runtime_ns.pop("endpoint_waits", None)
+    except Exception:  # noqa: BLE001 - bookkeeping never changes the outcome
+        pass
+
+
+def _endpoint_unreachable_wait(run: RunState, exc: EndpointUnreachableError) -> EffectOutcome:
+    """Root 1168 (operator 2026-11-08): the inference machine is off, asleep or unreachable —
+    that is not a failed generation, so the run does not fail. It parks on a durable EVENT wait
+    the host (the gateway's endpoint prober) resumes when the endpoint answers again:
+
+    - `wait_key = endpoint_unreachable:<base_url>` (the provider name when the provider has no
+      URL), so every run parked on one endpoint shares one key;
+    - `resume_to_node` is the node that issued THIS call: a `resume` with no payload re-plans it
+      and re-issues the identical LLM_CALL as a new effect issuance (`_runtime.effect_seq`
+      advanced with the WAITING record), so the failed attempt is never replayed as a result and
+      the ledger keeps one row per attempt;
+    - no prompt and no choices: a signal wait (`replay.view.wait_kind` → "signal", not
+      person-facing), presented as "Waiting for …", never as a question;
+    - `details` carry the fields a reader needs (base_url, provider, cause, detail, errno,
+      elapsed_s, retryable, attempt, since, node_id) and `message`, the reason text;
+    - `cancel` works as for any wait. Core never counts this error in its breaker
+      (`counts_toward_breaker = False`) and the runtime records no failure."""
+    node_id = str(run.current_node or "")
+    base_url = str(getattr(exc, "base_url", None) or "").strip() or None
+    provider = str(getattr(exc, "provider", None) or "provider")
+    target = base_url or provider
+    waits = _endpoint_waits_namespace(run)
+    prior = waits.get(node_id) if isinstance(waits.get(node_id), dict) else None
+    now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    attempt = int(prior.get("attempt") or 0) + 1 if prior else 1
+    since = str(prior.get("since") or now) if prior else now
+    waits[node_id] = {"attempt": attempt, "since": since, "base_url": base_url, "provider": provider}
+    cause = str(getattr(exc, "cause", "") or "")
+    detail = str(getattr(exc, "detail", "") or "")
+    elapsed = getattr(exc, "elapsed_s", None)
+    elapsed_f = float(elapsed) if isinstance(elapsed, (int, float)) and not isinstance(elapsed, bool) else None
+    what = cause + (f": {detail}" if detail else "")
+    took = f", after {elapsed_f:.1f} s" if elapsed_f is not None else ""
+    message = f"the model endpoint {target} did not answer ({what}{took}); waiting for it"
+    errno_raw = getattr(exc, "errno", None)
+    details: Dict[str, Any] = {
+        "kind": ENDPOINT_UNREACHABLE_WAIT_PREFIX,
+        "message": message,
+        "base_url": base_url,
+        "provider": provider,
+        "cause": cause,
+        "detail": detail,
+        "errno": errno_raw if isinstance(errno_raw, int) and not isinstance(errno_raw, bool) else None,
+        "elapsed_s": elapsed_f,
+        "retryable": bool(getattr(exc, "retryable", True)),
+        "attempt": attempt,
+        "since": since,
+        "node_id": node_id,
+    }
+    logger.warning("LLM_CALL parked: endpoint unreachable", base_url=target, attempt=attempt, detail=str(exc))
+    return EffectOutcome.waiting(
+        WaitState(
+            reason=WaitReason.EVENT,
+            wait_key=f"{ENDPOINT_UNREACHABLE_WAIT_PREFIX}:{target}",
+            resume_to_node=node_id or None,
+            result_key=None,
+            details=details,
+        )
+    )
 
 
 def make_llm_call_handler(*, llm: AbstractCoreLLMClient, artifact_store: Optional[ArtifactStore] = None) -> EffectHandler:
@@ -2494,6 +2594,7 @@ def make_llm_call_handler(*, llm: AbstractCoreLLMClient, artifact_store: Optiona
                 provider=provider or params.get("provider"),
                 requested=params_for_call.get("speculation"),
             )
+            _clear_endpoint_wait(run)
             return EffectOutcome.completed(result=result)
         except Exception as e:
             if runtime_cancel_event is not None and runtime_cancel_event.is_set():
@@ -2501,6 +2602,9 @@ def make_llm_call_handler(*, llm: AbstractCoreLLMClient, artifact_store: Optiona
                 # records this attempt as `cancelled`, not as a failure.
                 logger.info("LLM_CALL stopped by cancel", detail=str(e))
                 return EffectOutcome.failed(str(e), retryable=False)
+            if isinstance(e, EndpointUnreachableError):
+                # Root 1168: the endpoint is off or unreachable — park, never fail.
+                return _endpoint_unreachable_wait(run, e)
             logger.error("LLM_CALL failed", error=str(e))
             from .llm_client import residency_refusal_details
 

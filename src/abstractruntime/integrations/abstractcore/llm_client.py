@@ -13351,6 +13351,53 @@ def _http_error_response_body(error: Any) -> Optional[Any]:
     return None
 
 
+def _endpoint_unreachable_from_http_error(error: Any) -> Optional[Exception]:
+    """Rebuild AbstractCore's `EndpointUnreachableError` from the 503 envelope its server
+    sends for one (root 1168): `error.code == "endpoint_unreachable"` with `provider`,
+    `base_url`, `cause`, `errno`, `elapsed_s`, `retryable` and the composed `message`. Any
+    other status or body returns None, so a generic 500 stays exactly the error it was.
+
+    `detail` does not travel yet (core's `_endpoint_unreachable_payload` omits it); it is
+    recovered only when the message has exactly the shape core composes from the fields
+    (`<provider> API error: could not connect to <base_url> (<cause>: <detail>) after <t>s`),
+    else it is left empty — never guessed from prose."""
+    response = getattr(error, "response", None)
+    if getattr(response, "status_code", None) != 503:
+        return None
+    body = _http_error_response_body(error)
+    err = body.get("error") if isinstance(body, dict) else None
+    if not isinstance(err, dict):
+        return None
+    if str(err.get("code") or err.get("type") or "").strip() != "endpoint_unreachable":
+        return None
+    # By name, no fallback: an AbstractCore without the class is a wrong install.
+    from abstractcore.exceptions import EndpointUnreachableError
+
+    provider = str(err.get("provider") or "provider")
+    base_url = str(err.get("base_url")).strip() if err.get("base_url") else None
+    cause = str(err.get("cause") or "")
+    elapsed_raw = err.get("elapsed_s")
+    elapsed = float(elapsed_raw) if isinstance(elapsed_raw, (int, float)) and not isinstance(elapsed_raw, bool) else None
+    errno_raw = err.get("errno")
+    errno = errno_raw if isinstance(errno_raw, int) and not isinstance(errno_raw, bool) else None
+    message = str(err.get("message") or "")
+    detail = ""
+    if cause:
+        head = f"{provider} API error: could not connect{f' to {base_url}' if base_url else ''} ({cause}: "
+        tail = f") after {elapsed:.1f}s" if elapsed is not None else ")"
+        if message.startswith(head) and message.endswith(tail) and len(message) > len(head) + len(tail):
+            detail = message[len(head): len(message) - len(tail)]
+    return EndpointUnreachableError(
+        provider=provider,
+        base_url=base_url,
+        cause=cause,
+        detail=detail,
+        errno=errno,
+        elapsed_s=elapsed,
+        retryable=bool(err.get("retryable", True)),
+    )
+
+
 def voice_store_settings(llm_kwargs: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     from .voice_library import voice_store_settings as _settings
 
@@ -17098,18 +17145,27 @@ class RemoteAbstractCoreLLMClient:
         # AbstractCore server's client-disconnect watcher then cancels the
         # generation (and severs ITS upstream model request in turn).
         remote_cancel = params.get("cancel_event")
-        if isinstance(remote_cancel, threading.Event) and getattr(self._sender, "supports_cancel_event", False):
-            raw = self._sender.post(
-                url, headers=req_headers, json=body, timeout=self._timeout_s, cancel_event=remote_cancel
-            )
-        else:
-            if isinstance(remote_cancel, threading.Event) and not getattr(self, "_remote_cancel_unsupported_warned", False):
-                self._remote_cancel_unsupported_warned = True
-                logger.warning(
-                    "Remote AbstractCore request sender does not support cancel_event: a Stop cannot "
-                    "sever in-flight remote generations (sender=%s)" % type(self._sender).__name__
+        try:
+            if isinstance(remote_cancel, threading.Event) and getattr(self._sender, "supports_cancel_event", False):
+                raw = self._sender.post(
+                    url, headers=req_headers, json=body, timeout=self._timeout_s, cancel_event=remote_cancel
                 )
-            raw = self._sender.post(url, headers=req_headers, json=body, timeout=self._timeout_s)
+            else:
+                if isinstance(remote_cancel, threading.Event) and not getattr(self, "_remote_cancel_unsupported_warned", False):
+                    self._remote_cancel_unsupported_warned = True
+                    logger.warning(
+                        "Remote AbstractCore request sender does not support cancel_event: a Stop cannot "
+                        "sever in-flight remote generations (sender=%s)" % type(self._sender).__name__
+                    )
+                raw = self._sender.post(url, headers=req_headers, json=body, timeout=self._timeout_s)
+        except Exception as exc:
+            # Root 1168: the server behind this client could not reach ITS model endpoint — a
+            # 503 envelope with every field; rebuild the typed error so the LLM_CALL handler
+            # parks the run instead of failing it. Anything else propagates untouched.
+            unreachable = _endpoint_unreachable_from_http_error(exc)
+            if unreachable is not None:
+                raise unreachable from exc
+            raise
         resp, resp_headers = _unwrap_http_response(raw)
         lower_headers = {str(k).lower(): str(v) for k, v in resp_headers.items()}
         trace_id = lower_headers.get("x-abstractcore-trace-id") or lower_headers.get("x-trace-id")

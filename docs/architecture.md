@@ -278,6 +278,16 @@ Implemented in `src/abstractruntime/core/runtime.py`:
 - `Runtime.start(...)` creates a new `RunState` and initializes `_limits` from `RuntimeConfig` (`src/abstractruntime/core/config.py`).
 - `Runtime.tick(...)` executes nodes until the run becomes `WAITING`, `COMPLETED`, `FAILED`, or is `CANCELLED`.
 - `Runtime.resume(...)` validates the `wait_key`, writes the payload to `WaitState.result_key`, and continues execution **from** `WaitState.resume_to_node`.
+- A model endpoint that cannot be reached does not fail the run. When the provider raises AbstractCore's
+  `EndpointUnreachableError` (the inference machine is off, asleep or unreachable — not a generation that ran and
+  failed), the `LLM_CALL` handler returns a durable EVENT wait: `wait_key = endpoint_unreachable:<base_url>`,
+  `resume_to_node` = the node that issued the call, no prompt (a *signal* wait, shown as "Waiting for …", never as a
+  question), and `details {kind: endpoint_unreachable, message, base_url, provider, cause, detail, errno, elapsed_s,
+  retryable, attempt, since, node_id}`. The ledger keeps one WAITING record per attempt. A `resume` with no payload
+  re-plans that node and re-issues the identical call as a new effect issuance (the parked attempt is never replayed
+  as a result); `cancel` ends the run as for any wait. The host decides when to resume (the gateway probes the
+  endpoint). Core never counts this error in its circuit breaker. Over the AbstractCore server, the condition
+  travels as a 503 envelope with every field; the remote client rebuilds the typed error from it.
 
 ```mermaid
 sequenceDiagram

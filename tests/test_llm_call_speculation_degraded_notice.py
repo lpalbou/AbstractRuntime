@@ -1,9 +1,10 @@
 """Round 4 (operator 2026-11-08, "fallback to MTP=off if MTP was selected by mistake"): six Assistant runs
 failed instantly because a stored native_mtp default reached a remote openai-compatible model. Core now
 degrades such a default-sourced request itself (generates without speculation and reports
-`metadata.speculation.applied: false`); the runtime's part is the ledger notice on the LLM_CALL result so the
-replay view can say why the call ran without acceleration. A response without the flag adds nothing; an
-exception still propagates as before.
+`metadata.speculation = {requested, mode, used: false, applied: false, reason, degraded_from_default, message,
++ num_draft_tokens / drafter when set}`, core main 44897db3…904272da); the runtime's part is the ledger notice on the
+LLM_CALL result, worded from that metadata, so the replay view can say why the call ran without acceleration. A
+response without the flag adds nothing; an exception still propagates as before.
 """
 
 from __future__ import annotations
@@ -13,6 +14,16 @@ from typing import Any, Dict, List, Optional
 from abstractruntime.core.models import Effect, EffectType, RunState
 from abstractruntime.integrations.abstractcore.effect_handlers import make_llm_call_handler
 from abstractruntime.storage.artifacts import InMemoryArtifactStore
+
+DEGRADED = {
+    "requested": True,
+    "mode": "native_mtp",
+    "used": False,
+    "applied": False,
+    "reason": "native_mtp_backend_unavailable",
+    "degraded_from_default": True,
+    "message": "The openai-compatible provider has no native MTP adapter",
+}
 
 
 class _LLM:
@@ -54,21 +65,29 @@ def _call(llm: _LLM):
     return make_llm_call_handler(llm=llm, artifact_store=InMemoryArtifactStore())(_run(), _effect(), None)
 
 
-def test_degraded_speculation_leaves_one_notice_on_the_result() -> None:
-    llm = _LLM({"speculation": {"applied": False, "reason": "no_native_adapter", "mode": "native_mtp"}})
+def test_degraded_speculation_leaves_one_notice_worded_from_the_metadata() -> None:
+    llm = _LLM({"speculation": {**DEGRADED, "num_draft_tokens": 4}})
     out = _call(llm)
     assert out.status == "completed"
     assert out.result["content"] == "generated"
     assert out.result["notices"] == [
-        "speculation requested (native_mtp) but the openai-compatible provider has no native MTP adapter; "
-        "generated without it (reason: no_native_adapter)"
+        "speculation requested (native_mtp, 4 draft tokens) was not applied: "
+        "The openai-compatible provider has no native MTP adapter (reason: native_mtp_backend_unavailable)"
     ]
     # No retry in the runtime: one provider call, the request as asked (Core degraded it).
     assert len(llm.calls) == 1 and llm.calls[0].get("speculation") == {"mode": "native_mtp"}
 
 
+def test_notice_without_draft_tokens_names_the_mode_alone() -> None:
+    out = _call(_LLM({"speculation": dict(DEGRADED)}))
+    assert out.result["notices"] == [
+        "speculation requested (native_mtp) was not applied: "
+        "The openai-compatible provider has no native MTP adapter (reason: native_mtp_backend_unavailable)"
+    ]
+
+
 def test_a_response_without_the_flag_adds_no_notice() -> None:
-    applied = _call(_LLM({"speculation": {"applied": True, "mode": "native_mtp"}}))
+    applied = _call(_LLM({"speculation": {"requested": True, "mode": "native_mtp", "used": True, "applied": True}}))
     assert applied.status == "completed" and "notices" not in applied.result
     silent = _call(_LLM({}))
     assert silent.status == "completed" and "notices" not in silent.result

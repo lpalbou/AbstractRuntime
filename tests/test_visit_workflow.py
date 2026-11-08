@@ -397,19 +397,25 @@ def _stub_middle():
         from abstractruntime.session_history import window_transcript
 
         rn = run.vars.setdefault("_runtime", {})
-        msgs = (run.vars.get("context") or {}).get("messages") or []
+        context = run.vars.get("context") or {}
+        msgs = context.get("messages") or []
         extras = rn.get("llm_payload_extras") or {}
         # The adapter contract: send the history window BRIDGE asks for, record it.
         window = window_transcript(msgs, max_tokens=rn["history_window_tokens"])
         rn["session_history"] = dict(window.report)
+        payload: Dict[str, Any] = {
+            "messages": list(window),
+            "system_prompt": rn.get("system_prompt"),
+            "turn_id": rn.get("turn_id"),
+            **extras,
+        }
+        # The adapter's media contract (abstractagent react_runtime: every
+        # LLM_CALL carries `context.attachments` as `media`).
+        if context.get("attachments"):
+            payload["media"] = list(context["attachments"])
         return StepPlan(
             node_id="reason",
-            effect=Effect(type=EffectType.LLM_CALL, payload={
-                "messages": list(window),
-                "system_prompt": rn.get("system_prompt"),
-                "turn_id": rn.get("turn_id"),
-                **extras,
-            }, result_key="_temp.llm_response"),
+            effect=Effect(type=EffectType.LLM_CALL, payload=payload, result_key="_temp.llm_response"),
             next_node="observe",
         )
 
@@ -492,6 +498,153 @@ def test_react_middle_replaces_reason_and_downstream_runs_unchanged(tmp_path: Pa
             if isinstance(r, dict) and ((r.get("effect") or {}).get("type")) == "answer_user"
         ]
         assert any("one loop now" in (m or "") for m in answers)
+    finally:
+        ert.close()
+
+
+def _png_bytes() -> bytes:
+    """A structurally real, tiny PNG (signature + IHDR + IDAT + IEND)."""
+    import struct
+    import zlib
+
+    sig = b"\x89PNG\r\n\x1a\n"
+    ihdr = struct.pack(">I", 13) + b"IHDR" + struct.pack(">IIBBBBB", 1, 1, 8, 6, 0, 0, 0) + b"\x00\x00\x00\x00"
+    payload = zlib.compress(b"\x00\x00\x00\x00\x00")
+    idat = struct.pack(">I", len(payload)) + b"IDAT" + payload + b"\x00\x00\x00\x00"
+    iend = struct.pack(">I", 0) + b"IEND" + b"\xaeB`\x82"
+    return sig + ihdr + idat + iend
+
+
+def _attachment_records(home_dir: Path) -> tuple:
+    """Two door-shaped records over files planted in the home workspace: an
+    image and a text file. Returns (records, absolute png path)."""
+    import hashlib
+
+    png = _png_bytes()
+    shared = home_dir / "workspace" / "shared"
+    shared.mkdir(parents=True, exist_ok=True)
+    (shared / "Screenshot.png").write_bytes(png)
+    (shared / "notes.txt").write_text("a few notes\n", encoding="utf-8")
+    records = [
+        {"path": "shared/Screenshot.png", "bytes": len(png),
+         "sha256": hashlib.sha256(png).hexdigest(), "content_type": "image/png"},
+        {"path": "shared/notes.txt", "bytes": 12,
+         "sha256": hashlib.sha256(b"a few notes\n").hexdigest(), "content_type": "text/plain"},
+    ]
+    return records, str((shared / "Screenshot.png").resolve())
+
+
+def test_image_attachment_rides_the_turn_and_the_record_keeps_the_reference(tmp_path: Path) -> None:
+    """Operator 2026-11-08: an image attached in a visit reaches the entity's
+    model AS AN IMAGE (like every other client). On the react arm: the
+    turn's image path is `context.attachments` for every call of the turn
+    and gone after HARVEST; the user message and the durable history entry
+    carry the structured records; the rendered message says one honest line
+    per attachment while `turn.text` keeps the human's raw words; a
+    non-image attachment is recorded but never shown as media."""
+    home_dir = _make_home(tmp_path, slug="seeingling")
+    records, png_abs = _attachment_records(home_dir)
+    llm = _ScriptedLLMHandler([
+        "Looking at it now.",          # iteration 1
+        "I see a tiny square image.",  # iteration 2: answers
+    ])
+    ert = open_entity_runtime(home_dir, extra_handlers={EffectType.LLM_CALL: llm})
+    wf = build_visit_workflow(
+        ert.home, participants=["person:albou"], idle_seconds=3600,
+        visit_id="visit-img01", react_middle=_stub_middle(),
+    )
+    try:
+        run_id = ert.runtime.start(workflow=wf, vars={}, session_id="visit-1")
+        ert.runtime.tick(workflow=wf, run_id=run_id, max_steps=50)
+        state = ert.runtime.resume(
+            workflow=wf, run_id=run_id, wait_key=VISITOR_WAIT_KEY,
+            payload={"text": "what do you see?", "speaker": "person:albou", "attachments": records},
+            max_steps=200,
+        )
+        assert state.status == RunStatus.WAITING
+
+        # Every model call of the turn carried the image (and only the image).
+        assert len(llm.calls) == 2
+        assert all(c.get("media") == [png_abs] for c in llm.calls), llm.calls
+        # After the turn nothing lingers in context.attachments (no silent re-attach).
+        assert "attachments" not in (state.vars.get("context") or {})
+
+        # The rendered user message says the attachments; the raw words do not.
+        turn = state.vars["_turn"]
+        assert turn["text"] == "what do you see?"
+        rendered = turn["rendered_user"]
+        assert f"(attached: shared/Screenshot.png — a PNG image, {records[0]['bytes']:,} bytes; " \
+               "shown to you with this message; read_file re-opens it)" in rendered
+        assert "(attached: shared/notes.txt — a text file, 12 bytes; read_file opens it)" in rendered
+        assert rendered.endswith("what do you see?")
+        sent_user = [m for m in llm.calls[0]["messages"] if m.get("role") == "user"][-1]
+        assert "(attached: shared/Screenshot.png" in sent_user["content"]
+
+        # The durable transcript (context.messages) and the visit history keep the records.
+        user_msgs = [m for m in state.vars["context"]["messages"] if m.get("role") == "user"]
+        assert user_msgs[0]["metadata"]["attachments"] == records
+        history = state.vars["_visit"]["history"]
+        assert history[0]["role"] == "user" and history[0]["attachments"] == records
+        assert "attachments" not in history[1]
+
+        # The next turn, without attachments, re-sends nothing.
+        llm.replies.extend(["Nothing new.", "Still here."])
+        state = ert.runtime.resume(
+            workflow=wf, run_id=run_id, wait_key=VISITOR_WAIT_KEY,
+            payload={"text": "and now?", "speaker": "person:albou"}, max_steps=200,
+        )
+        assert state.status == RunStatus.WAITING
+        assert all("media" not in c for c in llm.calls[2:]), llm.calls[2:]
+        assert state.vars["_turn"]["attachments"] == []
+        assert "attachments" not in state.vars["_visit"]["history"][2]
+    finally:
+        ert.close()
+
+
+def test_image_attachment_rides_the_v0_llm_call_as_media(tmp_path: Path) -> None:
+    """The home-direct arm (no react middle): the single LLM_CALL payload
+    carries the image as `media` (the runtime LLM handler's own key)."""
+    home_dir = _make_home(tmp_path, slug="plainseeing")
+    records, png_abs = _attachment_records(home_dir)
+    llm = _ScriptedLLMHandler(["A small image, I see it."])
+    ert, wf = _open(home_dir, llm)
+    try:
+        run_id = ert.runtime.start(workflow=wf, vars={}, session_id="visit-1")
+        ert.runtime.tick(workflow=wf, run_id=run_id, max_steps=50)
+        state = ert.runtime.resume(
+            workflow=wf, run_id=run_id, wait_key=VISITOR_WAIT_KEY,
+            payload={"text": "look", "speaker": "person:albou", "attachments": records[:1]},
+            max_steps=100,
+        )
+        assert state.status == RunStatus.WAITING
+        assert llm.calls[0]["media"] == [png_abs]
+        assert state.vars["_visit"]["history"][0]["attachments"] == records[:1]
+    finally:
+        ert.close()
+
+
+def test_attachment_that_cannot_be_opened_is_said_not_shown(tmp_path: Path) -> None:
+    """A record whose file is gone (or outside the workspace) is stated on the
+    rendered message and never attached — honest, never silent, never a hedge."""
+    home_dir = _make_home(tmp_path, slug="missingling")
+    llm = _ScriptedLLMHandler(["I cannot see that one."])
+    ert, wf = _open(home_dir, llm)
+    try:
+        run_id = ert.runtime.start(workflow=wf, vars={}, session_id="visit-1")
+        ert.runtime.tick(workflow=wf, run_id=run_id, max_steps=50)
+        state = ert.runtime.resume(
+            workflow=wf, run_id=run_id, wait_key=VISITOR_WAIT_KEY,
+            payload={"text": "see this?", "speaker": "person:albou",
+                     "attachments": [{"path": "shared/gone.png"}, {"path": "../../etc/hosts"}, "not-a-record"]},
+            max_steps=100,
+        )
+        assert state.status == RunStatus.WAITING
+        assert "media" not in llm.calls[0]
+        rendered = state.vars["_turn"]["rendered_user"]
+        assert "(attached: shared/gone.png — could not be opened: no file at 'shared/gone.png'" in rendered
+        assert "(attached: ../../etc/hosts — could not be opened:" in rendered and "leaves your workspace" in rendered
+        assert "not-a-record" not in rendered
+        assert state.vars["_turn"]["text"] == "see this?"
     finally:
         ert.close()
 

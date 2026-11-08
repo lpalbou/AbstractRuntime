@@ -159,6 +159,93 @@ def _windowed_history(run: RunState, visit: Dict[str, Any]) -> List[Dict[str, An
     return list(window)
 
 
+# ATTACHMENTS (operator 2026-11-08: images "already work normally with every
+# other client — this must work" for entities too). A visit turn's resume
+# payload may carry `attachments`: the door's STRUCTURED records, one dict per
+# file the visitor attached, `path` workspace-relative (the same string the
+# workspace write returned) plus whatever the door recorded (bytes, sha256,
+# content_type). They are never parsed from the visitor's words. The runtime
+# keeps the records whole on the turn, says one honest line per file in the
+# rendered message, shows this turn's IMAGES to the model on every call of
+# the turn (`context.attachments`, cleared at HARVEST — the next turn does
+# not re-send them; a re-look is read_file, the sight lane), and folds the
+# records into the user message and the durable history entry.
+
+
+def _attachment_records(raw: Any) -> List[Dict[str, Any]]:
+    """The door's attachment records, kept whole: dicts with a non-empty
+    `path`. Anything else is not an attachment."""
+    out: List[Dict[str, Any]] = []
+    if not isinstance(raw, list):
+        return out
+    for item in raw:
+        if isinstance(item, dict) and str(item.get("path") or "").strip():
+            rec = dict(item)
+            rec["path"] = str(item["path"]).strip()
+            out.append(rec)
+    return out
+
+
+def _attachment_facts(home_dir: Any, records: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """What the file itself says about each attachment (content, never the
+    name): `{path, label, bytes, image, abs_path, problem}`. `image` is True
+    for a PNG/JPEG/GIF/WEBP within the workspace acceptance cap — the one
+    case the model is shown the file; `problem` names why a record could
+    not be opened (the file vanished, left the workspace, is over the cap)
+    so the rendered line stays honest instead of silently dropping it."""
+    from .tools import WORKSPACE_FILE_CAP_BYTES, WorkspaceRoot, sniff_binary, sniff_image
+
+    ws = WorkspaceRoot(home_dir)
+    facts: List[Dict[str, Any]] = []
+    for rec in records:
+        rel = str(rec.get("path") or "")
+        fact: Dict[str, Any] = {
+            "path": rel, "label": "", "bytes": 0, "image": False, "abs_path": None, "problem": "",
+        }
+        try:
+            path = ws.resolve(rel)
+            if not path.is_file():
+                raise FileNotFoundError(f"no file at {rel!r} in the workspace")
+            size = int(path.stat().st_size)
+            with open(path, "rb") as fh:
+                head = fh.read(8000)
+        except (OSError, ValueError) as exc:  # PermissionError/FileNotFoundError are OSErrors
+            fact["problem"] = str(exc)
+            facts.append(fact)
+            continue
+        fact["bytes"] = size
+        image = sniff_image(head)
+        if image is not None:
+            fact["label"] = image[0]
+            if size <= WORKSPACE_FILE_CAP_BYTES:
+                fact["image"] = True
+                fact["abs_path"] = str(path)
+            else:
+                fact["problem"] = f"over the {WORKSPACE_FILE_CAP_BYTES}-byte workspace cap"
+        else:
+            binary = sniff_binary(head)
+            fact["label"] = binary if binary is not None else "a text file"
+        facts.append(fact)
+    return facts
+
+
+def _attachment_lines(facts: List[Dict[str, Any]]) -> List[str]:
+    """One runtime-authored line per attachment for the rendered message
+    (prompt currency: never on `turn.text`, the human's raw words)."""
+    lines: List[str] = []
+    for f in facts:
+        if f.get("problem"):
+            lines.append(f"(attached: {f['path']} — could not be opened: {f['problem']})")
+        elif f.get("image"):
+            lines.append(
+                f"(attached: {f['path']} — {f['label']}, {int(f['bytes']):,} bytes; "
+                "shown to you with this message; read_file re-opens it)"
+            )
+        else:
+            lines.append(f"(attached: {f['path']} — {f['label']}, {int(f['bytes']):,} bytes; read_file opens it)")
+    return lines
+
+
 def _deadline_iso(idle_seconds: float) -> str:
     return (datetime.now(timezone.utc) + timedelta(seconds=float(idle_seconds))).isoformat()
 
@@ -322,6 +409,9 @@ def build_visit_workflow(
         turn["text"] = text
         turn["speaker"] = str(resume.get("speaker") or "") or (visit["participants"][0])
         turn["turn_id"] = f"t-{turn_n:04d}"
+        # The door's structured attachment records, kept whole (never
+        # parsed from `text`); RENDER says them, BRIDGE shows the images.
+        turn["attachments"] = _attachment_records(resume.get("attachments"))
         return StepPlan(node_id="ROUTE", next_node="RECALL")
 
     def recall_node(run: RunState, ctx: Any) -> StepPlan:
@@ -364,7 +454,12 @@ def build_visit_workflow(
         block = _memories_block(displayed, recall.get("as_of_seq"))
         others = [p for p in visit["participants"] if p != home.entity_id]
         presence = f"(present with you: {', '.join(others)})" if others else ""
-        decoration = "\n\n".join(s for s in (presence, block) if s)
+        # Attachments: one honest line per file, from the file itself; this
+        # turn's images are what BRIDGE/REASON show the model.
+        facts = _attachment_facts(home.home_dir, list(turn.get("attachments") or []))
+        turn["attachment_media"] = [str(f["abs_path"]) for f in facts if f.get("image") and f.get("abs_path")]
+        attached = "\n".join(_attachment_lines(facts))
+        decoration = "\n\n".join(s for s in (presence, block, attached) if s)
         # The decorated message is APPEND-ONCE: it enters the transcript at
         # the fold and STAYS (all-but-last message byte-identical across
         # turns = the cross-turn cache property; each block is dated +
@@ -416,8 +511,26 @@ def build_visit_workflow(
         if callable(react_middle.reset_turn):
             react_middle.reset_turn(run.vars)
         context = run.vars.setdefault("context", {})
+        # THIS turn's images ride every model call of the turn exactly as an
+        # Assistant attachment rides its run (the adapter reads
+        # `context.attachments` on each LLM_CALL); the previous turn's are
+        # replaced, and HARVEST clears them — never a silent re-attach.
+        media = [str(p) for p in (turn.get("attachment_media") or []) if p]
+        if media:
+            context["attachments"] = media
+        else:
+            context.pop("attachments", None)
         msgs = context.setdefault("messages", [])
-        msgs.append({"role": "user", "content": str(turn.get("rendered_user") or turn.get("text") or "")})
+        user_message: Dict[str, Any] = {
+            "role": "user",
+            "content": str(turn.get("rendered_user") or turn.get("text") or ""),
+        }
+        records = list(turn.get("attachments") or [])
+        if records:
+            # The durable transcript keeps the reference (path, bytes, sha256,
+            # type); the file itself stays in the workspace.
+            user_message["metadata"] = {"attachments": records}
+        msgs.append(user_message)
         # The turn in progress starts at the visitor's message: the window keeps
         # it whole whatever user-role messages the loop adds inside it (an
         # ask_user answer, operator guidance).
@@ -428,6 +541,10 @@ def build_visit_workflow(
         """The adapter cycle's exit -> ELECT: fold the turn's outcome into
         `_turn.llm` so every downstream node runs byte-unchanged."""
         runtime_ns = run.vars.setdefault("_runtime", {})
+        # The turn's images were shown on this turn's calls only.
+        context_ns = run.vars.get("context")
+        if isinstance(context_ns, dict):
+            context_ns.pop("attachments", None)
         report = runtime_ns.get("session_history")
         if isinstance(report, dict):
             report["window_applied"] = True
@@ -498,17 +615,24 @@ def build_visit_workflow(
             for h in displayed
             if (h.get("provenance") or {}).get("record_id")
         ]
+        payload: Dict[str, Any] = {
+            "messages": messages,
+            "system_prompt": visit["system_base"],
+            "turn_id": turn["turn_id"],
+            "anchor_record_ids": [h.get("record_id") for h in displayed],
+            "anchor_graph_ids": anchor_graph_ids,
+        }
+        media = [str(p) for p in (turn.get("attachment_media") or []) if p]
+        if media:
+            # This turn's images, as the runtime's LLM handler reads them
+            # (`payload.media`: file paths) — the same contract as BRIDGE's
+            # `context.attachments` on the react arm.
+            payload["media"] = media
         return StepPlan(
             node_id="REASON",
             effect=Effect(
                 type=EffectType.LLM_CALL,
-                payload={
-                    "messages": messages,
-                    "system_prompt": visit["system_base"],
-                    "turn_id": turn["turn_id"],
-                    "anchor_record_ids": [h.get("record_id") for h in displayed],
-                    "anchor_graph_ids": anchor_graph_ids,
-                },
+                payload=payload,
                 result_key="_turn.llm",
             ),
             next_node="ELECT",
@@ -733,7 +857,12 @@ def build_visit_workflow(
             # Append-once decorated user message (head discipline: the
             # transcript IS what was sent — all-but-last stays byte-stable
             # across turns); the raw words live in the formed verbatim.
-            history.append({"role": "user", "content": turn.get("rendered_user") or turn["text"]})
+            user_entry: Dict[str, Any] = {"role": "user", "content": turn.get("rendered_user") or turn["text"]}
+            if turn.get("attachments"):
+                # The durable visit transcript keeps the attachment reference
+                # (path + bytes + sha256 + type); the file stays in the workspace.
+                user_entry["attachments"] = list(turn["attachments"])
+            history.append(user_entry)
             history.append({"role": "assistant", "content": turn["marked_reply"]})
             # The WHOLE visit stays here; the prompt reads it through the
             # history window (`_windowed_history`), never a count slice.

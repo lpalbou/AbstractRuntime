@@ -72,7 +72,7 @@ def test_absent_ceiling_means_no_enforcement() -> None:
 
 
 def test_silent_workflow_under_low_ceiling_clamps_the_default_down() -> None:
-    """Ceiling 10 with no declared value: the effective default (20) would
+    """Ceiling 10 with no declared value: the effective default (50) would
     BREACH the operator's ceiling — the default clamps down (a default is
     nobody's word; clamping it is not an override)."""
     rt = _runtime()
@@ -81,8 +81,10 @@ def test_silent_workflow_under_low_ceiling_clamps_the_default_down() -> None:
     )
     assert rt._run_store.load(run_id).vars["_limits"]["max_iterations"] == 10
 
-    # And a HIGH ceiling leaves the default (20) alone.
+    # And a HIGH ceiling leaves the default (DEFAULT_MAX_ITERATIONS, 50) alone.
     run_id2 = rt.start(
         workflow=_wf(), vars={"_limits": {"max_iterations_ceiling": 100}}
     )
-    assert rt._run_store.load(run_id2).vars["_limits"]["max_iterations"] == 20
+    from abstractruntime import DEFAULT_MAX_ITERATIONS
+
+    assert rt._run_store.load(run_id2).vars["_limits"]["max_iterations"] == DEFAULT_MAX_ITERATIONS == 50

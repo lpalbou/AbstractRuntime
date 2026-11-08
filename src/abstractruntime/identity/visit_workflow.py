@@ -52,6 +52,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from ..core.models import Effect, EffectType, RunState, StepPlan
 from ..core.spec import WorkflowSpec
+from ..core.vars import DEFAULT_MAX_ITERATIONS
 from ..memory.token_budget import estimate_message_tokens
 from ..session_history import HISTORY_REPLAY_MAX_TOKENS, window_report, window_transcript
 from .chat import (
@@ -133,13 +134,11 @@ class ReactMiddle:
     nodes: Dict[str, Any]
     entry: str = "reason"
     reset_turn: Optional[Any] = None
-    # Reason-cycle bound per turn. 20 matches the ruled 20-tool-call turn
-    # budget (maintainer 2026-07-11: caps bound RUN-AWAY, not ambition) —
-    # the original 6 was the tightest agency bound in the stack (agent's
-    # caps audit): six cycles cannot spend a research turn's budget.
+    # Reason-cycle bound per turn: the framework default (DEFAULT_MAX_ITERATIONS,
+    # operator 2026-11-08 "50 everywhere"; caps bound RUN-AWAY, not ambition).
     # BRIDGE seeds `_limits.max_iterations` with setdefault, so a door- or
     # operator-supplied value always wins over this default.
-    max_iterations: int = 20
+    max_iterations: int = DEFAULT_MAX_ITERATIONS
 
 
 def _ns(run: RunState, key: str) -> Dict[str, Any]:

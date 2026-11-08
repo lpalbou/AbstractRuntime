@@ -28,6 +28,12 @@ NODE_TRACES = "node_traces"  # _runtime namespace key for per-node execution tra
 # `abstractcore.architectures.detection.get_model_capabilities(...)`.
 DEFAULT_MAX_TOKENS = 32768
 
+# THE framework default for an agent run's iteration budget (`_limits.max_iterations`):
+# every reader that needs "no value given" imports this name (abstractagent's loop, the
+# visual compiler, the gateway's builtin rung). Operator 2026-11-08: "By default, set it to
+# 50 everywhere". Never copy the number.
+DEFAULT_MAX_ITERATIONS = 50
+
 
 def ensure_namespaces(vars: Dict[str, Any]) -> Dict[str, Any]:
     """Ensure the four canonical namespaces exist and are dicts."""
@@ -130,7 +136,7 @@ def get_node_trace(vars: Dict[str, Any], node_id: str) -> Dict[str, Any]:
 def _default_limits() -> Dict[str, Any]:
     """Return default limits dict."""
     return {
-        "max_iterations": 20,
+        "max_iterations": DEFAULT_MAX_ITERATIONS,
         "current_iteration": 0,
         "max_tokens": DEFAULT_MAX_TOKENS,
         "max_output_tokens": None,

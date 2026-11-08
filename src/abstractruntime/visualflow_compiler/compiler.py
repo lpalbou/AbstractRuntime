@@ -1375,9 +1375,10 @@ def _create_visual_agent_effect_handler(
     ) -> Dict[str, Any]:
         parent_limits = run.vars.get("_limits")
         limits = dict(parent_limits) if isinstance(parent_limits, dict) else {}
-        limits.setdefault("max_iterations", 20)
+        from abstractruntime.core.vars import DEFAULT_MAX_ITERATIONS, DEFAULT_MAX_TOKENS
+
+        limits.setdefault("max_iterations", DEFAULT_MAX_ITERATIONS)
         limits.setdefault("current_iteration", 0)
-        from abstractruntime.core.vars import DEFAULT_MAX_TOKENS
 
         limits.setdefault("max_tokens", DEFAULT_MAX_TOKENS)
         limits.setdefault("max_output_tokens", None)
@@ -1595,7 +1596,7 @@ def _create_visual_agent_effect_handler(
 
         return {
             "context": ctx_ns,
-            "scratchpad": {"iteration": 0, "max_iterations": int(limits.get("max_iterations") or 20)},
+            "scratchpad": {"iteration": 0, "max_iterations": int(limits.get("max_iterations") or DEFAULT_MAX_ITERATIONS)},
             # `_runtime` is durable; we store provider/model here so the ReAct subworkflow
             # can inject them into LLM_CALL payloads (and remain resumable).
             "_runtime": runtime_ns,

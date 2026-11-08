@@ -12,7 +12,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Dict, Optional
 
-from .vars import DEFAULT_MAX_TOKENS
+from .vars import DEFAULT_MAX_ITERATIONS, DEFAULT_MAX_TOKENS
 
 # Truncation policy: keep mechanisms, but default to disabled.
 # A positive value enables a conservative auto-cap for `max_input_tokens` when callers do not
@@ -30,7 +30,7 @@ class RuntimeConfig:
     3. Configure warning thresholds for proactive notifications
 
     Attributes:
-        max_iterations: Maximum number of reasoning iterations (default: 20)
+        max_iterations: Maximum number of reasoning iterations (default: DEFAULT_MAX_ITERATIONS, 50)
         warn_iterations_pct: Percentage threshold for iteration warnings (default: 80)
         max_tokens: Maximum context window tokens (None = use model capabilities)
         max_output_tokens: Maximum tokens for LLM response (None = provider default)
@@ -48,7 +48,7 @@ class RuntimeConfig:
     """
 
     # Iteration control
-    max_iterations: int = 20
+    max_iterations: int = DEFAULT_MAX_ITERATIONS
     warn_iterations_pct: int = 80
 
     # Token/context window management

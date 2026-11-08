@@ -63,7 +63,9 @@ def create_agent_node_handler(
             task = f"Execute {node_id} step"
 
         # Build initial vars for the agent subworkflow
-        max_iterations = getattr(agent, "_max_iterations", 20)
+        from abstractruntime.core.vars import DEFAULT_MAX_ITERATIONS
+
+        max_iterations = getattr(agent, "_max_iterations", DEFAULT_MAX_ITERATIONS)
         max_history_messages = getattr(agent, "_max_history_messages", -1)
         max_tokens = getattr(agent, "_max_tokens", None)
         if not isinstance(max_tokens, int) or max_tokens <= 0:

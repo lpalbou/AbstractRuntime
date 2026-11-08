@@ -2368,10 +2368,10 @@ class Runtime:
         def pct(current: int, maximum: int) -> float:
             return round(current / maximum * 100, 1) if maximum > 0 else 0
 
-        from .vars import DEFAULT_MAX_TOKENS
+        from .vars import DEFAULT_MAX_ITERATIONS, DEFAULT_MAX_TOKENS
 
         current_iter = int(limits.get("current_iteration", 0) or 0)
-        max_iter = int(limits.get("max_iterations", 20) or 20)
+        max_iter = int(limits.get("max_iterations", DEFAULT_MAX_ITERATIONS) or DEFAULT_MAX_ITERATIONS)
         tokens_used = int(limits.get("estimated_tokens_used", 0) or 0)
         max_tokens = int(limits.get("max_tokens", DEFAULT_MAX_TOKENS) or DEFAULT_MAX_TOKENS)
         max_input_tokens = limits.get("max_input_tokens")
@@ -2412,9 +2412,11 @@ class Runtime:
         warnings: list[LimitWarning] = []
         limits = run.vars.get("_limits", {})
 
+        from .vars import DEFAULT_MAX_ITERATIONS
+
         # Check iterations
         current = int(limits.get("current_iteration", 0) or 0)
-        max_iter = int(limits.get("max_iterations", 20) or 20)
+        max_iter = int(limits.get("max_iterations", DEFAULT_MAX_ITERATIONS) or DEFAULT_MAX_ITERATIONS)
         warn_pct = int(limits.get("warn_iterations_pct", 80) or 80)
 
         if max_iter > 0:
@@ -5257,6 +5259,17 @@ class Runtime:
             if isinstance(conversation, dict) and isinstance(conversation.get("enabled"), bool):
                 sub_rt = sub_vars.setdefault("_runtime", {})
                 sub_rt.setdefault("conversation", copy.deepcopy(conversation))
+            # The iteration budget governs the whole run tree (operator
+            # 2026-11-08: a requested 50 must reach the agent in a CHILD
+            # flow). The parent's `_limits.max_iterations` rides into the
+            # child's `_limits`; an explicit child value (or flat pin) wins.
+            parent_limits = run.vars.get("_limits")
+            parent_max_iter = parent_limits.get("max_iterations") if isinstance(parent_limits, dict) else None
+            if parent_max_iter is not None and sub_vars.get("max_iterations") is None:
+                sub_limits = sub_vars.get("_limits")
+                sub_limits = dict(sub_limits) if isinstance(sub_limits, dict) else {}
+                sub_limits.setdefault("max_iterations", parent_max_iter)
+                sub_vars["_limits"] = sub_limits
         except Exception:
             pass
         # The host's built-in workspace protection is authoritative for the run

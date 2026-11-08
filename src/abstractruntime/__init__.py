@@ -42,6 +42,7 @@ from .core.run_identity import IdentityConflict, RunIdentityConflict, creation_d
 from .core.run_lifecycle import is_draft_lifecycle
 from .session_turns import select_session_turns
 from .core.spec import WorkflowSpec
+from .core.vars import DEFAULT_MAX_ITERATIONS
 from .core.policy import (
     EffectPolicy,
     DefaultEffectPolicy,
@@ -153,6 +154,7 @@ from .session_history import (
 )
 
 __all__ = [
+    "DEFAULT_MAX_ITERATIONS",
     # Core models
     "Effect",
     "EffectType",

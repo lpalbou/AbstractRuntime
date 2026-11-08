@@ -2220,6 +2220,20 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
                             if pid in input_data:
                                 out[pid] = input_data.get(pid)
                                 continue
+                            # The iteration budget is the RUN's (`_limits.max_iterations`:
+                            # request > host default > DEFAULT_MAX_ITERATIONS, seeded at
+                            # start), never a start-pin default: the shipped basic-agent's
+                            # pin default 20 used to beat a requested `_limits` 50 through
+                            # the data edge into the Agent node (operator 2026-11-08).
+                            _run_limits = input_data.get("_limits")
+                            if (
+                                pid == "max_iterations"
+                                and isinstance(_run_limits, dict)
+                                and _run_limits.get("max_iterations") is not None
+                            ):
+                                out[pid] = _run_limits.get("max_iterations")
+                                input_data[pid] = out[pid]
+                                continue
                             if isinstance(pid, str) and pid in defaults:
                                 dv = defaults.get(pid)
                                 out[pid] = _clone_default(dv)
@@ -5292,6 +5306,16 @@ def _create_data_aware_handler(
                 # Declared input-pin defaults are authored node configuration, so
                 # they override same-named keys carried by the ambient exec payload.
                 if pin_id not in declared_input_pin_ids and pin_id in resolved_input:
+                    continue
+                # A start-pin default never stands in for the run's iteration
+                # budget: `_limits.max_iterations` (seeded at start) applies
+                # instead (the event handler below reads it).
+                if (
+                    pin_id == "max_iterations"
+                    and node_type == "on_flow_start"
+                    and isinstance(resolved_input.get("_limits"), dict)
+                    and resolved_input["_limits"].get("max_iterations") is not None
+                ):
                     continue
                 # Clone object/array defaults so handlers can't mutate the shared default.
                 if isinstance(value, (dict, list)):

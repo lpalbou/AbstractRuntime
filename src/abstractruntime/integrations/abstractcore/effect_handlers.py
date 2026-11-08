@@ -56,6 +56,7 @@ from .session_attachments import (
     session_memory_owner_run_id,
 )
 from .workspace_scoped_tools import WorkspaceScope, describe_workspace_scope, rewrite_tool_arguments
+from .skill_roots import skill_file_read
 
 logger = get_logger(__name__)
 
@@ -4454,6 +4455,34 @@ def make_tool_calls_handler(
                     tc = {**tc, "arguments": arguments}
                     if media_artifact_id:
                         analyze_media_artifact_by_call[str(call_id)] = media_artifact_id
+
+            # An activated skill is always readable (operator 2026-11-08): a
+            # `read_file` inside one of the run's own skill folders is answered
+            # by the runtime, whole, BEFORE core's tool — and so before the
+            # workspace `.abstractignore` and the workspace scope — can refuse
+            # it. The folders come from the run's record (skill_roots.py);
+            # any other path goes on to core exactly as before.
+            if name == "read_file":
+                served = skill_file_read(run.vars if isinstance(run.vars, dict) else None, arguments)
+                if served is not None:
+                    ok_served, served_output, served_error = served
+                    blocked_by_index[idx] = {
+                        "call_id": call_id,
+                        "runtime_call_id": runtime_call_id_out,
+                        "name": name,
+                        "success": bool(ok_served),
+                        "output": served_output,
+                        "error": None if ok_served else served_error,
+                    }
+                    tool_calls_for_evidence.append(
+                        {
+                            "call_id": call_id,
+                            "runtime_call_id": runtime_call_id_out,
+                            "name": name,
+                            "arguments": dict(arguments),
+                        }
+                    )
+                    continue
 
             # Host tools: rewrite under workspace scope (when configured) before execution.
             tc2 = dict(tc)

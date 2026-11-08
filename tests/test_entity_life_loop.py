@@ -1666,18 +1666,71 @@ def test_settled_desk_supervised_run_exits_with_the_landing(tmp_path: Path) -> N
     assert "settled_desk" in str(state.get("reason"))
 
 
-def test_drives_cue_note_is_act_frame_only(tmp_path: Path) -> None:
-    """The MERGE composer (F2 contract): kind #tag [date] lines, NO gist
-    words from the drive records; ids returned for the commit exclusion."""
+def test_drives_cue_note_shows_each_drive_gist(tmp_path: Path) -> None:
+    """The MERGE composer (operator 2026-11-08, amending F2): each offered
+    drive shows kind #tag [date] AND its gist (first sentence of the stored
+    text, whole); no "owed" clause; the ids still feed the commit exclusion
+    and each offered drive reports its stored strength for the log line."""
     from abstractruntime.identity.life import drives_cue_note
 
     home_dir = _make_home(tmp_path)
-    note, ids = drives_cue_note(home_dir)
+    offered: list = []
+    note, ids = drives_cue_note(home_dir, offered=offered)
     assert "Alive on your desk today:" in note
     assert "#" in note and "read_memory" in note
-    assert "owed" in note, "release clause present"
-    assert "what does a day owe its evening" not in note, "NO gist words (F2)"
+    assert '"what does a day owe its evening?"' in note, "the drive's gist rides the desk"
+    assert "owed" not in note and "the day is yours" not in note
+    assert "next step" not in note, "no next step on the record, none shown"
     assert ids, "offered ids feed the first-turn commit exclusion"
+    assert [o["record_id"] for o in offered] == ids
+    assert all(isinstance(o["strength"], float) for o in offered), offered
+
+
+def test_drive_gist_is_the_whole_first_sentence() -> None:
+    from abstractruntime.identity.life import drive_gist
+
+    assert drive_gist("Why do I stop?  Because the day ends. More.") == "Why do I stop?"
+    assert drive_gist("version 2.5 is out. Next.") == "version 2.5 is out."
+    long = "a sentence without an end " * 30
+    assert drive_gist(long) == " ".join(long.split()), "never cut mid-word"
+    assert drive_gist("") == ""
+
+
+def test_drives_cue_note_shows_a_next_step_the_record_carries(tmp_path: Path) -> None:
+    from abstractruntime.identity import life as life_mod
+
+    home_dir = _make_home(tmp_path)
+    real = life_mod._drive_record_texts
+
+    def with_step(store, record_ids):
+        out = real(store, record_ids)
+        return {rid: (text, {**attrs, "next_step": "reread the July entries"})
+                for rid, (text, attrs) in out.items()}
+
+    life_mod._drive_record_texts = with_step
+    try:
+        note, _ids = life_mod.drives_cue_note(home_dir)
+    finally:
+        life_mod._drive_record_texts = real
+    assert "(next step: reread the July entries)" in note
+
+
+def test_day_open_logs_offered_drives_with_strength(tmp_path: Path) -> None:
+    """F2 watch: the own-time log names the offered ids and their strength
+    at day-open; the first turn still commit-excludes them."""
+    home_dir = _make_home(tmp_path)
+    lines: list = []
+    llm = _ScriptedLLM(["A thought.", "Day reflection."])
+    loop = LifeLoop(
+        _factory_for(home_dir, llm),
+        tick_seconds=0, ticks_per_day=1, max_ticks=1,
+        state_home=home_dir, sleep_fn=lambda s: None, out=lines.append,
+    )
+    loop.run()
+    logged = [ln for ln in lines if ln.startswith("(desk offered at day-open: ")]
+    assert len(logged) == 1, lines
+    assert "strength=" in logged[0] and "unread" not in logged[0]
+    assert any(i in logged[0] for i in loop._cue_drive_ids)
 
 
 def test_first_turn_commit_excludes_cue_offered_drives(tmp_path: Path) -> None:

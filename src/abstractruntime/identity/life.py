@@ -550,14 +550,81 @@ def _manifest_entity_id(home_dir: Path) -> str:
         return ""
 
 
-def drives_cue_note(home_dir: Path, *, k: int = 4) -> Tuple[str, List[str]]:
-    """The MERGE composer (adversary F2 contract): the day-open cue offers
-    the top-k ALIVE drives as ACT-FRAME handles only - kind #tag [date],
-    NO gist words (cue gist would lexically self-confirm one hop later
-    through stimulus admission). One offer, release clause in the text.
-    Returns (note, offered_graph_ids) - the ids feed the driver's
-    first-turn COMMIT EXCLUSION (the other half of the same contract:
-    a cue mention must not strengthen the drive it names)."""
+_SENTENCE_END_RE = re.compile(r"[.!?](?=\s|$)")
+# Attribute names a drive record may carry its next step under (none of the
+# current writers sets one; when a record carries one, the desk shows it).
+_NEXT_STEP_ATTRS = ("next_step", "next", "step", "how")
+
+
+def drive_gist(text: Any) -> str:
+    """The first sentence of a drive's stored text, WHOLE (ADR 0054: derived
+    at read time from the stored words, never cut mid-word, never stored).
+    A text with no sentence end is its own first sentence."""
+    flat = " ".join(str(text or "").split())
+    m = _SENTENCE_END_RE.search(flat)
+    return flat[: m.end()] if m else flat
+
+
+def _drive_next_step(attrs: Dict[str, Any]) -> str:
+    for key in _NEXT_STEP_ATTRS:
+        value = attrs.get(key)
+        if isinstance(value, str) and value.strip():
+            return " ".join(value.split())
+    return ""
+
+
+def _drive_record_texts(store: Any, record_ids: List[str]) -> Dict[str, Tuple[str, Dict[str, Any]]]:
+    """record_id -> (the full stored text, attributes) of each drive record.
+    alive_drives hands back a display-bounded digest; the gist derives from
+    the whole stored text instead."""
+    from abstractmemory import TripleQuery
+
+    out: Dict[str, Tuple[str, Dict[str, Any]]] = {}
+    for rid in record_ids:
+        if not rid:
+            continue
+        rows = store.query(TripleQuery(subject=rid, predicate="dcterms:abstract", limit=1))
+        for a in rows:
+            attrs = a.attributes if isinstance(a.attributes, dict) else {}
+            out[rid] = (str(a.object or ""), attrs)
+            break
+    return out
+
+
+def _drive_strengths(system: Any, scopes: List[Tuple[str, str]], record_ids: List[str]) -> Dict[str, float]:
+    """The stored activation of each offered drive, strongest across his
+    scopes: the quantity a first-turn commit would raise (the F2 risk the
+    day-open log line lets a later check watch)."""
+    strengths: Dict[str, float] = {}
+    ids = [rid for rid in record_ids if rid]
+    if not ids:
+        return strengths
+    for scope, owner in scopes:
+        for rid, score in system.activation(ids, scope=scope, owner_id=owner).items():
+            strengths[rid] = max(strengths.get(rid, 0.0), float(score.get("total") or 0.0))
+    return strengths
+
+
+def drives_cue_note(
+    home_dir: Path, *, k: int = 4, offered: Optional[List[Dict[str, Any]]] = None,
+) -> Tuple[str, List[str]]:
+    """The MERGE composer: the day-open cue offers the top-k ALIVE drives,
+    each as kind #tag [date] plus its GIST (the first sentence of its
+    stored text, whole) and its next step when the record carries one.
+
+    Operator ruling 2026-11-08 amends the adversary F2 contract: the desk
+    used to show bare ids so a cue gist could not lexically self-confirm
+    one hop later through stimulus admission; the bare id told him nothing
+    about what he was holding, and the operator accepted that risk. The
+    OTHER half of F2 stays exactly: the returned offered_graph_ids feed the
+    driver's first-turn COMMIT EXCLUSION (a cue mention must not strengthen
+    the drive it names). And the risk is now WATCHED: when `offered` is a
+    list, it receives one {record_id, drive, strength, strength_error}
+    entry per offered drive (stored activation at day-open) for the loop's
+    own-time log line, so a later check can see whether a named drive's
+    strength rises on days he did not act on it.
+
+    Returns (note, offered_graph_ids)."""
     try:
         from abstractmemory import MemorySystem, SQLiteJournal, SQLiteTripleStore
         from abstractmemory.alive_drives import alive_drives
@@ -610,10 +677,28 @@ def drives_cue_note(home_dir: Path, *, k: int = 4) -> Tuple[str, List[str]]:
                 # standing set so the biggest cluster never owns every
                 # morning and a dusty lone drive still gets its day.
                 dust = _standing_drive_rotation(store, journal, entity_id, k=len(items) + 1)
-                offered = {str(it.get("record_id") or "") for it in items}
-                fresh = [d for d in dust if str(d.get("record_id") or "") not in offered]
+                offered_ids = {str(it.get("record_id") or "") for it in items}
+                fresh = [d for d in dust if str(d.get("record_id") or "") not in offered_ids]
                 if fresh:
                     items = (items[: k - 1] if len(items) >= k else items) + [fresh[0]]
+            item_ids = [str(it.get("record_id") or "") for it in items]
+            texts = _drive_record_texts(store, item_ids)
+            if offered is not None:
+                try:
+                    strengths = _drive_strengths(system, scopes, item_ids)
+                    strength_error = ""
+                except Exception as e:  # noqa: BLE001 - the log line names it; the desk still opens
+                    strengths, strength_error = {}, str(e)
+                for it in items:
+                    rid = str(it.get("record_id") or "")
+                    if not rid:
+                        continue
+                    offered.append({
+                        "record_id": rid,
+                        "drive": str(it.get("drive") or "drive"),
+                        "strength": strengths.get(rid),
+                        "strength_error": strength_error,
+                    })
         finally:
             try:
                 store.close()
@@ -638,13 +723,17 @@ def drives_cue_note(home_dir: Path, *, k: int = 4) -> Tuple[str, List[str]]:
         # the count is now something he can read, not a hidden sort key.
         group_n = int(it.get("group_size") or 0)
         group_note = f" - {group_n} of yours circle this" if group_n > 1 else ""
-        parts.append(f"{label} {tag} [{born}]{group_note}")
+        text, attrs = texts.get(rid, ("", {}))
+        gist = drive_gist(text)
+        gist_note = f' - "{gist}"' if gist else ""
+        step = _drive_next_step(attrs)
+        step_note = f" (next step: {step})" if step else ""
+        parts.append(f"{label} {tag} [{born}]{group_note}{gist_note}{step_note}")
         if rid:
             ids.append(rid)
     note = (
         " Alive on your desk today: " + "; ".join(parts) + "."
         " If one pulls you, open it with read_memory (the #tag addresses it)."
-        " None of this is owed - the day is yours."
     )
     return note, ids
 
@@ -3112,7 +3201,25 @@ class LifeLoop:
             # day (P2-1: no stale exclusions on chained days).
             if self.state_home is not None:
                 standing = standing_state_note(self.state_home)
-                drives_note, drive_ids = drives_cue_note(self.state_home)
+                offered: List[Dict[str, Any]] = []
+                drives_note, drive_ids = drives_cue_note(self.state_home, offered=offered)
+                if offered:
+                    # F2 watch (operator 2026-11-08): the desk now names
+                    # each drive's gist, so the day-open log records which
+                    # drives were offered and their stored strength - a
+                    # later check compares these across days.
+                    self.out(
+                        "(desk offered at day-open: "
+                        + "; ".join(
+                            f"{o['record_id']} strength="
+                            + (
+                                f"{o['strength']:.4f}" if o["strength"] is not None
+                                else f"unread ({o['strength_error'] or 'no score'})"
+                            )
+                            for o in offered
+                        )
+                        + ")"
+                    )
                 # P2-2: BOTH note lanes' offered ids share one exclusion.
                 self._cue_drive_ids = drive_ids + standing_state_offered_ids()
                 base = (cue or "").strip()

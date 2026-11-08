@@ -1555,8 +1555,10 @@ class ChatSession:
         election must never kill a turn."""
         from .reflection import MAX_FEELINGS_PER_SESSION
 
-        lessons = self._within_session_cap("lesson", list(lessons), report.notices)
-        interests = self._within_session_cap("interest", list(interests), report.notices)
+        # The parsers already refused past the session's room (review F4,
+        # R2-2: the refusal is said in the stored marker); count what kept.
+        self._count_kept("lesson", len(lessons))
+        self._count_kept("interest", len(interests))
         if feelings:
             room = MAX_FEELINGS_PER_SESSION - self.feelings_applied
             if room <= 0:
@@ -2373,9 +2375,13 @@ class ChatSession:
             marked_reply, [line for _rid, line in self.session_sheet]
         )
         notices.extend(feel_notices)
-        marked_reply, midturn_lessons, lesson_notices = parse_lesson_blocks(marked_reply)
+        marked_reply, midturn_lessons, lesson_notices = parse_lesson_blocks(
+            marked_reply, room=self._session_room("lesson")
+        )
         notices.extend(lesson_notices)
-        marked_reply, midturn_interests, interest_notices = parse_interest_blocks(marked_reply)
+        marked_reply, midturn_interests, interest_notices = parse_interest_blocks(
+            marked_reply, room=self._session_room("interest")
+        )
         notices.extend(interest_notices)
         # Identity-pass spine (cti#399, gate ruled satisfied c4779):
         # realizations happen in the middle of living — the fence is parsed
@@ -3130,22 +3136,17 @@ class ChatSession:
         )
         return next(iter(formed.get("record_ids", [])), None)
 
-    def _within_session_cap(self, kind: str, items: List[str], notices: List[str]) -> List[str]:
-        """Keep at most the session cap of `kind` ("interest" | "lesson")
-        across the whole session (turns + every look-back); refuse the
-        rest loudly. Counts what it lets through."""
+    def _session_room(self, kind: str) -> int:
+        """How many more of `kind` ("interest" | "lesson") this session may
+        keep: the cap counts the whole session - an own-time day or a visit
+        - across the turns and every look-back (review F4)."""
         from .reflection import MAX_INTERESTS_PER_SESSION, MAX_LESSONS_PER_SESSION
 
         cap = MAX_INTERESTS_PER_SESSION if kind == "interest" else MAX_LESSONS_PER_SESSION
-        room = max(0, cap - self._kept_this_session.get(kind, 0))
-        if len(items) > room:
-            notices.append(
-                f"#FALLBACK {len(items) - room} {kind}(s) refused (cap {cap} per day of "
-                "own time or per visit reached)"
-            )
-            items = items[:room]
-        self._kept_this_session[kind] = self._kept_this_session.get(kind, 0) + len(items)
-        return items
+        return max(0, cap - self._kept_this_session.get(kind, 0))
+
+    def _count_kept(self, kind: str, n: int) -> None:
+        self._kept_this_session[kind] = self._kept_this_session.get(kind, 0) + int(n)
 
     def _reflect_over(
         self,
@@ -3197,10 +3198,22 @@ class ChatSession:
             return None
 
         marked_reply, feelings, notices = parse_feel_blocks(raw_reply, sheet_lines)
-        marked_reply, interests, interest_notices = parse_interest_blocks(marked_reply)
+        # SESSION caps (review F4): interests and lessons count against the
+        # whole session - an own-time day or a visit - across the turns and
+        # every look-back, not per look-back; the parsers get the room left
+        # so a refusal is SAID in the stored marker (R2-2). A salvage repairs
+        # a PAST session and keeps the parser's own per-look-back cap.
+        marked_reply, interests, interest_notices = parse_interest_blocks(
+            marked_reply, room=self._session_room("interest") if count_session_caps else None
+        )
         notices.extend(interest_notices)
-        marked_reply, lessons, lesson_notices = parse_lesson_blocks(marked_reply)
+        marked_reply, lessons, lesson_notices = parse_lesson_blocks(
+            marked_reply, room=self._session_room("lesson") if count_session_caps else None
+        )
         notices.extend(lesson_notices)
+        if count_session_caps:
+            self._count_kept("interest", len(interests))
+            self._count_kept("lesson", len(lessons))
         # Identity-pass spine: the look-back is the second waking surface
         # (realizations often land only when the day is seen whole).
         marked_reply, realizations, realize_notices = parse_realize_blocks(marked_reply)
@@ -3210,13 +3223,6 @@ class ChatSession:
         marked_reply = self._apply_tend_fence(marked_reply, notices)
         marked_reply, diary_elections, diary_notices = parse_diary_blocks(marked_reply)
         notices.extend(diary_notices)
-        # SESSION caps (review F4): interests and lessons count against the
-        # whole session - an own-time day or a visit - across the turns and
-        # every look-back, not per look-back. A salvage repairs a PAST
-        # session and keeps the parser's own per-look-back cap.
-        if count_session_caps:
-            interests = self._within_session_cap("interest", interests, notices)
-            lessons = self._within_session_cap("lesson", lessons, notices)
 
         kept_something = bool(
             feelings or interests or lessons or diary_elections or realizations or topics

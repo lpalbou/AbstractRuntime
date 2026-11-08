@@ -310,7 +310,38 @@ def test_interest_and_lesson_caps_count_against_the_day(tmp_path: Path) -> None:
     kinds = _kinds(home_dir)
     assert sorted(kinds.get("interest", [])) == ["subject 1a", "subject 1b"], kinds.get("interest")
     assert sorted(kinds.get("lesson", [])) == ["lesson 1a", "lesson 1b"], kinds.get("lesson")
-    assert any("interest(s) refused (cap 2 per day" in n for n in notices), notices
+    assert any("interest block refused (cap 2" in n for n in notices), notices
+
+
+def test_a_refused_interest_is_stored_as_refused_not_kept(tmp_path: Path) -> None:
+    """Review R2-2: once the day's two interests are kept, a third block -
+    mid-turn or in a look-back - rests in the stored text as REFUSED, with
+    his words whole, never as "[kept interest: ...]"."""
+    home_dir = _make_home(tmp_path)
+    third = "a third subject the day cap must refuse and keep whole in the marker"
+    llm = _Recorder([
+        "```interest\nfirst subject\n```\n```interest\nsecond subject\n```",
+        f"I like this too.\n```interest\n{third}\n```",
+        f"Seen whole.\n```interest\n{third} again\n```",
+    ])
+    s = _personal_session(home_dir, llm)
+    s.turn("(cue) one")
+    reply, _report = s.turn("(cue) two")
+    close = s.reflect()
+    s.home.close()
+    assert "[kept interest" not in reply and "refused, not kept" in reply
+    assert f'"{third}"' in reply, "his words stay whole in the marker"
+    assert "[kept interest" not in close["reply"] and "refused, not kept" in close["reply"]
+    from abstractmemory import SQLiteTripleStore, TripleQuery
+
+    store = SQLiteTripleStore(home_dir / "memory.sqlite3")
+    try:
+        stored = [str(a.object) for a in store.query(TripleQuery(predicate="dcterms:abstract", limit=0))]
+    finally:
+        store.close()
+    assert not any(f'[kept interest: "{third[:40]}' in t for t in stored)
+    assert any("refused, not kept" in t for t in stored), "the stored exchange says what happened"
+    assert sorted(_kinds(home_dir).get("interest", [])) == ["first subject", "second subject"]
 
 
 def test_tick_lookback_reuses_the_tick_prompt_and_bounds_its_context(tmp_path: Path) -> None:

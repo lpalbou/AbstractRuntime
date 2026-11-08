@@ -315,26 +315,40 @@ def parse_feel_blocks(
     return marked.strip(), elections, notices
 
 
-def parse_interest_blocks(reply: str) -> Tuple[str, List[str], List[str]]:
+def _room_for(cap: int, room: Optional[int]) -> int:
+    return cap if room is None else max(0, min(cap, int(room)))
+
+
+def parse_interest_blocks(
+    reply: str, *, room: Optional[int] = None,
+) -> Tuple[str, List[str], List[str]]:
     """Extract ```interest blocks (identity growth, a2a 0007 three-layer ack).
 
-    At most MAX_INTERESTS_PER_SESSION are kept; further blocks are REFUSED
-    loudly (never a silent drop of the first ones — truncation-vs-refusal
-    discipline applies to elections too). Returns (marked, interests, notices).
+    At most MAX_INTERESTS_PER_SESSION are kept - or `room`, what is left of
+    the session's cap when the caller counts across a whole day or visit;
+    further blocks are REFUSED loudly (never a silent drop of the first ones
+    — truncation-vs-refusal discipline applies to elections too). A refused
+    block's marker SAYS it was refused and keeps his words whole (review
+    R2-2, 2026-11-08: a refused interest used to rest as "[kept interest: ...]"
+    once the day's cap was spent). Returns (marked, interests, notices).
     """
     interests: List[str] = []
     notices: List[str] = []
+    limit = _room_for(MAX_INTERESTS_PER_SESSION, room)
 
     def _sub(match: re.Match) -> str:
         body = " ".join((match.group(1) or "").split())
         if not body:
             notices.append("#FALLBACK interest block skipped (empty body)")
             return "[interest block skipped - empty]"
-        if len(interests) >= MAX_INTERESTS_PER_SESSION:
+        if len(interests) >= limit:
             notices.append(
                 f"#FALLBACK interest block refused (cap {MAX_INTERESTS_PER_SESSION}/session)"
             )
-            return f"[interest refused - at most {MAX_INTERESTS_PER_SESSION} per session]"
+            return (
+                f"[interest refused, not kept - at most {MAX_INTERESTS_PER_SESSION} per session: "
+                f'"{body}"]'
+            )
         interests.append(body)
         # TITLED marker (maintainer directive 2026-07-15 c2468): the marker
         # carries the interest's own words so the record it lands in is
@@ -542,27 +556,35 @@ def parse_topic_blocks(reply: str) -> Tuple[str, List[str], List[str]]:
     return marked.strip(), topics, notices
 
 
-def parse_lesson_blocks(reply: str) -> Tuple[str, List[str], List[str]]:
+def parse_lesson_blocks(
+    reply: str, *, room: Optional[int] = None,
+) -> Tuple[str, List[str], List[str]]:
     """Extract ```lesson blocks (semantic knowledge, laurent's directive
     2026-07-18: "the entity still hasn't learned anything... think of the
     root issue"). THE ROOT ISSUE WAS SOLICITATION: kind=lesson existed in
     the engine (the scar-heal path) but nothing ever ASKED the entity what
     it learned — the reflection solicited feelings, interests, and open
     questions, never knowledge. Same election discipline as interests:
-    cap per session, refusals loud, titled marker carrying the words."""
+    cap per session (or `room`, what the session has left), refusals loud
+    and SAID in the marker with the words whole, titled marker carrying the
+    words."""
     lessons: List[str] = []
     notices: List[str] = []
+    limit = _room_for(MAX_LESSONS_PER_SESSION, room)
 
     def _sub(match: re.Match) -> str:
         body = " ".join((match.group(2) or "").split())
         if not body:
             notices.append("#FALLBACK lesson block skipped (empty body)")
             return "[lesson block skipped - empty]"
-        if len(lessons) >= MAX_LESSONS_PER_SESSION:
+        if len(lessons) >= limit:
             notices.append(
                 f"#FALLBACK lesson block refused (cap {MAX_LESSONS_PER_SESSION}/session)"
             )
-            return f"[lesson refused - at most {MAX_LESSONS_PER_SESSION} per session]"
+            return (
+                f"[lesson refused, not kept - at most {MAX_LESSONS_PER_SESSION} per session: "
+                f'"{body}"]'
+            )
         lessons.append(body)
         gist = " ".join(body.split())[:80]
         return f'[learned: "{gist}"]'

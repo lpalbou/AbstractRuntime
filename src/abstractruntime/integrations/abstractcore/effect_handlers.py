@@ -1368,6 +1368,43 @@ def _streamed_without_usage_looks_aborted(result: Dict[str, Any]) -> bool:
     )
 
 
+def _note_speculation_degraded(result: Any, *, provider: Any, requested: Any) -> None:
+    """Round 4 (operator 2026-11-08, "fallback to MTP=off if MTP was selected by
+    mistake"): a default-sourced native_mtp request that the provider cannot
+    honour is degraded by Core itself — generated without speculation, with
+    `metadata.speculation.applied == False` on the response — never failed
+    (six Assistant runs died instantly on a stored native_mtp default applied
+    to a remote endpoint model). The runtime's part is the ledger: ONE notice
+    on the LLM_CALL result, so the replay view can say why the call ran
+    without acceleration. A response without the key adds nothing; an
+    exception still propagates as before (no retry here)."""
+    if not isinstance(result, dict):
+        return
+    meta = result.get("metadata")
+    spec = meta.get("speculation") if isinstance(meta, dict) else None
+    if not isinstance(spec, dict) or spec.get("applied") is not False:
+        return
+    mode = str(
+        spec.get("mode")
+        or (requested.get("mode") if isinstance(requested, dict) else "")
+        or "native_mtp"
+    )
+    who = str(provider or "").strip()
+    notice = (
+        f"speculation requested ({mode}) but the {who + ' ' if who else ''}provider has no native MTP adapter; "
+        "generated without it"
+    )
+    reason = spec.get("reason")
+    if isinstance(reason, str) and reason.strip():
+        notice += f" (reason: {reason.strip()})"
+    notices = result.get("notices")
+    if not isinstance(notices, list):
+        notices = []
+    if notice not in notices:
+        notices.append(notice)
+    result["notices"] = notices
+
+
 def make_llm_call_handler(*, llm: AbstractCoreLLMClient, artifact_store: Optional[ArtifactStore] = None) -> EffectHandler:
     def _handler(run: RunState, effect: Effect, default_next_node: Optional[str]) -> EffectOutcome:
         payload = dict(effect.payload or {})
@@ -2452,6 +2489,11 @@ def make_llm_call_handler(*, llm: AbstractCoreLLMClient, artifact_store: Optiona
                         run.output["messages"] = msgs_any
             except Exception:
                 pass
+            _note_speculation_degraded(
+                result,
+                provider=provider or params.get("provider"),
+                requested=params_for_call.get("speculation"),
+            )
             return EffectOutcome.completed(result=result)
         except Exception as e:
             if runtime_cancel_event is not None and runtime_cancel_event.is_set():

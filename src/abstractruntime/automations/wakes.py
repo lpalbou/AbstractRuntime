@@ -220,9 +220,10 @@ def plan_schedule_run(run: Any, payload: Mapping[str, Any], *, now: str, run_sto
         "dropped_tools": dropped,
         "when": copy.deepcopy(req["when"]),
         # Backlog 1045 follow-up: every completed occurrence becomes an attention item (default: notes).
+        # The note is stored whole as the item's title and body (ADR 0054); a client folds for its screen.
         "notify": bool(req["notify"]),
-        "notify_title": (req["note"] or title)[:120],
-        "notify_body": (req["note"] or "")[:2000],
+        "notify_title": req["note"] or title,
+        "notify_body": req["note"] or "",
     }
     return plan
 

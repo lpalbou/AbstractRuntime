@@ -25,7 +25,6 @@ from ..core.models import RunState, RunStatus, WaitReason
 from ..core.vars import is_paused_vars
 from ..storage.artifacts import get_artifact_id, is_artifact_ref
 from .ledger import automation_records_newest_first
-from .models import NOTIFY_BODY_MAX, NOTIFY_DEFAULT_BODY_MAX, NOTIFY_TITLE_MAX
 
 ATTENTION_CURSOR_PREFIX = "att1:"
 
@@ -135,9 +134,12 @@ def normalize_occurrence_output(child: RunState, *, artifact_store: Any = None, 
 
 
 def notify_payload(raw: Any, *, title: str, answer: str) -> Optional[Dict[str, str]]:
-    """The normalized `{title, body}` for a notify value, or None (quiet)."""
+    """The normalized `{title, body}` for a notify value, or None (quiet).
+
+    Title and body are whole (ADR 0054, 2026-11-08): the item is stored and served as it is; a client
+    folds it for its screen. They used to be cut at 120 / 280 (default body) / 2,000 characters here."""
     if raw is True:
-        return {"title": title[:NOTIFY_TITLE_MAX], "body": (answer or "")[:NOTIFY_DEFAULT_BODY_MAX]}
+        return {"title": title, "body": answer or ""}
     if isinstance(raw, Mapping):
         t = raw.get("title")
         b = raw.get("body")
@@ -145,7 +147,7 @@ def notify_payload(raw: Any, *, title: str, answer: str) -> Optional[Dict[str, s
         b = b if isinstance(b, str) else ""
         if not t and not b.strip():
             return None
-        return {"title": (t or title)[:NOTIFY_TITLE_MAX], "body": b[:NOTIFY_BODY_MAX]}
+        return {"title": t or title, "body": b}
     return None
 
 

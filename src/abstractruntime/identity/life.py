@@ -963,7 +963,11 @@ def standing_state_note(home_dir: Optional[Path], *, rotation_key: Optional[int]
             )
         gist = str(q.get("gist") or "").strip()
         if not gist:
-            gist = str(q.get("text") or "").strip().splitlines()[0][:120]
+            # The cue is a prompt, so it may fold - visibly (ADR 0053 rule 2,
+            # ADR 0054): drive_gist's first-line, DRIVE_GIST_MAX_WORDS rule
+            # with its " …", never a silent 120-character cut mid-word. The
+            # reread command beside it opens the whole entry.
+            gist = drive_gist(q.get("text"))
         label = f'"{gist}"' if gist else "one you kept without a gist"
         kind_word = "a problem that stands: " if str(q.get("kind")) == "problem" else ""
         return (

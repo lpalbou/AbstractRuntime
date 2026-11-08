@@ -352,9 +352,10 @@ def parse_interest_blocks(
         interests.append(body)
         # TITLED marker (maintainer directive 2026-07-15 c2468): the marker
         # carries the interest's own words so the record it lands in is
-        # readable later, never a bare "[kept an interest]".
-        gist = " ".join(body.split())[:80]
-        return f'[kept interest: "{gist}"]'
+        # readable later, never a bare "[kept an interest]". WHOLE words
+        # (ADR 0054, 2026-11-08): the marked reply is stored as the turn's
+        # verbatim, so an 80-character cut here was a stored cut.
+        return f'[kept interest: "{body}"]'
 
     marked = _INTEREST_FENCE_RE.sub(_sub, reply)
     return marked.strip(), interests, notices
@@ -546,8 +547,9 @@ def parse_topic_blocks(reply: str) -> Tuple[str, List[str], List[str]]:
                 continue
             topics.append(words)
             # TITLED marker (the c2468 rule applied here): the marker carries
-            # the subject's own words so the record stays readable later.
-            markers.append(f'[topic: "{words[:80]}"]')
+            # the subject's own words, whole, so the record stays readable
+            # later (ADR 0054: the marked reply is stored).
+            markers.append(f'[topic: "{words}"]')
         if not markers:
             return "[topic block skipped - no usable subject]"
         return " ".join(markers)
@@ -586,8 +588,9 @@ def parse_lesson_blocks(
                 f'"{body}"]'
             )
         lessons.append(body)
-        gist = " ".join(body.split())[:80]
-        return f'[learned: "{gist}"]'
+        # The marker carries the lesson whole (ADR 0054): the marked reply
+        # is the stored verbatim of the turn.
+        return f'[learned: "{body}"]'
 
     marked = _LESSON_FENCE_RE.sub(_sub, reply)
     return marked.strip(), lessons, notices

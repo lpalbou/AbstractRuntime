@@ -41,9 +41,9 @@ CONTROLLER_WORKFLOW_ID = f"{CONTROLLER_BUNDLE_REF}:{CONTROLLER_FLOW_ID}"
 AUTOMATION_NAMESPACE = uuid.UUID("4a0d5a4e-6f1c-5b8e-9a53-2f7c1e0b9d61")
 
 TITLE_MAX = 120
-NOTIFY_TITLE_MAX = 120
-NOTIFY_BODY_MAX = 2000
-NOTIFY_DEFAULT_BODY_MAX = 280
+# `notify.title` and `notify.body` carry no length bound (ADR 0054, 2026-11-08): an attention item is stored
+# whole and each client folds it for its screen. Until then the definition cut them silently at 120 and 2,000
+# characters, and the default body (the occurrence's answer) at 280.
 
 DEFAULT_RETRY = {"max_attempts": 3, "backoff": {"initial": "30s", "factor": 2, "max": "10m"}}
 TOOL_APPROVAL_MODES = ("auto", "ask")
@@ -357,12 +357,12 @@ def validate_notify(value: Any) -> Dict[str, Any]:
             raise _invalid("notify.always must be true or false", "notify.always")
         if notify["always"]:
             result["always"] = True
-    for key, limit in (("title", NOTIFY_TITLE_MAX), ("body", NOTIFY_BODY_MAX)):
+    for key in ("title", "body"):
         if notify.get(key) is not None:
             if not isinstance(notify[key], str):
                 raise _invalid(f"notify.{key} must be text", f"notify.{key}")
             if notify[key].strip():
-                result[key] = notify[key].strip()[:limit]
+                result[key] = notify[key].strip()  # whole, never cut (ADR 0054)
     if "recipients" in notify:
         recipients = validate_email_allowed_recipients(notify["recipients"], field="notify.recipients")
         if not recipients:

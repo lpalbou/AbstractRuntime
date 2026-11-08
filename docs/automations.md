@@ -844,10 +844,10 @@ Waits on a person are live facts read from run state; they are not attention ite
 
 Automations are **quiet by default**. An occurrence creates an attention item only when:
 
-- its output carries `notify: true`: the item's title is the automation title and its body is the answer, cut to 280
-  characters;
-- its output carries `notify: {title, body}`: title at most 120 characters (the automation title when empty), body at
-  most 2,000 characters. A missing, `false` or empty `notify` stays quiet unless result email is enabled;
+- its output carries `notify: true`: the item's title is the automation title and its body is the whole answer;
+- its output carries `notify: {title, body}`: the title (the automation title when empty) and the body are stored
+  whole, never cut (root ADR 0054; a client folds them for its screen). A missing, `false` or empty `notify` stays
+  quiet unless result email is enabled;
 - it **failed after its last retry**: the title is "<automation title> failed" and the body is the error. A failure
   that a retry fixed is quiet, and so is a cancelled occurrence.
 

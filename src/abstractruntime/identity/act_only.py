@@ -180,7 +180,12 @@ def capture_diary_elections(
             # vars + pending_reflection.json and rides the reflection
             # prompt graph-ward) silently re-opens the private-words leak.
             # test_private_diary_meta_carries_no_words pins it.
-            meta["gist"] = str(e.gist or e.text or "").splitlines()[0][:120]
+            # ADR 0054 (2026-11-08): this key rests in run vars and the visit
+            # sheet, so it is STORED - his elected gist whole, else the first
+            # non-empty LINE of the entry whole (a line is structure; the old
+            # 120-character count was a cut). The book holds the whole text.
+            source = str(e.gist or "").strip() or str(e.text or "")
+            meta["gist"] = next((ln.strip() for ln in source.splitlines() if ln.strip()), "")
         entries.append(meta)
     return marked, entries, warnings
 

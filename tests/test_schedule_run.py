@@ -252,3 +252,24 @@ def test_a_note_wake_reaches_the_person_a_task_wake_stays_quiet(env):
     assert item["body"].startswith("echo:") and "call the dentist" in item["body"]
     _fire(runtime, clock, task_state.output["wake"]["automation_id"], task_state.output["wake"]["at"])
     assert list_attention(runtime.ledger_store, task_state.output["wake"]["automation_id"])["items"] == []
+
+
+def test_a_long_note_is_stored_whole_in_the_wake_its_definition_and_the_attention_item(env):
+    """Root ADR 0054: the note is the wake's notify title and body, the definition's notify and the attention
+    item's title and body, WHOLE - it used to be cut at 120 (title) / 2,000 (body) characters on the way to the
+    record. The automation `title` keeps its own validated bound; the note itself never did."""
+    from abstractruntime.automations import list_attention
+
+    runtime, host, clock = env
+    note = " ".join(f"word{i:03d}" for i in range(300))
+    assert len(note) > 2000
+    _, state = _call(runtime, {"after_s": 60, "note": note})
+    out = state.output["wake"]
+    plan = host.plans[-1]
+    assert plan["notify_title"] == note and plan["notify_body"] == note
+    definition = definition_of(runtime.run_store.load(out["automation_id"]))
+    assert definition["notify"]["title"] == note and definition["notify"]["body"] == note
+    _fire(runtime, clock, out["automation_id"], out["at"])
+    (item,) = list_attention(runtime.ledger_store, out["automation_id"])["items"]
+    assert item["kind"] == "notify" and item["title"] == note
+    assert item["body"].startswith("echo:") and note in item["body"], "the answer is the body, whole"

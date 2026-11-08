@@ -179,7 +179,11 @@ def mechanical_digest_v2(
 
     Both sides are digested with the reply getting the larger share (the
     entity's words carry its thinking); the total aims at
-    DIGEST_TOKEN_TARGET and never exceeds it by construction.
+    DIGEST_TOKEN_TARGET and the sentence selection never exceeds it. The
+    one case past it: a side where NO whole sentence fits its budget (a
+    long run-on sentence, prose without terminal punctuation) is carried
+    whole, never cut to a character count (ADR 0054: what is stored is the
+    verbatim; a reader that needs a short form folds it visibly).
     """
     user_budget = int(DIGEST_TOKEN_TARGET * 0.4)
     reply_budget = DIGEST_TOKEN_TARGET - user_budget
@@ -202,10 +206,14 @@ def mechanical_digest_v2(
 
     user_part = " ".join(_select_sentences(" ".join((user_text or "").split()), user_budget))
     reply_part = " ".join(_select_sentences(" ".join((spoken_reply or "").split()), reply_budget))
+    # ADR 0054 (2026-11-08): no whole sentence fit the side's budget, so the
+    # side's whole normalized text is the digest - never its first 200
+    # characters. The digest is STORED on the record; what a screen shows of
+    # it is that app's fold, with a visible reveal.
     if not user_part and user_text:
-        user_part = " ".join((user_text or "").split())[:200]
+        user_part = " ".join((user_text or "").split())
     if not reply_part and spoken_reply:
-        reply_part = " ".join((spoken_reply or "").split())[:200]
+        reply_part = " ".join((spoken_reply or "").split())
 
     digest = f"{speaker}: {user_part} {name}: {reply_part}".strip()
 

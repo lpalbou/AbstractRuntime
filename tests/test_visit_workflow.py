@@ -574,7 +574,8 @@ def test_image_attachment_rides_the_turn_and_the_record_keeps_the_reference(tmp_
         assert turn["text"] == "what do you see?"
         rendered = turn["rendered_user"]
         assert f"(attached: shared/Screenshot.png — a PNG image, {records[0]['bytes']:,} bytes; " \
-               "shown to you with this message; read_file re-opens it)" in rendered
+               "attached to this message as an image; read_file re-opens it)" in rendered
+        assert "shown to you" not in rendered
         assert "(attached: shared/notes.txt — a text file, 12 bytes; read_file opens it)" in rendered
         assert rendered.endswith("what do you see?")
         sent_user = [m for m in llm.calls[0]["messages"] if m.get("role") == "user"][-1]
@@ -658,7 +659,7 @@ def test_image_only_turn_runs_and_an_empty_turn_still_parks(tmp_path: Path) -> N
         assert turn["text"] == ""
         attached_line = (
             f"(attached: shared/Screenshot.png — a PNG image, {records[0]['bytes']:,} bytes; "
-            "shown to you with this message; read_file re-opens it)"
+            "attached to this message as an image; read_file re-opens it)"
         )
         rendered = turn["rendered_user"]
         assert rendered.startswith("(present with you: person:albou)")
@@ -680,6 +681,44 @@ def test_image_only_turn_runs_and_an_empty_turn_still_parks(tmp_path: Path) -> N
                     if isinstance(a.attributes, dict) and a.attributes.get("record_kind") == "episode"]
         assert len(episodes) == 1
         assert "shared/Screenshot.png" in json.dumps(episodes[0])
+    finally:
+        ert.close()
+
+
+def test_malformed_attachment_paths_never_crash_the_turn(tmp_path: Path) -> None:
+    """Review 2026-11-08 finding 1: an embedded NUL (ValueError), a 300-char
+    name (OSError ENAMETOOLONG at stat) and a symlink loop (RuntimeError on
+    Python < 3.13) used to raise out of ROUTE — the run saved mid-turn and
+    every later turn re-raised. Now each is one honest line, no host path in
+    the prompt, and the turn runs."""
+    import os
+
+    home_dir = _make_home(tmp_path, slug="loopling")
+    shared = home_dir / "workspace" / "shared"
+    shared.mkdir(parents=True, exist_ok=True)
+    os.symlink("loop_b", shared / "loop_a")
+    os.symlink("loop_a", shared / "loop_b")
+    bad = ["shared/pic.png\x00.txt", "shared/" + "a" * 300, "shared/loop_a"]
+    llm = _ScriptedLLMHandler(["None of those opened."])
+    ert, wf = _open(home_dir, llm)
+    try:
+        run_id = ert.runtime.start(workflow=wf, vars={}, session_id="visit-1")
+        ert.runtime.tick(workflow=wf, run_id=run_id, max_steps=50)
+        state = ert.runtime.resume(
+            workflow=wf, run_id=run_id, wait_key=VISITOR_WAIT_KEY,
+            payload={"text": "and these?", "speaker": "person:albou",
+                     "attachments": [{"path": p} for p in bad]},
+            max_steps=100,
+        )
+        assert state.status == RunStatus.WAITING, state.error
+        assert int(state.vars["_visit"]["turn_n"]) == 1
+        assert "media" not in llm.calls[0]
+        turn = state.vars["_turn"]
+        assert turn["attachment_media"] == []
+        rendered = turn["rendered_user"]
+        assert rendered.count("could not be opened: not a readable file path)") == 3, rendered
+        assert str(home_dir) not in rendered, "no host path echoed into the prompt"
+        assert rendered.endswith("and these?")
     finally:
         ert.close()
 

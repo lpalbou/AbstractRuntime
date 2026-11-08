@@ -210,8 +210,15 @@ def _attachment_facts(home_dir: Any, records: List[Dict[str, Any]]) -> List[Dict
             size = int(path.stat().st_size)
             with open(path, "rb") as fh:
                 head = fh.read(8000)
-        except (OSError, ValueError) as exc:  # PermissionError/FileNotFoundError are OSErrors
-            fact["problem"] = str(exc)
+        except (PermissionError, FileNotFoundError) as exc:
+            fact["problem"] = str(exc)  # the entity's own workspace words
+            facts.append(fact)
+            continue
+        except (OSError, ValueError, RuntimeError):
+            # An embedded NUL (ValueError), a name too long (OSError), a
+            # symlink loop (RuntimeError before Python 3.13): never a crash
+            # out of ROUTE, never a host path echoed into the prompt.
+            fact["problem"] = "not a readable file path"
             facts.append(fact)
             continue
         fact["bytes"] = size
@@ -238,9 +245,11 @@ def _attachment_lines(facts: List[Dict[str, Any]]) -> List[str]:
         if f.get("problem"):
             lines.append(f"(attached: {f['path']} — could not be opened: {f['problem']})")
         elif f.get("image"):
+            # The fact of the call (the host attaches it), not a claim about
+            # perception — a text-only mind may be given nothing by its provider.
             lines.append(
                 f"(attached: {f['path']} — {f['label']}, {int(f['bytes']):,} bytes; "
-                "shown to you with this message; read_file re-opens it)"
+                "attached to this message as an image; read_file re-opens it)"
             )
         else:
             lines.append(f"(attached: {f['path']} — {f['label']}, {int(f['bytes']):,} bytes; read_file opens it)")

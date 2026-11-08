@@ -6,9 +6,12 @@
   attached, with a workspace-relative `path` (and whatever the door recorded: `bytes`, `sha256`, `content_type`).
   Attachments are never parsed from the visitor's words. The runtime keeps the records whole on the turn
   (`_turn.attachments`), adds one honest line per file to the rendered message — for an image
-  `(attached: shared/x.png — a PNG image, 1,204,113 bytes; shown to you with this message; read_file re-opens it)`,
+  `(attached: shared/x.png — a PNG image, 1,204,113 bytes; attached to this message as an image; read_file re-opens it)`,
   for anything else `(attached: shared/notes.pdf — a PDF document, 88,201 bytes; read_file opens it)`, for a file that
-  cannot be opened `(attached: … — could not be opened: <why>)` — while `turn.text` keeps the human's raw words. This
+  cannot be opened `(attached: … — could not be opened: <why>)` (a path with an embedded NUL, a name too long or a
+  symlink loop reads "not a readable file path"; it never crashes the turn and never echoes a host path) — while
+  `turn.text` keeps the human's raw words. The line states the fact of the call (the host attaches the file), not a
+  claim about perception: whether the mind can see it is the provider's business. This
   turn's images (PNG, JPEG, GIF, WEBP by magic, within the workspace cap) are shown to the model on every call of the
   turn: on the react arm as `context.attachments` (absolute paths, cleared at HARVEST, so the next turn does not re-send
   them — a re-look is `read_file`), on the home-direct arm as the LLM_CALL payload's `media`. The appended user message
@@ -27,9 +30,14 @@
 
 ### Changed
 
-- **`WorkspaceRoot.read_file` on an image shows it instead of refusing it.** The result is a label,
-  `--- shared/x.png (1,204,113 bytes) ---` then `[#IMAGE: a PNG image; it is attached to your next look as an image]`;
-  no image byte ever enters the prompt as text (the 2026-08-01 wall stands). Other binaries are still refused with the
-  `#BINARY` notice, which no longer claims "You have no tool that can view images or other binary content"; it says
-  what is true: images are shown when read, other binary content is not readable here. WEBP (`RIFF….WEBP`) is now
-  labelled "a WEBP image" instead of "a RIFF media container".
+- **`WorkspaceRoot.read_file` on an image returns a label instead of a refusal, and says the fact of its lane.** No
+  image byte ever enters the prompt as text (the 2026-08-01 wall stands). On a lane whose host folds
+  `tool_result_media` into the next model call (`execute_tool_elections(..., results_carry_media=True)` /
+  `read_file(..., carry_media=True)`; the gateway's visit tool handler) the result is
+  `--- shared/x.png (1,204,113 bytes) ---` then `[#IMAGE: a PNG image; it is attached to your next model call as an
+  image]`. On every other lane (the in-process chat driver, the effect lane) it is `[#IMAGE: a PNG image - stored intact
+  at this path; this lane cannot attach images to your model calls, so it is not viewable here. …]` — never a promised
+  look that no call carries. Other binaries keep the `#BINARY` notice, which no longer claims "You have no tool that can
+  view images or other binary content": on a carrying lane it says images are attached as images when read and other
+  binary content is not readable here; elsewhere that binary content, images included, is not viewable in this lane.
+  WEBP (`RIFF….WEBP`) is now labelled "a WEBP image" instead of "a RIFF media container".

@@ -36,6 +36,7 @@ from abstractruntime.identity.tools import (
     WORKSPACE_TEXT_READ_CAP_CHARS,
     ToolElection,
     WorkspaceRoot,
+    execute_tool_elections,
     sniff_binary,
     sniff_image,
     tool_result_media,
@@ -84,13 +85,15 @@ def test_png_read_is_shown_as_an_image_never_decoded(tmp_path: Path) -> None:
     data = _png_bytes()
     (tmp_path / "workspace" / "shared").mkdir(parents=True)
     (tmp_path / "workspace" / "shared" / "Screenshot.png").write_bytes(data)
-    out = ws.read_file("shared/Screenshot.png")
+    out = ws.read_file("shared/Screenshot.png", carry_media=True)
     assert "#IMAGE" in out, "a labeled image result, never decoded bytes"
     assert "#BINARY" not in out, "an image is not refused"
     assert "PNG image" in out, "detected type reaches the entity"
     assert f"{len(data):,} bytes" in out, "size reaches the entity"
     assert "shared/Screenshot.png" in out, "name reaches the entity"
-    assert "attached to your next look as an image" in out
+    # The fact about the call, never a claim about perception.
+    assert "attached to your next model call as an image" in out
+    assert "shown to you" not in out and "next look" not in out
     # The whole point still holds: no byte noise. The label is metadata-sized
     # and carries not one replacement character of decoded image data.
     assert "�" not in out
@@ -128,13 +131,45 @@ def test_zip_refused_with_honest_capability_wording(tmp_path: Path) -> None:
     true: images are shown when read, other binary content is not readable."""
     ws = WorkspaceRoot(tmp_path)
     (tmp_path / "workspace" / "bundle.zip").write_bytes(b"PK\x03\x04" + b"\x00" * 64 + bytes(range(256)))
-    out = ws.read_file("bundle.zip")
+    out = ws.read_file("bundle.zip", carry_media=True)
     assert "#BINARY" in out and "ZIP-family archive" in out
     assert "stored intact" in out, "the file itself is not harmed"
     assert "no tool that can view images" not in out
-    assert "Images (PNG, JPEG, GIF, WEBP) are shown to you when you read them" in out
+    assert "Images (PNG, JPEG, GIF, WEBP) are attached as images when you read them" in out
     assert "other binary content is not readable here" in out
     assert tool_result_media(ToolElection(name="read_file", body="bundle.zip"), ws) is None
+    # A lane that cannot attach says so, images included — no false promise.
+    out = ws.read_file("bundle.zip")
+    assert "#BINARY" in out and "Binary content, images included, is not viewable in this lane" in out
+    assert "attached as images" not in out
+
+
+def test_lanes_that_cannot_attach_never_promise_a_look(tmp_path: Path) -> None:
+    """Review 2026-11-08 finding 2: only a host that folds `tool_result_media`
+    into the next model call (the gateway's TOOL_CALLS handler) may say an
+    image is attached. The in-process driver and effect lanes run
+    `execute_tool_elections` without `results_carry_media`, so there read_file
+    on an image says the fact of that lane: stored, not viewable here. The
+    declaration itself (`tool_result_media`) is lane-independent — a host
+    that asks for it is, by asking, a host that carries it."""
+    ws = WorkspaceRoot(tmp_path)
+    (tmp_path / "workspace" / "pic.png").write_bytes(_png_bytes())
+
+    def _run(**kw) -> str:
+        election = ToolElection(name="read_file", body="pic.png")
+        execute_tool_elections([election], diary_store=None, diary_read_effect=lambda _id: {}, workspace=ws, **kw)
+        return str(election.result)
+
+    plain = _run()
+    assert "#IMAGE" in plain and "a PNG image" in plain
+    assert "this lane cannot attach images to your model calls, so it is not viewable here" in plain
+    assert "attached to your next model call" not in plain
+    carried = _run(results_carry_media=True)
+    assert "attached to your next model call as an image" in carried
+    assert "not viewable" not in carried
+    assert tool_result_media(ToolElection(name="read_file", body="pic.png"), ws) == [
+        str((tmp_path / "workspace" / "pic.png").resolve())
+    ]
 
 
 def test_tool_result_media_declares_only_what_the_read_served(tmp_path: Path, monkeypatch) -> None:

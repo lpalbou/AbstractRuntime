@@ -494,7 +494,12 @@ class WorkspaceRoot:
         rel = (relative or "").strip() or "."
         return rel
 
-    def read_file(self, relative: str) -> str:
+    def read_file(self, relative: str, *, carry_media: bool = False) -> str:
+        """One file's text. `carry_media` is the LANE's fact (set by the
+        executor from `ToolExecutionContext.results_carry_media`): True when
+        the host folds `tool_result_media` into the next model call, so an
+        image's label may say it is attached; False says what is true
+        there instead — stored, not viewable in this lane."""
         path, _writable, _mount = self._route(relative)
         if not path.is_file():
             raise FileNotFoundError(f"no file at {relative!r} in your workspace")
@@ -515,19 +520,34 @@ class WorkspaceRoot:
         image = sniff_image(data)
         if image is not None:
             label, _content_type = image
+            if carry_media:
+                # A fact about the call, not a claim about perception: the
+                # host attaches the file; whether the mind can see it is the
+                # provider's business (a text-only mind skips it in core).
+                return (
+                    f"--- {self._display(relative)} ({len(data):,} bytes) ---\n"
+                    f"[#IMAGE: {label}; it is attached to your next model call as an image]"
+                )
             return (
                 f"--- {self._display(relative)} ({len(data):,} bytes) ---\n"
-                f"[#IMAGE: {label}; it is attached to your next look as an image]"
+                f"[#IMAGE: {label} - stored intact at this path; this lane cannot attach "
+                "images to your model calls, so it is not viewable here. If you need what "
+                "is inside, ask the person with you to describe it.]"
             )
         binary_label = sniff_binary(data)
         if binary_label is not None:
+            images_here = (
+                "Images (PNG, JPEG, GIF, WEBP) are attached as images when you read them; "
+                "other binary content is not readable here"
+                if carry_media
+                else "Binary content, images included, is not viewable in this lane"
+            )
             return (
                 f"--- {self._display(relative)} ({len(data)} bytes) ---\n"
                 f"[#BINARY: this file is {binary_label} - binary bytes, not readable "
                 "text. Decoding it as text would fill your working context with noise, "
                 "so none of its bytes were loaded. The file itself is stored intact at "
-                "this path in your workspace. Images (PNG, JPEG, GIF, WEBP) are shown to "
-                "you when you read them; other binary content is not readable here - if "
+                f"this path in your workspace. {images_here} - if "
                 "you need what is inside, say so honestly and ask the person with you to "
                 "describe it or provide a text version.]"
             )
@@ -1038,6 +1058,12 @@ class ToolExecutionContext:
     # (effect results = ledger truth); the header/private-trailer prose
     # must match where the words actually live.
     results_rest_durably: bool = False
+    # Lane honesty, sight edition (review 2026-11-08): True ONLY on lanes
+    # whose host folds `tool_result_media` into the next model call (the
+    # gateway's TOOL_CALLS handler). Elsewhere read_file on an image says
+    # the file is stored and not viewable in this lane — never a promised
+    # look that no call carries.
+    results_carry_media: bool = False
     notices: List[str] = field(default_factory=list)
 
 
@@ -1323,7 +1349,7 @@ def _exec_read_file(e: ToolElection, ctx: ToolExecutionContext) -> str:
     ws = _workspace_or_notice(e, ctx)
     if ws is None:
         return f"(the {e.name} tool is not enabled in this session)"
-    return ws.read_file(_read_file_target(e))
+    return ws.read_file(_read_file_target(e), carry_media=bool(ctx.results_carry_media))
 
 
 def _read_file_media(e: ToolElection, ctx: ToolExecutionContext) -> Optional[List[str]]:
@@ -1616,6 +1642,7 @@ def execute_tool_elections(
     recent_memories_fn: Optional[Callable[[str], str]] = None,
     feelings_about_fn: Optional[Callable[[str], str]] = None,
     results_rest_durably: bool = False,
+    results_carry_media: bool = False,
 ) -> Tuple[str, List[str]]:
     """Run elected tools; return (results_message, notices).
 
@@ -1636,6 +1663,7 @@ def execute_tool_elections(
         recent_memories_fn=recent_memories_fn,
         feelings_about_fn=feelings_about_fn,
         results_rest_durably=results_rest_durably,
+        results_carry_media=results_carry_media,
     )
     sections: List[str] = []
     for e in elections:

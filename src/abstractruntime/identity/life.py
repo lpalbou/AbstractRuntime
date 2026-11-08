@@ -3386,6 +3386,27 @@ class LifeLoop:
                     try:
                         try:
                             reply, turn_report = session.turn(cue)
+                            # THE TICK'S LOOK-BACK (operator 2026-11-08): at
+                            # the end of every personal-time tick, one model
+                            # call looks back over what the tick formed and
+                            # offers feelings, interests, lessons, questions
+                            # and problems through the close's parsers. It is
+                            # a home writer, so it runs inside this tick's
+                            # lease window. Skipped on the tick that elects
+                            # rest: the day's close runs the look-back over
+                            # the whole day right after. Its failure never
+                            # fails the tick (the turn already happened).
+                            if (
+                                getattr(session, "phase", "") == PHASE_PERSONAL
+                                and parse_rest_block(reply)[1] is None
+                            ):
+                                try:
+                                    session.tick_lookback()
+                                except Exception as lookback_err:  # noqa: BLE001
+                                    self.out(
+                                        f"#FALLBACK the tick's look-back failed ({lookback_err}); "
+                                        "the tick stands"
+                                    )
                         finally:
                             if tick_lease is not None:
                                 tick_lease.release()  # the tick's writer window ends HERE

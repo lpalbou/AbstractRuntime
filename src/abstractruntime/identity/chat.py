@@ -1160,6 +1160,11 @@ class ChatSession:
         # (build 2, iteration-2 synthesis: resolve+learn should compound;
         # the CUE asks, never auto-forms — sole authorship).
         self.session_resolutions: List[Tuple[str, str, str]] = []
+        # Tick look-backs (operator 2026-11-08): each covers the sheet and
+        # resolutions since the previous one.
+        self._lookback_sheet_mark = 0
+        self._lookback_resolution_mark = 0
+        self._tick_lookbacks = 0
         self.reflection_diary_entries = 0
         self.feelings_applied = 0
         # F2 commit-exclusion (drives build): graph ids the DAY-OPEN CUE
@@ -2835,15 +2840,11 @@ class ChatSession:
         """
         if not self.session_sheet:
             return None
-        # W1 (metronome ruling): OWN-TIME day closes are fully MECHANICAL —
-        # zero LLM, no questionnaire. Feelings/lessons/interests were
-        # electable in the moment all day (the mid-turn lanes); the close
-        # just records that the day happened (floored digest over the
-        # session sheet — the same mechanical narrative the salvage floor
-        # uses). Visit/work closes keep the one shrunk look-back (a social
-        # act with a human, not a questionnaire).
-        if self.phase == "personal":
-            return self._mechanical_close()
+        # Every close runs the model look-back - visits, work days AND
+        # own-time days (operator 2026-11-08). The 2026-07-21 zero-LLM
+        # own-time close recorded that the day happened and asked nothing;
+        # with the offers moved to a mid-turn lane, interests, lessons,
+        # questions and problems stopped forming (0 records in 17 homes).
         result = self._reflect_over(
             # SESSION-SCOPED turn_id (whole-package adversary P1, 2026-07-13,
             # live-verified silent loss: APPRAISE event-ids derive from
@@ -2856,7 +2857,7 @@ class ChatSession:
             turn_id=f"t-reflect-{self.session_id}",
         )
         if result is not None:
-            self.reflection_diary_entries = result["diary_entries"]
+            self.reflection_diary_entries += result["diary_entries"]
             self.feelings_applied += len(result["feelings_applied"])
             # Clean look-back: the write-ahead marker retires (the session
             # is reflected; nothing pends).
@@ -3003,61 +3004,39 @@ class ChatSession:
                 self.out(f"#FALLBACK card authoring for {target} refused: {e}")
         return authored
 
-    def _mechanical_close(self) -> Dict[str, Any]:
-        """The zero-LLM own-time close (W1): form the session summary from
-        the floored mechanical narrative — no prompt, no elections, no
-        spend. Everything electable was electable mid-turn."""
-        session_id = self.session_id
-        turn_id = f"t-reflect-{session_id}"
-        sheet = list(self.session_sheet)
-        refl_digest, _floored = floored_reflection_digest("", sheet)
-        notices: List[str] = ["mechanical close (own time): zero-LLM summary"]
-        session_record_id = None
-        try:
-            formed = self._effect(
-                EffectType.MEMORY_FORM,
-                {
-                    "records": [{
-                        "kind": "summary",
-                        "title": f"session reflection: {session_id}",
-                        "digest": refl_digest,
-                        "keywords": [],
-                        "verbatim": "",
-                        "edges": [["summarizes", rid] for rid, _ in sheet if rid],
-                        "attributes": {
-                            "participants": list(self.participants),
-                            "session_id": session_id,
-                            "phase": self.phase,
-                            "digest_method": "mechanical-floor-v1",
-                        },
-                        "provenance": {"source": "entity-mechanical-close-v1"},
-                    }],
-                    "scope": "life",
-                    "owner_id": self.home.entity_id,
-                    "turn_id": turn_id,
-                },
-            )
-            session_record_id = next(iter(formed.get("record_ids", [])), None)
-            notices.extend(formed.get("warnings", []))
-        except RuntimeError as exc:
-            notices.append(f"#FALLBACK mechanical close failed to form the summary: {exc}")
-        self._clear_pending_marker()
-        for n in notices:
-            self.out(f"  ({n})")
-        return {
-            "reply": "",
-            "feelings_applied": [],
-            "interests": [],
-            "lessons": [],
-            "topics": [],
-            "diary_entries": 0,
-            "session_record_id": session_record_id,
-            # P2-7 (pathway adversary): the zero-LLM close cannot run the
-            # resolution->lesson bridge - the resolutions ride OUT so the
-            # loop's next day-open cue can offer the bridge there.
-            "session_resolutions": list(self.session_resolutions),
-            "notices": notices,
-        }
+    def tick_lookback(self) -> Optional[Dict[str, Any]]:
+        """The look-back at the end of ONE personal-time tick (operator
+        2026-11-08: "at every tick in personal time, the same thing should
+        happen"). One model call over the records this tick formed (the
+        session sheet since the previous tick's look-back), the same prompt
+        offers and the same parsers as the close. Returns None (and spends
+        nothing) when the tick formed no records.
+
+        The write-ahead marker is NOT cleared: the day's close still owes
+        its look-back over the whole day. Feelings share the session cap
+        with the turns and the close."""
+        start = self._lookback_sheet_mark
+        sheet = list(self.session_sheet[start:])
+        self._lookback_sheet_mark = len(self.session_sheet)
+        res_start = self._lookback_resolution_mark
+        resolutions = list(self.session_resolutions[res_start:])
+        self._lookback_resolution_mark = len(self.session_resolutions)
+        if not sheet:
+            return None
+        self._tick_lookbacks += 1
+        n = self._tick_lookbacks
+        result = self._reflect_over(
+            sheet,
+            session_id=self.session_id,
+            turn_id=f"t-reflect-{self.session_id}-tick-{n}",
+            resolutions=resolutions,
+            moment="tick",
+            title=f"tick reflection: {self.session_id} #{n}",
+        )
+        if result is not None:
+            self.reflection_diary_entries += result["diary_entries"]
+            self.feelings_applied += len(result["feelings_applied"])
+        return result
 
     def _reflect_over(
         self,
@@ -3066,14 +3045,20 @@ class ChatSession:
         session_id: str,
         turn_id: str,
         phase: Optional[str] = None,
+        resolutions: Optional[List[Tuple[str, str, str]]] = None,
+        moment: str = "session",
+        title: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
-        """The look-back core over an explicit sheet (live session or a
-        salvaged ended one — same machinery, same honesty rules)."""
+        """The look-back core over an explicit sheet (live session, a
+        salvaged ended one, or one personal-time tick — same machinery,
+        same honesty rules). `resolutions` defaults to the whole session's."""
         if not sheet:
             return None
+        if resolutions is None:
+            resolutions = list(self.session_resolutions)
         sheet_lines = [f"{i}. {desc}" for i, (_rid, desc) in enumerate(sheet, start=1)]
         prompt = build_reflection_prompt(
-            sheet_lines, resolutions=list(self.session_resolutions)
+            sheet_lines, resolutions=list(resolutions), moment=moment
         )
 
         resp = self._generate(
@@ -3114,7 +3099,7 @@ class ChatSession:
                         # lived records (the kind vocabulary is memory's to
                         # grow; a dedicated "reflection" kind is a candidate).
                         "kind": "summary",
-                        "title": f"session reflection: {session_id}",
+                        "title": title or f"session reflection: {session_id}",
                         # MECHANICAL FLOOR (r-rt-2): never marker-only.
                         "digest": refl_digest,
                         "keywords": [],
@@ -3230,12 +3215,12 @@ class ChatSession:
         # the look-back of the session that resolved it). Multiple
         # resolutions = ambiguous = no edge (never guess which one taught).
         derived_from_id: Optional[str] = None
-        if len(self.session_resolutions) == 1 and lessons:
+        if len(resolutions) == 1 and lessons:
             try:
                 from .diary import _birth_trail
 
                 trail = _birth_trail(
-                    self.home.ms, self.home.entity_id, self.session_resolutions[0][0]
+                    self.home.ms, self.home.entity_id, resolutions[0][0]
                 )
                 derived_from_id = trail.get("projection_id") or None
             except Exception:  # noqa: BLE001 - the edge is enrichment, never a gate

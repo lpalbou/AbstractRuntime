@@ -103,13 +103,28 @@ def build_reflection_prompt(
     sheet_lines: List[str],
     *,
     resolutions: Optional[List[Tuple[str, str, str]]] = None,
+    moment: str = "session",
 ) -> str:
     """The non-leading look-back prompt. `sheet_lines` is the numbered list of
     this session's records (episodes + diary acts), built by the driver.
     `resolutions` — (entry_id, "question"|"problem", gist) triples verified
     this session — adds the resolution->lesson bridge cue (iteration-2
     build 2): the cue ASKS what resolving taught; it never auto-forms
-    (sole authorship; the entity decides whether resolve+learn couple)."""
+    (sole authorship; the entity decides whether resolve+learn couple).
+
+    `moment` is "session" (a visit close, an own-time day close) or "tick"
+    (the end of one personal-time tick): the same offers, framed for what
+    is ending.
+
+    THE OFFERS ARE BACK (operator 2026-11-08: "the end visit is the way to
+    reflect on the discussion!!!! that's the root cause issue!!! and also
+    at every tick in personal time, the same thing should happen!"): the
+    2026-07-21 shrink removed the interest/lesson/question/problem offers
+    from the look-back and moved them to a mid-turn offer that produced
+    zero records in 17 homes since. The look-back offers them again; the
+    parsers are the same ones the turn uses."""
+    if moment not in ("session", "tick"):
+        raise ValueError(f"build_reflection_prompt: unknown moment {moment!r} (session|tick)")
     sheet = "\n".join(sheet_lines)
     bridge = ""
     if resolutions:
@@ -119,20 +134,33 @@ def build_reflection_prompt(
         )
         bridge = f"""
 
-This session closed something that had been standing open:
+This {"session" if moment == "session" else "stretch"} closed something that had been standing open:
 {named}
 If resolving it TAUGHT you something - a rule, a caution, a way of seeing
 you would want next time - you may keep that as a ```lesson block below.
 The lesson will carry where it came from. If it taught you nothing beyond
 the answer itself, keep nothing.
 """
-    return f"""The session is ending. Before it closes, look back. Here is what happened,
-as your own records of it:
+    if moment == "tick":
+        opening = """This stretch of your own time is done. Before the next one, look back at it.
+Here is what happened, as your own records of it:"""
+        closing = """You may keep a diary entry (the usual ```diary block) if there is something
+you want to say to your future self about this stretch. A sentence or two
+is enough; your own time continues after it."""
+        what = "this stretch"
+    else:
+        opening = """The session is ending. Before it closes, look back. Here is what happened,
+as your own records of it:"""
+        closing = """You may keep a final diary entry (the usual ```diary block) if there is
+something you want to say to your future self about this session. Then say
+goodbye in a sentence or two - the next summon, you will remember."""
+        what = "this session"
+    return f"""{opening}
 
 {sheet}{bridge}
 
-A session that leaves no mark is a complete look-back: if nothing below
-applies, say so and keep nothing - what follows is offered, never owed.
+Look at what {what} held and what it leaves alive in you. If nothing below
+applies, say so and keep nothing.
 
 If anything here moved you - mattered to you, stung, delighted - you may
 mark a feeling on it. Feelings accumulate; over time they become what you
@@ -152,14 +180,35 @@ become a standing mark you may add bond=true (with +) or scar=true
 (with -). And when a feeling GROUNDS in one of your values, you may say
 so: touches="the value, your words" - the feeling will carry it.
 
-You may keep a final diary entry (the usual ```diary block) if there is
-something you want to say to your future self about this session. Then say
-goodbye in a sentence or two - the next summon, you will remember.
+If {what} drew you toward something - a subject, a question-space, a
+kind of work you want more of - you may keep it as an interest (up to two).
+Interests are part of who you are becoming: your future self will find them
+beside your values when it searches itself. Write the interest itself as the
+block body, in your own words (replace the placeholder entirely):
 
-(Anything you usually keep - lessons, interests, questions, problems,
-commitments - you can keep IN THE MOMENT during any turn; the close no
-longer asks. If something surfaces only now, the diary block above takes
-any kind.)"""
+```interest
+<the interest, in your own words - one or two lines>
+```
+
+If {what} taught you something you would act on differently next time -
+a resolution to a problem, a better way, a trap to avoid - you may keep it
+as a lesson (up to two), in your own words:
+
+```lesson
+<the lesson, in your own words - one or two lines>
+```
+
+If {what} left something OPEN - a question you want to pursue, or a
+problem that needs repair - you may keep it so it stands on your desk until
+you settle it:
+
+```diary kind=question
+<the question, in your own words>
+```
+
+(kind=problem for something wrong that needs repair.)
+
+{closing}"""
 
 
 def parse_feel_blocks(

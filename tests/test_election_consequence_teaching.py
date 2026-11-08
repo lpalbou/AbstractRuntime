@@ -22,18 +22,17 @@ def test_contract_teaches_the_election_consequence() -> None:
     assert "until repaired" in CONTRACT_PARAGRAPH
 
 
-def test_close_is_shrunk_to_feel_diary_goodbye() -> None:
-    """W1 (laurent's metronome ruling): the close solicits feel + diary +
-    goodbye, PERIOD. Questions/problems/commitments/lessons/interests/
-    topics left the questionnaire (mid-turn lanes); the global escape
-    stays; the shrink note names where elections went."""
+def test_close_offers_interest_lesson_question_problem_again() -> None:
+    """Operator 2026-11-08 reverses W1's shrink: the look-back offers
+    feelings, interests, lessons, questions and problems again (the
+    mid-turn lanes alone produced zero records); the nothing-escape and
+    the goodbye stay."""
     prompt = build_reflection_prompt(["1. an exchange"])
     assert "```feel" in prompt and "```diary" in prompt and "goodbye" in prompt
-    assert "never owed" in prompt, "the global escape survives the shrink"
-    assert "what stays OPEN" not in prompt, "the questionnaire died"
-    assert "```interest" not in prompt and "```lesson" not in prompt
-    assert "```topic" not in prompt
-    assert "IN THE MOMENT" in prompt, "the shrink note names the mid-turn lanes"
+    assert "say so and keep nothing" in prompt, "the escape survives"
+    assert "```interest" in prompt and "```lesson" in prompt
+    assert "```diary kind=question" in prompt and "kind=problem" in prompt
+    assert "IN THE MOMENT" not in prompt
 
 
 def test_numbered_feel_targets_render_the_records_words(  ) -> None:
@@ -90,14 +89,14 @@ def test_lesson_election_parses_with_titled_marker_and_caps() -> None:
     assert any("empty body" in n for n in notices2)
 
 
-def test_bridge_cue_is_the_only_close_lesson_solicitation() -> None:
-    """W1: the close never solicits lessons cold — but the CONDITIONAL
-    bridge cue (verified resolution -> what did it teach) survives as the
-    one law-clean solicitation (the simplicity audit's named template)."""
+def test_bridge_cue_names_the_resolution() -> None:
+    """The CONDITIONAL bridge cue (verified resolution -> what did it
+    teach) names the resolution only when one happened; the plain lesson
+    offer is in every look-back again (operator 2026-11-08)."""
     from abstractruntime.identity.reflection import build_reflection_prompt
 
     cold = build_reflection_prompt(["1. a thing happened"])
-    assert "```lesson" not in cold
+    assert "you resolved the open" not in cold
     bridged = build_reflection_prompt(
         ["1. a thing happened"],
         resolutions=[("diary_q1", "question", "why the tide turns")],
@@ -1263,9 +1262,9 @@ def test_w1_midturn_feel_applies_with_session_cap() -> None:
     home.close()
 
 
-def test_w1_mechanical_own_time_close_zero_llm() -> None:
-    """W1: own-time day closes are fully mechanical — zero LLM, floored
-    digest summary, no elections solicited."""
+def test_own_time_close_runs_one_model_lookback() -> None:
+    """Operator 2026-11-08 reverses W1: the own-time day close runs ONE
+    model look-back (it was a zero-LLM floored summary)."""
     import copy
     import json as _json
     import tempfile
@@ -1323,9 +1322,9 @@ def test_w1_mechanical_own_time_close_zero_llm() -> None:
     s.turn("(cue) morning")
     turns = calls["n"]
     result = s.reflect()
-    assert calls["n"] == turns, "the close spent ZERO LLM calls"
+    assert calls["n"] == turns + 1, "the close spent exactly one model call"
     assert result is not None and result["session_record_id"], "the summary formed"
-    assert any("mechanical close" in n for n in result["notices"])
+    assert not any("mechanical close" in n for n in result["notices"])
     home.close()
 
 

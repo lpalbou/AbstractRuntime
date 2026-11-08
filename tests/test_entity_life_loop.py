@@ -1751,12 +1751,21 @@ def test_day_open_logs_offered_drives_with_strength(tmp_path: Path) -> None:
 
 def test_first_turn_commit_excludes_cue_offered_drives(tmp_path: Path) -> None:
     """F2's other half: the cue's own mention must not strengthen the drive
-    it names - first-turn commit skips the offered ids; turn 2 commits
-    normally."""
+    it names - the first turn displays the offered drive but does not
+    commit it; turn 2 commits it normally. Non-vacuous (review F8): the
+    test proves the drive WAS displayed on turn 1 and WAS committed on
+    turn 2, so the exclusion is what kept it out of turn 1."""
+    from abstractmemory import TripleQuery
+
     from abstractruntime.identity.chat import ChatSession, open_home
+    from abstractruntime.identity.life import drives_cue_note
 
     home_dir = _make_home(tmp_path)
+    _note, ids = drives_cue_note(home_dir)
+    assert len(ids) == 1, ids
     home = open_home(home_dir)
+    rows = home.store.query(TripleQuery(subject=ids[0], predicate="dcterms:abstract", limit=1))
+    drive_handle = rows[0].assertion_id
     committed: list = []
     s = ChatSession(
         home, _ScriptedLLM(["Morning thought.", "Second thought."]),
@@ -1773,17 +1782,17 @@ def test_first_turn_commit_excludes_cue_offered_drives(tmp_path: Path) -> None:
         return orig(effect_type, payload)
 
     s._effect = spy
-    # Real exclusion path: use the seeded question's projection id set.
-    from abstractruntime.identity.life import drives_cue_note
-
-    _note, ids = drives_cue_note(home_dir)
     s.commit_exclusions = set(ids)
-    s.turn("(cue) morning - alive on your desk today: an open question")
-    s.turn("I reach for the question deliberately now")
+    _r1, report1 = s.turn("(cue) morning - alive on your desk today: what does a day owe its evening?")
+    turn1_commits = [rid for batch in committed for rid in batch]
+    committed.clear()
+    _r2, report2 = s.turn("what does a day owe its evening? I reach for it deliberately now")
+    turn2_commits = [rid for batch in committed for rid in batch]
     home.close()
-    # First turn: no committed id may be an offered drive id; second turn free.
-    if committed and committed[0]:
-        assert not (set(committed[0]) & set(ids)), "cue turn never commits offered drives"
+    assert drive_handle in [m.get("record_id") for m in report1.memories], "turn 1 displayed the drive"
+    assert drive_handle not in turn1_commits, "the cue turn never commits an offered drive"
+    assert drive_handle in [m.get("record_id") for m in report2.memories]
+    assert drive_handle in turn2_commits, "a later genuine reach commits normally"
 
 
 def test_loop_status_carries_the_day_cause_trace(tmp_path: Path) -> None:

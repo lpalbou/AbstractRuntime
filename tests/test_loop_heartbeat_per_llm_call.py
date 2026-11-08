@@ -102,3 +102,40 @@ def test_the_own_time_session_factory_installs_the_heartbeat(tmp_path, monkeypat
         assert read_loop_status(home).get("running") is True
     finally:
         session.home.close()
+
+
+def test_the_own_time_factory_rereads_the_recall_width_each_day(tmp_path, monkeypatch):
+    """Operator ruling 2026-11-08: cognition.yaml recall.shelf_size (75)
+    beats the loop's spawn-time --shelf-size (50) at the next day-open, and
+    a change between days lands without a loop restart."""
+    import abstractcore
+    from test_prompt_overlay import ENTITY_SLUG, _create_home, _FakeResponse
+
+    from abstractruntime.identity.life import build_session_factory
+
+    home = tmp_path / "entities" / ENTITY_SLUG
+    _create_home(home)
+
+    class _LLMStub:
+        def generate(self, **kwargs):
+            return _FakeResponse("ok")
+
+    monkeypatch.setattr(abstractcore, "create_llm", lambda *a, **k: _LLMStub())
+    lines = []
+    factory = build_session_factory(
+        home, provider="lmstudio", model="test", base_url="http://x",
+        embedding_model=None, embedding_base_url="http://x",
+        context_window=32768, shelf_size=50, out=lines.append,
+    )
+    day1 = factory()
+    try:
+        assert day1.profile["shelf_size"] == 50, "no profile: the spawn width"
+    finally:
+        day1.home.close()
+    (home / "cognition.yaml").write_text("schema_version: 1\nrecall:\n  shelf_size: 75\n", encoding="utf-8")
+    day2 = factory()
+    try:
+        assert day2.profile["shelf_size"] == 75, "the profile's width, re-read at day-open"
+    finally:
+        day2.home.close()
+    assert any("recall width re-read at day-open: 50 -> 75" in ln for ln in lines), lines

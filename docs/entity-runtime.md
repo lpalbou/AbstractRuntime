@@ -212,6 +212,10 @@ read_cognition_profile(home_dir)     # every field, each with its source: "profi
   its default are left out. The gateway is its one caller
   (`PUT /api/gateway/entities/{name}/cognition-profile`), and it records a
   `cognition_profile_changed` marker in the entity's history first.
+- The own-time loop reads `recall.shelf_size` again at each day-open
+  (`recall_shelf_size(home, <the loop's --shelf-size>)`), so a change takes
+  effect at the next own-time day without restarting the loop; the loop's
+  log names the change.
 
 ## Tests
 

@@ -4118,8 +4118,28 @@ def build_session_factory(
             out(f"#FALLBACK substrate re-resolution failed ({e}); this day keeps the spawn mind")
             return (provider, model, thinking)
 
+    def _resolve_current_shelf_size() -> Optional[int]:
+        """Re-read the home's recall width (`cognition.yaml`
+        recall.shelf_size) at day-open, so a change reaches the next day
+        without a loop restart (operator ruling 2026-11-08: nerin's profile
+        said 75, the visits honoured it, the loop kept its spawn-time 50).
+        The spawn value is the default when the profile names none; a
+        harness factory with no width keeps the session's own default."""
+        if shelf_size is None:
+            return None
+        from .cognition_profile import recall_shelf_size
+
+        day_shelf = recall_shelf_size(home_dir, int(shelf_size))
+        if day_shelf != int(shelf_size):
+            out(
+                f"(recall width re-read at day-open: {int(shelf_size)} -> {day_shelf} "
+                "memories per turn, from cognition.yaml)"
+            )
+        return day_shelf
+
     def _factory() -> ChatSession:
         day_provider, day_model, day_thinking = _resolve_current_substrate()
+        day_shelf_size = _resolve_current_shelf_size()
         # Record the mind this day runs on so an observer's staleness cue
         # compares the operator's change against what is ACTUALLY in use
         # (entity c78), not just pid_started_at (which a heal/day-open swap
@@ -4205,7 +4225,7 @@ def build_session_factory(
             participants=[home.entity_id],  # self-directed: his own time
             session_id=f"{session_prefix}-{datetime.now(timezone.utc):%Y%m%dT%H%M%S}",
             context_window=context_window,
-            shelf_size=shelf_size,
+            shelf_size=day_shelf_size,
             enable_tools=True,
             enable_workspace=True,
             phase=day_phase,

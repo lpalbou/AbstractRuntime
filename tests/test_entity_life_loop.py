@@ -1670,8 +1670,8 @@ def test_settled_desk_supervised_run_exits_with_the_landing(tmp_path: Path) -> N
 
 def test_drives_cue_note_shows_each_drive_gist(tmp_path: Path) -> None:
     """The MERGE composer (operator 2026-11-08, amending F2): each offered
-    drive shows kind #tag [date] AND its gist (first sentence of the stored
-    text, whole); no "owed" clause; the ids still feed the commit exclusion
+    drive shows kind #tag [date] AND its gist (drive_gist: stored title,
+    else first line); no "owed" clause; the ids still feed the commit exclusion
     and each offered drive reports its stored strength for the log line."""
     from abstractruntime.identity.life import drives_cue_note
 
@@ -1680,7 +1680,8 @@ def test_drives_cue_note_shows_each_drive_gist(tmp_path: Path) -> None:
     note, ids = drives_cue_note(home_dir, offered=offered)
     assert "Alive on your desk today:" in note
     assert "#" in note and "read_memory" in note
-    assert '"what does a day owe its evening?"' in note, "the drive's gist rides the desk"
+    # The record's stored title is the gist (review F2 rule 1).
+    assert '- "Diary entry (question) — 2026-07-19: what does a day owe its evening?"' in note, note
     assert "owed" not in note and "the day is yours" not in note
     assert "next step" not in note, "no next step on the record, none shown"
     assert ids, "offered ids feed the first-turn commit exclusion"
@@ -1688,13 +1689,26 @@ def test_drives_cue_note_shows_each_drive_gist(tmp_path: Path) -> None:
     assert all(isinstance(o["strength"], float) for o in offered), offered
 
 
-def test_drive_gist_is_the_whole_first_sentence() -> None:
-    from abstractruntime.identity.life import drive_gist
+def test_drive_gist_title_then_first_line_then_visible_word_bound() -> None:
+    """Review F2: no regex on prose. Title first; else the first line;
+    past 60 words a word-boundary cut with a visible " …"."""
+    from abstractruntime.identity.life import DRIVE_GIST_MAX_WORDS, drive_gist
 
-    assert drive_gist("Why do I stop?  Because the day ends. More.") == "Why do I stop?"
-    assert drive_gist("version 2.5 is out. Next.") == "version 2.5 is out."
-    long = "a sentence without an end " * 30
-    assert drive_gist(long) == " ".join(long.split()), "never cut mid-word"
+    assert DRIVE_GIST_MAX_WORDS == 60
+    # Abbreviations no longer cut the gist short (the regex did: "e.g.").
+    assert drive_gist("e.g. the tide turns twice a day. Why does it feel like once?") == (
+        "e.g. the tide turns twice a day. Why does it feel like once?"
+    )
+    assert drive_gist("I asked Dr. Albou about the tide.\nHe said read the source.") == (
+        "I asked Dr. Albou about the tide."
+    ), "the first LINE"
+    assert drive_gist("\n\n  second line wins when the first is blank\nmore") == (
+        "second line wins when the first is blank"
+    )
+    assert drive_gist("whatever the text says", "My stored title") == "My stored title"
+    long = " ".join(f"w{i}" for i in range(100))
+    shown = drive_gist(long)
+    assert shown == " ".join(f"w{i}" for i in range(60)) + " …", "visible cut at a word boundary"
     assert drive_gist("") == ""
 
 

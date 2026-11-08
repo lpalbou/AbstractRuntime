@@ -167,9 +167,10 @@ def _title_sentence(user_text: str, spoken_reply: str, *, self_prompted: bool = 
     if not candidates:
         return ""
     candidates.sort(key=lambda c: (-c[0], c[1]))
-    best = candidates[0][2]
-    words = best.split()
-    return " ".join(words[:14]) + ("…" if len(words) > 14 else "")
+    # The chosen sentence, WHOLE (root ADR 0054, 2026-11-08): the title is
+    # stored; it used to keep 14 words and a "…". A screen that wants a
+    # shorter line folds it visibly at read time.
+    return candidates[0][2]
 
 
 def mechanical_digest_v2(
@@ -231,7 +232,7 @@ def mechanical_digest_v2(
     )
     title = "exchange: " + (
         _title_sentence(user_text, spoken_reply, self_prompted=self_prompted)
-        or " ".join((user_text or "").split()[:8])
+        or " ".join((user_text or "").split())  # no sentence qualified: the words, whole (ADR 0054)
     )
 
     # KEYWORD QUALITY (wave-4, memory's discovery gate): SUBJECT-SHAPED

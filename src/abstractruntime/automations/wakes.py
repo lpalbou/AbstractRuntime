@@ -52,8 +52,9 @@ SCHEDULE_RUN_MODES = ("same_session", "independent")
 # Never passed on to a wake (a wake cannot schedule wakes).
 WAKE_EXCLUDED_TOOLS = frozenset({SCHEDULE_RUN_TOOL})
 MAX_AFTER_S = 366 * 86400
-MAX_TEXT = 20_000
-TITLE_MAX = 120
+# No length bound on a wake's `task`, `note` or `title` (root ADR 0054, 2026-11-08: stored text is never
+# capped; the task/note becomes the occurrence's prompt and the note its notify body). They were refused past
+# 20,000 characters and the title cut at 120.
 _PAYLOAD_KEYS = ("at", "after_s", "on", "task", "note", "tools", "session_id", "mode", "title", "notify", "tool_name", "call_id")
 
 
@@ -71,8 +72,6 @@ def _text(value: Any, field: str) -> Optional[str]:
         return None
     if not isinstance(value, str) or not value.strip():
         raise ScheduleRunError(f"{field} must be a non-empty string", field=field)
-    if len(value) > MAX_TEXT:
-        raise ScheduleRunError(f"{field} must be at most {MAX_TEXT} characters", field=field)
     return value.strip()
 
 
@@ -144,7 +143,7 @@ def validate_schedule_run(payload: Mapping[str, Any], *, now: str) -> Dict[str, 
         "tools": tools,
         "session_id": _text(payload.get("session_id"), "session_id"),
         "mode": mode,
-        "title": title[:TITLE_MAX] if title else None,
+        "title": title or None,  # whole (root ADR 0054)
     }
 
 
@@ -197,10 +196,10 @@ def plan_schedule_run(run: Any, payload: Mapping[str, Any], *, now: str, run_sto
         runtime_ns["untrusted_input"] = True
     if req["note"] is not None:
         prompt = f"Reminder you asked for earlier: {req['note']}"
-        title = req["title"] or f"Reminder: {req['note']}"[:TITLE_MAX]
+        title = req["title"] or f"Reminder: {req['note']}"
     else:
         prompt = str(req["task"])
-        title = req["title"] or f"Scheduled: {req['task']}"[:TITLE_MAX]
+        title = req["title"] or f"Scheduled: {req['task']}"
     rid = request_id or "wake:" + hashlib.sha256(f"{run.run_id}\n{now}\n{sorted(payload.items())!r}".encode("utf-8")).hexdigest()[:32]
     plan: Dict[str, Any] = {
         "request_id": rid,

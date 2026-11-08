@@ -1087,7 +1087,9 @@ def _standing_interest_note(home_dir: Path, entity_id: str, rotation_key: int) -
             if pick.subject in seen_ids:
                 continue
             seen_ids.add(pick.subject)
-            words = " ".join(str(pick.object or "").split())[:110]
+            # A prompt fold, VISIBLE (ADR 0053 rule 2 / 0054): drive_gist's
+            # 60-word " …" rule, never the old silent 110-character cut.
+            words = drive_gist(pick.object)
             tag = memory_tag(str(pick.subject or ""))
             offers.append(f'"{words}" ({tag})')
         ratio = f" You hold {len(rows)} interest(s); {explored} ever explored."
@@ -1303,7 +1305,7 @@ def write_loop_status(
     if isinstance(day_cause, dict) and day_cause.get("cause"):
         payload["day_cause"] = {
             "kind": str(day_cause.get("cause") or ""),
-            "detail": str(day_cause.get("detail") or "")[:200],
+            "detail": str(day_cause.get("detail") or ""),  # whole (root ADR 0054)
         }
     from ..utils.atomic_files import atomic_write_text
 
@@ -2344,7 +2346,7 @@ def parse_next_cue(reply: str) -> Optional[str]:
     if not hits:
         return None
     cue = " ".join(hits[-1].split())
-    return cue[:400] if cue else None
+    return cue or None  # whole (root ADR 0054; a 400-character cap used to apply)
 
 
 @dataclass
@@ -3814,8 +3816,8 @@ class LifeLoop:
                 # (written_by=self) so the navbar shows it; the nap is
                 # interruptible (a stop lands within seconds, not at nap's end).
                 # The reason rides the sleep state only (never the next
-                # cue, see below); the 400 cap mirrors parse_next_cue's.
-                rest_reason = (report.rest_reason or "no reason kept")[:400]
+                # cue, see below), whole (root ADR 0054).
+                rest_reason = report.rest_reason or "no reason kept"
                 report.sleeps += 1
                 dreamed = self._sleep_window(rest_reason)
                 if self._interruptible_sleep(self.rest_minutes * 60.0):

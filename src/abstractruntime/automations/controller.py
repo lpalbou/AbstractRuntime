@@ -1030,7 +1030,7 @@ def complete_occurrence(turn: Turn, *, status: str, outcome: Optional[Dict[str, 
             attention = {"kind": "notify", "seq": seq, **notify}
     elif status == "failed":
         seq += 1
-        body = str((outcome or {}).get("error") or "The occurrence failed.")[:2000]
+        body = str((outcome or {}).get("error") or "The occurrence failed.")  # whole (root ADR 0054)
         attention = {"kind": "failure", "seq": seq, "title": f"{definition['title']} failed", "body": body}
     if attention is not None:
         # Where the item is delivered (schema v2 `notify.channels`): "email" asks the host's

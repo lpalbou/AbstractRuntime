@@ -122,3 +122,131 @@ def test_notify_title_and_body_are_stored_whole() -> None:
     assert notify_payload({"title": LONG_LINE, "body": long_body}, title="t", answer="") == {
         "title": LONG_LINE, "body": long_body,
     }
+
+
+# -------------------------------------------------------------- round 2 (2026-11-08): no caps anywhere on stored text
+
+LONG_TEXT = ("The river bends twice before the dam and the beavers rebuild every spring. " * 40).strip()
+assert len(LONG_TEXT) > 2000
+
+
+def test_automation_title_has_no_length_cap() -> None:
+    from datetime import datetime, timezone
+
+    from abstractruntime.automations.models import validate_title
+    from abstractruntime.automations.wakes import validate_schedule_run
+
+    assert validate_title("  " + LONG_LINE + "  ") == LONG_LINE
+    now = datetime.now(timezone.utc).isoformat()
+    assert validate_schedule_run({"after_s": 60, "note": "x", "title": LONG_LINE}, now=now)["title"] == LONG_LINE
+    # The note / task text had a 20,000-character refusal; it is stored whole too (it is the prompt).
+    long_note = LONG_TEXT * 10
+    assert len(long_note) > 20_000
+    assert validate_schedule_run({"after_s": 60, "note": long_note}, now=now)["note"] == long_note
+
+
+def test_publish_title_body_and_subject_have_no_length_cap() -> None:
+    from abstractruntime.core.publish import validate_publish
+
+    out = validate_publish({"channel": "kitchen", "title": LONG_LINE, "body": LONG_TEXT, "subject": LONG_LINE})
+    assert out["title"] == LONG_LINE and out["body"] == LONG_TEXT and out["subject"] == LONG_LINE
+
+
+def test_mechanical_title_is_the_chosen_sentence_whole() -> None:
+    from abstractruntime.identity.digest import mechanical_digest_v2
+
+    sentence = (
+        "The river bends twice before the old dam, and the beavers rebuild it every spring with willow, "
+        "mud and stones carried from the north bank where the wooden bridge once stood."
+    )
+    assert len(sentence.split()) > 14
+    title, _digest, _kw = mechanical_digest_v2(sentence, "Noted.", "nerin", speaker="person:t")
+    assert title == f"exchange: {sentence}"
+    assert "…" not in title
+
+
+def test_feel_marker_carries_the_sheet_words_and_the_reason_whole() -> None:
+    from abstractruntime.identity.reflection import parse_feel_blocks
+
+    desc = " ".join(f"part{i}" for i in range(60))
+    assert len(desc) > 300
+    reply = "```feel\n" + f'target=1 feeling=+2 reason="{LONG_LINE}"\n' + "```"
+    marked, elections, _notices = parse_feel_blocks(reply, [f"1. {desc}"])
+    assert len(elections) == 1
+    assert f'[felt: about "{desc}" +2 - "{LONG_LINE}"]' in marked
+
+
+def test_realize_marker_carries_the_realization_whole() -> None:
+    from abstractruntime.identity.reflection import parse_realize_blocks
+
+    marked, realizations, _notices = parse_realize_blocks("```realize\n" + LONG_LINE + "\nevidence=#tag1\n```")
+    assert len(realizations) == 1 and realizations[0].text == LONG_LINE
+    assert f'[realized: "{LONG_LINE}" - held for sleep]' in marked
+
+
+def test_fallback_notices_quote_the_skipped_line_whole() -> None:
+    from abstractruntime.identity.reflection import parse_feel_blocks, parse_topic_blocks
+
+    bad_feel = "this is not a feel line " + LONG_LINE
+    _m, _e, notices = parse_feel_blocks("```feel\n" + bad_feel + "\n```")
+    assert any(bad_feel in n for n in notices), notices
+    bad_topic = "diary_" + LONG_LINE.replace(" ", "")
+    _m, _t, notices = parse_topic_blocks("```topic\n" + bad_topic + "\n```")
+    assert any(bad_topic in n for n in notices), notices
+
+
+def test_loop_status_day_cause_detail_and_next_cue_are_whole(tmp_path) -> None:
+    from abstractruntime.identity.life import parse_next_cue, read_loop_status, write_loop_status
+
+    write_loop_status(tmp_path, "day", day_kind="personal", day_cause={"cause": "drives", "detail": LONG_LINE})
+    assert read_loop_status(tmp_path)["day_cause"]["detail"] == LONG_LINE
+    assert parse_next_cue("Done for now.\nnext: " + LONG_LINE) == LONG_LINE
+
+
+def test_failed_occurrence_attention_body_is_the_whole_error(tmp_path, monkeypatch) -> None:
+    from automation_harness import TARGETS, Clock, create, drive, make_stores
+    from abstractruntime import Runtime, StepPlan, WorkflowSpec
+    from abstractruntime.automations import list_attention, register_controller_bundle
+    from abstractruntime.scheduler.registry import WorkflowRegistry
+
+    error = "E: " + LONG_TEXT  # past the old 2,000-character cut
+
+    def _fail(run, ctx):
+        return StepPlan(node_id="answer", complete_output={"success": False, "error": error})
+
+    registry = WorkflowRegistry()
+    for spec in TARGETS.values():
+        registry.register(spec)
+    registry.register(WorkflowSpec(workflow_id="longfail", entry_node="answer", nodes={"answer": _fail}))
+    register_controller_bundle(registry)
+    run_store, ledger_store = make_stores("json", tmp_path)
+    runtime = Runtime(run_store=run_store, ledger_store=ledger_store, workflow_registry=registry)
+    clock = Clock(monkeypatch)
+    aid = create(runtime, clock, workflow_id="longfail", input_data={"prompt": "p"}, retry={"max_attempts": 1})
+    drive(runtime, aid)
+    (item,) = list_attention(runtime.ledger_store, aid)["items"]
+    assert item["kind"] == "failure" and item["body"] == error
+
+
+def test_chat_sheet_line_and_tool_arg_are_whole(tmp_path) -> None:
+    from abstractruntime.identity.chat import ChatSession, open_home
+    from test_tool_results_are_artifacts import _ScriptedLLM, _make_home
+
+    query = " ".join(f"topic{i}" for i in range(60))
+    assert len(query) > 300
+    home = open_home(_make_home(tmp_path, "sheetling"))
+    try:
+        llm = _ScriptedLLM([
+            "Let me look.\n```tool name=web_search\n" + query + "\n```",
+            "```diary kind=note\n" + LONG_LINE + "\nA second line stays in the book.\n```\nKept.",
+            "(unused)",
+        ])
+        session = ChatSession(
+            home, llm, participants=["agent:t"], context_window=20000,
+            web_search_fn=lambda q: "RESULT: wood", out=lambda s: None,
+        )
+        _reply, report = session.turn("Tell me about the dam.")
+        assert report.tool_details[0]["arg"] == query, "the probe's tool argument is whole"
+        assert any(line.endswith(LONG_LINE) for _rid, line in session.session_sheet), session.session_sheet
+    finally:
+        home.close()

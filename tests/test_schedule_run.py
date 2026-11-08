@@ -257,7 +257,7 @@ def test_a_note_wake_reaches_the_person_a_task_wake_stays_quiet(env):
 def test_a_long_note_is_stored_whole_in_the_wake_its_definition_and_the_attention_item(env):
     """Root ADR 0054: the note is the wake's notify title and body, the definition's notify and the attention
     item's title and body, WHOLE - it used to be cut at 120 (title) / 2,000 (body) characters on the way to the
-    record. The automation `title` keeps its own validated bound; the note itself never did."""
+    record. The derived automation title ("Reminder: <note>") is whole too (it was cut at 120)."""
     from abstractruntime.automations import list_attention
 
     runtime, host, clock = env
@@ -267,7 +267,9 @@ def test_a_long_note_is_stored_whole_in_the_wake_its_definition_and_the_attentio
     out = state.output["wake"]
     plan = host.plans[-1]
     assert plan["notify_title"] == note and plan["notify_body"] == note
+    assert plan["title"] == f"Reminder: {note}"
     definition = definition_of(runtime.run_store.load(out["automation_id"]))
+    assert definition["title"] == f"Reminder: {note}"
     assert definition["notify"]["title"] == note and definition["notify"]["body"] == note
     _fire(runtime, clock, out["automation_id"], out["at"])
     (item,) = list_attention(runtime.ledger_store, out["automation_id"])["items"]

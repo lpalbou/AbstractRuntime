@@ -24,7 +24,6 @@ from abstractruntime.identity.chat import (
     _sheet_line,
     floored_reflection_digest,
 )
-from abstractruntime.identity.reflection import _receipt_gist
 
 
 # ---------------------------------------------------------------------------
@@ -75,12 +74,6 @@ def test_sheet_line_marker_fits_inside_the_bound() -> None:
     line = _sheet_line("x" * 500)
     assert len(line) <= _SHEET_LINE_MAX
     assert "#TRUNCATION" in line
-
-
-def test_receipt_gist_keeps_total_length_within_the_requested_chars() -> None:
-    gist = _receipt_gist("x" * 200, 80)
-    assert len(gist) <= 80
-    assert gist.endswith("…")
 
 
 def test_bounded_card_text_marker_fits_inside_the_card_bound() -> None:

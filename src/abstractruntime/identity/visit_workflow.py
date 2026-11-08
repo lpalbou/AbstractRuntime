@@ -70,7 +70,6 @@ from .prelude import render_summon_prelude
 from .prompt_overlay import overlay_note, read_prompt_overlay
 from .reflection import (
     FeelingElection,
-    _receipt_gist,
     build_reflection_prompt,
     parse_feel_blocks,
     parse_interest_blocks,
@@ -746,7 +745,7 @@ def build_visit_workflow(
                     else:
                         notices.append(
                             "#FALLBACK realization refused (no evidence resolved against "
-                            f'what you saw this turn): "{_receipt_gist(_re.text, 60)}"'
+                            f'what you saw this turn): "{_re.text}"'
                         )
             staged_count = (
                 len(pending["feelings"]) + len(pending.get("session_feelings") or [])
@@ -1026,7 +1025,7 @@ def build_visit_workflow(
                 else:
                     r_notes.append(
                         "#FALLBACK realization refused (no evidence resolved against "
-                        f'this visit\'s sheet): "{_receipt_gist(_re.text, 60)}"'
+                        f'this visit\'s sheet): "{_re.text}"'
                     )
             # Elected topics (operator directive 2026-07-19): parsed here,
             # stamped as attributes.topics on the summary stage below — the

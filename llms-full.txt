@@ -4704,7 +4704,7 @@ unknown fields are rejected at every level.
 |---|---|
 | `schema_version` | `2` (a stored `1` reads with the defaults of the v2 fields and becomes `2` at its next revision) |
 | `revision` | starts at 1; each applied `automation.revise` adds 1 |
-| `title` | non-empty, at most 120 characters |
+| `title` | non-empty text, whitespace trimmed, any length (root ADR 0054: stored text is never capped; a client folds it for its screen) |
 | `controller` | `{bundle_ref: "abstractframework.automation-controller@1.0.0", flow_id: "controller"}` |
 | `target` | `{workflow_id, bundle_ref, flow_id, input_data}`: a concrete workflow; a host resolves `@default` before creating (`flow_id: "@default"` is refused) |
 | `trigger` | `{binding_id, source_id, source_version, config}`; the runtime creates `binding_id` |

@@ -127,11 +127,12 @@ def _factory_for(home_dir: Path, llm: _ScriptedLLM):
 # ---------------------------------------------------------------- parsing
 
 
-def test_parse_next_cue_last_line_wins_and_caps() -> None:
+def test_parse_next_cue_last_line_wins_and_is_whole() -> None:
     assert parse_next_cue("thoughts\nnext: build the home file") == "build the home file"
     assert parse_next_cue("next: a\nmore\nnext: b") == "b"
     assert parse_next_cue("no note here") is None
-    assert len(parse_next_cue("next: " + "x" * 900)) == 400
+    # The cue is stored (the next tick's cue, the tick record): whole, never capped (root ADR 0054; was 400).
+    assert parse_next_cue("next: " + "x" * 900) == "x" * 900
 
 
 def test_parse_rest_block() -> None:

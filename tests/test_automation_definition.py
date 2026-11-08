@@ -52,7 +52,7 @@ def test_definition_defaults():
     [
         ({"surprise": 1}, "invalid_definition", "surprise"),
         ({"title": ""}, "invalid_definition", "title"),
-        ({"title": "x" * 121}, "invalid_definition", "title"),
+        ({"title": "   "}, "invalid_definition", "title"),  # length is never a reason (root ADR 0054)
         ({"target": {"workflow_id": "w", "bundle_ref": "b", "flow_id": "@default"}}, "invalid_definition", "target.flow_id"),
         ({"target": {"workflow_id": "w", "bundle_ref": "b", "flow_id": "f", "extra": 1}}, "invalid_definition", "target.extra"),
         ({"trigger": {"source_id": "cron", "source_version": 1, "config": {}}}, "unknown_trigger_source", "trigger.source_id"),

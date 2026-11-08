@@ -64,28 +64,10 @@ MAX_FEELINGS_PER_SESSION = 5
 # cap sits at the interests level, not the feelings level.
 MAX_REALIZATIONS_PER_SESSION = 2
 
-# Echo-receipt bound (ADR-0026): receipts quote a head of the elected text —
-# the full text always rides in the election itself. Marked when it cuts.
-_RECEIPT_GIST_CHARS = 80
-
-
-def _receipt_gist(text: Any, chars: int) -> str:
-    """A receipt-sized head of `text`, MARKED when it actually cuts.
-
-    ADR-0026 §1: these strings are substituted into the entity's own reply
-    and read back next turn — an unmarked cut reads as the whole elected
-    text. The election itself always carries the full words.
-    #[WARNING:TRUNCATION] echo-receipt bound; election keeps the full text
-    """
-    s = str(text or "")
-    if chars <= 0:
-        return ""
-    if len(s) <= chars:
-        return s
-    marker = "…"
-    if chars <= len(marker):
-        return marker[:chars]
-    return s[: chars - len(marker)].rstrip() + marker
+# Receipts (the markers substituted into the entity's own reply) carry the
+# elected words WHOLE (root ADR 0026/0054, 2026-11-08): the marked reply is
+# stored as the turn's verbatim, so the old marked 60/80-character
+# `_receipt_gist` head was still a stored cut.
 
 
 @dataclass
@@ -238,7 +220,7 @@ def parse_feel_blocks(
                 continue
             m = _FEEL_LINE_RE.match(line)
             if not m:
-                notices.append(f"#FALLBACK feel line skipped (unparseable): {line[:80]!r}")
+                notices.append(f"#FALLBACK feel line skipped (unparseable): {line!r}")
                 continue
             raw_val = float(m.group("feeling"))
             if raw_val == 0:
@@ -255,7 +237,7 @@ def parse_feel_blocks(
             rest = m.group("rest") or ""
             rm = _REASON_RE.search(rest)
             if not rm:
-                notices.append(f"#FALLBACK feel line skipped (missing reason=\"...\"): {line[:80]!r}")
+                notices.append(f"#FALLBACK feel line skipped (missing reason=\"...\"): {line!r}")
                 continue
             tm = _TOUCHES_RE.search(rest)
             touches = tm.group("touches").strip() if tm else ""
@@ -305,10 +287,11 @@ def parse_feel_blocks(
                     # sheet lines arrive as "N. description" — strip the number
                     desc = re.sub(r"^\d+\.\s*", "", desc).strip()
                     if desc:
-                        shown = f'about "{_receipt_gist(desc, 60)}"'
-            block_lines.append(
-                f'[felt: {shown} {signed}{marks} - "{_receipt_gist(e.reason, 80)}"]'
-            )
+                        shown = f'about "{desc}"'
+            # The record's words and his reason, WHOLE (root ADR 0026/0054,
+            # 2026-11-08): the marked reply is stored as the turn's verbatim,
+            # and a marked 60/80-character cut there was still a stored cut.
+            block_lines.append(f'[felt: {shown} {signed}{marks} - "{e.reason}"]')
         return " ".join(block_lines)
 
     marked = _FEEL_FENCE_RE.sub(_sub, reply)
@@ -457,12 +440,10 @@ def parse_realize_blocks(reply: str) -> Tuple[str, List[RealizeElection], List[s
             )
             return f"[realization refused - at most {MAX_REALIZATIONS_PER_SESSION} per session]"
         realizations.append(RealizeElection(text=body, evidence=evidence, touches=touches))
-        # ADR-0026 §1: the receipt is an echo (the FULL body rides in the
-        # election above), but a bare 80-char cut reads back to him as the
-        # whole realization — mark the cut so the echo cannot be mistaken
-        # for the record.  #[WARNING:TRUNCATION] realize-receipt echo bound
-        gist = _receipt_gist(body, _RECEIPT_GIST_CHARS)
-        return f'[realized: "{gist}" - held for sleep]'
+        # The marker carries the realization WHOLE (root ADR 0026/0054,
+        # 2026-11-08): the marked reply is stored as the turn's verbatim, and
+        # a marked 80-character cut there was still a stored cut.
+        return f'[realized: "{body}" - held for sleep]'
 
     marked = _REALIZE_FENCE_RE.sub(_sub, reply)
     return marked.strip(), realizations, notices
@@ -529,7 +510,7 @@ def parse_topic_blocks(reply: str) -> Tuple[str, List[str], List[str]]:
             words = normalize_topic(line)
             if words is None:
                 notices.append(
-                    f"#FALLBACK topic line skipped (not usable as a subject - plain words only): {line[:60]!r}"
+                    f"#FALLBACK topic line skipped (not usable as a subject - plain words only): {line!r}"
                 )
                 continue
             if len(words.split()) > MAX_TOPIC_WORDS:

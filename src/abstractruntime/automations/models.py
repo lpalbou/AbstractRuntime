@@ -40,10 +40,10 @@ CONTROLLER_WORKFLOW_ID = f"{CONTROLLER_BUNDLE_REF}:{CONTROLLER_FLOW_ID}"
 # Namespace for automation ids: uuid5(AUTOMATION_NAMESPACE, f"{tenant}:{user}:{request_id}").
 AUTOMATION_NAMESPACE = uuid.UUID("4a0d5a4e-6f1c-5b8e-9a53-2f7c1e0b9d61")
 
-TITLE_MAX = 120
-# `notify.title` and `notify.body` carry no length bound (ADR 0054, 2026-11-08): an attention item is stored
-# whole and each client folds it for its screen. Until then the definition cut them silently at 120 and 2,000
-# characters, and the default body (the occurrence's answer) at 280.
+# No length bound on stored text (root ADR 0026/0054, operator 2026-11-08): the automation `title` is any
+# non-empty text, trimmed (its 120-character refusal is what made the Assistant web cut titles before saving,
+# root/assistant 1154); `notify.title` / `notify.body` are stored whole (they were cut at 120 / 2,000 and the
+# default body at 280). Each client folds for its screen.
 
 DEFAULT_RETRY = {"max_attempts": 3, "backoff": {"initial": "30s", "factor": 2, "max": "10m"}}
 TOOL_APPROVAL_MODES = ("auto", "ask")
@@ -229,7 +229,8 @@ def _json_value(value: Any, field: str) -> Any:
 
 
 def validate_title(value: Any) -> str:
-    return _nonempty_str(value, "title", max_len=TITLE_MAX)
+    """Non-empty text, whitespace trimmed, any length (root ADR 0054: stored text is never capped)."""
+    return _nonempty_str(value, "title")
 
 
 def validate_target(value: Any) -> Dict[str, Any]:

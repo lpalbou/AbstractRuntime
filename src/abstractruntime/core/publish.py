@@ -36,8 +36,8 @@ from typing import Any, Dict, List, Mapping, Optional
 
 CHANNEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 TYPE_MAX = 200
-TITLE_MAX = 120
-BODY_MAX = 2000
+# `title`, `body` and `subject` carry no length bound (root ADR 0054): `type` and `channel` are names, `data` a
+# payload; text is stored whole.
 DATA_MAX_BYTES = 64 * 1024
 _KEYS = ("channel", "type", "title", "body", "subject", "data", "alert", "recipient", "channels")
 # Where an alert can reach its recipient (Notify me's "Where"), in their canonical order.
@@ -68,16 +68,18 @@ def validate_publish(payload: Mapping[str, Any]) -> Dict[str, Any]:
         if not isinstance(etype, str) or len(etype) > TYPE_MAX or any(c.isspace() for c in etype.strip()) or not etype.strip():
             raise PublishError(f"type must be a name without spaces (1..{TYPE_MAX}), e.g. kitchen.order.ready", field="type")
         out["type"] = etype.strip()
+    # `title`, `body` and `subject` carry no length bound (root ADR 0054, 2026-11-08: stored text is never
+    # capped; they were refused past 120 / 2,000 / 120 characters). A client folds them for its screen.
     title = payload.get("title")
-    if not isinstance(title, str) or not title.strip() or len(title) > TITLE_MAX:
-        raise PublishError(f"title is required (1..{TITLE_MAX} characters)", field="title")
+    if not isinstance(title, str) or not title.strip():
+        raise PublishError("title is required (non-empty text)", field="title")
     out["title"] = title.strip()
-    for key, limit in (("body", BODY_MAX), ("subject", TITLE_MAX)):
+    for key in ("body", "subject"):
         value = payload.get(key)
         if value is None or value == "":
             continue
-        if not isinstance(value, str) or len(value) > limit:
-            raise PublishError(f"{key} must be text of at most {limit} characters", field=key)
+        if not isinstance(value, str):
+            raise PublishError(f"{key} must be text", field=key)
         out[key] = value
     data = payload.get("data")
     if data is not None:

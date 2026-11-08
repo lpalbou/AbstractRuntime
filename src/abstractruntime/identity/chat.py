@@ -2168,7 +2168,7 @@ class ChatSession:
                 self.spend["tool_calls"] += len(tool_elections)
                 round_details: List[Dict[str, str]] = []
                 for e in tool_elections:
-                    arg = " ".join((e.body or "").split())[:120]
+                    arg = " ".join((e.body or "").split())  # whole (root ADR 0054)
                     if e.name == "write_file":
                         arg = (e.args or {}).get("path", "") or arg
                         report.files.append({"path": arg, "action": "wrote"})
@@ -2351,7 +2351,7 @@ class ChatSession:
                     self.spend["tool_calls"] += len(fix_elections)
                     fix_details: List[Dict[str, str]] = []
                     for e in fix_elections:
-                        detail = {"name": e.name, "arg": " ".join((e.body or "").split())[:120]}
+                        detail = {"name": e.name, "arg": " ".join((e.body or "").split())}
                         fix_details.append(detail)
                         report.tool_details.append(detail)
                     results_msg, exec_notices = execute_tool_elections(
@@ -2530,7 +2530,7 @@ class ChatSession:
                 word = "problem" if rs == "repaired_open_problem" else "question"
                 self.out(f"(resolved: {word} {e.resolves} leaves your open desk)")
                 self.session_resolutions.append(
-                    (str(e.resolves), word, (e.gist or e.text).strip().splitlines()[0][:100])
+                    (str(e.resolves), word, (e.gist or e.text).strip().splitlines()[0])  # whole line
                 )
             projected = diary_out.get("projected_record_id")
             if projected:
@@ -2549,7 +2549,9 @@ class ChatSession:
                 if e.visibility == "private":
                     sheet_line = "you kept a private diary entry"
                 else:
-                    gist_line = (e.gist or e.text).strip().splitlines()[0][:120]
+                    # The first LINE, whole (root ADR 0054): a line is structure,
+                    # the old 120-character count was a cut on a stored sheet.
+                    gist_line = (e.gist or e.text).strip().splitlines()[0]
                     sheet_line = f"you kept a diary entry ({e.kind}): {gist_line}"
                 self.session_sheet.append((str(projected), sheet_line))
                 # reflected_in edges only for non-private entries: a private

@@ -129,3 +129,11 @@ def test_replay_view_relabels_messages_folded_before_the_snapshot():
     apply(view, [], runs_by_id={"run-mention": _mention_run()})
     msgs = view.to_json()["messages"]
     assert msgs and all(m["author"] in (NERIN, ALICE) for m in msgs)
+
+
+def test_history_bundle_run_section_carries_the_authors():
+    from abstractruntime import export_run_history_bundle
+
+    rs = _store()
+    bundle = export_run_history_bundle(run_id="run-mention", run_store=rs, ledger_store=InMemoryLedgerStore(), artifact_store=None)
+    assert bundle["run"]["author"] == NERIN and bundle["run"]["prompt_author"] == ALICE

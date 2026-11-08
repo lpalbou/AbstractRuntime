@@ -959,6 +959,15 @@ def _best_effort_session_turns(
     return out
 
 
+def _run_authors(run: Any) -> Dict[str, Any]:
+    """`{prompt_author, author}` of a run (core.turn_author)."""
+    from .core.turn_author import turn_authors
+
+    vars_obj = getattr(run, "vars", None)
+    authors = turn_authors(vars_obj if isinstance(vars_obj, dict) else {}, workflow_id=getattr(run, "workflow_id", None))
+    return {"prompt_author": authors["prompt"], "author": authors["answer"]}
+
+
 def _omitted_marker(*, field: str, value: Any) -> Dict[str, Any]:
     """Structured replacement for a field dropped by a bundle profile.
 
@@ -1267,6 +1276,8 @@ def export_run_history_bundle(
             "parent_run_id": getattr(run, "parent_run_id", None),
             "error": getattr(run, "error", None),
             "waiting": getattr(run, "waiting", None).__dict__ if getattr(run, "waiting", None) is not None else None,
+            # Who asked and who answered this turn (core.turn_author; every key present).
+            **_run_authors(run),
         },
         "workflow_snapshot": snapshot_ref,
         "input_data": filtered_input_data,

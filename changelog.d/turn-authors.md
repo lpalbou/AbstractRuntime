@@ -3,7 +3,7 @@
 - **Who speaks in a turn: `author` on session turns, replayed history and the replay view**
   (`core/turn_author.py`, `history_bundle.py`, `session_history.py`, `replay/view.py`). One shape everywhere, every
   key present: `{kind: "entity"|"agent"|"person", name, entity_id, identity_ref, avatar: {style, color}|null}`.
-  Session turn rows (history bundles, session history blocs) carry `prompt_author` (who asked) and `author` (who
+  Session turn rows and every history bundle's `run` section (so session history blocs) carry `prompt_author` (who asked) and `author` (who
   answered). A host stamps them at `vars._meta.prompt_author` / `vars._meta.author` (`stamp_turn_authors`); without a
   stamp the answer is the entity of a summon run (its signed `_runtime.entity` stamp), else the agent named by
   `vars.workflow_selection.name` (then the workflow id's bundle id; never a model name), and the prompt is the

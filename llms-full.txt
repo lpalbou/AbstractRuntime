@@ -6360,6 +6360,7 @@ entities/castor/
   manifest.json            # entity_id (birth marker — never a lookup key)
   spark.yaml               # the attested seed
   substrate.yaml           # operator's ONE mind choice (provider+model)
+  cognition.yaml           # the cognition profile: a model per capability, recall width, rebuild policy
   identity.json            # look and voice (digital-identity.md)
   .identity.lock           # one identity write at a time
   state_history.jsonl      # biography: state, phase_changed and identity_changed rows
@@ -6497,10 +6498,71 @@ Effect(type=EffectType.WAIT_EVENT, payload={
   together, so clients can render a chat composer for visit waits and the
   deadline without new transport.
 
+## Cognition profile (`identity/cognition_profile.py`)
+
+The mind (`substrate.yaml`) is what the entity talks with. The cognition
+profile, `<home>/cognition.yaml`, says which model each other part of its
+thinking uses, how many memories a turn brings to mind, and how readily it
+revisits what it already understood:
+
+```yaml
+schema_version: 1
+capabilities:
+  summaries:     {inherit: mind}    # digests, titles, keywords, cards
+  understanding: {provider: "endpoint:compat-theforge-nvidia", model: "qwen/qwen3.8-27b", thinking: low}
+  extraction:    {inherit: mind}    # the memory extraction lane
+recall:
+  shelf_size: 50                    # memories retrieved per turn, in visits and own time (1..400)
+rebuild:
+  sensitivity: 0.5                  # 0..1, how easily a new memory or a surprise re-opens what is understood
+  cap_per_turn: 3                   # 0..10 memory tasks a turn may run at most; 0 = only while resting
+```
+
+| Field | Absent means | Range |
+|---|---|---|
+| `capabilities.<cap>` | `{inherit: mind}` | `{inherit: mind}` or `{provider, model, thinking?, max_input_tokens?}`; `thinking` from `none, minimal, low, medium, high, xhigh, auto, on, off`; `max_input_tokens` 4096..140000 (140000 when absent) |
+| `recall.shelf_size` | the host's default (the gateway's is 50) | whole number 1..400 |
+| `rebuild.sensitivity` | 0.5 | number 0..1 |
+| `rebuild.cap_per_turn` | 3 | whole number 0..10 |
+
+```python
+from abstractruntime.identity.cognition_profile import (
+    read_cognition_profile, resolve_capability, recall_shelf_size, rebuild_policy,
+)
+
+resolve_capability(home_dir, "summaries")
+# {"provider": ..., "model": ..., "thinking": ..., "max_input_tokens": 140000, "source": "mind"}
+resolve_capability(home_dir, "summaries", mind={"provider": "lmstudio", "model": "qwen3-4b"})
+recall_shelf_size(home_dir, 50)      # the profile's width, else the default you pass
+rebuild_policy(home_dir)             # {"sensitivity": 0.5, "cap_per_turn": 3}
+read_cognition_profile(home_dir)     # every field, each with its source: "profile" or "default"
+```
+
+- A capability that inherits resolves through `resolve_home_substrate`, so it
+  is exactly the mind; `mind=` passes a host's already-resolved mind as the
+  explicit rung (the gateway passes the mind its visits use). `source` is
+  `profile` or `mind`. When neither the profile nor the mind names a model,
+  `resolve_capability` raises `SubstrateUnset`: no model is ever chosen by
+  code.
+- Reads never raise. A file that is not YAML, not a mapping or of another
+  `schema_version` reads as all defaults; a single malformed field reads as
+  its default while the others keep their values. Each case logs a warning
+  that names the field, and `read_cognition_profile(...)["warnings"]` lists
+  them.
+- `write_cognition_profile(home_dir, profile)` validates first and raises
+  `CognitionProfileInvalid` (`.field`, and a sentence such as "Memories per
+  turn must be a whole number from 1 to 400.") before the file moves, then
+  writes atomically (temporary file in the home, fsync, rename). It stores
+  only what was chosen: a capability that inherits and a field that follows
+  its default are left out. The gateway is its one caller
+  (`PUT /api/gateway/entities/{name}/cognition-profile`), and it records a
+  `cognition_profile_changed` marker in the entity's history first.
+
 ## Tests
 
 `tests/test_directory_lease.py`, `tests/test_entity_runtime.py`,
-`tests/test_act_only_dereference.py`, `tests/test_wait_event_deadline.py` —
+`tests/test_act_only_dereference.py`, `tests/test_wait_event_deadline.py`,
+`tests/test_cognition_profile.py` —
 including cross-process lease exclusion, waits-traveling-on-home-copy, the
 ledger-keeps-the-ref end-to-end pin, and the three-backend due-scan.
 
@@ -7996,7 +8058,7 @@ In this repo, the AbstractCore wiring lives under `src/abstractruntime/integrati
 ## Features (reference)
 
 - `automations.md` — automations: a workflow run on a schedule, on an event or on request as a durable controller run; triggers (`schedule@1`, `schedule@2` calendar rules in a time zone, `manual@1`, `email.received@1`, `feed.item@1` RSS 2.0 / RSS 1.0 / Atom, `webhook.received@1` Standard Webhooks, entry-point sources), per-user trigger connections, the CloudEvents envelope (`input_data.event`), run origin (`_meta.origin`), wakes (`SCHEDULE_RUN`: work later in the same session, with at most the caller's tools), Publish to channel (`PUBLISH_EVENT`, alerts with `recipient` and `channels`), commands, independent or growing context, discussions forked at any occurrence (own writable workspace, the automation's workspace mounted read-only), tool approval, typed waits, notifications and retries, and the storage guarantees (create-if-absent, per-run lock, turn roots, session kinds, one writer process per store)
-- `entity-runtime.md` — per-entity runtimes for summoned entities: homes, the one-writer lease, act-only diary privacy (`$act_only` refs), durable visit waits with deadlines
+- `entity-runtime.md` — per-entity runtimes for summoned entities: homes, the one-writer lease, act-only diary privacy (`$act_only` refs), durable visit waits with deadlines, the cognition profile (`cognition.yaml`: a model per capability, recall width, rebuild policy)
 - `digital-identity.md` — an entity's look and voice: `identity.json` in the home, the recorded default, the `identity_changed` biography row, the identity reference on runs, the fingerprint, the summon cue
 - `track-record.md` — an entity's or a session's track record (sessions, runs, successes, failures, tokens) and reputation (trust per task kind with its evidence), computed from existing records; completion rates until feedback exists; and its acquaintances (the entities and humans it met)
 - `evidence.md` — artifact-backed evidence capture for external-boundary tools

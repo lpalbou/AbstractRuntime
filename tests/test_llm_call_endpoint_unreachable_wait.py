@@ -247,7 +247,8 @@ class _Sender:
 ENVELOPE = {"error": {
     "message": f"lmstudio API error: could not connect to {BASE_URL} (httpx.ConnectError: [Errno 61] Connection refused) after 0.4s",
     "type": "endpoint_unreachable", "code": "endpoint_unreachable", "provider": "lmstudio", "base_url": BASE_URL,
-    "cause": "httpx.ConnectError", "errno": 61, "elapsed_s": 0.4, "retryable": True,
+    "cause": "httpx.ConnectError", "detail": "[Errno 61] Connection refused", "errno": 61, "elapsed_s": 0.4,
+    "retryable": True,
 }}
 
 
@@ -265,9 +266,17 @@ def test_remote_client_rebuilds_the_error_from_the_503_envelope() -> None:
     assert (e.provider, e.base_url, e.cause, e.errno, e.elapsed_s, e.retryable) == (
         "lmstudio", BASE_URL, "httpx.ConnectError", 61, 0.4, True,
     )
-    assert e.detail == "[Errno 61] Connection refused", "recovered from core's composed message (no wire field yet)"
+    assert e.detail == "[Errno 61] Connection refused", "detail travels in the envelope (core b8bcda1d)"
     assert str(e) == ENVELOPE["error"]["message"]
     assert len(sender.posts) == 1
+
+
+def test_remote_client_never_parses_detail_out_of_the_message() -> None:
+    envelope = {"error": {k: v for k, v in ENVELOPE["error"].items() if k != "detail"}}
+    sender = _Sender(_HttpError(_Resp(503, envelope)))
+    with pytest.raises(EndpointUnreachableError) as info:
+        _remote(sender).generate(prompt="hello", params={})
+    assert info.value.detail == "" and info.value.errno == 61
 
 
 def test_remote_client_leaves_a_generic_500_as_it_was() -> None:

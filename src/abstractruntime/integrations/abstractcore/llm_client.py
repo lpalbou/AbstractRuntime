@@ -13353,14 +13353,10 @@ def _http_error_response_body(error: Any) -> Optional[Any]:
 
 def _endpoint_unreachable_from_http_error(error: Any) -> Optional[Exception]:
     """Rebuild AbstractCore's `EndpointUnreachableError` from the 503 envelope its server
-    sends for one (root 1168): `error.code == "endpoint_unreachable"` with `provider`,
-    `base_url`, `cause`, `errno`, `elapsed_s`, `retryable` and the composed `message`. Any
-    other status or body returns None, so a generic 500 stays exactly the error it was.
-
-    `detail` does not travel yet (core's `_endpoint_unreachable_payload` omits it); it is
-    recovered only when the message has exactly the shape core composes from the fields
-    (`<provider> API error: could not connect to <base_url> (<cause>: <detail>) after <t>s`),
-    else it is left empty — never guessed from prose."""
+    sends for one (root 1168): `error.code == "endpoint_unreachable"` with the seven fields
+    `provider`, `base_url`, `cause`, `detail` (core b8bcda1d), `errno`, `elapsed_s`,
+    `retryable`, beside the composed `message`. Any other status or body returns None, so a
+    generic 500 stays exactly the error it was."""
     response = getattr(error, "response", None)
     if getattr(response, "status_code", None) != 503:
         return None
@@ -13380,18 +13376,11 @@ def _endpoint_unreachable_from_http_error(error: Any) -> Optional[Exception]:
     elapsed = float(elapsed_raw) if isinstance(elapsed_raw, (int, float)) and not isinstance(elapsed_raw, bool) else None
     errno_raw = err.get("errno")
     errno = errno_raw if isinstance(errno_raw, int) and not isinstance(errno_raw, bool) else None
-    message = str(err.get("message") or "")
-    detail = ""
-    if cause:
-        head = f"{provider} API error: could not connect{f' to {base_url}' if base_url else ''} ({cause}: "
-        tail = f") after {elapsed:.1f}s" if elapsed is not None else ")"
-        if message.startswith(head) and message.endswith(tail) and len(message) > len(head) + len(tail):
-            detail = message[len(head): len(message) - len(tail)]
     return EndpointUnreachableError(
         provider=provider,
         base_url=base_url,
         cause=cause,
-        detail=detail,
+        detail=str(err.get("detail") or ""),
         errno=errno,
         elapsed_s=elapsed,
         retryable=bool(err.get("retryable", True)),

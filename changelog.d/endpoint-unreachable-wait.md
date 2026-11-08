@@ -12,9 +12,10 @@
   node and re-issues the identical call as a new effect issuance (the parked attempt is never replayed as a result);
   `cancel` ends the run as today; any other provider error fails as before. Core never counts the error in its
   breaker and the runtime records no failure. The remote client (`RemoteAbstractCoreLLMClient`) rebuilds the typed
-  error from the AbstractCore server's 503 envelope (`error.code == "endpoint_unreachable"` with every field); a
-  generic 500 stays the error it was. `detail` is recovered from core's composed message because the envelope does
-  not carry it yet. The gateway's endpoint prober issues the resume; the kit's wording is its own.
-  Imports `EndpointUnreachableError` by name: this needs AbstractCore at or after core main 6c1e7a0e (the class, the
-  503 envelope and its pickle `__reduce__`), unpublished at the time of writing — the runtime stays local until core
-  publishes and the floor in `pyproject.toml` is raised then. `docs/architecture.md` (runtime loop) describes the wait.
+  error from the AbstractCore server's 503 envelope (`error.code == "endpoint_unreachable"` with the seven fields,
+  `detail` included since core b8bcda1d; nothing is parsed out of the message); a generic 500 stays the error it
+  was. The gateway's endpoint prober issues the resume; the kit's wording is its own.
+  Imports `EndpointUnreachableError` by name: this needs the AbstractCore that carries core main b8bcda1d (the class,
+  its pickle `__reduce__`, the 503 envelope with `detail`), unpublished at the time of writing — the runtime stays
+  local until core publishes and the `abstractcore>=` floor in `pyproject.toml` is raised to that version.
+  `docs/architecture.md` (runtime loop) describes the wait.

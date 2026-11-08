@@ -18,7 +18,6 @@ from __future__ import annotations
 
 from abstractruntime.identity.chat import (
     _CARD_TEXT_MAX,
-    _REFLECTION_DIGEST_MAX,
     _SHEET_LINE_MAX,
     _bounded_card_text,
     _handle_origin_label,
@@ -48,7 +47,7 @@ def test_marker_only_reflection_digest_is_floored() -> None:
 def test_prose_reflection_digest_is_kept_verbatim() -> None:
     prose = "This session was quiet - just enough time to remember the flood. [marked 1 feeling]"
     digest, floored = floored_reflection_digest(prose, [("ex:1", "d")])
-    assert digest == prose[:280], "entity-authored prose is first-class, never replaced"
+    assert digest == prose, "entity-authored prose is first-class, never replaced"
     assert floored is False, "prose path never stamps the floor method"
 
 
@@ -59,11 +58,17 @@ def test_empty_reply_still_floors() -> None:
     assert "walked the workspace" in digest
 
 
-def test_long_reflection_digest_marker_fits_inside_the_bound() -> None:
-    digest, floored = floored_reflection_digest("x" * 500, [("ex:1", "ignored")])
+def test_long_reflection_digest_is_stored_whole() -> None:
+    """ADR 0054 (2026-11-08): the stored digest is never cut - a 2000-char
+    look-back stores 2000 chars, no marker, no "…"."""
+    prose = " ".join(f"word{i}" for i in range(400))
+    digest, floored = floored_reflection_digest(prose, [("ex:1", "ignored")])
     assert floored is False
-    assert len(digest) <= _REFLECTION_DIGEST_MAX
-    assert "#TRUNCATION" in digest
+    assert digest == prose and len(digest) > 2000
+    assert "#TRUNCATION" not in digest and "…" not in digest
+    long_floor_moment = "m" * 900
+    floored_digest, was_floored = floored_reflection_digest("", [("ex:2", long_floor_moment)])
+    assert was_floored is True and long_floor_moment in floored_digest
 
 
 def test_sheet_line_marker_fits_inside_the_bound() -> None:

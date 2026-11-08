@@ -178,12 +178,6 @@ def _entity_patience_window() -> "tuple[float | None, float | None]":
     return timeout, budget
 
 
-# The session-summary digest bound. This string is INGESTED as the durable
-# reflection record's digest (ADR-0026 §2 critical path), so the bound may
-# never be silent: an unmarked cut reads back forever as the whole look-back.
-_REFLECTION_DIGEST_MAX = 280
-
-
 def _bounded_with_marker(text: Any, *, max_chars: int, marker: str) -> str:
     """Bound `text` INCLUDING the marker itself."""
     s = str(text or "")
@@ -196,17 +190,6 @@ def _bounded_with_marker(text: Any, *, max_chars: int, marker: str) -> str:
     if keep <= 0:
         return marker_s[:max_chars]
     return s[:keep].rstrip() + marker_s
-
-
-def _bounded_digest(text: str) -> str:
-    """Bound the session digest, MARKED when the bound bites.
-    #[WARNING:TRUNCATION] reflection digest bounded; the verbatim episode keeps the full reply
-    """
-    return _bounded_with_marker(
-        text,
-        max_chars=_REFLECTION_DIGEST_MAX,
-        marker="… [#TRUNCATION: digest bounded]",
-    )
 
 
 # The session-sheet moment bound. Sheet lines ride BOTH the reflection prompt
@@ -262,10 +245,15 @@ def floored_reflection_digest(
     fired — callers stamp `digest_method="mechanical-floor-v1"` on the
     record (memory's co-sign note, report v10: the redigestion machinery
     discovers poverty candidates by digest_method, and an unstamped
-    floored digest would read as entity-authored to that scan)."""
+    floored digest would read as entity-authored to that scan).
+
+    The digest is stored WHOLE (ADR 0054, 2026-11-08: stored text is never
+    truncated; a short form is derived at read time). It used to be cut at
+    280 characters with a marker - with a look-back at every own-time tick
+    that cut landed on up to eight records a day."""
     prose = " ".join(str(marked_reply or "").split())
     if prose and not _MARKERS_ONLY_RE.match(prose):
-        return _bounded_digest(prose), False
+        return prose, False
     descs = [str(d or "").strip() for _rid, d in (sheet or []) if str(d or "").strip()]
     floor = f"Look-back over {len(sheet or [])} moment(s)"
     if descs:
@@ -273,7 +261,7 @@ def floored_reflection_digest(
         if len(descs) > 3:
             #[WARNING:TRUNCATION] floored digest quotes 3 sheet moments
             floor += f" (+{len(descs) - 3} more moment(s) on the sheet)"
-    return _bounded_digest((prose + " - " if prose else "") + floor), True
+    return (prose + " - " if prose else "") + floor, True
 _STOPWORDS = frozenset(
     "the a an and or but if then else of to in on at for with from by as is are was were be been "
     "it its this that these those i you he she we they me him her us them my your his our their "

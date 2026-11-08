@@ -221,3 +221,87 @@ def test_work_ticks_have_no_tick_lookback(tmp_path: Path) -> None:
                     sleep_fn=lambda _s: None, out=lambda _s: None)
     loop.run()
     assert not any(p.startswith("This stretch of your own time is done.") for p in llm.prompts)
+
+
+# ------------------------------------------------- review round 2 (storage)
+
+
+def _summaries(home_dir: Path) -> List[Dict[str, Any]]:
+    from abstractmemory import SQLiteJournal, SQLiteTripleStore, TripleQuery
+
+    db = home_dir / "memory.sqlite3"
+    store = SQLiteTripleStore(db)
+    journal = SQLiteJournal(db)
+    try:
+        out = []
+        for a in store.query(TripleQuery(predicate="dcterms:abstract", limit=0)):
+            attrs = a.attributes if isinstance(a.attributes, dict) else {}
+            if attrs.get("record_kind") == "summary":
+                out.append({"digest": str(a.object), "title": str(attrs.get("title") or "")})
+        return out
+    finally:
+        store.close()
+        journal.close()
+
+
+def _personal_session(home_dir: Path, llm: Any) -> ChatSession:
+    home = open_home(home_dir)
+    return ChatSession(home, llm, participants=[home.entity_id], context_window=20000,
+                       out=lambda _s: None, phase="personal")
+
+
+def test_tick_lookback_that_keeps_nothing_stores_no_summary(tmp_path: Path) -> None:
+    """Review F3: a 'nothing to keep' tick stores nothing; a tick that kept
+    something stores its summary (the anchor of what it kept)."""
+    home_dir = _make_home(tmp_path)
+    llm = _Recorder(["First tick.", "Nothing to keep.", "Second tick.", LOOKBACK_REPLY])
+    s = _personal_session(home_dir, llm)
+    before = len(_summaries(home_dir))
+    s.turn("(cue) one")
+    first = s.tick_lookback()
+    assert first is not None and first["session_record_id"] is None
+    assert len(_summaries(home_dir)) == before, "nothing kept, nothing stored"
+    s.turn("(cue) two")
+    second = s.tick_lookback()
+    s.home.close()
+    assert second is not None and second["session_record_id"]
+    assert len(_summaries(home_dir)) == before + 1
+
+
+def test_tick_summary_digest_is_stored_whole(tmp_path: Path) -> None:
+    """Review F1 / ADR 0054: a long look-back is stored whole in the
+    summary's digest - no 280-char cut, no marker."""
+    home_dir = _make_home(tmp_path)
+    prose = " ".join(f"tide{i}" for i in range(200))
+    reply = prose + "\n\n```interest\nhow tides keep time without a clock\n```"
+    llm = _Recorder(["A tick.", reply])
+    s = _personal_session(home_dir, llm)
+    s.turn("(cue) one")
+    s.tick_lookback()
+    s.home.close()
+    digests = [x["digest"] for x in _summaries(home_dir) if "tide199" in x["digest"]]
+    assert digests, _summaries(home_dir)
+    assert prose in digests[0] and "#TRUNCATION" not in digests[0]
+
+
+def test_interest_and_lesson_caps_count_against_the_day(tmp_path: Path) -> None:
+    """Review F4: two interests and two lessons per DAY of own time (turns
+    and every look-back), not two per look-back."""
+    home_dir = _make_home(tmp_path)
+
+    def lookback(i: int) -> str:
+        return (f"```interest\nsubject {i}a\n```\n```interest\nsubject {i}b\n```\n"
+                f"```lesson\nlesson {i}a\n```\n```lesson\nlesson {i}b\n```")
+
+    llm = _Recorder(["T1.", lookback(1), "T2.", lookback(2), "T3.", lookback(3)])
+    s = _personal_session(home_dir, llm)
+    notices: List[str] = []
+    for n in (1, 2, 3):
+        s.turn(f"(cue) {n}")
+        result = s.tick_lookback()
+        notices.extend(result["notices"])
+    s.home.close()
+    kinds = _kinds(home_dir)
+    assert sorted(kinds.get("interest", [])) == ["subject 1a", "subject 1b"], kinds.get("interest")
+    assert sorted(kinds.get("lesson", [])) == ["lesson 1a", "lesson 1b"], kinds.get("lesson")
+    assert any("interest(s) refused (cap 2 per day" in n for n in notices), notices

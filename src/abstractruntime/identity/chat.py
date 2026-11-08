@@ -1153,6 +1153,9 @@ class ChatSession:
         self._lookback_sheet_mark = 0
         self._lookback_resolution_mark = 0
         self._tick_lookbacks = 0
+        # Interests/lessons kept this session (turns + look-backs), for the
+        # session caps (review F4).
+        self._kept_this_session: Dict[str, int] = {}
         self.reflection_diary_entries = 0
         self.feelings_applied = 0
         # F2 commit-exclusion (drives build): graph ids the DAY-OPEN CUE
@@ -1538,6 +1541,8 @@ class ChatSession:
         election must never kill a turn."""
         from .reflection import MAX_FEELINGS_PER_SESSION
 
+        lessons = self._within_session_cap("lesson", list(lessons), report.notices)
+        interests = self._within_session_cap("interest", list(interests), report.notices)
         if feelings:
             room = MAX_FEELINGS_PER_SESSION - self.feelings_applied
             if room <= 0:
@@ -2806,6 +2811,7 @@ class ChatSession:
                 sheet, session_id=str(marker.get("session_id")),
                 turn_id=f"t-reflect-salvage-{marker.get('session_id')}",
                 phase=marker_phase or None,
+                count_session_caps=False,
             )
         except Exception as e:  # noqa: BLE001 - a repair must not block a life
             self.out(
@@ -3020,63 +3026,28 @@ class ChatSession:
             resolutions=resolutions,
             moment="tick",
             title=f"tick reflection: {self.session_id} #{n}",
+            summary_only_if_kept=True,
         )
         if result is not None:
             self.reflection_diary_entries += result["diary_entries"]
             self.feelings_applied += len(result["feelings_applied"])
         return result
 
-    def _reflect_over(
+    def _form_reflection_summary(
         self,
+        marked_reply: str,
         sheet: List[Tuple[Optional[str], str]],
         *,
         session_id: str,
         turn_id: str,
-        phase: Optional[str] = None,
-        resolutions: Optional[List[Tuple[str, str, str]]] = None,
-        moment: str = "session",
-        title: Optional[str] = None,
-    ) -> Optional[Dict[str, Any]]:
-        """The look-back core over an explicit sheet (live session, a
-        salvaged ended one, or one personal-time tick — same machinery,
-        same honesty rules). `resolutions` defaults to the whole session's."""
-        if not sheet:
-            return None
-        if resolutions is None:
-            resolutions = list(self.session_resolutions)
-        sheet_lines = [f"{i}. {desc}" for i, (_rid, desc) in enumerate(sheet, start=1)]
-        prompt = build_reflection_prompt(
-            sheet_lines, resolutions=list(resolutions), moment=moment
-        )
-
-        resp = self._generate(
-            messages=self._prompt_history() + [{"role": "user", "content": prompt}],
-            system_prompt=self.system_base,
-        )
-        raw_reply = clean_model_reply(getattr(resp, "content", None) or "")
-        if not raw_reply:
-            self.out("#FALLBACK reflection returned empty; the session closes without feelings marked")
-            return None
-
-        marked_reply, feelings, notices = parse_feel_blocks(raw_reply, sheet_lines)
-        marked_reply, interests, interest_notices = parse_interest_blocks(marked_reply)
-        notices.extend(interest_notices)
-        marked_reply, lessons, lesson_notices = parse_lesson_blocks(marked_reply)
-        notices.extend(lesson_notices)
-        # Identity-pass spine: the look-back is the second waking surface
-        # (realizations often land only when the day is seen whole).
-        marked_reply, realizations, realize_notices = parse_realize_blocks(marked_reply)
-        notices.extend(realize_notices)
-        marked_reply, topics, topic_notices = parse_topic_blocks(marked_reply)
-        notices.extend(topic_notices)
-        marked_reply = self._apply_tend_fence(marked_reply, notices)
-        marked_reply, diary_elections, diary_notices = parse_diary_blocks(marked_reply)
-        notices.extend(diary_notices)
-
-        # The reflection itself is remembered (kind=summary, life scope) —
-        # it is also the target for `target=session` feelings. The engine
-        # rightly demands that a summary NAME what it summarizes: the edges
-        # tie the look-back to the session's own records.
+        phase: Optional[str],
+        title: Optional[str],
+        topics: List[str],
+    ) -> Optional[str]:
+        """The reflection itself is remembered (kind=summary, life scope) —
+        it is also the target for `target=session` feelings. The engine
+        rightly demands that a summary NAME what it summarizes: the edges
+        tie the look-back to the session's own records. Returns its id."""
         refl_digest, refl_floored = floored_reflection_digest(marked_reply, sheet)
         formed = self._effect(
             EffectType.MEMORY_FORM,
@@ -3121,7 +3092,99 @@ class ChatSession:
                 "turn_id": turn_id,
             },
         )
-        session_record_id = next(iter(formed.get("record_ids", [])), None)
+        return next(iter(formed.get("record_ids", [])), None)
+
+    def _within_session_cap(self, kind: str, items: List[str], notices: List[str]) -> List[str]:
+        """Keep at most the session cap of `kind` ("interest" | "lesson")
+        across the whole session (turns + every look-back); refuse the
+        rest loudly. Counts what it lets through."""
+        from .reflection import MAX_INTERESTS_PER_SESSION, MAX_LESSONS_PER_SESSION
+
+        cap = MAX_INTERESTS_PER_SESSION if kind == "interest" else MAX_LESSONS_PER_SESSION
+        room = max(0, cap - self._kept_this_session.get(kind, 0))
+        if len(items) > room:
+            notices.append(
+                f"#FALLBACK {len(items) - room} {kind}(s) refused (cap {cap} per day of "
+                "own time or per visit reached)"
+            )
+            items = items[:room]
+        self._kept_this_session[kind] = self._kept_this_session.get(kind, 0) + len(items)
+        return items
+
+    def _reflect_over(
+        self,
+        sheet: List[Tuple[Optional[str], str]],
+        *,
+        session_id: str,
+        turn_id: str,
+        phase: Optional[str] = None,
+        resolutions: Optional[List[Tuple[str, str, str]]] = None,
+        moment: str = "session",
+        title: Optional[str] = None,
+        summary_only_if_kept: bool = False,
+        count_session_caps: bool = True,
+    ) -> Optional[Dict[str, Any]]:
+        """The look-back core over an explicit sheet (live session, a
+        salvaged ended one, or one personal-time tick — same machinery,
+        same honesty rules). `resolutions` defaults to the whole session's.
+
+        `summary_only_if_kept` (the tick look-back): the summary record is
+        formed only when the look-back KEPT something - a feeling, interest,
+        lesson, diary entry (question, problem, ...), realization or topic;
+        the summary exists to anchor those (from_session, target=session).
+        A "nothing to keep" tick stores nothing (review F3, 2026-11-08: the
+        Ephemeral incident was a near-empty summary winning a recall seat)."""
+        if not sheet:
+            return None
+        if resolutions is None:
+            resolutions = list(self.session_resolutions)
+        sheet_lines = [f"{i}. {desc}" for i, (_rid, desc) in enumerate(sheet, start=1)]
+        prompt = build_reflection_prompt(
+            sheet_lines, resolutions=list(resolutions), moment=moment
+        )
+
+        resp = self._generate(
+            messages=self._prompt_history() + [{"role": "user", "content": prompt}],
+            system_prompt=self.system_base,
+        )
+        raw_reply = clean_model_reply(getattr(resp, "content", None) or "")
+        if not raw_reply:
+            self.out("#FALLBACK reflection returned empty; the session closes without feelings marked")
+            return None
+
+        marked_reply, feelings, notices = parse_feel_blocks(raw_reply, sheet_lines)
+        marked_reply, interests, interest_notices = parse_interest_blocks(marked_reply)
+        notices.extend(interest_notices)
+        marked_reply, lessons, lesson_notices = parse_lesson_blocks(marked_reply)
+        notices.extend(lesson_notices)
+        # Identity-pass spine: the look-back is the second waking surface
+        # (realizations often land only when the day is seen whole).
+        marked_reply, realizations, realize_notices = parse_realize_blocks(marked_reply)
+        notices.extend(realize_notices)
+        marked_reply, topics, topic_notices = parse_topic_blocks(marked_reply)
+        notices.extend(topic_notices)
+        marked_reply = self._apply_tend_fence(marked_reply, notices)
+        marked_reply, diary_elections, diary_notices = parse_diary_blocks(marked_reply)
+        notices.extend(diary_notices)
+        # SESSION caps (review F4): interests and lessons count against the
+        # whole session - an own-time day or a visit - across the turns and
+        # every look-back, not per look-back. A salvage repairs a PAST
+        # session and keeps the parser's own per-look-back cap.
+        if count_session_caps:
+            interests = self._within_session_cap("interest", interests, notices)
+            lessons = self._within_session_cap("lesson", lessons, notices)
+
+        kept_something = bool(
+            feelings or interests or lessons or diary_elections or realizations or topics
+        )
+        session_record_id: Optional[str] = None
+        if summary_only_if_kept and not kept_something:
+            notices.append("the look-back kept nothing; no summary record formed")
+        else:
+            session_record_id = self._form_reflection_summary(
+                marked_reply, sheet, session_id=session_id, turn_id=turn_id,
+                phase=phase, title=title, topics=topics,
+            )
 
         # IN-DAY topic cards (build 4): the elected subjects revise their
         # topic:<name> cards NOW, not at the next sleep — same mechanical

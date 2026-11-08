@@ -18,7 +18,7 @@ If you are new to the project, start with `../README.md` and `../architecture.md
 
 2026-10-28: recounted from disk (deprecated was 13 in this block, 14 on disk); +1 planned for 0858 (root 1063, typed runs); +1 planned for 0859 (ephemeral live-text deltas on the view stream, gateway 0954).
 
-- Planned: 34
+- Planned: 35
 - Proposed: 17
 - Completed: 39
 - Deprecated: 14
@@ -177,6 +177,7 @@ mtime). The anticipated ADR ("an automation is its controller root run") is not 
 | 0066 | `planned/runtime_portability/0066_portable_io_and_media_reader.md` |
 | 0067 | `planned/runtime_systemic_reliability/0067_durable_write_discipline.md` |
 | 0068 | `planned/runtime_systemic_reliability/0068_hot_path_store_reads.md` |
+| 1159 | `planned/1159_a_tool_call_has_a_time_budget_and_the_ledger_shows_its_elapsed_time.md` |
 
 \* 026/027/028 numerically collide with completed items of the same prefix
 (legacy three-digit numbering; they predate the four-digit convention).

@@ -1142,7 +1142,7 @@ def build_visit_workflow(
                     payload={
                         "records": [{
                             "kind": "interest",
-                            "title": "interest: " + _t,
+                            "title": _t,
                             "digest": _w,
                             "keywords": [],
                             "edges": (

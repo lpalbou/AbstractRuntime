@@ -1621,7 +1621,7 @@ class ChatSession:
                     {
                         "records": [{
                             "kind": "interest",
-                            "title": "interest: " + interest_title,
+                            "title": interest_title,
                             "digest": interest_words,
                             "keywords": [],
                             "edges": [],
@@ -3307,7 +3307,7 @@ class ChatSession:
                     "records": [
                         {
                             "kind": "interest",
-                            "title": "interest: " + interest_title,
+                            "title": interest_title,
                             "digest": interest_words,  # his words verbatim (embedded)
                             "keywords": [],
                             "edges": (

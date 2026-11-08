@@ -142,7 +142,9 @@ BLOCKS = (
 
 
 def _assert_titles(t: Dict[str, List[tuple]]) -> None:
-    assert (f"interest: {EXPLICIT}", LONG_BODY) in t.get("interest", []), t.get("interest")
+    # The title is the title (operator 2026-11-08): no "interest:" prefix on a new interest.
+    assert (EXPLICIT, LONG_BODY) in t.get("interest", []), t.get("interest")
+    assert not any(title.lower().startswith("interest:") for title, _w in t.get("interest", []))
     assert (f"lesson: {LONG_FIRST}", LONG_BODY) in t.get("lesson", []), t.get("lesson")
 
 

@@ -52,9 +52,13 @@ class _Recorder:
     def __init__(self, replies: List[str]) -> None:
         self.replies = list(replies)
         self.prompts: List[str] = []
+        self.systems: List[str] = []
+        self.messages: List[List[Dict[str, Any]]] = []
 
     def generate(self, *, messages, system_prompt):
         self.prompts.append(str(messages[-1]["content"]))
+        self.systems.append(str(system_prompt))
+        self.messages.append([dict(m) for m in messages])
 
         class _R:
             pass
@@ -186,15 +190,17 @@ def test_every_personal_tick_ends_with_a_lookback(tmp_path: Path) -> None:
     assert report.ticks == 2
     starts = [p.split("\n", 1)[0] for p in llm.prompts]
     tick_prompts = [i for i, p in enumerate(llm.prompts)
-                    if p.startswith("This stretch of your own time is done.")]
+                    if "This stretch of your own time is done." in p]
     assert tick_prompts == [1, 3], starts
     assert llm.prompts[4].startswith("The session is ending."), starts
     assert not any("look-back failed" in ln for ln in lines), lines
     kinds = _kinds(home_dir)
     assert _has(kinds.get("interest", []), "how tides keep time")
     assert _has(kinds["open_question"], "evening feel shorter")
-    # Each tick's look-back covers only that tick's records.
-    assert "First tick" not in llm.prompts[3]
+    # Each tick's look-back numbers only that tick's records; the day's
+    # earlier moments ride the recap above it.
+    recap, numbered = llm.prompts[3].split("This stretch of your own time is done.", 1)
+    assert "First tick" in recap and "First tick" not in numbered
 
 
 def test_rest_tick_leaves_the_lookback_to_the_day_close(tmp_path: Path) -> None:
@@ -220,7 +226,7 @@ def test_work_ticks_have_no_tick_lookback(tmp_path: Path) -> None:
     loop = LifeLoop(_open, tick_seconds=0, ticks_per_day=2, max_ticks=2,
                     sleep_fn=lambda _s: None, out=lambda _s: None)
     loop.run()
-    assert not any(p.startswith("This stretch of your own time is done.") for p in llm.prompts)
+    assert not any("This stretch of your own time is done." in p for p in llm.prompts)
 
 
 # ------------------------------------------------- review round 2 (storage)
@@ -305,3 +311,58 @@ def test_interest_and_lesson_caps_count_against_the_day(tmp_path: Path) -> None:
     assert sorted(kinds.get("interest", [])) == ["subject 1a", "subject 1b"], kinds.get("interest")
     assert sorted(kinds.get("lesson", [])) == ["lesson 1a", "lesson 1b"], kinds.get("lesson")
     assert any("interest(s) refused (cap 2 per day" in n for n in notices), notices
+
+
+def test_tick_lookback_reuses_the_tick_prompt_and_bounds_its_context(tmp_path: Path) -> None:
+    """Review F6: the tick look-back sends the tick's OWN system prompt
+    (prefix cache) and only that tick's exchange plus a recap of the day's
+    earlier moments - not the whole day's conversation."""
+    home_dir = _make_home(tmp_path)
+    llm = _Recorder(["EARLY-REPLY about the harbour.", "Nothing to keep.",
+                     "LATE-REPLY about the tide.", "Nothing to keep."])
+    s = _personal_session(home_dir, llm)
+    s.turn("(cue) one")
+    s.tick_lookback()
+    s.turn("(cue) two")
+    tick_system = s.reports[-1].system_prompt
+    s.tick_lookback()
+    s.home.close()
+    assert llm.systems[3] == tick_system, "the same system prompt as the tick's own call"
+    assert tick_system != s.system_base, "the tick's prompt carries its MEMORIES block"
+    sent = llm.messages[3]
+    joined = "\n".join(str(m["content"]) for m in sent[:-1])
+    assert "LATE-REPLY" in joined, "this tick's own exchange"
+    assert "EARLY-REPLY" not in joined, "not the whole day's conversation"
+    assert len(sent) == 3, [m["role"] for m in sent]
+    assert sent[-1]["content"].startswith("Earlier today, from your own records:"), sent[-1]["content"][:80]
+
+
+def test_tick_lookback_context_flips_to_the_whole_day(tmp_path: Path, monkeypatch) -> None:
+    from abstractruntime.identity import chat as chat_mod
+
+    monkeypatch.setattr(chat_mod, "TICK_LOOKBACK_CONTEXT", "day")
+    home_dir = _make_home(tmp_path)
+    llm = _Recorder(["EARLY-REPLY.", "Nothing.", "LATE-REPLY.", "Nothing."])
+    s = _personal_session(home_dir, llm)
+    s.turn("(cue) one")
+    s.tick_lookback()
+    s.turn("(cue) two")
+    s.tick_lookback()
+    s.home.close()
+    joined = "\n".join(str(m["content"]) for m in llm.messages[3][:-1])
+    assert "EARLY-REPLY" in joined and "LATE-REPLY" in joined
+
+
+def test_day_close_keeps_the_whole_discussion_and_the_last_turn_prompt(tmp_path: Path) -> None:
+    home_dir = _make_home(tmp_path)
+    llm = _Recorder(["EARLY-REPLY.", "Nothing.", "LATE-REPLY.", "Day seen whole."])
+    s = _personal_session(home_dir, llm)
+    s.turn("(cue) one")
+    s.tick_lookback()
+    s.turn("(cue) two")
+    last_system = s.reports[-1].system_prompt
+    s.reflect()
+    s.home.close()
+    joined = "\n".join(str(m["content"]) for m in llm.messages[-1][:-1])
+    assert "EARLY-REPLY" in joined and "LATE-REPLY" in joined, "the whole day"
+    assert llm.systems[-1] == last_system

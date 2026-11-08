@@ -192,6 +192,19 @@ def _bounded_with_marker(text: Any, *, max_chars: int, marker: str) -> str:
     return s[:keep].rstrip() + marker_s
 
 
+# THE TICK LOOK-BACK'S CONTEXT (review F6, operator option b, 2026-11-08).
+# "tick": the look-back at the end of a personal-time tick sees that tick's
+#   own exchange plus a short recap of the day's earlier moments (the last
+#   TICK_LOOKBACK_RECAP_MOMENTS sheet lines) - about 3-5k tokens beyond the
+#   tick's own system prompt, which it reuses whole so a provider's prefix
+#   cache hits.
+# "day": it sees the whole day's conversation so far (the history window,
+#   up to 50k tokens), like the visit and day closes do.
+# Visit closes and own-time day closes always see the whole discussion.
+TICK_LOOKBACK_CONTEXT = "tick"
+TICK_LOOKBACK_RECAP_MOMENTS = 12
+
+
 # The session-sheet moment bound. Sheet lines ride BOTH the reflection prompt
 # and the card-authoring prompt — a silent cut there is the entity being asked
 # to reflect on an amputated account of its own turn (ADR-0026 §1).
@@ -1152,6 +1165,7 @@ class ChatSession:
         # resolutions since the previous one.
         self._lookback_sheet_mark = 0
         self._lookback_resolution_mark = 0
+        self._lookback_history_mark = 0
         self._tick_lookbacks = 0
         # Interests/lessons kept this session (turns + look-backs), for the
         # session caps (review F4).
@@ -3015,10 +3029,30 @@ class ChatSession:
         res_start = self._lookback_resolution_mark
         resolutions = list(self.session_resolutions[res_start:])
         self._lookback_resolution_mark = len(self.session_resolutions)
+        hist_start = self._lookback_history_mark
+        self._lookback_history_mark = len(self.history)
         if not sheet:
             return None
         self._tick_lookbacks += 1
         n = self._tick_lookbacks
+        if TICK_LOOKBACK_CONTEXT == "tick":
+            # This tick's own exchange, plus a recap of the day's earlier
+            # moments (a visible count names what the recap leaves out).
+            context: Optional[List[Dict[str, str]]] = [dict(m) for m in self.history[hist_start:]]
+            earlier = [desc for _rid, desc in self.session_sheet[:start]]
+            preamble = ""
+            if earlier:
+                shown = earlier[-TICK_LOOKBACK_RECAP_MOMENTS:]
+                hidden = len(earlier) - len(shown)
+                preamble = (
+                    "Earlier today, from your own records"
+                    + (f" (the last {len(shown)} of {len(earlier)} moments)" if hidden else "")
+                    + ":\n" + "\n".join(f"- {d}" for d in shown) + "\n\n"
+                )
+        elif TICK_LOOKBACK_CONTEXT == "day":
+            context, preamble = None, ""
+        else:
+            raise ValueError(f"TICK_LOOKBACK_CONTEXT must be 'tick' or 'day', not {TICK_LOOKBACK_CONTEXT!r}")
         result = self._reflect_over(
             sheet,
             session_id=self.session_id,
@@ -3027,6 +3061,8 @@ class ChatSession:
             moment="tick",
             title=f"tick reflection: {self.session_id} #{n}",
             summary_only_if_kept=True,
+            context_messages=context,
+            preamble=preamble,
         )
         if result is not None:
             self.reflection_diary_entries += result["diary_entries"]
@@ -3123,6 +3159,8 @@ class ChatSession:
         title: Optional[str] = None,
         summary_only_if_kept: bool = False,
         count_session_caps: bool = True,
+        context_messages: Optional[List[Dict[str, str]]] = None,
+        preamble: str = "",
     ) -> Optional[Dict[str, Any]]:
         """The look-back core over an explicit sheet (live session, a
         salvaged ended one, or one personal-time tick — same machinery,
@@ -3139,13 +3177,19 @@ class ChatSession:
         if resolutions is None:
             resolutions = list(self.session_resolutions)
         sheet_lines = [f"{i}. {desc}" for i, (_rid, desc) in enumerate(sheet, start=1)]
-        prompt = build_reflection_prompt(
+        prompt = preamble + build_reflection_prompt(
             sheet_lines, resolutions=list(resolutions), moment=moment
         )
-
+        # The SAME system prompt as the last turn's own call (review F6):
+        # the look-back then shares that whole prefix and a provider's
+        # prefix cache hits; a session with no turn yet (a salvage) uses
+        # the base. `context_messages` None = the whole discussion (the
+        # history window), which the visit and day closes keep.
+        last_system = self.reports[-1].system_prompt if self.reports else ""
+        messages = self._prompt_history() if context_messages is None else list(context_messages)
         resp = self._generate(
-            messages=self._prompt_history() + [{"role": "user", "content": prompt}],
-            system_prompt=self.system_base,
+            messages=messages + [{"role": "user", "content": prompt}],
+            system_prompt=last_system or self.system_base,
         )
         raw_reply = clean_model_reply(getattr(resp, "content", None) or "")
         if not raw_reply:

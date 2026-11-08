@@ -209,6 +209,18 @@ class ToolElection:
     # operator-transparency ruling; prompt-ephemerality is about the RECORD,
     # not about hiding the turn from its operator).
     result: Optional[str] = None
+    # DURABILITY (root 1145 step 1; operator 2026-11-08: "there should be no
+    # activity, either by human or by entities, that does not go through
+    # the runtime"): what the tool actually RETRIEVED, whole, when the shown
+    # result is a bounded view of it — the fetched page past fetch_url's
+    # cap, the file past read_file's text cap (or an image's bytes), a
+    # command's whole output. Set by the executor; stored by
+    # `keep_tool_result_artifact`. None = the result text IS the material.
+    material: Optional[bytes] = None
+    material_content_type: str = "text/plain; charset=utf-8"
+    # The home artifact this round stored for the election (set by
+    # execute_tool_elections when the lane passes an artifact store).
+    artifact_id: Optional[str] = None
 
 
 def sanitize_tool_surface(text: str, cap: int = 120) -> str:
@@ -867,35 +879,53 @@ def _run_web_search(query: str) -> str:
         return raw  # unexpected shape: hand over the truth unformatted
 
 
-def _run_fetch_url(body: str) -> str:
+_FETCH_URL_RESULT_CAP = 6000
+
+
+def _fetch_page(body: str) -> Tuple[str, Optional[str]]:
     """Read ONE web page — a read-only GET (maintainer ruling: GET, never
     POST). The verb is hard-coded here; the entity supplies only a URL, so
-    the prompt has no way to reach a mutating request. Returns readable text
-    (title + content), an honest failure string on error (never a crash)."""
+    the prompt has no way to reach a mutating request.
+
+    Returns (the result text shown to the entity, the WHOLE page text or
+    None). The shown text is bounded so a huge page cannot blow the turn's
+    context — the cap is labeled truncation, never a silent cut; when it
+    cuts, the whole text (title + full content) is returned beside it so the
+    durability artifact keeps what was actually retrieved (root 1145 step 1).
+    Failures are honest strings (never a crash) with no whole text."""
     url = (body or "").strip().splitlines()[0].strip() if body else ""
     if not url:
-        return "(fetch_url needs a URL)"
+        return "(fetch_url needs a URL)", None
     if not (url.startswith("http://") or url.startswith("https://")):
-        return f"(fetch_url needs an http(s) URL; got {url!r})"
+        return f"(fetch_url needs an http(s) URL; got {url!r})", None
 
     from abstractcore.tools.common_tools import fetch_url
 
     result = fetch_url(url=url, method="GET", include_full_content=True)
     if not isinstance(result, dict):
-        return str(result)
+        return str(result), None
     if result.get("error") or result.get("success") is False:
-        return f"(could not read {url}: {result.get('error') or 'fetch failed'})"
+        return f"(could not read {url}: {result.get('error') or 'fetch failed'})", None
     title = str(result.get("title") or "").strip()
     content = str(result.get("content") or result.get("text") or "").strip()
     if not content:
-        return f"(read {url} but found no readable text)"
-    # Bound the payload so a huge page cannot blow the turn's context; the
-    # cap is labeled truncation, never a silent cut.
-    cap = 6000
+        return f"(read {url} but found no readable text)", None
+    cap = _FETCH_URL_RESULT_CAP
     head = f"Fetched: {url}" + (f"\nTitle: {title}" if title else "")
+    whole = f"{head}\n\n{content}"
     if len(content) > cap:
-        content = content[:cap] + f"\n#TRUNCATION (page longer than {cap} chars; refine with web_search or a more specific URL)"
-    return f"{head}\n\n{content}"
+        shown = content[:cap] + (
+            f"\n#TRUNCATION (page longer than {cap} chars; "
+            "refine with web_search or a more specific URL)"
+        )
+        return f"{head}\n\n{shown}", whole
+    return whole, None
+
+
+def _run_fetch_url(body: str) -> str:
+    """The shown result of `_fetch_page` (readable text: title + content, or
+    an honest failure string)."""
+    return _fetch_page(body)[0]
 
 
 def _run_diary_list(diary_store: Any, body: str) -> str:
@@ -1064,6 +1094,13 @@ class ToolExecutionContext:
     # the file is stored and not viewable in this lane — never a promised
     # look that no call carries.
     results_carry_media: bool = False
+    # DURABILITY (root 1145 step 1): the entity HOME's artifact store. When
+    # set, every executed election's result rests there whole (see
+    # `keep_tool_result_artifact`) and the result text gains the
+    # `[artifact: <id>]` line; `artifact_context` says where it came from
+    # (lane, run_id, turn_id / tick_id, session_id, entity_id, record_id).
+    artifact_store: Any = None
+    artifact_context: Dict[str, Any] = field(default_factory=dict)
     notices: List[str] = field(default_factory=list)
 
 
@@ -1072,7 +1109,13 @@ def _exec_web_search(e: ToolElection, ctx: ToolExecutionContext) -> str:
 
 
 def _exec_fetch_url(e: ToolElection, ctx: ToolExecutionContext) -> str:
-    return _run_fetch_url(e.body)
+    shown, whole = _fetch_page(e.body)
+    if whole is not None:
+        # The shown text is a cut of the page; the page itself is the
+        # durability artifact's material (root 1145 step 1).
+        e.material = whole.encode("utf-8")
+        e.material_content_type = "text/plain; charset=utf-8"
+    return shown
 
 
 def _exec_diary_list(e: ToolElection, ctx: ToolExecutionContext) -> str:
@@ -1155,7 +1198,9 @@ _EXEC_TIMEOUT_S = EXEC_TIMEOUT_S
 _EXEC_OUTPUT_CAP = 24_000
 
 
-def _run_execute_command(command_text: str, ws: Any) -> str:
+def _run_execute_command(
+    command_text: str, ws: Any, *, election: Optional[ToolElection] = None,
+) -> str:
     import shlex
     import subprocess
     from pathlib import Path
@@ -1315,9 +1360,15 @@ def _run_execute_command(command_text: str, ws: Any) -> str:
         return f"the command could not run ({e})"
     out = (stdout or "") + (("\n" + stderr) if stderr else "")
     out = out.strip()
-    if len(out) > _EXEC_OUTPUT_CAP:
-        out = out[:_EXEC_OUTPUT_CAP] + f"\n#TRUNCATION output capped at {_EXEC_OUTPUT_CAP} chars"
     tail = f"(exit code {proc.returncode})"
+    if len(out) > _EXEC_OUTPUT_CAP:
+        if election is not None:
+            # The whole output (with its exit code) is the durability
+            # artifact's material (root 1145 step 1); the shown text stays
+            # bounded and labeled.
+            election.material = f"{out}\n{tail}".encode("utf-8")
+            election.material_content_type = "text/plain; charset=utf-8"
+        out = out[:_EXEC_OUTPUT_CAP] + f"\n#TRUNCATION output capped at {_EXEC_OUTPUT_CAP} chars"
     return f"{out}\n{tail}" if out else tail
 
 
@@ -1325,7 +1376,7 @@ def _exec_execute_command(e: ToolElection, ctx: ToolExecutionContext) -> str:
     ws = _workspace_or_notice(e, ctx)
     if ws is None:
         return f"(the {e.name} tool is not enabled in this session)"
-    return _run_execute_command(e.body, ws)
+    return _run_execute_command(e.body, ws, election=e)
 
 
 def _exec_write_file(e: ToolElection, ctx: ToolExecutionContext) -> str:
@@ -1349,7 +1400,36 @@ def _exec_read_file(e: ToolElection, ctx: ToolExecutionContext) -> str:
     ws = _workspace_or_notice(e, ctx)
     if ws is None:
         return f"(the {e.name} tool is not enabled in this session)"
-    return ws.read_file(_read_file_target(e), carry_media=bool(ctx.results_carry_media))
+    out = ws.read_file(_read_file_target(e), carry_media=bool(ctx.results_carry_media))
+    if ctx.artifact_store is not None:
+        _attach_read_file_material(e, ws)
+    return out
+
+
+def _attach_read_file_material(e: ToolElection, ws: WorkspaceRoot) -> None:
+    """The WHOLE file a read_file election opened, as the durability
+    artifact's bytes (root 1145 step 1): the text past
+    WORKSPACE_TEXT_READ_CAP_CHARS, an image, a binary — byte for byte, with
+    a content type read from the bytes (a name proves nothing). Same
+    containment and cap as the read itself; a refused read (outside the
+    workspace, over the cap, no such file) attaches nothing, so the honest
+    refusal text is what rests."""
+    try:
+        path = ws.resolve(_read_file_target(e))
+        if not path.is_file() or path.stat().st_size > WORKSPACE_FILE_CAP_BYTES:
+            return
+        data = path.read_bytes()
+    except (OSError, ValueError, PermissionError, FileNotFoundError):
+        return
+    image = sniff_image(data)
+    if image is not None:
+        content_type = image[1]
+    elif sniff_binary(data) is not None:
+        content_type = "application/octet-stream"
+    else:
+        content_type = "text/plain; charset=utf-8"
+    e.material = data
+    e.material_content_type = content_type
 
 
 def _read_file_media(e: ToolElection, ctx: ToolExecutionContext) -> Optional[List[str]]:
@@ -1630,6 +1710,80 @@ def walled_tool_rows() -> List[Dict[str, Any]]:
     return rows
 
 
+TOOL_RESULT_ARTIFACT_KIND = "tool_result"
+
+
+def keep_tool_result_artifact(
+    store: Any, election: ToolElection, *, context: Optional[Dict[str, Any]] = None,
+) -> str:
+    """Store what ONE executed tool returned as an artifact of the entity's
+    home; returns the artifact id (root 1145 step 1; operator 2026-11-08:
+    "there should be no activity, either by human or by entities, that does
+    not go through the runtime ... to enable retrospective analysis / search,
+    including to rehydrate context/memory").
+
+    The bytes are the WHOLE material: `election.material` when the executor
+    set it (a fetched page past the shown cap, a file past the text cap, an
+    image's bytes, a command's whole output), else the result text as shown.
+    No size cut here, and FileArtifactStore carries no bound of its own;
+    `metadata.bytes` says the size. Content-addressed by the store (the blob
+    is the sha256 of the bytes, deduped across runs); the artifact id is
+    namespaced to `context["run_id"]` when given, so each run that retrieved
+    the same page has its own record pointing at one blob.
+
+    Metadata: tool, arguments (the election body whole + its block args),
+    turn_id / tick_id, record_id (when the caller knows it), created_at,
+    lane, run_id, session_id, entity_id, node_id, content_type, bytes,
+    `shown_is_view` (the result text is a bounded view of these bytes) and
+    `shown_chars`, `failed` (the executor raised; the bytes are its honest
+    failure text). Tags (indexed): kind, tool, lane, entity_id, turn_id.
+    Raises on a store failure: the caller decides how loudly."""
+    from datetime import datetime, timezone
+
+    ctx = dict(context or {})
+    shown = str(election.result or "")
+    if election.material is not None:
+        content = bytes(election.material)
+        content_type = election.material_content_type or "application/octet-stream"
+        shown_is_view = True
+    else:
+        content = shown.encode("utf-8")
+        content_type = "text/plain; charset=utf-8"
+        shown_is_view = False
+    run_id = str(ctx.get("run_id") or "").strip() or None
+    tags: Dict[str, str] = {"kind": TOOL_RESULT_ARTIFACT_KIND, "tool": election.name}
+    for key in ("lane", "entity_id", "turn_id", "tick_id", "session_id"):
+        if ctx.get(key):
+            tags[key] = str(ctx[key])
+    arguments: Dict[str, str] = {"body": str(election.body or "")}
+    for key, value in (election.args or {}).items():
+        arguments[str(key)] = str(value)
+    metadata: Dict[str, Any] = {
+        "kind": TOOL_RESULT_ARTIFACT_KIND,
+        "tool": election.name,
+        "arguments": arguments,
+        "turn_id": ctx.get("turn_id"),
+        "tick_id": ctx.get("tick_id"),
+        "record_id": ctx.get("record_id"),
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "lane": ctx.get("lane"),
+        "phase": ctx.get("phase"),
+        "run_id": run_id,
+        "session_id": ctx.get("session_id"),
+        "node_id": ctx.get("node_id"),
+        "entity_id": ctx.get("entity_id"),
+        "content_type": content_type,
+        "bytes": len(content),
+        "shown_is_view": shown_is_view,
+        "shown_chars": len(shown),
+        "failed": bool(ctx.get("failed")),
+    }
+    meta = store.store(
+        content, content_type=content_type, run_id=run_id, tags=tags, metadata=metadata,
+    )
+    return str(meta.artifact_id)
+
+
 def execute_tool_elections(
     elections: List[ToolElection],
     *,
@@ -1643,6 +1797,8 @@ def execute_tool_elections(
     feelings_about_fn: Optional[Callable[[str], str]] = None,
     results_rest_durably: bool = False,
     results_carry_media: bool = False,
+    artifact_store: Any = None,
+    artifact_context: Optional[Dict[str, Any]] = None,
 ) -> Tuple[str, List[str]]:
     """Run elected tools; return (results_message, notices).
 
@@ -1652,7 +1808,17 @@ def execute_tool_elections(
     run only when a `workspace` is provided (operator-enabled per session).
     Dispatch goes through TOOL_DESCRIPTORS (declare-beside-execute): the
     executor lives on the same record as the declaration, so this function
-    cannot know a name the declaration surfaces don't."""
+    cannot know a name the declaration surfaces don't.
+
+    DURABILITY (root 1145 step 1): with `artifact_store` (the entity HOME's
+    store), every executed election's result rests there WHOLE through
+    `keep_tool_result_artifact` — the page, the file, the search output, the
+    image bytes — and the result text the model reads ends with one line,
+    `[artifact: <id>]`, so the verbatim and the memory records can name it.
+    Book-adjacent tools (diary_read, diary_list, search_memory) are the one
+    exception: their content is the entity's own book/graph, already in the
+    home, and the W5 containment rule keeps private words out of life scope.
+    A store failure is a loud `#FALLBACK` notice, never a lost turn."""
     ctx = ToolExecutionContext(
         diary_store=diary_store,
         diary_read_effect=diary_read_effect,
@@ -1664,9 +1830,12 @@ def execute_tool_elections(
         feelings_about_fn=feelings_about_fn,
         results_rest_durably=results_rest_durably,
         results_carry_media=results_carry_media,
+        artifact_store=artifact_store,
+        artifact_context=dict(artifact_context or {}),
     )
     sections: List[str] = []
     for e in elections:
+        failed = False
         try:
             d = TOOL_DESCRIPTORS.get(e.name)
             if d is None:  # unreachable: parse admits only allowed names
@@ -1674,8 +1843,21 @@ def execute_tool_elections(
             out = d.executor(e, ctx)
         except Exception as exc:  # tool failure -> honest report, never a crash
             out = f"(the {e.name} call failed: {exc})"
+            failed = True
+            e.material = None
             ctx.notices.append(f"#FALLBACK tool {e.name} failed: {exc}")
         e.result = out  # the election carries what came back (probe surface)
+        if ctx.artifact_store is not None and e.name not in BOOK_ADJACENT_TOOL_NAMES:
+            try:
+                artifact_id = keep_tool_result_artifact(
+                    ctx.artifact_store, e, context={**ctx.artifact_context, "failed": failed},
+                )
+            except Exception as exc:  # noqa: BLE001 - durability failing is loud, never fatal to the turn
+                ctx.notices.append(f"#FALLBACK tool {e.name} result NOT kept as an artifact: {exc}")
+            else:
+                e.artifact_id = artifact_id
+                out = f"{out}\n[artifact: {artifact_id}]"
+                e.result = out
         sections.append(f"[{e.name}]\n{out}")
     # Header honesty per lane (adversary F4, corrected by gateway c5403):
     # the effect lane's results REST as durable ledger truth — but NOT

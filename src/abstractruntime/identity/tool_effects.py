@@ -180,6 +180,19 @@ def build_entity_tool_effect_handlers(*, home: Any) -> Dict[EffectType, EffectHa
                     # are ledger truth in the home's own store) — the header/
                     # trailer must not tell the entity its words vanish.
                     results_rest_durably=True,
+                    # Root 1145 step 1 (operator 2026-11-08: no entity activity
+                    # outside the runtime): every result rests WHOLE as an
+                    # artifact of the home, named in the result text.
+                    artifact_store=home.artifacts,
+                    artifact_context={
+                        "lane": "effect",
+                        "phase": phase,
+                        "run_id": str(run.run_id),
+                        "session_id": getattr(run, "session_id", None),
+                        "node_id": getattr(run, "current_node", None),
+                        "turn_id": payload.get("turn_id"),
+                        "entity_id": home.entity_id,
+                    },
                 )
             except Exception as e:  # noqa: BLE001
                 return EffectOutcome.failed(f"ENTITY_TOOLS_EXECUTE executor failed: {e}")
@@ -193,7 +206,10 @@ def build_entity_tool_effect_handlers(*, home: Any) -> Dict[EffectType, EffectHa
         return EffectOutcome.completed({
             "phase": phase,
             "tools_ran": seen,
-            "results": [{"name": e.name, "result": e.result} for e in elections],
+            "results": [
+                {"name": e.name, "result": e.result, "artifact_id": e.artifact_id}
+                for e in elections
+            ],
             "results_message": results_message,
             "markers": markers,
             "notices": gate_notes + list(notices) + list(exec_notices),

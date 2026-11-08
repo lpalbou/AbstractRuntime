@@ -1910,6 +1910,23 @@ class ChatSession:
         return out.result
 
     # ------------------------------------------------------------------ turn
+    def _artifact_context(self, turn_id: str) -> Dict[str, Any]:
+        """Where a tool result's durability artifact came from (root 1145
+        step 1): this lane's run id (the stand-in `chat-<session>` run on
+        the home-direct lanes), the turn id — which IS the tick id on
+        personal time, where one tick is one turn — the phase and the
+        entity. The visit lane that runs through the gateway's TOOL_CALLS
+        handler builds the same shape from the real run."""
+        return {
+            "lane": self.phase,
+            "phase": self.phase,
+            "run_id": str(self.run.run_id),
+            "session_id": self.session_id,
+            "turn_id": turn_id,
+            "tick_id": turn_id if self.phase != "visit" else None,
+            "entity_id": self.home.entity_id,
+        }
+
     def turn(self, user_text: str, *, speaker_label: Optional[str] = None) -> Tuple[str, TurnReport]:
         self.turn_n += 1
         turn_id = f"t-{self.turn_n:04d}"
@@ -2175,6 +2192,10 @@ class ChatSession:
                     search_memory_fn=self._search_memory,
                     recent_memories_fn=self._recent_memories,
                     feelings_about_fn=self._feelings_about,
+                    # Root 1145 step 1: what the tools returned rests WHOLE as
+                    # artifacts of the home, named in the result text.
+                    artifact_store=self.home.artifacts,
+                    artifact_context=self._artifact_context(turn_id),
                 )
                 report.notices.extend(exec_notices)
                 # What each lookup RETURNED, on the probe surface (maintainer
@@ -2183,6 +2204,7 @@ class ChatSession:
                 # response passes tool_details through unchanged.
                 for detail, e in zip(round_details, tool_elections):
                     detail["result"] = e.result or ""
+                    detail["artifact_id"] = e.artifact_id or ""
                 lookup_phases.append(tool_marked)
                 # W5 raw-at-rest: what the tools RETURNED joins the episode
                 # verbatim — except book-adjacent tools (private words/gists
@@ -2344,10 +2366,13 @@ class ChatSession:
                         search_memory_fn=self._search_memory,
                         recent_memories_fn=self._recent_memories,
                         feelings_about_fn=self._feelings_about,
+                        artifact_store=self.home.artifacts,
+                        artifact_context=self._artifact_context(turn_id),
                     )
                     report.notices.extend(exec_notices)
                     for detail, e in zip(fix_details, fix_elections):
                         detail["result"] = e.result or ""
+                        detail["artifact_id"] = e.artifact_id or ""
                     lookup_phases.append(marked_fix)
                     tool_result_phases.append(_at_rest_tool_results(fix_elections))
                     convo_fix = convo_fix + [

@@ -1391,8 +1391,8 @@ def _note_speculation_degraded(result: Any, *, provider: Any, requested: Any) ->
     )
     who = str(provider or "").strip()
     notice = (
-        f"speculation requested ({mode}) but the {who + ' ' if who else ''}provider has no native MTP adapter; "
-        "generated without it"
+        f"speculation requested ({mode}) but the {who + ' ' if who else ''}provider "
+        "has no native MTP adapter; generated without it"
     )
     reason = spec.get("reason")
     if isinstance(reason, str) and reason.strip():

@@ -905,7 +905,9 @@ def test_standing_state_rotates_daily_and_offers_an_interest(tmp_path) -> None:
     assert "q1" in day1 and "q0" in day2, "the offered question rotates daily"
     assert "Alive in you:" in day1, "an interest is offered back"
     assert "read_memory fetches one" in day1, "the offer carries the reach command"
-    assert "never owed" in day1, "offered, never ordered"
+    # Operator 2026-11-08 (review F5): this note rides the day-open cue,
+    # which carries no "owed" clause any more.
+    assert "owed" not in day1
 
 
 def test_commitments_teach_in_the_contract_not_the_close() -> None:

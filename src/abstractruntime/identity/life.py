@@ -1092,7 +1092,7 @@ def _standing_interest_note(home_dir: Path, entity_id: str, rotation_key: int) -
             ratio + " Alive in you: " + "; ".join(offers) +
             ". read_memory fetches one; if a diary entry today DEVELOPS it, "
             "add explores=<its #tag> on the block line - exploring feeds an "
-            "interest, never closes it. Yours if it pulls, never owed."
+            "interest, never closes it."
         )
         return note, sorted(seen_ids)
     except Exception:  # noqa: BLE001 - the cue is an offer; absence is silent

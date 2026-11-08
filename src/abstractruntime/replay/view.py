@@ -47,7 +47,7 @@ import re
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Set, Tuple
 
 from ..automations.attention import ANSWER_PAYLOADS
-from ..core.turn_author import turn_authors
+from ..core.turn_author import prompt_repeat_of, turn_authors
 from ..core.vars import is_paused_vars
 from ..history_bundle import _extract_usage_from_ledger_record, _extract_user_prompt_from_input
 from ..identity.digital_identity import read_run_identity_ref
@@ -205,6 +205,10 @@ def _snapshot(run: Any) -> Dict[str, Any]:
     # view's user and assistant messages.
     snap["authors"] = turn_authors(d.get("vars") if isinstance(d.get("vars"), dict) else {},
                                    workflow_id=snap["workflow_id"])
+    repeat_of = prompt_repeat_of(d.get("vars"))
+    if repeat_of:
+        # The input repeats another turn's prompt (an @entity mention): clients fold it.
+        snap["repeat_of"] = repeat_of
     # Only when the host stamped one: a run without a ref keeps the same snapshot digest (cursor token).
     ref = _run_identity_ref(d.get("vars"))
     if ref is not None:
@@ -1273,7 +1277,7 @@ class ReplayView:
             if snap.get("prompt"):
                 self._message(f"{self.root_run_id}:input", role="user", kind="prompt", text=snap["prompt"],
                               run_id=self.root_run_id, step_id="", seq=0, ts=snap.get("created_at") or root.first_ts,
-                              source="run_input")
+                              source="run_input", extra={"repeat_of": snap.get("repeat_of")})
             if snap.get("status") == "completed" and f"{self.root_run_id}:final" not in self._messages:
                 # No terminal record folded (a legacy or windowed ledger): the snapshot's output.
                 self._final_message(self.root_run_id, "", 0, snap.get("updated_at") or "~", snap.get("output_text") or "",

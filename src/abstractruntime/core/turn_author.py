@@ -35,6 +35,10 @@ from typing import Any, Dict, Mapping, Optional
 
 AUTHOR_KEY = "author"
 PROMPT_AUTHOR_KEY = "prompt_author"
+# `vars._meta.repeat_of`: this turn's prompt REPEATS another turn's (the run id of the person's own
+# turn whose words an `@entity` mention answers again). Clients fold the repeated bubble into that
+# turn; replay keeps the prompt so every turn stays a whole user/assistant pair.
+REPEAT_OF_KEY = "repeat_of"
 AUTHOR_KINDS = ("entity", "agent", "person")
 AUTHOR_FIELDS = ("kind", "name", "entity_id", "identity_ref", "avatar")
 
@@ -171,6 +175,12 @@ def prompt_author(vars_obj: Any) -> Dict[str, Any]:
     return author_for("person", name)
 
 
+def prompt_repeat_of(vars_obj: Any) -> Optional[str]:
+    """The run id this turn's prompt repeats (`vars._meta.repeat_of`), or None."""
+    value = _meta(vars_obj).get(REPEAT_OF_KEY)
+    return value.strip() if isinstance(value, str) and value.strip() else None
+
+
 def turn_authors(vars_obj: Any, *, workflow_id: Any = None) -> Dict[str, Dict[str, Any]]:
     """`{"prompt": <author>, "answer": <author>}` of one turn run."""
     return {"prompt": prompt_author(vars_obj), "answer": answer_author(vars_obj, workflow_id=workflow_id)}
@@ -191,9 +201,11 @@ __all__ = [
     "AUTHOR_KEY",
     "AUTHOR_KINDS",
     "PROMPT_AUTHOR_KEY",
+    "REPEAT_OF_KEY",
     "answer_author",
     "author_for",
     "prompt_author",
+    "prompt_repeat_of",
     "read_author",
     "speaker_line",
     "stamp_turn_authors",

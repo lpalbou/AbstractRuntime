@@ -580,6 +580,9 @@ def _turn_pairs(turns: Any, *, excluded: set) -> List[List[Dict[str, Any]]]:
         # so the next agent run never reads another speaker's words as its own. Driven by the
         # field alone; agent and person messages keep their exact bytes (prefix caches).
         user_meta = {**meta, "author": turn.get("prompt_author")} if turn.get("prompt_author") else dict(meta)
+        if turn.get("repeat_of"):
+            # The prompt repeats another turn's (an @entity mention): kept, so the pair stays whole.
+            user_meta["repeat_of"] = turn["repeat_of"]
         answer_author = turn.get("author")
         answer_meta = {**meta, "author": answer_author} if answer_author else dict(meta)
         turn_pairs.append(

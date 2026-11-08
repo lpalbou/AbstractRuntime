@@ -845,7 +845,7 @@ def _best_effort_session_turns(
     # parent-less runs plus automation occurrences; never descendants,
     # controllers, internal runs, legacy scheduled wrappers or drafts.
     from .session_turns import select_session_turns
-    from .core.turn_author import turn_authors
+    from .core.turn_author import prompt_repeat_of, turn_authors
 
     roots: List[RunState] = select_session_turns(
         run_store,
@@ -952,6 +952,7 @@ def _best_effort_session_turns(
                 "answer_meta": answer_meta,
                 "prompt_author": authors["prompt"],
                 "author": authors["answer"],
+                "repeat_of": prompt_repeat_of(input_data),
                 "stats": stats,
                 "artifacts": artifacts,
             }
@@ -960,12 +961,13 @@ def _best_effort_session_turns(
 
 
 def _run_authors(run: Any) -> Dict[str, Any]:
-    """`{prompt_author, author}` of a run (core.turn_author)."""
-    from .core.turn_author import turn_authors
+    """`{prompt_author, author, repeat_of}` of a run (core.turn_author)."""
+    from .core.turn_author import prompt_repeat_of, turn_authors
 
     vars_obj = getattr(run, "vars", None)
-    authors = turn_authors(vars_obj if isinstance(vars_obj, dict) else {}, workflow_id=getattr(run, "workflow_id", None))
-    return {"prompt_author": authors["prompt"], "author": authors["answer"]}
+    vars_obj = vars_obj if isinstance(vars_obj, dict) else {}
+    authors = turn_authors(vars_obj, workflow_id=getattr(run, "workflow_id", None))
+    return {"prompt_author": authors["prompt"], "author": authors["answer"], "repeat_of": prompt_repeat_of(vars_obj)}
 
 
 def _omitted_marker(*, field: str, value: Any) -> Dict[str, Any]:

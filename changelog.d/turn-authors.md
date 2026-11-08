@@ -13,3 +13,8 @@
   and person messages keep their exact bytes. Replay view messages with role `user`/`assistant` carry `author` from
   the root run (relabelled when the snapshot is folded after the records); the 15 conformance goldens are
   regenerated for the new key (cursor tokens change with the snapshot digest).
+- **`repeat_of`: a turn whose prompt repeats another turn's** (`core/turn_author.py` `prompt_repeat_of`). A host
+  stamps `vars._meta.repeat_of = <run id>` (the gateway does it for an `@entity` mention that answers the person's own
+  turn again). Session turn rows and history bundle `run` sections carry `repeat_of` (null when none); the replay
+  view's input message carries it when set; replayed history keeps the prompt (the pair stays whole, so the
+  entity's reply still reaches the next agent run) and marks the user message's `metadata.repeat_of`.

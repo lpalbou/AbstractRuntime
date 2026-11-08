@@ -137,3 +137,26 @@ def test_history_bundle_run_section_carries_the_authors():
     rs = _store()
     bundle = export_run_history_bundle(run_id="run-mention", run_store=rs, ledger_store=InMemoryLedgerStore(), artifact_store=None)
     assert bundle["run"]["author"] == NERIN and bundle["run"]["prompt_author"] == ALICE
+
+
+def test_a_repeated_prompt_is_marked_repeat_of_and_kept_whole_for_replay():
+    rs = InMemoryRunStore()
+    rs.save(_agent_run())
+    run = _mention_run()
+    run.vars["_meta"]["repeat_of"] = "run-agent"
+    rs.save(run)
+    turns = {t["run_id"]: t for t in _best_effort_session_turns(
+        run_store=rs, ledger_store=InMemoryLedgerStore(), artifact_store=None, session_id="sess-1", limit=10)}
+    assert turns["run-mention"]["repeat_of"] == "run-agent" and turns["run-agent"]["repeat_of"] is None
+    # Replay keeps the pair whole (the entity's reply is never lost) and marks the repeat.
+    history = session_chat_messages(run_store=rs, session_id="sess-1")
+    assert len(history) == 4 and history[2]["metadata"]["repeat_of"] == "run-agent"
+    assert "repeat_of" not in history[0]["metadata"]
+    # The replay view's input message names the turn it repeats; the answer is not marked.
+    view = replay({"run-mention": []}, {"run-mention": run}, root_run_id="run-mention").to_json()
+    by_role = {m["role"]: m for m in view["messages"]}
+    assert by_role["user"]["repeat_of"] == "run-agent" and "repeat_of" not in by_role["assistant"]
+    from abstractruntime import export_run_history_bundle
+
+    bundle = export_run_history_bundle(run_id="run-mention", run_store=rs, ledger_store=InMemoryLedgerStore(), artifact_store=None)
+    assert bundle["run"]["repeat_of"] == "run-agent"

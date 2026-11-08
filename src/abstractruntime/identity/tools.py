@@ -270,6 +270,32 @@ _BINARY_MAGIC_LABELS: Tuple[Tuple[bytes, str], ...] = (
     (b"\xfe\xff", "UTF-16 big-endian text (re-save as UTF-8 to read it here)"),
 )
 
+# IMAGES ARE SHOWN, NOT REFUSED (operator 2026-11-08: images "already work
+# normally with every other client — this must work" for entities too). The
+# four formats every vision-capable model reads, detected by magic (content,
+# never the file name); WEBP is `RIFF` + 4 size bytes + `WEBP`, so it is not
+# a plain prefix. (label for the entity, IANA content type for the record.)
+_IMAGE_MAGIC: Tuple[Tuple[bytes, str, str], ...] = (
+    (b"\x89PNG\r\n\x1a\n", "a PNG image", "image/png"),
+    (b"\xff\xd8\xff", "a JPEG image", "image/jpeg"),
+    (b"GIF87a", "a GIF image", "image/gif"),
+    (b"GIF89a", "a GIF image", "image/gif"),
+)
+_WEBP_LABEL = "a WEBP image"
+_WEBP_CONTENT_TYPE = "image/webp"
+
+
+def sniff_image(data: bytes) -> Optional[Tuple[str, str]]:
+    """(label, content_type) when `data` starts like a PNG/JPEG/GIF/WEBP
+    image, else None. Magic only — a name says nothing about bytes."""
+    head = bytes(data[:16])
+    for magic, label, content_type in _IMAGE_MAGIC:
+        if head.startswith(magic):
+            return label, content_type
+    if head[:4] == b"RIFF" and head[8:12] == b"WEBP":
+        return _WEBP_LABEL, _WEBP_CONTENT_TYPE
+    return None
+
 
 def sniff_binary(data: bytes) -> Optional[str]:
     """Detect non-text content; return an honest type label, or None for text.
@@ -297,6 +323,8 @@ def sniff_binary(data: bytes) -> Optional[str]:
             is_binary = (replaced / len(window)) >= _BINARY_REPLACEMENT_RATIO
     if not is_binary:
         return None
+    if window[:4] == b"RIFF" and window[8:12] == b"WEBP":
+        return _WEBP_LABEL  # before the plain-prefix table: RIFF alone is any wav/avi/webp
     for magic, label in _BINARY_MAGIC_LABELS:
         if window.startswith(magic):
             return label
@@ -479,10 +507,18 @@ class WorkspaceRoot:
         # durable visit transcript into every subsequent LLM call until the
         # upstream refused the request over its context window). Binary
         # content is refused with metadata, never decoded: name, size, and
-        # detected type reach the entity; the noise never does. The pointer
-        # is honest about capability — the walled tool surface
-        # (TOOL_DESCRIPTORS) carries no image- or binary-viewing tool, so
-        # none is named; inventing one would bait a dead call.
+        # detected type reach the entity; the noise never does.
+        # IMAGES (operator 2026-11-08): a PNG/JPEG/GIF/WEBP is not refused —
+        # the text result is a label and the file rides the NEXT model call
+        # as an image (the sight lane: `tool_result_media` declares the path
+        # beside this executor; the host folds it into that call's media).
+        image = sniff_image(data)
+        if image is not None:
+            label, _content_type = image
+            return (
+                f"--- {self._display(relative)} ({len(data):,} bytes) ---\n"
+                f"[#IMAGE: {label}; it is attached to your next look as an image]"
+            )
         binary_label = sniff_binary(data)
         if binary_label is not None:
             return (
@@ -490,9 +526,10 @@ class WorkspaceRoot:
                 f"[#BINARY: this file is {binary_label} - binary bytes, not readable "
                 "text. Decoding it as text would fill your working context with noise, "
                 "so none of its bytes were loaded. The file itself is stored intact at "
-                "this path in your workspace. You have no tool that can view images or "
-                "other binary content - if you need what is inside, say so honestly and "
-                "ask the person with you to describe it or provide a text version.]"
+                "this path in your workspace. Images (PNG, JPEG, GIF, WEBP) are shown to "
+                "you when you read them; other binary content is not readable here - if "
+                "you need what is inside, say so honestly and ask the person with you to "
+                "describe it or provide a text version.]"
             )
         text = data.decode("utf-8", errors="replace")
         if len(text) > WORKSPACE_TEXT_READ_CAP_CHARS:
@@ -1275,11 +1312,38 @@ def _exec_write_file(e: ToolElection, ctx: ToolExecutionContext) -> str:
     return ws.write_file(path, e.body)
 
 
+def _read_file_target(e: ToolElection) -> str:
+    """The one path a read_file election names (first body line, as the
+    executor reads it — the SAME string, so declare and execute agree)."""
+    lines = e.body.strip().splitlines()
+    return lines[0] if lines else ""
+
+
 def _exec_read_file(e: ToolElection, ctx: ToolExecutionContext) -> str:
     ws = _workspace_or_notice(e, ctx)
     if ws is None:
         return f"(the {e.name} tool is not enabled in this session)"
-    return ws.read_file(e.body.strip().splitlines()[0])
+    return ws.read_file(_read_file_target(e))
+
+
+def _read_file_media(e: ToolElection, ctx: ToolExecutionContext) -> Optional[List[str]]:
+    """The image a read_file election opened, as the absolute path the model
+    is shown next (`WorkspaceRoot.read_file`'s #IMAGE case). Re-resolved and
+    re-sniffed here under the same containment and size cap the read applied,
+    so a refused read (outside the workspace, over the cap, not an image, no
+    such file) declares nothing — never derived from the result text."""
+    ws = ctx.workspace
+    if ws is None:
+        return None
+    try:
+        path = ws.resolve(_read_file_target(e))
+        if not path.is_file() or path.stat().st_size > WORKSPACE_FILE_CAP_BYTES:
+            return None
+        with open(path, "rb") as fh:
+            head = fh.read(16)
+    except (OSError, ValueError, PermissionError, FileNotFoundError):
+        return None
+    return [str(path)] if sniff_image(head) is not None else None
 
 
 def _exec_list_files(e: ToolElection, ctx: ToolExecutionContext) -> str:
@@ -1338,6 +1402,12 @@ class ToolDescriptor:
     comms_send: bool = False            # sends on the operator's identity
     captures_environment: bool = False  # records the real surroundings
     standing_effect: bool = False       # persists beyond the call (monitors/triggers)
+    # SIGHT (declare-beside-execute, 2026-11-08): the media this tool's
+    # result shows the model — absolute file paths the host folds into the
+    # NEXT model call (abstractagent's sight lane reads a dict output's
+    # `media` list). None = the tool's results are text only. Resolved by
+    # `tool_result_media`, never sniffed from the result prose.
+    result_media: Optional[Callable[[ToolElection, ToolExecutionContext], Optional[List[str]]]] = None
 
 
 # Canonical registry ORDER IS THE CANONICAL TOOL ORDER (byte-stable member
@@ -1434,10 +1504,11 @@ TOOL_DESCRIPTORS: Dict[str, ToolDescriptor] = {
         ),
         ToolDescriptor(
             name="read_file", tier="workspace", mutating=False,
-            description="Read one file from your workspace.",
+            description="Read one file from your workspace (an image is shown to you).",
             properties={"path": {"type": "string", "description": "path relative to your workspace"}},
             required=("path",), executor=_exec_read_file,
             capability_class="tier1_self",
+            result_media=_read_file_media,
         ),
         ToolDescriptor(
             name="list_files", tier="workspace", mutating=False,
@@ -1595,3 +1666,21 @@ def execute_tool_elections(
         + "\n\nTool lookups are done for this turn. Finish your reply to the person now."
     )
     return message, ctx.notices
+
+
+def tool_result_media(election: ToolElection, workspace: Optional[WorkspaceRoot]) -> Optional[List[str]]:
+    """The media ONE executed election shows the model: absolute file paths,
+    or None when its result is text only (every tool but read_file today).
+
+    Declared beside the executor (`ToolDescriptor.result_media`), so a host
+    that serves tool results as `{"success": True, "output": ...}` can make
+    `output` the dict the sight lane reads — `{"rendered": <the result
+    text>, "media": [<absolute path>, ...]}` — and the image rides the next
+    model call. A host that keeps `output` a string shows nothing and loses
+    nothing else. Content-based like the read itself: a name proves nothing."""
+    d = TOOL_DESCRIPTORS.get(election.name)
+    if d is None or d.result_media is None:
+        return None
+    ctx = ToolExecutionContext(workspace=workspace)
+    media = d.result_media(election, ctx)
+    return list(media) if media else None

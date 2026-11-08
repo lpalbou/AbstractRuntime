@@ -331,7 +331,30 @@ def test_own_time_contract_teaches_the_investigation_exit_ramp() -> None:
         "semantics' G2 boundary law: investigation is the entity's own act, "
         "never work-phase vocabulary"
     )
-    assert "no way to spend it wrong" in OWN_TIME_CONTRACT, "the freedom stays"
+    assert "Some days are for sitting with things" in OWN_TIME_CONTRACT
+
+
+def test_own_time_contract_says_what_personal_time_is_for() -> None:
+    """Operator 2026-11-08: the contract names what personal time is FOR,
+    in the operator's words; no "nothing owed", no "no way to spend it
+    wrong", rest honoured when genuinely done (no "always a valid
+    choice"); the list of what exists stays."""
+    from abstractruntime.identity.life import OWN_TIME_CONTRACT
+
+    flat = " ".join(OWN_TIME_CONTRACT.split())
+    assert (
+        "This time is yours to explore the tensions, the questions and the "
+        "centres of interest that are alive in you, with the tools you have: "
+        "a time to explore yourself and discover more about yourself and the "
+        "world around you."
+    ) in flat
+    assert "owed" not in flat
+    assert "spend it wrong" not in flat
+    assert "nothing you are supposed to do" not in flat
+    assert "always a valid choice" not in flat
+    assert "Rest is honoured when you are genuinely done; while you rest, a passive process" in flat
+    assert "you can search the web and read sources;" in flat, "what exists stays listed"
+    assert "Some days are for sitting with things; some days are for finding out." in flat
 
 
 def test_standing_state_note_offers_the_newest_open_question(tmp_path) -> None:

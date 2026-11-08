@@ -102,6 +102,11 @@ def test_cycle_sleep_fires_after_the_window_and_wakes_into_personal(tmp_path: Pa
     assert slept["n"] >= 1, "the maintenance window ran the consolidator"
     assert report.sleeps >= 1
     assert report.days >= 2, "personal time RESUMED after the cycle sleep"
+    # The wake cue (operator 2026-11-08): no "nothing owed" left in it.
+    cycle_cues = [r.cue for r in report.records if "maintenance sleep is over" in r.cue]
+    assert cycle_cues, [r.cue for r in report.records]
+    assert all("personal time resumes, the grant stands." in c for c in cycle_cues)
+    assert not any("owed" in c for c in cycle_cues)
     # The wake left an honest awake state (not stranded asleep).
     state = read_entity_state(home_dir)
     assert state.get("state") in ("awake", "asleep")  # asleep only via exit landing

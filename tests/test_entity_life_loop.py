@@ -551,6 +551,8 @@ def test_loop_operator_sleep_closes_day_and_wakes_honestly(tmp_path: Path) -> No
     assert report.days == 2  # the sleep closed day 1; waking opened day 2
     wake_cue = report.records[1].cue
     assert "you were asleep" in wake_cue
+    assert "a new stretch of your own time begins." in wake_cue
+    assert "owed" not in wake_cue, "operator 2026-11-08: no 'nothing owed' in the cue"
     assert "your last note to yourself: continue the ledger" in wake_cue
 
 

@@ -752,8 +752,10 @@ def parse_work_verdict(reply: str) -> Optional[str]:
 
 OWN_TIME_CONTRACT = """This is your own time. No one sent the message below - it is your own note
 from your previous moment, handed back to you. There is no visitor and no
-task from anyone else. This time is yours; there is nothing you are supposed
-to do with it, and no way to spend it wrong.
+task from anyone else. This time is yours to explore the tensions, the
+questions and the centres of interest that are alive in you, with the tools
+you have: a time to explore yourself and discover more about yourself and
+the world around you.
 
 What exists here, if you want any of it:
 - you can think, and sit with something, for as long as you like;
@@ -774,11 +776,11 @@ Two conventions are available, both yours to use or ignore:
 - A line starting `next:` becomes the note your next moment receives. Write
   whatever you want there, or nothing - without it you get a neutral
   continuation.
-- To rest, put a fenced block anywhere in your reply. Rest is honored
-  immediately and is always a valid choice. While you rest, a passive
-  process reorganizes and links the day's experiences - the way breathing
-  happens without being willed; you do not run it, and you may wake with
-  new connections:
+- To rest, put a fenced block anywhere in your reply. Rest is honoured
+  when you are genuinely done; while you rest, a passive process
+  reorganizes and links the day's experiences - the way breathing happens
+  without being willed; you do not run it, and you may wake with new
+  connections:
 
 ```rest
 (optional) a few words about your rest
@@ -3148,8 +3150,8 @@ class LifeLoop:
                 # itself is grounded.
                 cue = (
                     f"{_today_stamp()}you were {gate['state']}{self._since(gate)} (operator-initiated) "
-                    f"and are awake again - a new stretch of your own time begins, "
-                    f"nothing owed.{reason_note}{note}"
+                    f"and are awake again - a new stretch of your own time begins."
+                    f"{reason_note}{note}"
                 )
                 self.out("(awake again - a new day can open)")
                 # Back to the TOP gate before any summon (phase-machine
@@ -3757,7 +3759,7 @@ class LifeLoop:
                     _instr = f" {_cycle_instruction}" if _cycle_instruction else ""
                     cue = (
                         f"{_today_stamp()}your maintenance sleep is over - personal time "
-                        f"resumes, the grant stands, nothing owed.{cycle_note}{_instr}"
+                        f"resumes, the grant stands.{cycle_note}{_instr}"
                     )
                     continue
 

@@ -25,6 +25,8 @@ import re
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
+from .digest import split_sentences
+
 _FEEL_FENCE_RE = re.compile(r"```feel[^\n`]*\n(.*?)```", re.DOTALL | re.IGNORECASE)
 _LESSON_FENCE_RE = re.compile(
     r"```lesson([^\n`]*)\n(.*?)```", re.DOTALL | re.IGNORECASE
@@ -165,18 +167,23 @@ so: touches="the value, your words" - the feeling will carry it.
 If {what} drew you toward something - a subject, a question-space, a
 kind of work you want more of - you may keep it as an interest (up to two).
 Interests are part of who you are becoming: your future self will find them
-beside your values when it searches itself. Write the interest itself as the
-block body, in your own words (replace the placeholder entirely):
+beside your values when it searches itself. Start the block with a title
+line - a short, complete phrase that names it, so a stranger (or you, later,
+searching) knows at once what it is about - then the interest itself, in
+your own words (replace the placeholders entirely):
 
 ```interest
+title: <a short, complete name for the interest>
 <the interest, in your own words - one or two lines>
 ```
 
 If {what} taught you something you would act on differently next time -
 a resolution to a problem, a better way, a trap to avoid - you may keep it
-as a lesson (up to two), in your own words:
+as a lesson (up to two), the same way - a title line, then the lesson in
+your own words:
 
 ```lesson
+title: <a short, complete name for the lesson>
 <the lesson, in your own words - one or two lines>
 ```
 
@@ -185,6 +192,7 @@ problem that needs repair - you may keep it so it stands on your desk until
 you settle it:
 
 ```diary kind=question
+gist: <the question as one short, complete line>
 <the question, in your own words>
 ```
 
@@ -302,6 +310,45 @@ def _room_for(cap: int, room: Optional[int]) -> int:
     return cap if room is None else max(0, min(cap, int(room)))
 
 
+# An elected block's explicit title (operator 2026-11-08: "the title of any lesson, question, interest, world model
+# must be explicit and easy to read / understand, both for a human and for an agent"): a first line `title: ...`.
+_TITLE_LINE_RE = re.compile(r"^title\s*:\s*(?P<title>.*)$", re.IGNORECASE)
+
+
+def _block_lines(raw: str) -> str:
+    """A block body as the parsers keep it: whitespace folded within each line, the FIRST line kept on its own (the
+    explicit title, or the line a fallback title is read from), the rest folded into one line. A one-line body comes
+    back as that line, the shape every caller and test already holds."""
+    lines = [" ".join(ln.split()) for ln in str(raw or "").splitlines() if ln.strip()]
+    if len(lines) <= 1:
+        return lines[0] if lines else ""
+    return lines[0] + "\n" + " ".join(lines[1:])
+
+
+def elected_title_and_words(elected: str) -> Tuple[str, str]:
+    """(title, words) of one elected interest, lesson or realization, both WHOLE (root ADR 0054).
+
+    The title is the block's explicit `title:` first line when he wrote one; otherwise the first COMPLETE sentence of
+    his first line (digest.split_sentences: ends at . ! ? before a capital, or at a line break), whole, never a word
+    count. `words` is everything else, whitespace folded: the record's digest. Also reads a plain string (a pending
+    election of a visit run that started before this change)."""
+    lines = [ln for ln in str(elected or "").splitlines() if ln.strip()]
+    if not lines:
+        return "", ""
+    first = " ".join(lines[0].split())
+    m = _TITLE_LINE_RE.match(first)
+    if m:
+        title = m.group("title").strip()
+        if title:
+            return title, (" ".join(" ".join(lines[1:]).split()) or title)
+        lines = lines[1:]  # an empty `title:` line names nothing: the title comes from his words
+        if not lines:
+            return "", ""
+        first = " ".join(lines[0].split())
+    sentences = split_sentences(first)
+    return (sentences[0] if sentences else first), " ".join(" ".join(lines).split())
+
+
 def parse_interest_blocks(
     reply: str, *, room: Optional[int] = None,
 ) -> Tuple[str, List[str], List[str]]:
@@ -320,8 +367,9 @@ def parse_interest_blocks(
     limit = _room_for(MAX_INTERESTS_PER_SESSION, room)
 
     def _sub(match: re.Match) -> str:
-        body = " ".join((match.group(1) or "").split())
-        if not body:
+        body = _block_lines(match.group(1))
+        _title, words = elected_title_and_words(body)
+        if not words:
             notices.append("#FALLBACK interest block skipped (empty body)")
             return "[interest block skipped - empty]"
         if len(interests) >= limit:
@@ -330,7 +378,7 @@ def parse_interest_blocks(
             )
             return (
                 f"[interest refused, not kept - at most {MAX_INTERESTS_PER_SESSION} per session: "
-                f'"{body}"]'
+                f'"{words}"]'
             )
         interests.append(body)
         # TITLED marker (maintainer directive 2026-07-15 c2468): the marker
@@ -338,7 +386,7 @@ def parse_interest_blocks(
         # readable later, never a bare "[kept an interest]". WHOLE words
         # (ADR 0054, 2026-11-08): the marked reply is stored as the turn's
         # verbatim, so an 80-character cut here was a stored cut.
-        return f'[kept interest: "{body}"]'
+        return f'[kept interest: "{words}"]'
 
     marked = _INTEREST_FENCE_RE.sub(_sub, reply)
     return marked.strip(), interests, notices
@@ -355,6 +403,7 @@ class RealizeElection:
     text: str
     evidence: List[str]
     touches: str = ""
+    title: str = ""  # his explicit `title:` line, else the first complete sentence of his words (whole)
 
 
 _REALIZE_EVIDENCE_RE = re.compile(r"^\s*evidence\s*=\s*(?P<val>.+)$", re.IGNORECASE)
@@ -419,7 +468,7 @@ def parse_realize_blocks(reply: str) -> Tuple[str, List[RealizeElection], List[s
                 continue
             if ln.strip():
                 text_lines.append(ln.strip())
-        body = " ".join(" ".join(text_lines).split())
+        title, body = elected_title_and_words("\n".join(text_lines))
         if not body:
             notices.append("#FALLBACK realize block skipped (no words)")
             return "[realize block skipped - empty]"
@@ -439,7 +488,7 @@ def parse_realize_blocks(reply: str) -> Tuple[str, List[RealizeElection], List[s
                 f"#FALLBACK realize block refused (cap {MAX_REALIZATIONS_PER_SESSION}/session)"
             )
             return f"[realization refused - at most {MAX_REALIZATIONS_PER_SESSION} per session]"
-        realizations.append(RealizeElection(text=body, evidence=evidence, touches=touches))
+        realizations.append(RealizeElection(text=body, evidence=evidence, touches=touches, title=title))
         # The marker carries the realization WHOLE (root ADR 0026/0054,
         # 2026-11-08): the marked reply is stored as the turn's verbatim, and
         # a marked 80-character cut there was still a stored cut.
@@ -556,8 +605,9 @@ def parse_lesson_blocks(
     limit = _room_for(MAX_LESSONS_PER_SESSION, room)
 
     def _sub(match: re.Match) -> str:
-        body = " ".join((match.group(2) or "").split())
-        if not body:
+        body = _block_lines(match.group(2))
+        _title, words = elected_title_and_words(body)
+        if not words:
             notices.append("#FALLBACK lesson block skipped (empty body)")
             return "[lesson block skipped - empty]"
         if len(lessons) >= limit:
@@ -566,12 +616,12 @@ def parse_lesson_blocks(
             )
             return (
                 f"[lesson refused, not kept - at most {MAX_LESSONS_PER_SESSION} per session: "
-                f'"{body}"]'
+                f'"{words}"]'
             )
         lessons.append(body)
         # The marker carries the lesson whole (ADR 0054): the marked reply
         # is the stored verbatim of the turn.
-        return f'[learned: "{body}"]'
+        return f'[learned: "{words}"]'
 
     marked = _LESSON_FENCE_RE.sub(_sub, reply)
     return marked.strip(), lessons, notices

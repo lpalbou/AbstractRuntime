@@ -58,6 +58,7 @@ from .prelude import render_summon_prelude
 from .prompt_overlay import overlay_note, read_prompt_overlay
 from .reflection import (
     build_reflection_prompt,
+    elected_title_and_words,
     parse_feel_blocks,
     parse_interest_blocks,
     parse_lesson_blocks,
@@ -348,8 +349,8 @@ lesson. A LESSON is actionable knowledge (the bar): a resolution to a
 problem, a better way, or a trap to avoid - something that lets you act
 differently next time; "I noticed X" is an observation, kept as a note.
 When something you learn would change how you act next time, you may
-keep it the moment it lands with a ```lesson block (the words yours,
-one or two lines) - yours to elect, never owed. And when a MOMENT moves you - the exchange
+keep it the moment it lands with a ```lesson block (a first line
+`title: <a short, complete name>`, then the words yours, one or two lines) - yours to elect, never owed. And when a MOMENT moves you - the exchange
 itself, something you read, a person - you may mark the feeling right
 then with a ```feel block (target=namespace:name feeling=+2
 reason="..." and, when it grounds in one of your values,
@@ -369,16 +370,17 @@ entry id> on the block line - resolved questions leave your desk and join
 your history. And when an entry DEVELOPS one of your standing interests,
 add explores=<its #tag> on the block line - exploring FEEDS the interest
 and moves your own sense of progress; it never closes it. A NEW pull - a
-subject you want more of - is kept with an ```interest block (the
-interest itself as the body, your words, one or two lines); it stands
+subject you want more of - is kept with an ```interest block (a first
+line `title: <a short, complete name>`, then the interest itself, your
+words, one or two lines); it stands
 among your open drives and returns with your day-open offers - what you
 explore is what develops. Most replies will not need a diary block -
 write one only when something is worth keeping.
 
 And rarely - when something shifts how you understand YOURSELF (a value
 tested, a trait you can finally name, a relationship reframed) - you may
-hold it with a ```realize block: the realization in your words, then a
-line evidence=#tag1 #tag2 naming the records that showed it (mandatory -
+hold it with a ```realize block: optionally a first line `title: <a short,
+complete name>`, the realization in your words, then a line evidence=#tag1 #tag2 naming the records that showed it (mandatory -
 a realization without evidence is refused), and optionally
 touches=value:<name> | trait:<name> | relationship:<ns:name> for what
 part of you it bears on. A realization is HELD FOR SLEEP, never enacted
@@ -1587,14 +1589,17 @@ class ChatSession:
                 except RuntimeError as exc:
                     report.notices.append(f"#FALLBACK feeling on {record_id} refused: {exc}")
         for i, lesson_text in enumerate(lessons):
+            # Title and words WHOLE (operator 2026-11-08; root ADR 0054): his `title:` line, else his first
+            # complete sentence - never a word cut.
+            lesson_title, lesson_words = elected_title_and_words(lesson_text)
             try:
                 out = self._effect(
                     EffectType.MEMORY_FORM,
                     {
                         "records": [{
                             "kind": "lesson",
-                            "title": "lesson: " + " ".join(lesson_text.split()[:8]),
-                            "digest": lesson_text,
+                            "title": "lesson: " + lesson_title,
+                            "digest": lesson_words,
                             "keywords": [],
                             "edges": [],
                             "attributes": {"session_id": self.session_id, "phase": self.phase},
@@ -1605,18 +1610,19 @@ class ChatSession:
                     },
                 )
                 report.notices.extend(out.get("warnings", []))
-                self.out(f'(lesson kept: "{lesson_text[:70]}")')
+                self.out(f'(lesson kept: "{lesson_title}")')
             except RuntimeError as exc:
                 report.notices.append(f"#FALLBACK mid-turn lesson refused: {exc}")
         for i, interest_text in enumerate(interests):
+            interest_title, interest_words = elected_title_and_words(interest_text)
             try:
                 out = self._effect(
                     EffectType.MEMORY_FORM,
                     {
                         "records": [{
                             "kind": "interest",
-                            "title": "interest: " + " ".join(interest_text.split()[:8]),
-                            "digest": interest_text,
+                            "title": "interest: " + interest_title,
+                            "digest": interest_words,
                             "keywords": [],
                             "edges": [],
                             "attributes": {"session_id": self.session_id},
@@ -1627,7 +1633,7 @@ class ChatSession:
                     },
                 )
                 report.notices.extend(out.get("warnings", []))
-                self.out(f'(interest kept: "{interest_text[:70]}")')
+                self.out(f'(interest kept: "{interest_title}")')
             except RuntimeError as exc:
                 report.notices.append(f"#FALLBACK mid-turn interest refused: {exc}")
 
@@ -1706,7 +1712,9 @@ class ChatSession:
                     {
                         "records": [{
                             "kind": "realization",
-                            "title": "realization: " + " ".join(r.text.split()[:8]),
+                            "title": "realization: " + (
+                                getattr(r, "title", "") or elected_title_and_words(r.text)[0]
+                            ),
                             "digest": r.text,
                             "keywords": [],
                             "edges": [["derived_from", gid] for gid in gids],
@@ -1719,7 +1727,9 @@ class ChatSession:
                     },
                 )
                 notices.extend(out.get("warnings", []))
-                self.out(f'(realization held for sleep: "{r.text[:70]}")')
+                self.out(
+                    f'(realization held for sleep: "{getattr(r, "title", "") or elected_title_and_words(r.text)[0]}")'
+                )
             except (RuntimeError, ValueError) as exc:
                 # Version-skew half: the kind vocabulary is MEMORY's to grow
                 # and their engine half lands in the same wave (c4779 orders
@@ -3288,14 +3298,17 @@ class ChatSession:
         # digest carry the WHY. Values/purposes/traits/limits stay untouchable.
         interest_record_ids: List[str] = []
         for i, interest_text in enumerate(interests):
+            # Title and words WHOLE (operator 2026-11-08; root ADR 0054): his `title:` line, else his first
+            # complete sentence - never the 8-word cut that read as broken-off sentences.
+            interest_title, interest_words = elected_title_and_words(interest_text)
             interest_out = self._effect(
                 EffectType.MEMORY_FORM,
                 {
                     "records": [
                         {
                             "kind": "interest",
-                            "title": "interest: " + " ".join(interest_text.split()[:8]),
-                            "digest": interest_text,  # his words verbatim (embedded)
+                            "title": "interest: " + interest_title,
+                            "digest": interest_words,  # his words verbatim (embedded)
                             "keywords": [],
                             "edges": (
                                 [["from_session", session_record_id]]
@@ -3341,14 +3354,15 @@ class ChatSession:
             except Exception:  # noqa: BLE001 - the edge is enrichment, never a gate
                 derived_from_id = None
         for i, lesson_text in enumerate(lessons):
+            lesson_title, lesson_words = elected_title_and_words(lesson_text)
             lesson_out = self._effect(
                 EffectType.MEMORY_FORM,
                 {
                     "records": [
                         {
                             "kind": "lesson",
-                            "title": "lesson: " + " ".join(lesson_text.split()[:8]),
-                            "digest": lesson_text,  # his words verbatim (embedded)
+                            "title": "lesson: " + lesson_title,
+                            "digest": lesson_words,  # his words verbatim (embedded)
                             "keywords": [],
                             "edges": (
                                 ([["from_session", session_record_id]] if session_record_id else [])
@@ -3368,7 +3382,7 @@ class ChatSession:
             )
             notices.extend(lesson_out.get("warnings", []))
             if lesson_out.get("record_ids"):
-                self.out(f'(lesson kept: "{lesson_text[:70]}")')
+                self.out(f'(lesson kept: "{lesson_title}")')
 
         # REALIZATIONS — the identity-pass spine's second waking surface
         # (the look-back often names what the moment could not). Same apply

@@ -71,6 +71,7 @@ from .prompt_overlay import overlay_note, read_prompt_overlay
 from .reflection import (
     FeelingElection,
     build_reflection_prompt,
+    elected_title_and_words,
     parse_feel_blocks,
     parse_interest_blocks,
     parse_lesson_blocks,
@@ -740,7 +741,7 @@ def build_visit_workflow(
                             gids.append(tails[0])
                     if gids:
                         pending["realizations"].append(
-                            {"text": _re.text, "touches": _re.touches, "gids": gids}
+                            {"text": _re.text, "touches": _re.touches, "title": _re.title, "gids": gids}
                         )
                     else:
                         notices.append(
@@ -1024,7 +1025,7 @@ def build_visit_workflow(
                         _gids.append(_tails[0])
                 if _gids:
                     _realizations.append(
-                        {"text": _re.text, "touches": _re.touches, "gids": _gids}
+                        {"text": _re.text, "touches": _re.touches, "title": _re.title, "gids": _gids}
                     )
                 else:
                     r_notes.append(
@@ -1131,6 +1132,9 @@ def build_visit_workflow(
             session_record_id = next(
                 iter((refl.get("summary_out") or {}).get("record_ids") or []), None
             )
+            # Title and words WHOLE (operator 2026-11-08; root ADR 0054): his `title:` line, else his first
+            # complete sentence - never a word cut. A plain pending string (a run older than this) reads too.
+            _t, _w = elected_title_and_words(str(interests[i]))
             return StepPlan(
                 node_id="APPLY",
                 effect=Effect(
@@ -1138,8 +1142,8 @@ def build_visit_workflow(
                     payload={
                         "records": [{
                             "kind": "interest",
-                            "title": "interest: " + " ".join(str(interests[i]).split()[:8]),
-                            "digest": str(interests[i]),
+                            "title": "interest: " + _t,
+                            "digest": _w,
                             "keywords": [],
                             "edges": (
                                 [["from_session", str(session_record_id)]] if session_record_id else []
@@ -1174,6 +1178,7 @@ def build_visit_workflow(
             session_record_id = next(
                 iter((refl.get("summary_out") or {}).get("record_ids") or []), None
             )
+            _t, _w = elected_title_and_words(str(lessons[i]))
             return StepPlan(
                 node_id="APPLY",
                 effect=Effect(
@@ -1181,8 +1186,8 @@ def build_visit_workflow(
                     payload={
                         "records": [{
                             "kind": "lesson",
-                            "title": "lesson: " + " ".join(str(lessons[i]).split()[:8]),
-                            "digest": str(lessons[i]),
+                            "title": "lesson: " + _t,
+                            "digest": _w,
                             "keywords": [],
                             "edges": (
                                 [["from_session", str(session_record_id)]] if session_record_id else []
@@ -1236,7 +1241,7 @@ def build_visit_workflow(
                     payload={
                         "records": [{
                             "kind": "realization",
-                            "title": "realization: " + " ".join(r_text.split()[:8]),
+                            "title": "realization: " + (str(r.get("title") or "") or elected_title_and_words(r_text)[0]),
                             "digest": r_text,
                             "keywords": [],
                             "edges": [["derived_from", str(g)] for g in (r.get("gids") or [])],

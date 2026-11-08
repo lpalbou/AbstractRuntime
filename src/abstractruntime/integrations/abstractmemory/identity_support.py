@@ -197,12 +197,11 @@ def project_diary_entry(
         # clustering-on-form the slug fix killed.
         _slug = ""
         if ((gist or "").strip() or fallback) and not digest_method:
-            _slug = digest[:60].rstrip()
-            if len(digest) > 60:
-                cut = _slug.rfind(" ")
-                if cut > 20:
-                    _slug = _slug[:cut]
-                _slug += "…"
+            # WHOLE (root ADR 0054; operator 2026-11-08: a title is explicit and readable): his elected gist, else
+            # the first complete sentence of his first line, never a 60-character cut.
+            from ...identity.digest import split_sentences
+
+            _slug = (gist or "").strip() or (split_sentences(fallback) or [fallback])[0]
         if _slug:
             title = f"Diary entry ({kind}) — {written_date}: {_slug}"
         else:

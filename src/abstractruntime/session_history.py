@@ -47,6 +47,7 @@ import logging
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from .history_bundle import _best_effort_session_turns
+from .core.turn_author import speaker_line
 from .memory.token_budget import estimate_message_tokens
 
 __all__ = [
@@ -403,7 +404,9 @@ def session_chat_messages(
 
     Returns a `ReplayedHistory` — a list of `{"role": "user"|"assistant",
     "content": str, "metadata": {"kind": "session_turn", "run_id": ...,
-    "ts": ...}}` in chronological order, the newest whole turns that fit
+    "ts": ..., "author": {kind, name, entity_id, identity_ref, avatar}}}` in
+    chronological order (an entity's reply reads "<name> (entity): ...", see
+    `core.turn_author.speaker_line`), the newest whole turns that fit
     `max_tokens` (`fold_history_window`) — with the window's receipt in
     `.report`. Strictly alternating user/assistant PAIRS: a turn missing
     either side is skipped whole (runtime review A3 — dangling user messages
@@ -572,10 +575,17 @@ def _turn_pairs(turns: Any, *, excluded: set) -> List[List[Dict[str, Any]]]:
         meta: Dict[str, Any] = {"kind": SESSION_TURN_KIND, "run_id": rid}
         if ts:
             meta["ts"] = ts
+        # THE SPEAKER (entity mentions, 2026-11-08): each message carries its structured
+        # `author` (core.turn_author); an ENTITY's reply is also rendered "<name> (entity): ..."
+        # so the next agent run never reads another speaker's words as its own. Driven by the
+        # field alone; agent and person messages keep their exact bytes (prefix caches).
+        user_meta = {**meta, "author": turn.get("prompt_author")} if turn.get("prompt_author") else dict(meta)
+        answer_author = turn.get("author")
+        answer_meta = {**meta, "author": answer_author} if answer_author else dict(meta)
         turn_pairs.append(
             [
-                {"role": "user", "content": prompt, "metadata": dict(meta)},
-                {"role": "assistant", "content": answer, "metadata": dict(meta)},
+                {"role": "user", "content": prompt, "metadata": user_meta},
+                {"role": "assistant", "content": speaker_line(answer_author, answer), "metadata": answer_meta},
             ]
         )
     return turn_pairs

@@ -62,13 +62,20 @@
     "runs": {
       "d0d0d0d0-0000-4000-8000-0000000000d0": 5
     },
-    "token": "d0d0d0d0:5~617fefc20a"
+    "token": "d0d0d0d0:5~355a7e5093"
   },
   "display_status": null,
   "interaction": null,
   "messages": [
     {
       "artifact_ids": [],
+      "author": {
+        "avatar": null,
+        "entity_id": null,
+        "identity_ref": null,
+        "kind": "person",
+        "name": null
+      },
       "id": "d0d0d0d0-0000-4000-8000-0000000000d0:input",
       "kind": "prompt",
       "order": [
@@ -85,6 +92,13 @@
     },
     {
       "artifact_ids": [],
+      "author": {
+        "avatar": null,
+        "entity_id": null,
+        "identity_ref": null,
+        "kind": "agent",
+        "name": "hello"
+      },
       "id": "d0d0d0d0-0000-4000-8000-0000000000d0:say-1:answer_user",
       "kind": "answer",
       "order": [
@@ -105,6 +119,13 @@
     },
     {
       "artifact_ids": [],
+      "author": {
+        "avatar": null,
+        "entity_id": null,
+        "identity_ref": null,
+        "kind": "agent",
+        "name": "hello"
+      },
       "id": "d0d0d0d0-0000-4000-8000-0000000000d0:final",
       "kind": "final",
       "order": [

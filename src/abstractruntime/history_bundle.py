@@ -845,6 +845,7 @@ def _best_effort_session_turns(
     # parent-less runs plus automation occurrences; never descendants,
     # controllers, internal runs, legacy scheduled wrappers or drafts.
     from .session_turns import select_session_turns
+    from .core.turn_author import turn_authors
 
     roots: List[RunState] = select_session_turns(
         run_store,
@@ -928,6 +929,8 @@ def _best_effort_session_turns(
                 if not is_voice_transport(item.get("tags"))
             ]
 
+        # Who asked and who answered (core.turn_author): every key present, nulls included.
+        authors = turn_authors(input_data, workflow_id=wid)
         turn: Dict[str, Any] = {}
         if kind == "occurrence":
             occ = (input_data.get("_meta") or {}).get("occurrence") or {}
@@ -947,6 +950,8 @@ def _best_effort_session_turns(
                 "attachments": attachments,
                 "answer": answer or None,
                 "answer_meta": answer_meta,
+                "prompt_author": authors["prompt"],
+                "author": authors["answer"],
                 "stats": stats,
                 "artifacts": artifacts,
             }

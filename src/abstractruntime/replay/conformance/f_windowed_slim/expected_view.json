@@ -81,7 +81,7 @@
       "74808832-e6db-5b9f-a68a-02ef826b4509": 10,
       "fd450aa7-f922-5398-b823-7ed8a3f20dfc": 5
     },
-    "token": "fd450aa7:5.74808832:10~04db0f8265"
+    "token": "fd450aa7:5.74808832:10~ae7813eab6"
   },
   "display_status": null,
   "interaction": {
@@ -168,6 +168,13 @@
   "messages": [
     {
       "artifact_ids": [],
+      "author": {
+        "avatar": null,
+        "entity_id": null,
+        "identity_ref": null,
+        "kind": "person",
+        "name": null
+      },
       "id": "fd450aa7-f922-5398-b823-7ed8a3f20dfc:input",
       "kind": "prompt",
       "order": [

@@ -275,13 +275,20 @@
       "7acdab4a-b0d4-589a-ad71-787e07262839": 11,
       "9aa00b16-9758-5719-816c-1b63e3866f10": 6
     },
-    "token": "7acdab4a:11.75821be6:6.324f805f:8.9aa00b16:6~25e87de5cb"
+    "token": "7acdab4a:11.75821be6:6.324f805f:8.9aa00b16:6~9640a5341d"
   },
   "display_status": null,
   "interaction": null,
   "messages": [
     {
       "artifact_ids": [],
+      "author": {
+        "avatar": null,
+        "entity_id": null,
+        "identity_ref": null,
+        "kind": "person",
+        "name": null
+      },
       "id": "7acdab4a-b0d4-589a-ad71-787e07262839:input",
       "kind": "prompt",
       "order": [
@@ -298,6 +305,13 @@
     },
     {
       "artifact_ids": [],
+      "author": {
+        "avatar": null,
+        "entity_id": null,
+        "identity_ref": null,
+        "kind": "agent",
+        "name": "basic-agent"
+      },
       "id": "7acdab4a-b0d4-589a-ad71-787e07262839:final",
       "kind": "final",
       "order": [

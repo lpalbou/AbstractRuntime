@@ -354,13 +354,20 @@
       "44ed2126-ab6d-5bd2-be31-c57132dcb5c7": 14,
       "67d4a24f-1a23-5390-ba6c-a969a927ce4b": 16
     },
-    "token": "67d4a24f:16.44ed2126:14.0cbf23e2:0~bbc3489d4d"
+    "token": "67d4a24f:16.44ed2126:14.0cbf23e2:0~e7f9305063"
   },
   "display_status": null,
   "interaction": null,
   "messages": [
     {
       "artifact_ids": [],
+      "author": {
+        "avatar": null,
+        "entity_id": null,
+        "identity_ref": null,
+        "kind": "person",
+        "name": null
+      },
       "id": "67d4a24f-1a23-5390-ba6c-a969a927ce4b:input",
       "kind": "prompt",
       "order": [
@@ -377,6 +384,13 @@
     },
     {
       "artifact_ids": [],
+      "author": {
+        "avatar": null,
+        "entity_id": null,
+        "identity_ref": null,
+        "kind": "agent",
+        "name": "assist"
+      },
       "id": "67d4a24f-1a23-5390-ba6c-a969a927ce4b:8c4e6151-576e-56a3-8de3-e5594bb08f3b:answer_user",
       "kind": "answer",
       "order": [
@@ -397,6 +411,13 @@
     },
     {
       "artifact_ids": [],
+      "author": {
+        "avatar": null,
+        "entity_id": null,
+        "identity_ref": null,
+        "kind": "agent",
+        "name": "assist"
+      },
       "id": "67d4a24f-1a23-5390-ba6c-a969a927ce4b:f841536f-6e1f-5dac-96bf-97b7eef53838:answer_user",
       "kind": "answer",
       "order": [

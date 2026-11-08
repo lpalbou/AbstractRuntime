@@ -93,13 +93,20 @@
     "runs": {
       "b0b0b0b0-0000-4000-8000-0000000000b0": 7
     },
-    "token": "b0b0b0b0:7~75ac72b7d2"
+    "token": "b0b0b0b0:7~aee6c5eade"
   },
   "display_status": null,
   "interaction": null,
   "messages": [
     {
       "artifact_ids": [],
+      "author": {
+        "avatar": null,
+        "entity_id": null,
+        "identity_ref": null,
+        "kind": "person",
+        "name": null
+      },
       "id": "b0b0b0b0-0000-4000-8000-0000000000b0:input",
       "kind": "prompt",
       "order": [
@@ -116,6 +123,13 @@
     },
     {
       "artifact_ids": [],
+      "author": {
+        "avatar": null,
+        "entity_id": null,
+        "identity_ref": null,
+        "kind": "agent",
+        "name": "event-then-pause"
+      },
       "id": "b0b0b0b0-0000-4000-8000-0000000000b0:say:answer_user",
       "kind": "answer",
       "order": [

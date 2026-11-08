@@ -324,13 +324,20 @@
       "e0e0e0e0-0000-4000-8000-0000000000e0": 4,
       "e1e1e1e1-0000-4000-8000-0000000000e1": 13
     },
-    "token": "e0e0e0e0:4.e1e1e1e1:13~836517118b"
+    "token": "e0e0e0e0:4.e1e1e1e1:13~e053952758"
   },
   "display_status": null,
   "interaction": null,
   "messages": [
     {
       "artifact_ids": [],
+      "author": {
+        "avatar": null,
+        "entity_id": null,
+        "identity_ref": null,
+        "kind": "person",
+        "name": null
+      },
       "id": "e0e0e0e0-0000-4000-8000-0000000000e0:input",
       "kind": "prompt",
       "order": [
@@ -347,6 +354,13 @@
     },
     {
       "artifact_ids": [],
+      "author": {
+        "avatar": null,
+        "entity_id": null,
+        "identity_ref": null,
+        "kind": "agent",
+        "name": "basic-agent"
+      },
       "id": "e0e0e0e0-0000-4000-8000-0000000000e0:final",
       "kind": "final",
       "order": [

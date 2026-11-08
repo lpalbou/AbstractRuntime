@@ -47,6 +47,7 @@ import re
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Set, Tuple
 
 from ..automations.attention import ANSWER_PAYLOADS
+from ..core.turn_author import turn_authors
 from ..core.vars import is_paused_vars
 from ..history_bundle import _extract_usage_from_ledger_record, _extract_user_prompt_from_input
 from ..identity.digital_identity import read_run_identity_ref
@@ -200,6 +201,10 @@ def _snapshot(run: Any) -> Dict[str, Any]:
         "updated_at": _s(d.get("updated_at")),
         "paused": bool(is_paused_vars(d.get("vars"))),
     }
+    # Who asked and who answered this run's turn (core.turn_author): the root's authors label the
+    # view's user and assistant messages.
+    snap["authors"] = turn_authors(d.get("vars") if isinstance(d.get("vars"), dict) else {},
+                                   workflow_id=snap["workflow_id"])
     # Only when the host stamped one: a run without a ref keeps the same snapshot digest (cursor token).
     ref = _run_identity_ref(d.get("vars"))
     if ref is not None:
@@ -541,11 +546,14 @@ class ReplayView:
         r = self._run(rid)
         if r.snapshot != snap:
             ref_changed = r.snapshot.get("identity_ref") != snap.get("identity_ref")
+            authors_changed = r.snapshot.get("authors") != snap.get("authors")
             r.snapshot = snap
             r.snap_digest = _snapshot_digest(snap)
             self._dirty["runs"].add(rid)
             if ref_changed:
                 self._stamp_identity_ref(rid)
+            if authors_changed and rid == self.root_run_id:
+                self._stamp_authors()
         if snap.get("workflow_id") and r.workflow_id != snap["workflow_id"]:
             r.workflow_id = snap["workflow_id"]
             self._dirty["runs"].add(rid)
@@ -1187,6 +1195,27 @@ class ReplayView:
             self._messages[mid] = msg
             self._dirty["messages"].add(mid)
 
+    def _author_for_role(self, role: str) -> Optional[Dict[str, Any]]:
+        """The turn's author for a message of `role` (the ROOT run's authors: who asked, who
+        answered; every key present). System messages have none."""
+        if role not in ("user", "assistant"):
+            return None
+        root = self._runs.get(self.root_run_id)
+        authors = root.snapshot.get("authors") if root is not None else None
+        if not isinstance(authors, dict):
+            authors = turn_authors({}, workflow_id=None)
+        return copy.deepcopy(authors["prompt" if role == "user" else "answer"])
+
+    def _stamp_authors(self) -> None:
+        """Re-label the messages already folded when the root snapshot's authors change (a
+        snapshot read after its records)."""
+        for mid, msg in list(self._messages.items()):
+            author = self._author_for_role(msg.get("role") or "")
+            if author is None or msg.get("author") == author:
+                continue
+            self._messages[mid] = {**msg, "author": author}
+            self._dirty["messages"].add(mid)
+
     def _message(self, mid: str, *, role: str, kind: str, text: str, run_id: str, step_id: str, seq: int, ts: str,
                  source: str, artifact_ids: Optional[List[str]] = None, extra: Optional[Dict[str, Any]] = None) -> None:
         msg = {
@@ -1194,6 +1223,10 @@ class ReplayView:
             "seqs": [seq] if seq else [], "source": source, "artifact_ids": sorted(set(artifact_ids or [])),
             "order": [ts, run_id, seq],
         }
+        author = self._author_for_role(role)
+        if author is not None:
+            # Who speaks (entity mentions, 2026-11-08): {kind, name, entity_id, identity_ref, avatar}.
+            msg["author"] = author
         for k, v in (extra or {}).items():
             if v is not None:
                 msg[k] = v

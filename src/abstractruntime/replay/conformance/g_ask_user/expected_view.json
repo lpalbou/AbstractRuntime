@@ -118,13 +118,20 @@
     "runs": {
       "73c7888f-f6d1-5be9-9f95-254e9eb0ffd9": 10
     },
-    "token": "73c7888f:10~3515304d7d"
+    "token": "73c7888f:10~601c487884"
   },
   "display_status": null,
   "interaction": null,
   "messages": [
     {
       "artifact_ids": [],
+      "author": {
+        "avatar": null,
+        "entity_id": null,
+        "identity_ref": null,
+        "kind": "person",
+        "name": null
+      },
       "id": "73c7888f-f6d1-5be9-9f95-254e9eb0ffd9:input",
       "kind": "prompt",
       "order": [
@@ -141,6 +148,13 @@
     },
     {
       "artifact_ids": [],
+      "author": {
+        "avatar": null,
+        "entity_id": null,
+        "identity_ref": null,
+        "kind": "agent",
+        "name": "dialogue"
+      },
       "choices": [],
       "id": "73c7888f-f6d1-5be9-9f95-254e9eb0ffd9:3eae53fa-a639-5fd1-ae1f-a340108611d9:question",
       "kind": "question",
@@ -163,6 +177,13 @@
     },
     {
       "artifact_ids": [],
+      "author": {
+        "avatar": null,
+        "entity_id": null,
+        "identity_ref": null,
+        "kind": "person",
+        "name": null
+      },
       "id": "73c7888f-f6d1-5be9-9f95-254e9eb0ffd9:bbfc56dc-f417-5c25-aaf2-531d0ba0a327:answer",
       "kind": "answer",
       "order": [
@@ -184,6 +205,13 @@
     },
     {
       "artifact_ids": [],
+      "author": {
+        "avatar": null,
+        "entity_id": null,
+        "identity_ref": null,
+        "kind": "agent",
+        "name": "dialogue"
+      },
       "id": "73c7888f-f6d1-5be9-9f95-254e9eb0ffd9:final",
       "kind": "final",
       "order": [

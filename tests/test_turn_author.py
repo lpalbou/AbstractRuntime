@@ -160,3 +160,13 @@ def test_a_repeated_prompt_is_marked_repeat_of_and_kept_whole_for_replay():
 
     bundle = export_run_history_bundle(run_id="run-mention", run_store=rs, ledger_store=InMemoryLedgerStore(), artifact_store=None)
     assert bundle["run"]["repeat_of"] == "run-agent"
+
+
+def test_a_replayed_answer_carries_its_own_time_after_the_question():
+    rs = InMemoryRunStore()
+    run = _mention_run()
+    run.updated_at = "2026-11-08T10:01:09+00:00"
+    rs.save(run)
+    user, answer = session_chat_messages(run_store=rs, session_id="sess-1")
+    assert user["metadata"]["ts"] == "2026-11-08T10:01:00+00:00"
+    assert answer["metadata"]["ts"] == "2026-11-08T10:01:09+00:00"

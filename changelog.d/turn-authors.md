@@ -18,3 +18,6 @@
   turn again). Session turn rows and history bundle `run` sections carry `repeat_of` (null when none); the replay
   view's input message carries it when set; replayed history keeps the prompt (the pair stays whole, so the
   entity's reply still reaches the next agent run) and marks the user message's `metadata.repeat_of`.
+- **A replayed answer carries its own time** (`session_history.py`): the assistant message's `metadata.ts` is the
+  run's `updated_at` (when it answered, never before the prompt's `created_at`), so a reader sorting by `ts` never
+  shows an answer above its question; the user message keeps `created_at`.

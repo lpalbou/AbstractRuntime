@@ -585,6 +585,11 @@ def _turn_pairs(turns: Any, *, excluded: set) -> List[List[Dict[str, Any]]]:
             user_meta["repeat_of"] = turn["repeat_of"]
         answer_author = turn.get("author")
         answer_meta = {**meta, "author": answer_author} if answer_author else dict(meta)
+        # The answer's own time: when the run finished (>= the prompt's), so a reader sorting by
+        # `ts` never puts an answer above its question (an @entity mention is recorded after the reply).
+        answered_at = str(turn.get("updated_at") or "").strip()
+        if answered_at and answered_at >= str(meta.get("ts") or ""):
+            answer_meta["ts"] = answered_at
         turn_pairs.append(
             [
                 {"role": "user", "content": prompt, "metadata": user_meta},

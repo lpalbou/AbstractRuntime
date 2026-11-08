@@ -81,6 +81,17 @@ def _llm_rows(rt: Runtime, run_id: str) -> List[Dict[str, Any]]:
     return [r for r in rt.get_ledger(run_id) if (r.get("effect") or {}).get("type") == "llm_call"]
 
 
+def _recorded(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """A ledger-recorded effect payload minus the runtime's own decoration (per-issuance trace metadata, the
+    wall-clock `<runtime_metadata>` block it prepends to the prompt)."""
+    out = dict(payload)
+    params = dict(out.get("params") or {})
+    params.pop("trace_metadata", None)
+    out["params"] = params
+    out["prompt"] = str(out.get("prompt") or "").split("</runtime_metadata>")[-1]
+    return out
+
+
 def _semantic(params: Dict[str, Any]) -> Dict[str, Any]:
     """The request as the provider sees it, minus the runtime's per-attempt handles (callbacks, events) and its
     per-issuance trace metadata (the new issuance has a new idempotency key by design)."""
@@ -144,7 +155,9 @@ def test_resume_with_no_payload_reissues_the_identical_call() -> None:
     assert _semantic(first["params"]) == _semantic(second["params"])
     rows = _llm_rows(rt, run_id)
     payloads = [r["effect"]["payload"] for r in rows if r.get("status") in ("waiting", "completed")]
-    assert len(payloads) == 2 and payloads[0] == payloads[1] == {"prompt": "hello", "provider": "lmstudio", "model": "qwen"}
+    assert len(payloads) == 2 and _recorded(payloads[0]) == _recorded(payloads[1])
+    assert _recorded(payloads[0])["prompt"].strip() == "hello"
+    assert payloads[1]["provider"] == "lmstudio" and payloads[1]["model"] == "qwen"
     assert "endpoint_waits" not in (resumed.vars.get("_runtime") or {}), "the outage counter ends with the success"
     terminal = [r.get("status") for r in rows if r.get("status") in ("waiting", "completed", "failed")]
     assert terminal == ["waiting", "completed"], "one row per attempt, no failure"

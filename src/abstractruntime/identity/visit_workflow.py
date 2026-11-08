@@ -56,7 +56,6 @@ from ..memory.token_budget import estimate_message_tokens
 from ..session_history import HISTORY_REPLAY_MAX_TOKENS, window_report, window_transcript
 from .chat import (
     SUMMON_POSTURE_SELF_FRACTION,
-    _sheet_line,
     ChatHome,
     _memories_block,
     _serialize_under_budget,
@@ -64,6 +63,7 @@ from .chat import (
     compose_system_base,
     floored_reflection_digest,
     parse_diary_blocks,
+    sheet_prompt_line,
 )
 from .digest import mechanical_digest_v2
 from .prelude import render_summon_prelude
@@ -892,7 +892,7 @@ def build_visit_workflow(
             sheet = list(visit.get("sheet") or [])
             formed_ids = list((turn.get("formed") or {}).get("record_ids") or [])
             for rid in formed_ids:
-                sheet.append([str(rid), _sheet_line(turn.get("digest"))])
+                sheet.append([str(rid), str(turn.get("digest") or "")])  # whole (root ADR 0054)
                 visit["last_episode_id"] = str(rid)
             for meta in list(turn.get("diary_meta") or []):
                 projected = (meta or {}).get("projected_record_id")
@@ -938,8 +938,12 @@ def build_visit_workflow(
             return StepPlan(node_id="REFLECT", next_node="DONE")
         if not sheet:
             return StepPlan(node_id="REFLECT", next_node="DONE")
-        sheet_lines = [f"{i}. {desc}" for i, (_rid, desc) in enumerate(sheet, start=1)]
-        prompt = build_reflection_prompt(sheet_lines)
+        # The prompt lists the sheet folded visibly (an index beside the whole
+        # history); the marker renderer in the apply node reads the whole lines.
+        prompt_sheet_lines = [
+            f"{i}. {sheet_prompt_line(desc)}" for i, (_rid, desc) in enumerate(sheet, start=1)
+        ]
+        prompt = build_reflection_prompt(prompt_sheet_lines)
         session_graph_ids = [rid for rid, _ in sheet if rid][-4:]
         return StepPlan(
             node_id="REFLECT",

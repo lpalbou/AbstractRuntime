@@ -17,11 +17,7 @@ Two symptoms, three runtime fixes:
 from __future__ import annotations
 
 from abstractruntime.identity.chat import (
-    _CARD_TEXT_MAX,
-    _SHEET_LINE_MAX,
-    _bounded_card_text,
     _handle_origin_label,
-    _sheet_line,
     floored_reflection_digest,
 )
 
@@ -70,17 +66,98 @@ def test_long_reflection_digest_is_stored_whole() -> None:
     assert was_floored is True and long_floor_moment in floored_digest
 
 
-def test_sheet_line_marker_fits_inside_the_bound() -> None:
-    line = _sheet_line("x" * 500)
-    assert len(line) <= _SHEET_LINE_MAX
-    assert "#TRUNCATION" in line
+def test_sheet_prompt_line_folds_visibly_for_the_prompt_only() -> None:
+    """The fold is read-time prompt currency (ADR 0053 rule 2), never what is stored."""
+    from abstractruntime.identity.chat import SHEET_PROMPT_LINE_MAX, sheet_prompt_line
+
+    line = sheet_prompt_line("x" * 500)
+    assert len(line) <= SHEET_PROMPT_LINE_MAX and "folded for this prompt" in line
+    assert sheet_prompt_line("short") == "short"
 
 
-def test_bounded_card_text_marker_fits_inside_the_card_bound() -> None:
-    card, kept = _bounded_card_text(("Sentence. " * 300).strip())
-    assert len(card) <= _CARD_TEXT_MAX
-    assert kept < len(("Sentence. " * 300).strip())
-    assert "#TRUNCATION" in card
+def test_sheet_line_is_stored_whole(tmp_path) -> None:
+    """Root ADR 0054 (memory owner 2026-11-08): a 500+ character moment rests in the session sheet whole,
+    byte for byte the record's digest; the 160-character `_sheet_line` cut is gone (the prompt folds at read
+    time, test above)."""
+    from abstractmemory import TripleQuery
+    from abstractruntime.identity.chat import ChatSession, open_home
+    from test_tool_results_are_artifacts import _ScriptedLLM, _make_home
+
+    user_text = " ".join(
+        f"Sentence {i} says that the river bends twice before the dam and the beavers rebuild it in spring."
+        for i in range(12)
+    )
+    reply = " ".join(
+        f"Thought {i}: the beavers choose willow over alder because it bends without breaking in the current."
+        for i in range(12)
+    )
+    home = open_home(_make_home(tmp_path, "sheetwhole"))
+    try:
+        session = ChatSession(
+            home, _ScriptedLLM([reply, "(unused)"]), participants=["agent:t"], context_window=20000,
+            out=lambda s: None,
+        )
+        session.turn(user_text)
+        rid, line = session.session_sheet[-1]
+        assert len(line) > 500, line
+        assert "TRUNCATION" not in line and "folded" not in line
+        digests = [
+            str(a.object)
+            for a in home.ms.query(TripleQuery(scope="life", owner_id=home.entity_id, limit=0))
+            if str(a.subject) == rid and str(a.predicate) == "dcterms:abstract"
+        ]
+        assert digests == [line], "the sheet line is the record's digest, byte for byte"
+    finally:
+        home.close()
+
+
+def test_authored_card_text_is_stored_whole(tmp_path) -> None:
+    """Root ADR 0054 (memory owner 2026-11-08): a 3,000-character authored briefing round-trips byte for
+    byte; the 1,600-character `_bounded_card_text` cut is gone."""
+    import pytest
+
+    from abstractmemory import current_world_models, world_model_pass
+    from abstractruntime.identity.chat import ChatSession, open_home
+    from test_tool_results_are_artifacts import _make_home
+
+    class _LLM:
+        def __init__(self, replies):
+            self.replies = list(replies)
+
+        def generate(self, *, messages, system_prompt):
+            class _R:
+                pass
+
+            r = _R()
+            r.content = self.replies.pop(0) if self.replies else "…"
+            return r
+
+    home = open_home(_make_home(tmp_path, "cardwhole"))
+    try:
+        s = ChatSession(
+            home, _LLM(["Good to see you, admin. We spoke of trails.", "Another exchange about breadcrumbs.",
+                        "A third exchange, noted."]),
+            participants=["person:admin"], context_window=20000, out=lambda s: None,
+        )
+        s.turn("Hello again - it's admin. Let's talk trails.")
+        s.turn("Breadcrumbs beat search sometimes, no?")
+        s.turn("One more thought on time-order.")
+        world_model_pass(home.ms, scopes=[("life", home.entity_id)], owner_id=home.entity_id, targets=["person:admin"])
+        if current_world_models(home.store, scope="life", owner_id=home.entity_id, journal=home.journal).get("person:admin") is None:
+            pytest.skip("floor pass formed no card for this evidence shape")
+        briefing = (
+            "admin is the operator I keep meeting: he cares about trails and breadcrumbs, asks direct questions "
+            "and trusts me to answer honestly, and our talks keep building on each other. "
+        ) * 18
+        briefing = briefing.strip()
+        assert len(briefing) > 3000
+        s.llm = _LLM(["A good session with admin.", briefing])
+        result = s.reflect()
+        assert result is not None and result.get("world_models_authored") == ["person:admin"]
+        current = current_world_models(home.store, scope="life", owner_id=home.entity_id, journal=home.journal)["person:admin"]
+        assert str(current.object) == briefing, "the card is his briefing, whole"
+    finally:
+        home.close()
 
 
 # ---------------------------------------------------------------------------

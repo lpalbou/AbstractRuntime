@@ -85,11 +85,10 @@ SUMMON_POSTURE_SELF_FRACTION = 0.5
 
 MAX_DIARY_BLOCKS_PER_TURN = 3
 
-# The authored world-model card bound. A card is orientation (the prompt asks
-# for 3-6 sentences), not an essay — but per ADR-0026 the bound may never be
-# silent: an over-long briefing is cut on a sentence boundary, marked in-band,
-# and announced on the entity's own out-channel.
-_CARD_TEXT_MAX = 1600
+# An authored world-model card is stored WHOLE (root ADR 0054; the memory
+# owner 2026-11-08: no length caps on its columns, author_world_model stores
+# text whole, short forms are derived at read time). The old 1,600-character
+# card bound and its in-band marker are gone.
 
 _DIARY_FENCE_RE = re.compile(
     r"```diary([^\n`]*)\n(.*?)```", re.DOTALL | re.IGNORECASE
@@ -209,39 +208,23 @@ def _bounded_with_marker(text: Any, *, max_chars: int, marker: str) -> str:
 TICK_LOOKBACK_RECAP_MOMENTS = 12
 
 
-# The session-sheet moment bound. Sheet lines ride BOTH the reflection prompt
-# and the card-authoring prompt — a silent cut there is the entity being asked
-# to reflect on an amputated account of its own turn (ADR-0026 §1).
-_SHEET_LINE_MAX = 160
+# The session sheet is STORED whole (run vars, pending_reflection.json) —
+# root ADR 0054, memory owner 2026-11-08; the old 160-character `_sheet_line`
+# cut is gone. A PROMPT that lists the sheet folds each moment VISIBLY to this
+# many characters (ADR 0053 rule 2): the look-back and the card prompt see the
+# whole conversation beside the sheet, so the sheet is an index of the moments
+# (the numbered targets of feel elections), not the record — unfolded it would
+# add ~5x tokens per moment and no new words. The marker renderer
+# (parse_feel_blocks) always gets the WHOLE lines, so what rests in the reply
+# is the record's words, never the fold.
+SHEET_PROMPT_LINE_MAX = 160
+_SHEET_FOLD_MARKER = "… [folded for this prompt; the record is whole]"
 
 
-def _sheet_line(digest: Any) -> str:
-    """One sheet moment, bounded and MARKED when the bound bites.
-    #[WARNING:TRUNCATION] session-sheet moment bound; the formed episode keeps the full digest
-    """
-    return _bounded_with_marker(
-        digest,
-        max_chars=_SHEET_LINE_MAX,
-        marker="… [#TRUNCATION: moment line bounded]",
-    )
-
-
-def _bounded_card_text(text: str) -> tuple[str, int]:
-    """Bound an authored world-model card INCLUDING its truncation marker."""
-    s = str(text or "")
-    if len(s) <= _CARD_TEXT_MAX:
-        return s, len(s)
-    marker = (
-        f" [#TRUNCATION: briefing cut by the {_CARD_TEXT_MAX}-char card bound; "
-        f"full draft was {len(s)} chars]"
-    )
-    keep = max(_CARD_TEXT_MAX - len(marker), 0)
-    cut = s[:keep]
-    dot = cut.rfind(". ")
-    if dot > keep // 2:
-        cut = cut[: dot + 1]
-    kept = len(cut.rstrip())
-    return cut.rstrip() + marker, kept
+def sheet_prompt_line(desc: Any) -> str:
+    """One sheet moment as a prompt lists it: whole up to SHEET_PROMPT_LINE_MAX
+    characters (marker included), else a visible fold. Never what is stored."""
+    return _bounded_with_marker(desc, max_chars=SHEET_PROMPT_LINE_MAX, marker=_SHEET_FOLD_MARKER)
 
 
 def floored_reflection_digest(
@@ -2658,7 +2641,7 @@ class ChatSession:
         report.formed = list(formed.get("record_ids", []))
         report.notices.extend(formed.get("warnings", []))
         for rid in report.formed:
-            self.session_sheet.append((str(rid), _sheet_line(digest)))
+            self.session_sheet.append((str(rid), str(digest or "")))  # whole (root ADR 0054)
             self._last_episode_id = str(rid)
         # PER-TURN CARD UPDATE (laurent's directive 2026-07-18: "the update
         # of the world model should happen naturally after each turn...
@@ -2960,7 +2943,8 @@ class ChatSession:
         if not targets:
             return []
 
-        sheet_lines = [f"- {desc}" for _rid, desc in self.session_sheet][-12:]
+        # The card prompt lists the sheet folded visibly (read-time; the sheet is stored whole).
+        sheet_lines = [f"- {sheet_prompt_line(desc)}" for _rid, desc in self.session_sheet][-12:]
         authored: List[str] = []
         for target in targets:
             # Find the standing card across his ladder scopes.
@@ -3022,20 +3006,10 @@ class ChatSession:
             if not text or len(text) < 40:
                 self.out(f"#FALLBACK card authoring for {target} returned too little; floor stands")
                 continue
-            # ADR-0026 §1: the card-write bound stands (a card is orientation,
-            # not an essay) but it may never be SILENT — this text becomes
-            # durable memory, and a mid-word cut with no trace reads back
-            # forever as "this is all he wrote". Cut on a sentence boundary
-            # when one is near, and say so in-band + on his own out-channel.
+            # The card is stored WHOLE (root ADR 0054; memory owner 2026-11-08:
+            # no caps on its columns, author_world_model stores text whole).
+            # The prompt asks for 3-6 sentences; what he wrote is what rests.
             card_text = text
-            if len(text) > _CARD_TEXT_MAX:
-                #[WARNING:TRUNCATION] authored world-model card bounded at
-                # _CARD_TEXT_MAX chars (abstractruntime.identity.chat)
-                card_text, kept = _bounded_card_text(text)
-                self.out(
-                    f"#NOTE your briefing of {target} ran {len(text)} chars; "
-                    f"kept {kept} (the card bound is {_CARD_TEXT_MAX})"
-                )
             try:
                 out = author_world_model(
                     self.home.ms, target=target, text=card_text,
@@ -3211,9 +3185,15 @@ class ChatSession:
             return None
         if resolutions is None:
             resolutions = list(self.session_resolutions)
+        # Whole lines for the marker renderer (parse_feel_blocks below names
+        # the record's words); visibly folded lines for the prompt (the sheet
+        # is an index beside the whole conversation; see sheet_prompt_line).
         sheet_lines = [f"{i}. {desc}" for i, (_rid, desc) in enumerate(sheet, start=1)]
+        prompt_sheet_lines = [
+            f"{i}. {sheet_prompt_line(desc)}" for i, (_rid, desc) in enumerate(sheet, start=1)
+        ]
         prompt = preamble + build_reflection_prompt(
-            sheet_lines, resolutions=list(resolutions), moment=moment
+            prompt_sheet_lines, resolutions=list(resolutions), moment=moment
         )
         # The SAME system prompt as the last turn's own call (review F6):
         # the look-back then shares that whole prefix and a provider's

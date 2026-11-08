@@ -22,7 +22,8 @@
     stored as refused ("[interest refused, not kept - ...: "<his words, whole>"]"), never as kept.
   - A look-back sends the same system prompt as the last turn's own call, so a provider's prefix cache can reuse
     it. What a personal tick's look-back sees is a per-entity setting, `lookback.context` in the home's
-    `cognition.yaml`, read at every tick look-back:
+    `cognition.yaml`, read through `cognition_profile.lookback_context(home)` each time a tick's look-back is
+    built, so a change applies from the next tick (and so at every day-open) without restarting the loop:
     - `day` (the default): the whole day's conversation so far. The tick's own request is then a prefix of its
       look-back, so with a prefix cache (OpenAI, llama.cpp / LM Studio, mlx-lm) each tick adds a roughly constant
       number of new tokens: the reply plus the look-back prompt.

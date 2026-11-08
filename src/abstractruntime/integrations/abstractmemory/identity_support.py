@@ -169,15 +169,16 @@ def project_diary_entry(
         # no-gist template digest ("Wrote a diary entry (question) at ...")
         # made 42 of Ephemeral's questions CLUSTER ON FORM — same-sitting
         # projections sharing only machine words. A non-private entry's
-        # first line is HIS words and already public-plane (the <=120-char
-        # gist fallback is a RULED decision, act-only ledger contract);
-        # the digest carries it so clusters form on CONTENT.
+        # first line is HIS words and already public-plane; the digest
+        # carries it so clusters form on CONTENT. The WHOLE first line
+        # (ADR 0054, 2026-11-08: stored text is never truncated - it was
+        # `first_line[:120]`, cutting the look-back's questions mid-word).
         fallback = ""
         if isinstance(text, str) and text.strip():
             first_line = text.strip().splitlines()[0].strip()
             if first_line.lower().startswith("gist:"):
                 first_line = first_line[5:].strip()
-            fallback = first_line[:120]
+            fallback = first_line
         digest = (gist or "").strip() or fallback or (
             f"Wrote a diary entry ({kind}) at {written_at}; no gist elected."
         )

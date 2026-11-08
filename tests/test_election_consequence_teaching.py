@@ -1330,8 +1330,8 @@ def test_own_time_close_runs_one_model_lookback() -> None:
 
 def test_no_gist_projection_digest_carries_his_words() -> None:
     """W-GROUP known-limit root fix (memory c302): a non-private no-gist
-    projection digests the entry's FIRST LINE (his words, <=120ch - the
-    ruled gist-fallback), never the machine template that made 42
+    projection digests the entry's WHOLE FIRST LINE (his words; ADR 0054
+    ended the 120-char cut), never the machine template that made 42
     questions cluster on form. Private stays act-frame."""
     captured = {}
 
@@ -1361,6 +1361,16 @@ def test_no_gist_projection_digest_carries_his_words() -> None:
     digest = str(getattr(rec, "digest", ""))
     assert "Why does the shore hold its shape?" in digest
     assert "no gist elected" not in digest, "the template era is over"
+    # ADR 0054: the whole first line is stored, never a 120-char cut.
+    long_q = ("Why does the harbour clock run slow on the days when the tide comes in early, "
+              "and why does nobody at the quay seem to notice it at all?")
+    assert len(long_q) > 120
+    project_diary_entry(
+        _MS(), entity_id="entity:t@x", entry_id="diary_ng3", kind="question",
+        visibility="normal", gist=None, text=long_q + "\nsecond line",
+        written_at="2026-07-20T10:02:00+00:00", turn_id="t3", origin={"run_id": "r1"},
+    )
+    assert str(getattr(captured["records"][0], "digest", "")) == long_q
     # Private entries keep the act-frame regardless of text.
     rid2, _w2 = project_diary_entry(
         _MS(), entity_id="entity:t@x", entry_id="diary_ng2", kind="note",

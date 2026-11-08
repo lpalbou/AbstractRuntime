@@ -13,7 +13,10 @@
   turn: on the react arm as `context.attachments` (absolute paths, cleared at HARVEST, so the next turn does not re-send
   them — a re-look is `read_file`), on the home-direct arm as the LLM_CALL payload's `media`. The appended user message
   carries `metadata.attachments` and the durable visit history entry carries `attachments`, so the transcript keeps the
-  reference (path, bytes, sha256, type); the file itself stays in the workspace.
+  reference (path, bytes, sha256, type); the file itself stays in the workspace. A turn with files and no words is a
+  turn: `turn.text` stays empty, the rendered message is the decoration alone (presence, memories, the attachment
+  lines), the recall cue and the episode's verbatim name what was shown; a turn with neither words nor files still
+  parks without a turn.
 - **`tool_result_media(election, workspace)`** (`identity/tools.py`): the media one executed tool election shows the
   model — absolute file paths, or None when the result is text only. Declared beside the executor
   (`ToolDescriptor.result_media`); today `read_file` on an image declares its path, re-resolved and re-sniffed under

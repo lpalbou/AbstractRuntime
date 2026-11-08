@@ -623,6 +623,67 @@ def test_image_attachment_rides_the_v0_llm_call_as_media(tmp_path: Path) -> None
         ert.close()
 
 
+def test_image_only_turn_runs_and_an_empty_turn_still_parks(tmp_path: Path) -> None:
+    """Entity app seam (2026-11-08): a turn with files and no words IS a
+    turn — `text` stays "", the rendered message is the decoration alone
+    (presence, MEMORIES, the attachment lines), the recall cue is the
+    attachment lines, the image rides the call and the episode's verbatim
+    names what was shown. A turn with neither words nor files still parks."""
+    from abstractmemory import TripleQuery
+
+    home_dir = _make_home(tmp_path, slug="silentling")
+    records, png_abs = _attachment_records(home_dir)
+    llm = _ScriptedLLMHandler(["A tiny square, shown without a word."])
+    ert, wf = _open(home_dir, llm)
+    try:
+        run_id = ert.runtime.start(workflow=wf, vars={}, session_id="visit-1")
+        ert.runtime.tick(workflow=wf, run_id=run_id, max_steps=50)
+
+        # Neither words nor files: not a turn (honest no-op, parks again).
+        state = ert.runtime.resume(
+            workflow=wf, run_id=run_id, wait_key=VISITOR_WAIT_KEY,
+            payload={"text": "   ", "speaker": "person:albou", "attachments": []}, max_steps=100,
+        )
+        assert state.status == RunStatus.WAITING
+        assert int(state.vars["_visit"]["turn_n"]) == 0 and llm.calls == []
+
+        # Files, no words: a turn.
+        state = ert.runtime.resume(
+            workflow=wf, run_id=run_id, wait_key=VISITOR_WAIT_KEY,
+            payload={"text": "", "speaker": "person:albou", "attachments": records[:1]}, max_steps=100,
+        )
+        assert state.status == RunStatus.WAITING
+        assert int(state.vars["_visit"]["turn_n"]) == 1
+        turn = state.vars["_turn"]
+        assert turn["text"] == ""
+        attached_line = (
+            f"(attached: shared/Screenshot.png — a PNG image, {records[0]['bytes']:,} bytes; "
+            "shown to you with this message; read_file re-opens it)"
+        )
+        rendered = turn["rendered_user"]
+        assert rendered.startswith("(present with you: person:albou)")
+        assert rendered.endswith(attached_line), rendered  # the decoration alone, nothing after it
+        assert llm.calls[0]["media"] == [png_abs]
+        assert state.vars["_visit"]["history"][0]["attachments"] == records[:1]
+
+        # The recall cue was what was shown, never an empty string.
+        recalls = [
+            ((r.get("effect") or {}).get("payload") or {})
+            for r in ert.runtime.get_ledger(run_id)
+            if isinstance(r, dict) and "recall" in str((r.get("effect") or {}).get("type") or "")
+        ]
+        assert recalls and recalls[-1].get("cue_text") == attached_line
+
+        # The episode's verbatim names what was shown, not an empty utterance.
+        rows = ert.home.ms.query(TripleQuery(scope="life", owner_id=ert.entity_id, limit=0))
+        episodes = [a.attributes for a in rows
+                    if isinstance(a.attributes, dict) and a.attributes.get("record_kind") == "episode"]
+        assert len(episodes) == 1
+        assert "shared/Screenshot.png" in json.dumps(episodes[0])
+    finally:
+        ert.close()
+
+
 def test_attachment_that_cannot_be_opened_is_said_not_shown(tmp_path: Path) -> None:
     """A record whose file is gone (or outside the workspace) is stated on the
     rendered message and never attached — honest, never silent, never a hedge."""

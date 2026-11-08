@@ -401,18 +401,27 @@ def build_visit_workflow(
                 visit["skip_reflection"] = True
             return StepPlan(node_id="ROUTE", next_node="REFLECT")
         text = str(resume.get("text") or "").strip()
-        if not text:
+        # The door's structured attachment records, kept whole (never
+        # parsed from `text`); RENDER says them, BRIDGE shows the images.
+        records = _attachment_records(resume.get("attachments"))
+        if not text and not records:
             # An empty message is not a turn; park again (honest no-op).
             return StepPlan(node_id="ROUTE", next_node="PARK")
         turn_n = int(visit.get("turn_n") or 0) + 1
         visit["turn_n"] = turn_n
         turn.clear()
+        # An image-only turn (files, no words) is a turn: `text` stays "",
+        # the rendered message is the decoration alone.
         turn["text"] = text
         turn["speaker"] = str(resume.get("speaker") or "") or (visit["participants"][0])
         turn["turn_id"] = f"t-{turn_n:04d}"
-        # The door's structured attachment records, kept whole (never
-        # parsed from `text`); RENDER says them, BRIDGE shows the images.
-        turn["attachments"] = _attachment_records(resume.get("attachments"))
+        turn["attachments"] = records
+        # What the files themselves say, read once here: the lines RENDER
+        # says (and RECALL cues on when there are no words), the images
+        # BRIDGE/REASON show.
+        facts = _attachment_facts(home.home_dir, records)
+        turn["attachment_lines"] = _attachment_lines(facts)
+        turn["attachment_media"] = [str(f["abs_path"]) for f in facts if f.get("image") and f.get("abs_path")]
         return StepPlan(node_id="ROUTE", next_node="RECALL")
 
     def recall_node(run: RunState, ctx: Any) -> StepPlan:
@@ -423,7 +432,9 @@ def build_visit_workflow(
             effect=Effect(
                 type=EffectType.MEMORY_RECALL,
                 payload={
-                    "cue_text": turn["text"],
+                    # No words (an image-only turn): the cue is what was
+                    # shown — the attachment lines (file names), never "".
+                    "cue_text": turn["text"] or "\n".join(turn.get("attachment_lines") or []),
                     "scopes": ladder,
                     "view": "working_set",
                     "turn_id": turn["turn_id"],
@@ -455,11 +466,9 @@ def build_visit_workflow(
         block = _memories_block(displayed, recall.get("as_of_seq"))
         others = [p for p in visit["participants"] if p != home.entity_id]
         presence = f"(present with you: {', '.join(others)})" if others else ""
-        # Attachments: one honest line per file, from the file itself; this
-        # turn's images are what BRIDGE/REASON show the model.
-        facts = _attachment_facts(home.home_dir, list(turn.get("attachments") or []))
-        turn["attachment_media"] = [str(f["abs_path"]) for f in facts if f.get("image") and f.get("abs_path")]
-        attached = "\n".join(_attachment_lines(facts))
+        # Attachments: one honest line per file (ROUTE read the files), INSIDE
+        # the decoration, before the visitor's words — never after them.
+        attached = "\n".join(turn.get("attachment_lines") or [])
         decoration = "\n\n".join(s for s in (presence, block, attached) if s)
         # The decorated message is APPEND-ONCE: it enters the transcript at
         # the fold and STAYS (all-but-last message byte-identical across
@@ -467,9 +476,9 @@ def build_visit_workflow(
         # as_of-labeled, so an old block reads as the honest record of what
         # that moment reminded him of, never as current recall). The RECORD
         # keeps the human's raw words: formation verbatim uses turn.text.
-        turn["rendered_user"] = (
-            (decoration + "\n\n" if decoration else "") + turn["text"]
-        )
+        # An image-only turn has no words: the message is the decoration.
+        text = str(turn.get("text") or "")
+        turn["rendered_user"] = (decoration + "\n\n" + text) if (decoration and text) else (decoration or text)
         return StepPlan(node_id="RENDER", next_node="REASON")
 
     def bridge_node(run: RunState, ctx: Any) -> StepPlan:
@@ -786,13 +795,17 @@ def build_visit_workflow(
             speaker = verified[0] if verified else home.entity_id
             if claimed:
                 speaker_claimed_label = claimed
+        # The human's raw words — or, on an image-only turn, what they showed
+        # (the attachment lines), so the episode never records an empty
+        # utterance against a turn that happened.
+        said = str(turn.get("text") or "") or "\n".join(turn.get("attachment_lines") or [])
         title, digest, keywords = mechanical_digest_v2(
-            turn["text"], turn["marked_reply"], home.name, speaker=speaker
+            said, turn["marked_reply"], home.name, speaker=speaker
         )
         turn["digest"] = digest
         # W5 (the visit half of the one verbatim edit): adapter-reported
         # intermediate rounds rest as inner speech + returned results.
-        verbatim = f"{speaker}:\n{turn['text']}\n\n"
+        verbatim = f"{speaker}:\n{said}\n\n"
         phases = list(turn.get("lookup_phases") or [])
         results = list(turn.get("tool_results_at_rest") or [])
         for i, phase in enumerate(phases):

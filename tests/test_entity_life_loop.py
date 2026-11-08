@@ -1680,8 +1680,10 @@ def test_drives_cue_note_shows_each_drive_gist(tmp_path: Path) -> None:
     note, ids = drives_cue_note(home_dir, offered=offered)
     assert "Alive on your desk today:" in note
     assert "#" in note and "read_memory" in note
-    # The record's stored title is the gist (review F2 rule 1).
-    assert '- "Diary entry (question) — 2026-07-19: what does a day owe its evening?"' in note, note
+    # The gist is the stored text's first line, never the machine title
+    # (review R2-1: titles are cuts of the text).
+    assert '- "what does a day owe its evening?"' in note, note
+    assert "Diary entry (question)" not in note
     assert "owed" not in note and "the day is yours" not in note
     assert "next step" not in note, "no next step on the record, none shown"
     assert ids, "offered ids feed the first-turn commit exclusion"
@@ -1689,9 +1691,9 @@ def test_drives_cue_note_shows_each_drive_gist(tmp_path: Path) -> None:
     assert all(isinstance(o["strength"], float) for o in offered), offered
 
 
-def test_drive_gist_title_then_first_line_then_visible_word_bound() -> None:
-    """Review F2: no regex on prose. Title first; else the first line;
-    past 60 words a word-boundary cut with a visible " …"."""
+def test_drive_gist_first_line_then_visible_word_bound() -> None:
+    """Review F2/R2-1: no regex on prose and no machine title. The first
+    line; past 60 words a word-boundary cut with a visible " …"."""
     from abstractruntime.identity.life import DRIVE_GIST_MAX_WORDS, drive_gist
 
     assert DRIVE_GIST_MAX_WORDS == 60
@@ -1705,7 +1707,6 @@ def test_drive_gist_title_then_first_line_then_visible_word_bound() -> None:
     assert drive_gist("\n\n  second line wins when the first is blank\nmore") == (
         "second line wins when the first is blank"
     )
-    assert drive_gist("whatever the text says", "My stored title") == "My stored title"
     long = " ".join(f"w{i}" for i in range(100))
     shown = drive_gist(long)
     assert shown == " ".join(f"w{i}" for i in range(60)) + " …", "visible cut at a word boundary"

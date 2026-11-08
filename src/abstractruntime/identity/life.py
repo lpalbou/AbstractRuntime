@@ -557,26 +557,25 @@ _NEXT_STEP_ATTRS = ("next_step", "next", "step", "how")
 DRIVE_GIST_MAX_WORDS = 60
 
 
-def drive_gist(text: Any, title: Any = "") -> str:
+def drive_gist(text: Any) -> str:
     """The short form of a drive shown on the desk, derived at read time
-    from what is stored (ADR 0054: the record itself is never cut).
+    from its stored text (ADR 0054: the record itself is never cut).
 
-    The rule, in order (review F2, 2026-11-08 - no regex on the entity's
-    prose, so no sentence splitting):
-    1. the record's stored title, when it has one;
-    2. else the first non-empty LINE of its stored text (a newline is
+    The rule (review F2 and R2-1, 2026-11-08 - no regex on the entity's
+    prose, so no sentence splitting; and never the record's stored title,
+    which for every drive kind is a machine cut of the text):
+    1. the first non-empty LINE of the stored text (a newline is
        structure, not a guess about prose);
-    3. whichever it is, when it runs past DRIVE_GIST_MAX_WORDS words it
-       shows the first DRIVE_GIST_MAX_WORDS words, cut at a word
-       boundary, followed by a visible " …" (a visible cut is allowed in
-       a prompt; a silent one is not; read_memory opens the whole record).
+    2. when that line runs past DRIVE_GIST_MAX_WORDS words, the first
+       DRIVE_GIST_MAX_WORDS words, cut at a word boundary, followed by a
+       visible " …" (a visible cut is allowed in a prompt; a silent one is
+       not; read_memory opens the whole record).
     """
-    chosen = str(title or "").strip()
-    if not chosen:
-        for line in str(text or "").splitlines():
-            if line.strip():
-                chosen = line
-                break
+    chosen = ""
+    for line in str(text or "").splitlines():
+        if line.strip():
+            chosen = line
+            break
     words = chosen.split()
     if len(words) > DRIVE_GIST_MAX_WORDS:
         return " ".join(words[:DRIVE_GIST_MAX_WORDS]) + " …"
@@ -627,9 +626,9 @@ def drives_cue_note(
     home_dir: Path, *, k: int = 4, offered: Optional[List[Dict[str, Any]]] = None,
 ) -> Tuple[str, List[str]]:
     """The MERGE composer: the day-open cue offers the top-k ALIVE drives,
-    each as kind #tag [date] plus its GIST (`drive_gist`: its stored title,
-    else its first line, bounded at DRIVE_GIST_MAX_WORDS words with a
-    visible " …") and its next step when the record carries one.
+    each as kind #tag [date] plus its GIST (`drive_gist`: the first line of
+    its stored text, bounded at DRIVE_GIST_MAX_WORDS words with a visible
+    " …") and its next step when the record carries one.
 
     Operator ruling 2026-11-08 amends the adversary F2 contract: the desk
     used to show bare ids so a cue gist could not lexically self-confirm
@@ -743,7 +742,7 @@ def drives_cue_note(
         group_n = int(it.get("group_size") or 0)
         group_note = f" - {group_n} of yours circle this" if group_n > 1 else ""
         text, attrs = texts.get(rid, ("", {}))
-        gist = drive_gist(text, attrs.get("title"))
+        gist = drive_gist(text)
         gist_note = f' - "{gist}"' if gist else ""
         step = _drive_next_step(attrs)
         step_note = f" (next step: {step})" if step else ""

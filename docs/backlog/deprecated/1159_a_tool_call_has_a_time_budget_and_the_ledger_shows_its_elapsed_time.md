@@ -1,6 +1,6 @@
 # 1159 — A tool call has a wall-clock budget; the ledger and the view show how long it has been running
 
-**Status**: planned · **Priority**: P1 (operator incident 2026-11-08 03:31: "you would think it works and it's just slow? no it isn't… so somewhere those tools crashed") · **Created**: 2026-11-08
+**Status**: deprecated · **Deprecated**: 2026-11-08 (operator: "i never said that and i don't want that. we don't want silly arbitrary interrupts") · **Priority**: P1 (operator incident 2026-11-08 03:31: "you would think it works and it's just slow? no it isn't… so somewhere those tools crashed") · **Created**: 2026-11-08
 **Package**: abstractruntime (`integrations/abstractcore/effect_handlers.py` TOOL_CALLS handler, ledger event schema, `replay/view.py`) · **Consumers**: AbstractUIC panel-chat (the tool row shows the elapsed time and a "still running" cue, uic 1161), AbstractCore `search_files` (its own deadline, root 1160)
 
 ## What happened
@@ -52,3 +52,9 @@ layout; the runtime gap stays: a tool call can run for hours and the run cannot 
 
 - Hermetic gateway: a `search_files` over a tree with a 200k-file decoy folder returns the timeout result
   within the budget + 1 s, the run continues, Code's row shows the elapsed time while it runs.
+
+## Deprecation record
+
+Operator ruling 2026-11-08 11:30: no wall-clock budget on tool calls, no arbitrary interrupts. The elapsed-time
+record (started_at/duration_ms on tool results) is kept as a proposed display aid in uic 1161; the eight-minute
+search is addressed by the workspace `.abstractignore` (root 8d9477b) and the ignore defaults in root 1160.

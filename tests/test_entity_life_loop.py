@@ -508,8 +508,12 @@ def test_loop_rest_is_a_nap_in_247_mode(tmp_path: Path) -> None:
     assert report.ticks == 2
     assert report.days == 2
     # The resume cue acknowledges the rest rather than faking continuity.
-    assert "you rested" in report.records[1].cue
-    assert "sitting quietly" in report.records[1].cue
+    assert "you rested and your own time resumes." in report.records[1].cue
+    # ...but never echoes his reason to stop into the next day (operator
+    # 2026-11-08): the reason stays in his records, not in the cue.
+    assert "sitting quietly" not in report.records[1].cue
+    assert report.records[0].rest == "sitting quietly", "the reason stays on the record"
+    assert "nothing owed" not in report.records[1].cue
 
 
 def test_loop_operator_sleep_closes_day_and_wakes_honestly(tmp_path: Path) -> None:

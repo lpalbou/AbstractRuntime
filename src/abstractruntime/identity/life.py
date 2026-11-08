@@ -3661,10 +3661,8 @@ class LifeLoop:
                 # surfaces tensions for the waking self. State is marked asleep
                 # (written_by=self) so the navbar shows it; the nap is
                 # interruptible (a stop lands within seconds, not at nap's end).
-                # Cap mirrors parse_next_cue's 400 (adversary F7: the rest
-                # reason is entity prose with no ceiling, and the composed
-                # cue rests in the next episode's digest — an unbounded
-                # reason is recall-cue dilution engraved).
+                # The reason rides the sleep state only (never the next
+                # cue, see below); the 400 cap mirrors parse_next_cue's.
                 rest_reason = (report.rest_reason or "no reason kept")[:400]
                 report.sleeps += 1
                 dreamed = self._sleep_window(rest_reason)
@@ -3697,10 +3695,13 @@ class LifeLoop:
                 # with the reread command, and name a circling run when the
                 # last stretch was one — directions, never orders.
                 circling = self._circling_note()
-                cue = (
-                    f"{_today_stamp()}you rested ({rest_reason}) and your own time resumes - "
-                    f"fresh day, nothing owed.{dream_note}{circling}"
-                )
+                # NO ECHO OF THE REST REASON (operator 2026-11-08): the
+                # reason stays in his records (report.rest_reason, the
+                # sleep state's reason, own_time.log) and never opens the
+                # next day - nerin rested on 14 of 28 days and every day
+                # after a rest opened on his own reason to stop, then
+                # rested again (8 of 8; sleep-investigation-2026-11-08).
+                cue = f"{_today_stamp()}you rested and your own time resumes.{dream_note}{circling}"
                 report.rest_reason = None
                 report.dreams += 1 if (isinstance(dreamed, dict) and dreamed.get("formed")) else 0
                 continue

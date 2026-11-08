@@ -19,7 +19,8 @@ Node cycle (frozen spec §A + the 0014 node-graph draft):
   names). A REFUSED prelude completes the run with `{"refused": true}` —
   the door translates it to its 4xx; identity is never truncated.
 - PARK is WAIT_EVENT `visitor_input` with the D3 idle deadline; resume
-  payloads: `{text, speaker}` (turn), `{kind: "close"}` (explicit close),
+  payloads: `{text, speaker, attachments?}` (turn; attachments = the
+  door's structured records, see `_attachment_records`), `{kind: "close"}` (explicit close),
   `{timed_out: true}` (deadline). `details.kind="visitor_message"` makes
   the wait self-describing to clients.
 - The TURN chain is the driver's seam, per-effect: MEMORY_RECALL ->

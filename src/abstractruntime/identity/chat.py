@@ -192,16 +192,20 @@ def _bounded_with_marker(text: Any, *, max_chars: int, marker: str) -> str:
     return s[:keep].rstrip() + marker_s
 
 
-# THE TICK LOOK-BACK'S CONTEXT (review F6, operator option b, 2026-11-08).
-# "tick": the look-back at the end of a personal-time tick sees that tick's
-#   own exchange plus a short recap of the day's earlier moments (the last
-#   TICK_LOOKBACK_RECAP_MOMENTS sheet lines) - about 3-5k tokens beyond the
-#   tick's own system prompt, which it reuses whole so a provider's prefix
-#   cache hits.
-# "day": it sees the whole day's conversation so far (the history window,
-#   up to 50k tokens), like the visit and day closes do.
-# Visit closes and own-time day closes always see the whole discussion.
-TICK_LOOKBACK_CONTEXT = "tick"
+# THE TICK LOOK-BACK'S CONTEXT is a per-entity setting (review R2-3,
+# 2026-11-08): `lookback.context` in the home's cognition.yaml, read through
+# `cognition_profile.lookback_context(home)` at every tick look-back, so a
+# change applies at the next tick. Default "day" (the cognition profile's
+# DEFAULT_LOOKBACK_CONTEXT):
+# "day": the look-back sees the whole day's conversation so far (the history
+#   window) - the tick's own request is then a PREFIX of its look-back, so
+#   with a prefix cache (OpenAI, llama.cpp / LM Studio, mlx-lm) the new
+#   tokens per tick stay ~constant (the reply + the look-back prompt).
+# "tick": it sees that tick's own exchange plus a recap of the day's earlier
+#   moments (the last TICK_LOOKBACK_RECAP_MOMENTS sheet lines) - smaller
+#   when the provider has no prefix cache; shares only the system prompt.
+# Either way the look-back reuses the tick's own system prompt. Visit closes
+# and own-time day closes always see the whole discussion.
 TICK_LOOKBACK_RECAP_MOMENTS = 12
 
 
@@ -3041,7 +3045,10 @@ class ChatSession:
             return None
         self._tick_lookbacks += 1
         n = self._tick_lookbacks
-        if TICK_LOOKBACK_CONTEXT == "tick":
+        from .cognition_profile import lookback_context
+
+        mode = lookback_context(self.home.home_dir)
+        if mode == "tick":
             # This tick's own exchange, plus a recap of the day's earlier
             # moments (a visible count names what the recap leaves out).
             context: Optional[List[Dict[str, str]]] = [dict(m) for m in self.history[hist_start:]]
@@ -3055,10 +3062,10 @@ class ChatSession:
                     + (f" (the last {len(shown)} of {len(earlier)} moments)" if hidden else "")
                     + ":\n" + "\n".join(f"- {d}" for d in shown) + "\n\n"
                 )
-        elif TICK_LOOKBACK_CONTEXT == "day":
+        elif mode == "day":
             context, preamble = None, ""
         else:
-            raise ValueError(f"TICK_LOOKBACK_CONTEXT must be 'tick' or 'day', not {TICK_LOOKBACK_CONTEXT!r}")
+            raise ValueError(f"lookback.context must be 'day' or 'tick', not {mode!r}")
         result = self._reflect_over(
             sheet,
             session_id=self.session_id,

@@ -197,10 +197,11 @@ def test_every_personal_tick_ends_with_a_lookback(tmp_path: Path) -> None:
     kinds = _kinds(home_dir)
     assert _has(kinds.get("interest", []), "how tides keep time")
     assert _has(kinds["open_question"], "evening feel shorter")
-    # Each tick's look-back numbers only that tick's records; the day's
-    # earlier moments ride the recap above it.
-    recap, numbered = llm.prompts[3].split("This stretch of your own time is done.", 1)
-    assert "First tick" in recap and "First tick" not in numbered
+    # Each tick's look-back numbers only that tick's records; by default
+    # ("day") the whole day's conversation rides the messages before it.
+    _before, numbered = llm.prompts[3].split("This stretch of your own time is done.", 1)
+    assert "First tick" not in numbered
+    assert any("First tick" in str(m["content"]) for m in llm.messages[3][:-1])
 
 
 def test_rest_tick_leaves_the_lookback_to_the_day_close(tmp_path: Path) -> None:
@@ -344,11 +345,19 @@ def test_a_refused_interest_is_stored_as_refused_not_kept(tmp_path: Path) -> Non
     assert sorted(_kinds(home_dir).get("interest", [])) == ["first subject", "second subject"]
 
 
+def _set_lookback_context(home_dir: Path, value: str) -> None:
+    (home_dir / "cognition.yaml").write_text(
+        f"schema_version: 1\nlookback:\n  context: {value}\n", encoding="utf-8"
+    )
+
+
 def test_tick_lookback_reuses_the_tick_prompt_and_bounds_its_context(tmp_path: Path) -> None:
-    """Review F6: the tick look-back sends the tick's OWN system prompt
-    (prefix cache) and only that tick's exchange plus a recap of the day's
-    earlier moments - not the whole day's conversation."""
+    """Review F6 / R2-3: with `lookback.context: tick` in cognition.yaml the
+    tick look-back sends the tick's OWN system prompt (prefix cache) and
+    only that tick's exchange plus a recap of the day's earlier moments -
+    not the whole day's conversation."""
     home_dir = _make_home(tmp_path)
+    _set_lookback_context(home_dir, "tick")
     llm = _Recorder(["EARLY-REPLY about the harbour.", "Nothing to keep.",
                      "LATE-REPLY about the tide.", "Nothing to keep."])
     s = _personal_session(home_dir, llm)
@@ -368,11 +377,13 @@ def test_tick_lookback_reuses_the_tick_prompt_and_bounds_its_context(tmp_path: P
     assert sent[-1]["content"].startswith("Earlier today, from your own records:"), sent[-1]["content"][:80]
 
 
-def test_tick_lookback_context_flips_to_the_whole_day(tmp_path: Path, monkeypatch) -> None:
-    from abstractruntime.identity import chat as chat_mod
-
-    monkeypatch.setattr(chat_mod, "TICK_LOOKBACK_CONTEXT", "day")
+def test_tick_lookback_sees_the_whole_day_by_default(tmp_path: Path) -> None:
+    """Review R2-3: no cognition.yaml setting = "day": the look-back sees the
+    whole day, and the tick's own request is a PREFIX of its look-back
+    (same system prompt, same messages, then the reply and the prompt), so
+    a provider's prefix cache serves everything but the new tail."""
     home_dir = _make_home(tmp_path)
+    assert not (home_dir / "cognition.yaml").exists()
     llm = _Recorder(["EARLY-REPLY.", "Nothing.", "LATE-REPLY.", "Nothing."])
     s = _personal_session(home_dir, llm)
     s.turn("(cue) one")
@@ -382,6 +393,23 @@ def test_tick_lookback_context_flips_to_the_whole_day(tmp_path: Path, monkeypatc
     s.home.close()
     joined = "\n".join(str(m["content"]) for m in llm.messages[3][:-1])
     assert "EARLY-REPLY" in joined and "LATE-REPLY" in joined
+    tick_call, lookback_call = llm.messages[2], llm.messages[3]
+    assert llm.systems[2] == llm.systems[3]
+    assert lookback_call[: len(tick_call)] == tick_call, "the tick's request is a prefix of its look-back"
+
+
+def test_lookback_context_setting_applies_at_the_next_tick(tmp_path: Path) -> None:
+    home_dir = _make_home(tmp_path)
+    llm = _Recorder(["EARLY-REPLY.", "Nothing.", "LATE-REPLY.", "Nothing."])
+    s = _personal_session(home_dir, llm)
+    s.turn("(cue) one")
+    s.tick_lookback()
+    _set_lookback_context(home_dir, "tick")  # the operator changes it mid-day
+    s.turn("(cue) two")
+    s.tick_lookback()
+    s.home.close()
+    joined = "\n".join(str(m["content"]) for m in llm.messages[3][:-1])
+    assert "LATE-REPLY" in joined and "EARLY-REPLY" not in joined
 
 
 def test_day_close_keeps_the_whole_discussion_and_the_last_turn_prompt(tmp_path: Path) -> None:

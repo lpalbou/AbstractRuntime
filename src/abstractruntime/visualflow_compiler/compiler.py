@@ -1555,6 +1555,16 @@ def _create_visual_agent_effect_handler(
             if isinstance(conversation, dict) and isinstance(conversation.get("enabled"), bool):
                 runtime_ns.setdefault("conversation", deepcopy(conversation))
 
+            # The entities the person's message mentions (abstractgateway c26d38a2:
+            # host-written at POST /runs/start as {entities: [{entity_id, name}], line}).
+            # The Agent node's ReAct child reads it to end the turn on an empty reply
+            # (AbstractAgent ff1c4d1); without it the child retried the silence. The
+            # line itself reaches the child's messages the way the conversation does
+            # (the context pin / use_context). A copy: parent and child never share it.
+            mentions = parent_runtime.get("mentions")
+            if isinstance(mentions, dict):
+                runtime_ns.setdefault("mentions", deepcopy(mentions))
+
         thinking_value = _normalize_thinking(thinking)
         if thinking_value is None and isinstance(parent_runtime, dict):
             thinking_value = _normalize_thinking(parent_runtime.get("thinking"))

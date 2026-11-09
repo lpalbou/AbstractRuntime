@@ -431,3 +431,66 @@ def test_the_sleep_repairs_legacy_mechanical_cards_and_dreams(tmp_path: Path, mo
         assert row.object == SUMMARY, (kind, row.object)
         assert not isinstance(row.attributes.get("pending"), dict), (kind, row.attributes.get("pending"))
     assert _failures(tmp_path) == [], "no authoring failure, no memory_refused"
+
+
+def _exhaust_title_task(home: Any, s: Any, target: str) -> Dict[str, Any]:
+    """Fail the record's title.author task through its attempts (a capability client that raises, as the live
+    gateway's did on 2026-11-09): it ends `failed`, the record stays marked pending with no live task."""
+    s.llm_for_capability = lambda name: _Capability(exc=RuntimeError("gateway 500: capability route missing"))
+    for _ in range(6):
+        task = [t for t in home.ms.tasks.tasks(kind=("title.author",)) if t["target_id"] == target][-1]
+        if task["status"] == "failed":
+            return task
+        from abstractruntime.identity.authoring import drain_authoring
+
+        drain_authoring(home.ms, llm_for_capability=s.llm_for_capability, artifacts=home.artifacts,
+                        home_dir=home.home_dir, entity=home.entity_id, holder="test", cap=3, window="turn")
+    raise AssertionError(f"the task never ended failed: {task}")
+
+
+def test_a_pending_record_whose_tasks_all_failed_is_rearmed_and_authored_at_the_next_drainer_pass(
+        tmp_path: Path) -> None:
+    import abstractruntime.identity.authoring as authoring_mod
+
+    home_dir = _workspace_home(tmp_path)
+    home, s = _session(home_dir, ["Back.\n```interest\nwhy rivers bend\n```\n", "A quiet close."])
+    s.llm_for_capability = None  # forms pending
+    s.turn("hi")
+    target = str(_rows(home_dir, "interest")[-1].subject)
+    failed = _exhaust_title_task(home, s, target)
+    assert failed["status"] == "failed"
+    # The capability is fixed: the next pass re-arms the record through memory and authors it.
+    lines: List[str] = []
+    receipt = authoring_mod.drain_authoring(home.ms, llm_for_capability=lambda name: _Capability(),
+                                            artifacts=home.artifacts, home_dir=home_dir, entity=home.entity_id,
+                                            holder="test", cap=3, window="turn", out=lines.append)
+    home.close()
+    # Every exhausted record of the turn is re-armed (the interest, and the episode whose tasks ran out beside it).
+    assert receipt["rearmed"] >= 1 and receipt["authored"] >= 1, receipt
+    interest = [r for r in _rows(home_dir, "interest") if str(r.subject) == target][-1]
+    assert interest.attributes["title"] == TITLE and "pending" not in interest.attributes
+    assert any("re-armed" in ln for ln in lines), lines
+
+
+def test_without_memorys_rearm_verb_the_drainer_says_so_once_and_writes_nothing(tmp_path: Path, monkeypatch) -> None:
+    import abstractmemory
+
+    import abstractruntime.identity.authoring as authoring_mod
+
+    home_dir = _workspace_home(tmp_path)
+    home, s = _session(home_dir, ["Back.\n```interest\nwhy rivers bend\n```\n", "A quiet close."])
+    s.llm_for_capability = None
+    s.turn("hi")
+    target = str(_rows(home_dir, "interest")[-1].subject)
+    _exhaust_title_task(home, s, target)
+    monkeypatch.delattr(abstractmemory, "rearm_pending", raising=False)
+    monkeypatch.setattr(authoring_mod, "_REARM_VERB_MISSING_LOGGED", False)
+    lines: List[str] = []
+    for _ in range(2):
+        receipt = authoring_mod.drain_authoring(home.ms, llm_for_capability=lambda name: _Capability(),
+                                                artifacts=home.artifacts, home_dir=home_dir, entity=home.entity_id,
+                                                holder="test", cap=3, window="turn", out=lines.append)
+        assert receipt["rearmed"] == 0 and receipt["authored"] == 0, receipt
+    home.close()
+    assert len([ln for ln in lines if ln.startswith("#MISSING_VERB abstractmemory.rearm_pending")]) == 1, lines
+    assert [t["status"] for t in _tasks(home_dir, "title.author") if t["target_id"] == target] == ["failed"]

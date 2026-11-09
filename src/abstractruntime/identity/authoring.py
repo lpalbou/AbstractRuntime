@@ -41,6 +41,7 @@ __all__ = [
     "authored_write",
     "declare_missing_metadata",
     "drain_authoring",
+    "rearm_exhausted_authoring",
 ]
 
 AUTHORING_CAPABILITY = "summaries"
@@ -310,10 +311,13 @@ def drain_authoring(
     {authored, deferred, failed, considered}."""
     from .title_failures import record_authoring_failure
 
-    receipt = {"authored": 0, "deferred": 0, "failed": 0, "considered": 0}
+    receipt = {"authored": 0, "deferred": 0, "failed": 0, "considered": 0, "rearmed": 0}
     tasks = getattr(ms, "tasks", None)
     if tasks is None or int(cap) <= 0:
         return receipt
+    # A pending record whose every authoring task ran out (failed after its attempts, skipped, superseded) would
+    # stay pending forever: memory re-arms it first, so this pass can author it.
+    receipt["rearmed"] = int(rearm_exhausted_authoring(ms, out=out).get("rearmed") or 0)
     selection = tasks.select_for_window(10_000.0, window=window, kinds=list(AUTHORING_TASK_KINDS),
                                         hard_cap=int(cap))
     picked = list(selection.get("tasks") or [])
@@ -454,4 +458,48 @@ def declare_missing_metadata(ms: Any, *, scopes: Sequence[Tuple[str, str]], out:
             receipt["declared"] += len(res.get("declared") or [])
     if receipt["declared"]:
         out(f"(sleep: {receipt['declared']} missing title(s)/summary(ies) declared pending for their authoring)")
+    return receipt
+
+
+# Logged once per process when memory lacks the re-arm verbs (a loud line, not one per tick).
+_REARM_VERB_MISSING_LOGGED = False
+
+
+def rearm_exhausted_authoring(ms: Any, *, scopes: Optional[Sequence[Tuple[str, str]]] = None,
+                              out: Callable[[str], None] = lambda _s: None) -> Dict[str, Any]:
+    """Re-arm the pending records whose title.author / digest.author tasks all ended (operator 2026-11-09: a title
+    and a summary must ALWAYS exist; a capability failure that exhausted the attempts must not leave a record pending
+    with no task). Through memory's own verbs only: `pending_records(ms, scopes=, live_task=False)` finds the
+    records with a pending field and no live task, `rearm_pending(ms, record_id, cause="repair", reason=)` queues
+    their fresh task (the marker stays, its `rearmed` count grows). `scopes` None = every scope. A refusal is logged
+    (#REARM_REFUSED) and counted. Memory without the verbs: one loud #MISSING_VERB line per process, nothing
+    re-armed (never a write around memory). Returns {rearmed, refused, unchanged, missing_verb?}."""
+    global _REARM_VERB_MISSING_LOGGED
+
+    receipt: Dict[str, Any] = {"rearmed": 0, "refused": 0, "unchanged": 0}
+    if getattr(ms, "tasks", None) is None:
+        return receipt
+    try:
+        from abstractmemory import pending_records, rearm_pending
+    except ImportError as e:
+        receipt["missing_verb"] = "abstractmemory.rearm_pending / pending_records"
+        if not _REARM_VERB_MISSING_LOGGED:
+            _REARM_VERB_MISSING_LOGGED = True
+            out(f"#MISSING_VERB abstractmemory.rearm_pending / pending_records ({e}): a pending record whose "
+                "authoring tasks all ended keeps no task until memory ships the re-arm")
+        return receipt
+    for rec in pending_records(ms, scopes=scopes, live_task=False):
+        res = rearm_pending(ms, rec["record_id"], cause="repair",
+                            reason="every authoring task of a pending field ended")
+        outcome = res.get("outcome")
+        if outcome == "rearmed":
+            receipt["rearmed"] += 1
+        elif outcome == "refused":
+            receipt["refused"] += 1
+            out(f"#REARM_REFUSED memory refused to re-arm {rec.get('record_kind')} {rec['record_id']}: "
+                f"{res.get('reason')}{' - ' + str(res.get('detail')) if res.get('detail') else ''}")
+        else:
+            receipt["unchanged"] += 1
+    if receipt["rearmed"]:
+        out(f"(authoring: {receipt['rearmed']} pending record(s) whose tasks had all ended were re-armed)")
     return receipt

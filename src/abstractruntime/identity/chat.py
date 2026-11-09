@@ -3260,7 +3260,13 @@ class ChatSession:
         forms - the title and/or the summary are then the authored ones and nothing is pending. Only when that
         step fails does the record form pending (memory queues its task) and the failure is logged once it has an
         id. The call is kept as a home artifact (the author's source). Returns (payload, per-record outcomes)."""
-        from .authoring import AuthoringUnavailable, _reader_of, _source_artifact, author_metadata
+        from .authoring import (
+            AuthoringUnavailable,
+            _reader_of,
+            _source_artifact,
+            author_metadata,
+            authoring_failure_fields,
+        )
 
         records = list((payload or {}).get("records") or [])
         if not any(isinstance(r, dict) and r.get("_authoring") for r in records):
@@ -3300,14 +3306,15 @@ class ChatSession:
                 rec["attributes"] = attrs
                 outcomes.append({"authored": authored})
             except Exception as e:  # noqa: BLE001 - the record forms pending; the failure is logged with its id
-                reader = _reader_of(llm) if llm is not None else {}
+                why = authoring_failure_fields(e, llm)
                 outcomes.append({"failure": {
                     "kind": kind, "raw_block": str(meta.get("raw_block") or body),
-                    "template_id": str(meta.get("template_id") or ""), "provider": reader.get("provider"),
-                    "model": reader.get("model"),
-                    "reason": "unavailable" if isinstance(e, AuthoringUnavailable) else "malformed",
+                    "template_id": str(meta.get("template_id") or ""), "provider": why["provider"],
+                    "model": why["model"], "reason": why["reason"],
                     "missing": "both" if len(need) == 2 else need[0],
                     "extra": {"session_id": self.session_id, "error": f"{type(e).__name__}: {e}",
+                              "error_class": why["error_class"], "error_message": why["error_message"],
+                              "capability": "summaries",
                               **({"block_reason": meta["block_reason"]} if meta.get("block_reason") else {})},
                 }})
             new_records.append(rec)

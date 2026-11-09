@@ -29,12 +29,15 @@ __all__ = [
     "AUTHORING_TASK_KINDS",
     "AUTHORING_CAPABILITY_KEY",
     "AUTHORING_RESPONSE_SCHEMA",
+    "AuthoringCallFailed",
     "AuthoringFailed",
+    "AuthoringRefused",
     "AuthoringUnavailable",
     "CapabilityUnrouted",
     "authoring_llm_call_payload",
     "parse_authored_result",
     "author_metadata",
+    "authoring_failure_fields",
     "authored_write",
     "declare_missing_metadata",
     "drain_authoring",
@@ -54,6 +57,15 @@ class AuthoringUnavailable(Exception):
 
 class AuthoringFailed(Exception):
     """The capability model answered without a usable title or summary (an attempt spent)."""
+
+
+class AuthoringCallFailed(AuthoringFailed):
+    """The capability client RAISED (and the endpoint is not merely unreachable): the call failed before any reply
+    existed - never a malformed reply. Its class and message go to the failure line (an attempt spent)."""
+
+
+class AuthoringRefused(AuthoringFailed):
+    """Memory refused the authored write (retitle / rewrite_digest answered neither applied nor unchanged)."""
 
 
 _SYSTEM = (
@@ -165,7 +177,11 @@ def author_metadata(llm: Any, *, kind: str, body: str) -> Dict[str, Any]:
     except Exception as e:  # noqa: BLE001 - classified below, never swallowed
         if _unreachable(e):
             raise AuthoringUnavailable(f"{type(e).__name__}: {e}") from e
-        raise AuthoringFailed(f"the model call failed: {type(e).__name__}: {e}") from e
+        from pydantic import ValidationError
+
+        if isinstance(e, ValidationError):  # the reply came back and did not fit {title, summary}: malformed
+            raise AuthoringFailed(f"the reply did not fit the title and summary: {type(e).__name__}: {e}") from e
+        raise AuthoringCallFailed(f"the model call failed: {type(e).__name__}: {e}") from e
     if hasattr(resp, "model_dump"):
         data = resp.model_dump()
     elif isinstance(resp, dict):
@@ -183,6 +199,30 @@ def author_metadata(llm: Any, *, kind: str, body: str) -> Dict[str, Any]:
     if not isinstance(summary, str) or not summary.strip():
         raise AuthoringFailed("the reply carried no summary")
     return {"title": title.strip(), "summary": summary.strip(), "raw": json.dumps(data, ensure_ascii=False)}
+
+
+def authoring_failure_fields(exc: BaseException, llm: Any = None) -> Dict[str, Any]:
+    """What a failure line says about a failed authoring step: the reason word, the provider/model of the capability
+    client used (None when none could be built), and the class and message of what actually failed - the client's
+    own exception when it raised, never the wrapper. reason: unavailable (unreachable endpoint / no client, no
+    attempt spent) | client_error (the client raised) | capability_unrouted | memory_refused | malformed (a reply
+    that truly failed to parse or lacked a field) | error (anything else)."""
+    root = exc.__cause__ if exc.__cause__ is not None else exc
+    if isinstance(exc, AuthoringUnavailable):
+        reason = "unavailable"
+    elif isinstance(exc, AuthoringCallFailed):
+        reason = "client_error"
+    elif isinstance(exc, CapabilityUnrouted):
+        reason = "capability_unrouted"
+    elif isinstance(exc, AuthoringRefused):
+        reason = "memory_refused"
+    elif isinstance(exc, AuthoringFailed):
+        reason = "malformed"
+    else:
+        reason = "error"
+    reader = _reader_of(llm) if llm is not None else {}
+    return {"reason": reason, "provider": reader.get("provider"), "model": reader.get("model"),
+            "error_class": type(root).__name__, "error_message": str(root)}
 
 
 def _reader_of(llm: Any) -> Dict[str, Any]:
@@ -246,7 +286,7 @@ def authored_write(ms: Any, artifacts: Any, *, record_id: str, kind: str, body: 
                                            reader=reader, sources=sources, task_id=tid)
     for field, res in out.items():
         if not isinstance(res, dict) or res.get("outcome") not in ("applied", "unchanged"):
-            raise AuthoringFailed(f"{field} write refused: {(res or {}).get('reason')}")
+            raise AuthoringRefused(f"{field} write refused: {(res or {}).get('reason')}")
     return out
 
 
@@ -324,11 +364,13 @@ def drain_authoring(
         except AuthoringFailed as e:
             tasks.release(t["task_id"], holder=holder, outcome="retry", reason=str(e))
             receipt["failed"] += 1
+            why = authoring_failure_fields(e, llm)
             record_authoring_failure(
                 home_dir, entity=entity, record_id=str(t["target_id"]), kind=kind, raw_block=body,
-                template_id=AUTHORING_TEMPLATE_ID, provider=None, model=None,
-                reason="memory_refused" if " write refused: " in str(e) else "malformed",
-                missing=need[0], extra={"task_id": t["task_id"], "error": str(e)}, out=out,
+                template_id=AUTHORING_TEMPLATE_ID, provider=why["provider"], model=why["model"], reason=why["reason"],
+                missing=need[0], out=out,
+                extra={"task_id": t["task_id"], "error": str(e), "error_class": why["error_class"],
+                       "error_message": why["error_message"], "capability": AUTHORING_CAPABILITY},
             )
     return receipt
 

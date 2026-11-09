@@ -285,17 +285,21 @@ def _authored_fields(result: Any, *, need: List[str], run_id: str, title: Option
     """Record fields from one authoring call: (fields, failure). Authored = the title/summary set and nothing
     pending; failed = the needed fields PENDING (memory queues the task) and the failure to log once the record
     has an id. A call no handler served (no capability echo) is a wiring failure, logged as an error."""
-    from .authoring import AuthoringUnavailable, CapabilityUnrouted, parse_authored_result
+    from .authoring import CapabilityUnrouted, authoring_failure_fields, parse_authored_result
 
     try:
         authored = parse_authored_result(result)
     except Exception as e:  # noqa: BLE001
         if isinstance(e, CapabilityUnrouted):
             logger.error("entity visit run %s: %s", run_id, e)
-        reason = ("capability_unrouted" if isinstance(e, CapabilityUnrouted)
-                  else "unavailable" if isinstance(e, AuthoringUnavailable) else "malformed")
+        why = authoring_failure_fields(e)
         fields: Dict[str, Any] = {"title": None if "title" in need else title, "digest": digest, "pending": list(need)}
-        return fields, {"reason": reason, "error": f"{type(e).__name__}: {e}",
+        # The capability call's own provider/model when its result names them (the visit's mind is not the model
+        # that was asked: never stamped in their place).
+        res = result if isinstance(result, dict) else {}
+        return fields, {"reason": why["reason"], "error": f"{type(e).__name__}: {e}",
+                        "error_class": why["error_class"], "error_message": why["error_message"],
+                        "provider": res.get("provider"), "model": res.get("model"),
                         "missing": "both" if len(need) == 2 else need[0]}
     fields = {
         "title": authored["title"] if "title" in need else title,
@@ -311,14 +315,15 @@ def _log_visit_authoring_failure(home: Any, visit: Dict[str, Any], failure: Dict
     from .title_failures import record_authoring_failure
 
     ids = list((formed or {}).get("record_ids") or []) if isinstance(formed, dict) else []
-    info = visit.get("model_info") if isinstance(visit.get("model_info"), dict) else {}
     record_authoring_failure(
         getattr(home, "home_dir", None), entity=getattr(home, "entity_id", None),
         record_id=str(ids[0]) if ids else None, kind=str(failure.get("kind")),
         raw_block=str(failure.get("raw_block") or ""), template_id=str(failure.get("template_id") or ""),
-        provider=info.get("provider"), model=info.get("model"), reason=str(failure.get("reason")),
+        provider=failure.get("provider"), model=failure.get("model"), reason=str(failure.get("reason")),
         missing=str(failure.get("missing") or "title"),
-        extra={k: failure[k] for k in ("error", "turn_id", "block_reason") if failure.get(k)},
+        extra={"capability": "summaries",
+               **{k: failure[k] for k in ("error", "error_class", "error_message", "turn_id", "block_reason")
+                  if failure.get(k)}},
     )
 
 

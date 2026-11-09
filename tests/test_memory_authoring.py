@@ -111,8 +111,33 @@ def test_a_failing_model_leaves_the_record_pending_with_its_task_and_a_failure_l
     assert interest.attributes["pending"]["title"] is True
     assert [t["status"] for t in _tasks(home_dir, "title.author") if t["target_id"] == str(interest.subject)] == ["pending"]
     lines = [f for f in _failures(tmp_path) if f["kind"] == "interest"]
-    assert len(lines) == 1 and lines[0]["missing"] == "title" and lines[0]["reason"] == "malformed"
-    assert lines[0]["record_id"] == str(interest.subject) and lines[0]["block_reason"] == "missing"
+    assert len(lines) == 1 and lines[0]["missing"] == "title" and lines[0]["record_id"] == str(interest.subject)
+    assert lines[0]["block_reason"] == "missing"
+    # The client RAISED: its class, message and the capability model it was are on the line - never "malformed"
+    # with no model (live gateway 2026-11-09: every visit-formed record failed that way and said nothing).
+    line = lines[0]
+    assert (line["reason"], line["error_class"], line["error_message"]) == ("client_error", "ValueError", "no fields")
+    assert (line["provider"], line["model"], line["capability"]) == ("fake", "summarizer", "summaries"), line
+
+
+def test_the_drainer_failure_line_names_the_client_exception_and_model(tmp_path: Path) -> None:
+    home_dir = _workspace_home(tmp_path)
+    home, s = _session(home_dir, ["Back.\n```interest\nwhy rivers bend\n```\n", "A quiet close."])
+    s.llm_for_capability = None  # forms pending
+    s.turn("hi")
+    s.llm_for_capability = lambda name: _Capability(exc=RuntimeError("gateway 500: capability route missing"))
+    receipt = s.drain_authoring(window="turn", cap=3)
+    assert receipt["failed"] >= 1, receipt
+    line = [f for f in _failures(tmp_path) if f.get("task_id")][-1]
+    assert (line["reason"], line["error_class"]) == ("client_error", "RuntimeError"), line
+    assert line["error_message"] == "gateway 500: capability route missing"
+    assert (line["provider"], line["model"]) == ("fake", "summarizer"), line
+    # A reply that truly failed to parse stays malformed - with the model that gave it.
+    s.llm_for_capability = lambda name: _Capability(summary="")
+    s.drain_authoring(window="turn", cap=3)
+    home.close()
+    bad = [f for f in _failures(tmp_path) if f.get("task_id")][-1]
+    assert (bad["reason"], bad["model"]) == ("malformed", "summarizer"), bad
 
 
 def test_the_drainer_authors_a_pending_record_on_the_next_tick_and_defers_an_unreachable_endpoint(

@@ -1592,8 +1592,8 @@ class ChatSession:
                 except RuntimeError as exc:
                     report.notices.append(f"#FALLBACK feeling on {record_id} refused: {exc}")
         for i, lesson_text in enumerate(lessons):
-            # Title and words WHOLE (operator 2026-11-08; root ADR 0054): his `title:` line, else his first
-            # complete sentence - never a word cut.
+            # Title and words WHOLE (operator 2026-11-08; root ADR 0054): his `title:` line, else his whole first
+            # line - never a word cut. The title is the title: no "lesson: " prefix (review 2026-11-09).
             lesson_title, lesson_words = elected_title_and_words(lesson_text)
             try:
                 out = self._effect(
@@ -1601,7 +1601,7 @@ class ChatSession:
                     {
                         "records": [{
                             "kind": "lesson",
-                            "title": "lesson: " + lesson_title,
+                            "title": lesson_title,
                             "digest": lesson_words,
                             "keywords": [],
                             "edges": [],
@@ -1715,9 +1715,7 @@ class ChatSession:
                     {
                         "records": [{
                             "kind": "realization",
-                            "title": "realization: " + (
-                                getattr(r, "title", "") or elected_title_and_words(r.text)[0]
-                            ),
+                            "title": getattr(r, "title", "") or elected_title_and_words(r.text)[0],
                             "digest": r.text,
                             "keywords": [],
                             "edges": [["derived_from", gid] for gid in gids],
@@ -3333,8 +3331,8 @@ class ChatSession:
         # digest carry the WHY. Values/purposes/traits/limits stay untouchable.
         interest_record_ids: List[str] = []
         for i, interest_text in enumerate(interests):
-            # Title and words WHOLE (operator 2026-11-08; root ADR 0054): his `title:` line, else his first
-            # complete sentence - never the 8-word cut that read as broken-off sentences.
+            # Title and words WHOLE (operator 2026-11-08; root ADR 0054): his `title:` line, else his whole first
+            # line - never the 8-word cut that read as broken-off sentences.
             interest_title, interest_words = elected_title_and_words(interest_text)
             interest_out = self._effect(
                 EffectType.MEMORY_FORM,
@@ -3396,7 +3394,7 @@ class ChatSession:
                     "records": [
                         {
                             "kind": "lesson",
-                            "title": "lesson: " + lesson_title,
+                            "title": lesson_title,
                             "digest": lesson_words,  # his words verbatim (embedded)
                             "keywords": [],
                             "edges": (

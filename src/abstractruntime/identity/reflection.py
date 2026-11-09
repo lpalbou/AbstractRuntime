@@ -25,8 +25,6 @@ import re
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
-from .digest import split_sentences
-
 _FEEL_FENCE_RE = re.compile(r"```feel[^\n`]*\n(.*?)```", re.DOTALL | re.IGNORECASE)
 _LESSON_FENCE_RE = re.compile(
     r"```lesson([^\n`]*)\n(.*?)```", re.DOTALL | re.IGNORECASE
@@ -328,10 +326,11 @@ def _block_lines(raw: str) -> str:
 def elected_title_and_words(elected: str) -> Tuple[str, str]:
     """(title, words) of one elected interest, lesson or realization, both WHOLE (root ADR 0054).
 
-    The title is the block's explicit `title:` first line when he wrote one; otherwise the first COMPLETE sentence of
-    his first line (digest.split_sentences: ends at . ! ? before a capital, or at a line break), whole, never a word
-    count. `words` is everything else, whitespace folded: the record's digest. Also reads a plain string (a pending
-    election of a visit run that started before this change)."""
+    The title is the block's explicit `title:` first line when he wrote one; otherwise his WHOLE first line - his own
+    line break, never a punctuation guess (a sentence split cut "Dr. Smith taught me patience." to "Dr." and stored
+    that for good; review 2026-11-09). Stored whole; a display folds it. `words` is everything else, whitespace folded:
+    the record's digest. Also reads a plain string (a pending election of a visit run that started before this
+    change)."""
     lines = [ln for ln in str(elected or "").splitlines() if ln.strip()]
     if not lines:
         return "", ""
@@ -345,8 +344,7 @@ def elected_title_and_words(elected: str) -> Tuple[str, str]:
         if not lines:
             return "", ""
         first = " ".join(lines[0].split())
-    sentences = split_sentences(first)
-    return (sentences[0] if sentences else first), " ".join(" ".join(lines).split())
+    return first, " ".join(" ".join(lines).split())
 
 
 def parse_interest_blocks(
@@ -403,7 +401,7 @@ class RealizeElection:
     text: str
     evidence: List[str]
     touches: str = ""
-    title: str = ""  # his explicit `title:` line, else the first complete sentence of his words (whole)
+    title: str = ""  # his explicit `title:` line, else his whole first line
 
 
 _REALIZE_EVIDENCE_RE = re.compile(r"^\s*evidence\s*=\s*(?P<val>.+)$", re.IGNORECASE)

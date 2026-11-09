@@ -1131,8 +1131,8 @@ def build_visit_workflow(
             session_record_id = next(
                 iter((refl.get("summary_out") or {}).get("record_ids") or []), None
             )
-            # Title and words WHOLE (operator 2026-11-08; root ADR 0054): his `title:` line, else his first
-            # complete sentence - never a word cut. A plain pending string (a run older than this) reads too.
+            # Title and words WHOLE (operator 2026-11-08; root ADR 0054): his `title:` line, else his whole first
+            # line - never a word cut. A plain pending string (a run older than this) reads too.
             _t, _w = elected_title_and_words(str(interests[i]))
             return StepPlan(
                 node_id="APPLY",
@@ -1185,7 +1185,7 @@ def build_visit_workflow(
                     payload={
                         "records": [{
                             "kind": "lesson",
-                            "title": "lesson: " + _t,
+                            "title": _t,
                             "digest": _w,
                             "keywords": [],
                             "edges": (
@@ -1240,7 +1240,7 @@ def build_visit_workflow(
                     payload={
                         "records": [{
                             "kind": "realization",
-                            "title": "realization: " + (str(r.get("title") or "") or elected_title_and_words(r_text)[0]),
+                            "title": str(r.get("title") or "") or elected_title_and_words(r_text)[0],
                             "digest": r_text,
                             "keywords": [],
                             "edges": [["derived_from", str(g)] for g in (r.get("gids") or [])],

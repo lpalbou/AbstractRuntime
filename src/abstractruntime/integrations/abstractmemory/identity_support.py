@@ -198,10 +198,9 @@ def project_diary_entry(
         _slug = ""
         if ((gist or "").strip() or fallback) and not digest_method:
             # WHOLE (root ADR 0054; operator 2026-11-08: a title is explicit and readable): his elected gist, else
-            # the first complete sentence of his first line, never a 60-character cut.
-            from ...identity.digest import split_sentences
-
-            _slug = (gist or "").strip() or (split_sentences(fallback) or [fallback])[0]
+            # his whole first line - his own line break, never a punctuation guess (a sentence split cut
+            # "Dr. Smith..." to "Dr."; review 2026-11-09) and never a 60-character cut.
+            _slug = (gist or "").strip() or fallback
         if _slug:
             title = f"Diary entry ({kind}) — {written_date}: {_slug}"
         else:

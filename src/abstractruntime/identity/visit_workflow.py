@@ -60,6 +60,7 @@ from .chat import (
     ChatHome,
     _memories_block,
     _serialize_under_budget,
+    authored_digest_attributes,
     clean_model_reply,
     compose_system_base,
     floored_reflection_digest,
@@ -949,6 +950,9 @@ def build_visit_workflow(
                                            digest=digest)
         if fields.get("_metadata_authored"):
             attributes["metadata_authored"] = fields.pop("_metadata_authored")
+            # The authored summary is the digest: its label says authored (memory queues a mechanical-v2 digest
+            # for sleep repair - rewriting his authored words for nothing).
+            attributes = authored_digest_attributes(attributes, attributes["metadata_authored"].get("fields"))
             digest = str(fields["digest"])
             turn["digest"] = digest
         if failure:
@@ -1326,6 +1330,9 @@ def build_visit_workflow(
                                    if refl_floored and not _sum_authored else {}),
                                 **({"visit_id": str(visit_id)} if visit_id else {}),
                                 **({"metadata_authored": _sum_authored} if _sum_authored else {}),
+                                # An authored summary says so (digest_method authored:summaries).
+                                **(authored_digest_attributes({}, _sum_authored.get("fields"))
+                                   if _sum_authored else {}),
                             },
                             "provenance": {"source": "entity-visit-run-reflection-v0"},
                         }],

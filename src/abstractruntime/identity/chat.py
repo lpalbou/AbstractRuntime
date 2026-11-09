@@ -230,6 +230,22 @@ def sheet_prompt_line(desc: Any) -> str:
     return _bounded_with_marker(desc, max_chars=SHEET_PROMPT_LINE_MAX, marker=_SHEET_FOLD_MARKER)
 
 
+#: The digest_method of a summary the summaries capability AUTHORED at formation (never in memory's repair-consent
+#: set MECHANICAL_DIGEST_METHODS, which only a truly mechanical digest declares).
+AUTHORED_SUMMARIES_METHOD = "authored:summaries"
+
+
+def authored_digest_attributes(attributes: Dict[str, Any], fields: Any) -> Dict[str, Any]:
+    """`attributes` with the digest label its words have: when the authored `fields` include the summary, the digest
+    IS the authored one, so `digest_method` says so (`authored:summaries`) whatever mechanical label the formation
+    stamped before the call (`mechanical-v2`, `mechanical-floor-v1`). A title-only authoring leaves the digest's
+    own label alone (the digest is still the one the label names)."""
+    out = dict(attributes or {})
+    if "summary" in [str(f) for f in (fields or [])]:
+        out["digest_method"] = AUTHORED_SUMMARIES_METHOD
+    return out
+
+
 def floored_reflection_digest(
     marked_reply: str, sheet: List[Tuple[Optional[str], str]]
 ) -> Tuple[str, bool]:
@@ -3370,6 +3386,9 @@ class ChatSession:
                 attrs = dict(rec.get("attributes") or {})
                 attrs["metadata_authored"] = {"fields": need, "capability": "summaries", "reader": reader,
                                               "source": sources[0]}
+                # The digest's own label follows its words: an AUTHORED summary is never stamped mechanical (memory
+                # queues a mechanical digest for sleep repair; rewriting authored words spends tokens for nothing).
+                attrs = authored_digest_attributes(attrs, need)
                 rec["attributes"] = attrs
                 outcomes.append({"authored": authored})
             except Exception as e:  # noqa: BLE001 - the record forms pending; the failure is logged with its id

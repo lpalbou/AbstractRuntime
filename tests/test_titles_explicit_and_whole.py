@@ -17,7 +17,6 @@ from typing import Any, Dict, List
 
 import pytest
 
-from abstractruntime.identity.title_failures import untitled_label
 from abstractruntime.identity.reflection import (
     build_reflection_prompt,
     elected_title_and_words,
@@ -129,8 +128,8 @@ def _project(gist: Any, text: str) -> str:
 def test_diary_title_is_his_gist_whole_and_never_his_first_line() -> None:
     long_q = LONG_FIRST.rstrip(".") + "? And another sentence follows it."
     title = _project(None, long_q + "\nMore prose below.")
-    assert title == "Diary entry (question) — 2026-11-08 [ary_q1]", title  # no words of his without a gist
-    assert _project(None, DR_BODY) == "Diary entry (question) — 2026-11-08 [ary_q1]"
+    assert title in ("", "None"), title  # no gist: the title is pending (authored later from the book), never his words
+    assert _project(None, DR_BODY) in ("", "None")
     gist = "Why does a research nation hollow out the institutions that produce its own breakthroughs?"
     assert _project(gist, "prose").endswith(": " + gist)
     assert "…" not in _project(gist, "prose")
@@ -168,10 +167,10 @@ def _assert_titles(t: Dict[str, List[tuple]]) -> None:
     # The title is the title (operator 2026-11-08): no "interest:" prefix on a new interest.
     assert (EXPLICIT, LONG_BODY) in t.get("interest", []), t.get("interest")
     assert not any(title.lower().startswith("interest:") for title, _w in t.get("interest", []))
-    # No "lesson: " prefix; an untitled lesson takes no title from his words (the untitled label, never "Dr.").
-    assert (untitled_label("lesson", LONG_BODY), LONG_BODY) in t.get("lesson", []), t.get("lesson")
-    assert (untitled_label("lesson", DR_BODY), "Dr. Smith taught me patience. It matters to how I teach.") in t.get(
-        "lesson", []), t.get("lesson")
+    # No "lesson: " prefix; an untitled lesson takes no title from his words (never "Dr."): with no capability
+    # model here, its title is pending (None) and authored later.
+    assert ("", LONG_BODY) in t.get("lesson", []), t.get("lesson")
+    assert ("", "Dr. Smith taught me patience. It matters to how I teach.") in t.get("lesson", []), t.get("lesson")
     assert not any(title.lower().startswith("lesson:") for title, _w in t.get("lesson", []))
 
 
@@ -229,14 +228,13 @@ def test_visit_lane_stores_whole_titles(tmp_path: Path) -> None:
         # The `title:` line wins, with no "realization: " prefix.
         assert (EXPLICIT, LONG_BODY) in t.get("realization", []), t.get("realization")
         assert not any(title.lower().startswith("realization:") for title, _w in t.get("realization", []))
-        # The two untitled lessons are recorded (no untracked/ beside this test home: the own-time log, marked).
-        log = (home_dir / "own_time.log").read_text(encoding="utf-8")
-        failures = [json.loads(ln.split(" ", 1)[1]) for ln in log.splitlines() if ln.startswith("#TITLE_FAILURE ")]
-        assert sorted((f["kind"], f["reason"], f["raw_block"]) for f in failures) == sorted(
-            [("lesson", "missing", LONG_BODY), ("lesson", "missing", DR_BODY)]), failures
-        # Logged AFTER the formation (Codex review 2026-11-09 #9): each line names the record it formed.
-        stored_ids = {str(a.subject) for a in _abstract_rows(ert.home)}
-        assert all(f["record_id"] and f["record_id"] in stored_ids for f in failures), failures
+        # The two untitled lessons formed PENDING: memory's marker and their title.author tasks wait for the
+        # authoring drainer (the visit lane has no capability call in its formation step).
+        pending = [a for a in _abstract_rows(ert.home)
+                   if (a.attributes or {}).get("record_kind") == "lesson" and (a.attributes or {}).get("pending")]
+        assert len(pending) == 2 and all(a.attributes["pending"]["title"] for a in pending), pending
+        tasks = ert.home.ms.tasks.tasks(kind=("title.author",))
+        assert {str(a.subject) for a in pending} <= {t["target_id"] for t in tasks}
     finally:
         ert.close()
 
@@ -253,8 +251,9 @@ def test_chat_realization_title_has_no_prefix() -> None:
     stub = _ApplyStub()
     stub._apply_realizations(elected, turn_id="t1", notices=[])
     titles = [payload["records"][0]["title"] for _etype, payload in stub.effect_calls]
-    assert titles == [EXPLICIT, untitled_label("realization", elected[1].raw)], titles
-    assert "Smith" not in titles[1]
+    assert titles == [EXPLICIT, None], titles  # no title from his words: pending, authored later
+    pend = [payload["records"][0].get("pending") for _etype, payload in stub.effect_calls]
+    assert pend == [None, ["title"]], pend
 
 
 def test_pending_plain_string_still_forms_with_its_words_whole() -> None:

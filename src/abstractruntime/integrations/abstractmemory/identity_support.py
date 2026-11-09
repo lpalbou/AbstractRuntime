@@ -205,7 +205,11 @@ def project_diary_entry(
             # failure is recorded (title_failures).
             _slug = (gist or "").strip()
             title_missing = not _slug
-        if _slug:
+        if title_missing:
+            # Authored metadata (operator 2026-11-09): no gist = the title is PENDING (memory queues title.author);
+            # the drainer authors it from the book's words. Never a template standing in for his words.
+            title = None
+        elif _slug:
             title = f"Diary entry ({kind}) — {written_date}: {_slug}"
         else:
             # MECHANICAL / no-gist entries carry no content slug (machine
@@ -266,6 +270,7 @@ def project_diary_entry(
                 MemoryRecordInput(
                     kind="diary",
                     title=title,
+                    **({"pending": ("title",)} if (not private and title_missing) else {}),
                     digest=digest,
                     keywords=(),
                     payload_ref=None,
@@ -280,23 +285,6 @@ def project_diary_entry(
             turn_id=turn_id,
         )
         record_id = str(record_ids[0]) if record_ids else None
-        if not private and title_missing:
-            from ...identity.title_failures import record_title_failure
-
-            failure = record_title_failure(
-                home_dir,
-                entity=entity_id,
-                record_id=record_id,
-                kind="diary",
-                raw_block=str(text or ""),
-                template_id="diary.gist",
-                provider=origin.get("provider"),
-                model=origin.get("model"),
-                reason="missing",
-                extra={"entry_id": entry_id, "stored_title": title},
-            )
-            if failure.get("logged"):
-                warnings.append(str(failure["logged"]))
         return record_id, warnings
     except Exception as e:
         warnings.append(f"#FALLBACK diary projection failed (chain entry preserved): {e}")

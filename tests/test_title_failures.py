@@ -1,12 +1,11 @@
-"""A missing title is recorded, never guessed (operator ruling 2026-11-09: "we shouldn't need a fallback. if it fails,
-it should add information to a temporary error file in untracked/ so we know what's failing and how to fix it at the
-source").
+"""A missing title is never guessed (operator rulings 2026-11-09: "we shouldn't need a fallback. if it fails, it
+should add information to a temporary error file in untracked/"; "the title + summary must ALWAYS exist").
 
-When an elected block (interest, lesson, realization) carries no usable `title:` first line, or a public diary entry
-carries no `gist:`, the record takes NO title from his words (AbstractMemory requires a title, so it carries the
-visibly-untitled label "untitled <kind> [<key>]"; its words whole, as before) and ONE JSON line is appended to
-`<workspace>/untracked/title-failures/<YYYY-MM-DD>.jsonl` (the workspace = the parent of the data dir that holds the
-home). When no such folder resolves, the same line goes to the home's own-time log after a `#TITLE_FAILURE` marker.
+The title comes from the block's `title:` first line, else the summaries capability model authors it in the
+formation step (tests/test_memory_authoring.py). When that step fails - here: no capability model in the session -
+the record forms PENDING (title None, memory's marker and title.author task) and ONE JSON line is appended to
+`<workspace>/untracked/authoring-failures/<YYYY-MM-DD>.jsonl` (the workspace = the parent of the data dir that holds
+the home); when no such folder resolves, the same line goes to the home's own-time log after `#AUTHORING_FAILURE`.
 """
 
 from __future__ import annotations
@@ -19,11 +18,10 @@ from typing import Any, Dict, List
 import pytest
 
 from abstractruntime.identity.reflection import parse_elected_title
-from abstractruntime.identity.title_failures import untitled_label
 
 FIELDS = {
     "observed_at", "entity", "record_id", "kind", "raw_block", "template_id", "template_version",
-    "provider", "model", "reason",
+    "provider", "model", "reason", "missing",
 }
 GOOD = "Patience as a practice"
 
@@ -56,7 +54,7 @@ def _workspace_home(tmp_path: Path) -> Path:
 
 
 def _failure_lines(tmp_path: Path) -> List[Dict[str, Any]]:
-    folder = tmp_path / "ws" / "untracked" / "title-failures"
+    folder = tmp_path / "ws" / "untracked" / "authoring-failures"
     if not folder.is_dir():
         return []
     out: List[Dict[str, Any]] = []
@@ -94,7 +92,7 @@ def _session(home_dir: Path, replies: List[str]):
 
 
 @pytest.mark.parametrize("site", ["lookback", "midturn"])
-def test_an_untitled_lesson_is_stored_without_a_title_and_recorded(tmp_path: Path, site: str) -> None:
+def test_an_untitled_lesson_whose_authoring_fails_is_pending_and_recorded(tmp_path: Path, site: str) -> None:
     pytest.importorskip("abstractmemory")
     home_dir = _workspace_home(tmp_path)
     block = "Dr. Smith taught me patience.\nIt matters to how I teach."
@@ -106,24 +104,20 @@ def test_an_untitled_lesson_is_stored_without_a_title_and_recorded(tmp_path: Pat
     home.close()
     lessons = _stored(home_dir)["lesson"]
     untitled = [r for r in lessons if r[1] == "Dr. Smith taught me patience. It matters to how I teach."]
-    # No title from his words (AbstractMemory requires one, so the visibly-untitled label stands in: the kind and a
-    # key of the block, none of his words); the words whole.
-    assert len(untitled) == 1 and untitled[0][0] == untitled_label("lesson", block), lessons
-    assert untitled[0][0].startswith("untitled lesson [") and "Smith" not in untitled[0][0]
+    # No title from his words, no placeholder: the title is pending (None); the words whole.
+    assert len(untitled) == 1 and untitled[0][0] == "", lessons
     assert (GOOD, "Wait before answering.") in [(t, w) for t, w, _id in lessons]  # a good title: verbatim
-    lines = _failure_lines(tmp_path)
+    lines = [ln for ln in _failure_lines(tmp_path) if ln["kind"] == "lesson"]
     assert len(lines) == 1, lines  # the good title wrote nothing
     line = lines[0]
     assert set(line) >= FIELDS, sorted(line)
-    assert line["kind"] == "lesson" and line["reason"] == "missing"
+    assert line["missing"] == "title" and line["reason"] == "unavailable" and line["block_reason"] == "missing"
     assert line["raw_block"] == block  # the block he wrote, whole
     assert line["entity"] == "entity:liveling@home-test"
     assert line["record_id"] and line["record_id"] == untitled[0][2]
-    assert line["provider"] == "lmstudio" and line["model"] == "qwen-test"
     assert line["template_id"] and line["template_version"]
     assert line["observed_at"].endswith("+00:00")
-    assert line["stored_title"] == untitled[0][0]
-    assert (tmp_path / "ws" / "untracked" / "title-failures" / f"{line['observed_at'][:10]}.jsonl").is_file()
+    assert (tmp_path / "ws" / "untracked" / "authoring-failures" / f"{line['observed_at'][:10]}.jsonl").is_file()
 
 
 def test_unresolvable_folder_writes_the_marker_to_the_own_time_log(tmp_path: Path) -> None:
@@ -137,15 +131,17 @@ def test_unresolvable_folder_writes_the_marker_to_the_own_time_log(tmp_path: Pat
     s.reflect()
     home.close()
     log = (home_dir / "own_time.log").read_text(encoding="utf-8")
-    marked = [ln for ln in log.splitlines() if ln.startswith("#TITLE_FAILURE ")]
-    assert len(marked) == 1, log
-    line = json.loads(marked[0][len("#TITLE_FAILURE "):])
-    assert set(line) >= FIELDS and line["kind"] == "interest" and line["reason"] == "missing"
+    marked = [json.loads(ln[len("#AUTHORING_FAILURE "):]) for ln in log.splitlines()
+              if ln.startswith("#AUTHORING_FAILURE ")]
+    interest = [ln for ln in marked if ln["kind"] == "interest"]
+    assert len(interest) == 1, log
+    line = interest[0]
+    assert set(line) >= FIELDS and line["missing"] == "title" and line["block_reason"] == "missing"
     assert line["raw_block"] == "why rivers bend"
-    assert not list(tmp_path.rglob("title-failures"))
+    assert not list(tmp_path.rglob("authoring-failures"))
 
 
-def _project(home_dir: Path, gist: Any, text: str) -> str:
+def _project(gist: Any, text: str) -> Any:
     from abstractruntime.integrations.abstractmemory.identity_support import project_diary_entry
 
     captured: Dict[str, Any] = {}
@@ -157,53 +153,30 @@ def _project(home_dir: Path, gist: Any, text: str) -> str:
 
     project_diary_entry(
         _MS(), entity_id="entity:x", entry_id="diary_q1abcdef", kind="question", visibility="normal", gist=gist,
-        text=text, written_at="2026-11-08T10:00:00+00:00", turn_id="t-1", origin={}, home_dir=home_dir,
+        text=text, written_at="2026-11-08T10:00:00+00:00", turn_id="t-1", origin={},
     )
-    return str(captured["records"][0].title)
+    return captured["records"][0]
 
 
-def test_a_diary_entry_without_a_gist_takes_no_title_from_its_text(tmp_path: Path) -> None:
-    home_dir = tmp_path / "ws" / "data" / "entities" / "x"
-    home_dir.mkdir(parents=True)
-    (tmp_path / "ws" / "untracked").mkdir()
-    title = _project(home_dir, None, "Why do rivers bend?\nMore prose.")
-    assert "rivers" not in title and title.startswith("Diary entry (question) — 2026-11-08"), title
-    lines = _failure_lines(tmp_path)
-    assert len(lines) == 1 and lines[0]["kind"] == "diary" and lines[0]["reason"] == "missing"
-    assert lines[0]["raw_block"] == "Why do rivers bend?\nMore prose." and lines[0]["record_id"] == "ex:rec-1"
-    # His gist is his title: no failure.
-    assert _project(home_dir, "Why rivers bend", "prose").endswith(": Why rivers bend")
-    assert len(_failure_lines(tmp_path)) == 1
+def test_a_diary_entry_without_a_gist_takes_no_title_from_its_text() -> None:
+    record = _project(None, "Why do rivers bend?\nMore prose.")
+    # Pending, authored later from the book - never his first line, never a template standing in.
+    assert record.title in (None, "") and tuple(record.pending) == ("title",)
+    gisted = _project("Why rivers bend", "prose")
+    assert gisted.title.endswith(": Why rivers bend") and not tuple(gisted.pending)
 
 
-def test_a_placeholder_is_marked_and_never_rendered_as_his_title(tmp_path: Path) -> None:
-    """Codex review 2026-11-09 #9 (interim until memory stores a missing title as None): the placeholder record says
-    so in its attributes (title_missing, title_failure_reason), and the recall shelf shows no title for it."""
-    pytest.importorskip("abstractmemory")
-    from abstractmemory import SQLiteTripleStore, TripleQuery
-
+def test_a_legacy_placeholder_title_is_never_rendered_as_his() -> None:
+    """The 8e72975 placeholder ("untitled <kind> [<hex>]", retired once memory stored a pending title as None) may
+    still stand on records formed that afternoon: the recall shelf shows no title for it (the sleep repairs it)."""
     from abstractruntime.identity.chat import _memories_block
     from abstractruntime.identity.title_failures import is_placeholder_title
 
-    home_dir = _workspace_home(tmp_path)
-    block = "why rivers bend"
-    home, s = _session(home_dir, ["Hello.", f"Back.\n```interest\n{block}\n```\n"])
-    s.turn("hi")
-    s.reflect()
-    home.close()
-    store = SQLiteTripleStore(home_dir / "memory.sqlite3")
-    try:
-        rows = [a for a in store.query(TripleQuery(predicate="dcterms:abstract", limit=0))
-                if (a.attributes or {}).get("record_kind") == "interest"]
-    finally:
-        store.close()
-    attrs = rows[-1].attributes
-    assert attrs["title"] == untitled_label("interest", block) and is_placeholder_title(attrs["title"])
-    assert attrs["title_missing"] is True and attrs["title_failure_reason"] == "missing"
     shelf = _memories_block([
-        {"kind": "interest", "title": untitled_label("interest", block), "digest": block, "admission": "stimulus"},
+        {"kind": "interest", "title": "untitled interest [3fa2c1]", "digest": "why rivers bend", "admission": "stimulus"},
         {"kind": "lesson", "title": GOOD, "digest": "Wait before answering.", "admission": "stimulus"},
     ], 7)
-    assert "untitled interest" not in shelf and f"{block} (" in shelf
+    assert "untitled interest" not in shelf and "why rivers bend (" in shelf
     assert f"{GOOD}: Wait before answering." in shelf
+    assert is_placeholder_title("untitled lesson [abc123]")
     assert not is_placeholder_title("untitled thoughts [abc123]") and not is_placeholder_title("Untitled song")

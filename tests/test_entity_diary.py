@@ -313,12 +313,11 @@ class TestProjectionPlane:
             origin={},
         )
         assert rid == "rec_1"
-        title = mem.calls[0]["inputs"][0].title
-        # No content SLUG (no machine words / colon segment) — but the
-        # entry-id tail disambiguates same-day multiples (adversary C4): a
-        # key, never words, the private-branch shape.
-        assert ":" not in title.split("—")[-1], f"no-gist title must carry no slug: {title}"
-        assert "diary_barecase01"[-6:] in title, "the entry-id tail disambiguates same-day multiples"
+        record = mem.calls[0]["inputs"][0]
+        # Re-based (operator 2026-11-09: title and summary are mandatory, authored, never a template standing in
+        # for his words): a public entry with no gist forms with its title PENDING (memory queues title.author;
+        # the authoring drainer writes it from the book).
+        assert record.title in (None, "") and tuple(record.pending) == ("title",), record
 
     def test_writer_declared_digest_method_stamps_projection_and_bares_title(self):
         """c5270 P2-2 (jointly ruled with memory): machine-worded entries
@@ -458,7 +457,8 @@ class TestProjectionPlane:
 
         with _warnings.catch_warnings():
             _warnings.simplefilter("ignore", RuntimeWarning)
-            ms = MemorySystem(store=InMemoryTripleStore(), journal=InMemoryJournal())
+            # task_queue=True: a gistless entry forms with its title pending (AbstractMemory c4ffc45).
+            ms = MemorySystem(store=InMemoryTripleStore(), journal=InMemoryJournal(), task_queue=True)
 
         store = _store()
         handler = build_diary_effect_handlers(entity_id=ENTITY, diary_store=store, memory_system=ms)[

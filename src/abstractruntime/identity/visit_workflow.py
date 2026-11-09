@@ -67,7 +67,6 @@ from .chat import (
     sheet_prompt_line,
 )
 from .digest import mechanical_digest_v2
-from .title_failures import untitled_attributes, untitled_label
 from .prelude import render_summon_prelude
 from .prompt_overlay import overlay_note, read_prompt_overlay
 from .reflection import (
@@ -264,32 +263,6 @@ def _attachment_lines(facts: List[Dict[str, Any]]) -> List[str]:
 
 def _deadline_iso(idle_seconds: float) -> str:
     return (datetime.now(timezone.utc) + timedelta(seconds=float(idle_seconds))).isoformat()
-
-
-def _visit_title_failure(
-    home: Any, visit: Dict[str, Any], kind: str, raw_block: str, reason: str, *, turn_id: str,
-    record_id: Optional[str] = None, formation_failed: Optional[str] = None,
-) -> None:
-    """A visit election formed without a title (operator 2026-11-09: no fallback; see `title_failures`). Recorded
-    AFTER the formation (Codex review 2026-11-09 #9): the line names the record it formed (or why none formed)."""
-    from .title_failures import record_title_failure
-
-    info = visit.get("model_info") if isinstance(visit.get("model_info"), dict) else {}
-    extra: Dict[str, Any] = {"turn_id": turn_id, "stored_title": untitled_label(kind, raw_block)}
-    if formation_failed:
-        extra["formation_failed"] = formation_failed
-    record_title_failure(
-        getattr(home, "home_dir", None),
-        entity=getattr(home, "entity_id", None),
-        record_id=record_id,
-        kind=kind,
-        raw_block=raw_block,
-        template_id="visit_workflow.elections",
-        provider=info.get("provider"),
-        model=info.get("model"),
-        reason=reason,
-        extra=extra,
-    )
 
 
 def _get_path(obj: Any, dotted: str) -> Any:
@@ -916,7 +889,10 @@ def build_visit_workflow(
                 payload={
                     "records": [{
                         "kind": "episode",
-                        "title": title,
+                        # Authored metadata (operator 2026-11-09): formed pending - the mechanical digest is the
+                        # provisional summary, never the title; the authoring drainer writes both.
+                        "title": None,
+                        "pending": ["title", "summary"],
                         "digest": digest,
                         "keywords": keywords,
                         "verbatim": verbatim,
@@ -1101,18 +1077,6 @@ def build_visit_workflow(
         the diary + feelings queued behind it."""
         visit = _ns(run, "_visit")
         refl = _ns(run, "_reflect")
-        # An untitled election formed by the previous APPLY step: its failure line names the record it formed.
-        pending = refl.pop("title_pending", None)
-        if isinstance(pending, dict):
-            formed = refl.get(str(pending.get("result_key") or ""))
-            ids = list((formed or {}).get("record_ids") or []) if isinstance(formed, dict) else []
-            _visit_title_failure(
-                home, visit, str(pending.get("kind")), str(pending.get("raw") or ""), str(pending.get("reason")),
-                turn_id=str(pending.get("turn_id") or ""), record_id=str(ids[0]) if ids else None,
-                formation_failed=(str(formed.get("absorbed_failure")) if isinstance(formed, dict)
-                                  and formed.get("absorbed_failure") else None),
-            )
-
         def _note_absorbed(stage_key: str, label: str) -> None:
             out = refl.get(stage_key)
             if isinstance(out, dict) and out.get("absorbed_failure") and not out.get("_noted"):
@@ -1226,7 +1190,8 @@ def build_visit_workflow(
                     payload={
                         "records": [{
                             "kind": "summary",
-                            "title": f"session reflection: {run.session_id}",
+                            "title": None,
+                            "pending": ["title", "summary"],
                             "digest": refl_digest,
                             "keywords": [],
                             "verbatim": str(refl["marked_reply"]),
@@ -1268,10 +1233,8 @@ def build_visit_workflow(
             # Title and words WHOLE (operator 2026-11-08; root ADR 0054): his `title:` first line; without one, no
             # title and a recorded failure (operator 2026-11-09: no fallback). A plain pending string reads too.
             _t, _w, _why = parse_elected_title(str(interests[i]))
-            if _why:
-                refl["title_pending"] = {"kind": "interest", "raw": str(interests[i]), "reason": _why,
-                                         "turn_id": f"t-reflect-interest-{rid_scope}-{i}",
-                                         "result_key": "interest_out"}
+            # No usable `title:` line: the record forms with its title PENDING (memory queues title.author) and the
+            # authoring drainer writes it with the summaries capability model - never a guess from his words.
             return StepPlan(
                 node_id="APPLY",
                 effect=Effect(
@@ -1279,14 +1242,14 @@ def build_visit_workflow(
                     payload={
                         "records": [{
                             "kind": "interest",
-                            "title": _t or untitled_label("interest", str(interests[i])),
+                            "title": _t,
+                            **({"pending": ["title"]} if _why else {}),
                             "digest": _w,
                             "keywords": [],
                             "edges": (
                                 [["from_session", str(session_record_id)]] if session_record_id else []
                             ),
-                            "attributes": {"session_id": str(run.session_id or ""),
-                                           **(untitled_attributes(_why) if _why else {})},
+                            "attributes": {"session_id": str(run.session_id or "")},
                             "provenance": {
                                 "source": "entity-visit-run-reflection-v0",
                                 "actor": "entity-reflection",
@@ -1317,10 +1280,8 @@ def build_visit_workflow(
                 iter((refl.get("summary_out") or {}).get("record_ids") or []), None
             )
             _t, _w, _why = parse_elected_title(str(lessons[i]))
-            if _why:
-                refl["title_pending"] = {"kind": "lesson", "raw": str(lessons[i]), "reason": _why,
-                                         "turn_id": f"t-reflect-lesson-{rid_scope}-{i}",
-                                         "result_key": "lesson_out"}
+            # No usable `title:` line: the record forms with its title PENDING (memory queues title.author) and the
+            # authoring drainer writes it with the summaries capability model - never a guess from his words.
             return StepPlan(
                 node_id="APPLY",
                 effect=Effect(
@@ -1328,7 +1289,8 @@ def build_visit_workflow(
                     payload={
                         "records": [{
                             "kind": "lesson",
-                            "title": _t or untitled_label("lesson", str(lessons[i])),
+                            "title": _t,
+                            **({"pending": ["title"]} if _why else {}),
                             "digest": _w,
                             "keywords": [],
                             "edges": (
@@ -1337,7 +1299,6 @@ def build_visit_workflow(
                             "attributes": {
                                 "session_id": str(run.session_id or ""),
                                 "phase": "visit",
-                                **(untitled_attributes(_why) if _why else {}),
                             },
                             "provenance": {
                                 "source": "entity-visit-run-reflection-v0",
@@ -1377,18 +1338,13 @@ def build_visit_workflow(
             _r_why = r.get("title_reason")
             if _r_title is None and not _r_why and "title_reason" not in r:
                 _r_title, _unused, _r_why = parse_elected_title(r_text)
-            if _r_why:
-                refl["title_pending"] = {"kind": "realization", "raw": str(r.get("raw") or r_text),
-                                         "reason": str(_r_why), "turn_id": f"t-reflect-realize-{rid_scope}-{i}",
-                                         "result_key": "realize_out"}
+            # No usable `title:` line: formed pending; the authoring drainer writes the title.
             r_attrs: Dict[str, Any] = {
                 "session_id": str(run.session_id or ""),
                 "phase": "visit",
             }
             if r.get("touches"):
                 r_attrs["touches"] = str(r["touches"])
-            if _r_why:
-                r_attrs.update(untitled_attributes(str(_r_why)))
             return StepPlan(
                 node_id="APPLY",
                 effect=Effect(
@@ -1396,7 +1352,8 @@ def build_visit_workflow(
                     payload={
                         "records": [{
                             "kind": "realization",
-                            "title": _r_title or untitled_label("realization", str(r.get("raw") or r_text)),
+                            "title": _r_title,
+                            **({"pending": ["title"]} if _r_why else {}),
                             "digest": r_text,
                             "keywords": [],
                             "edges": [["derived_from", str(g)] for g in (r.get("gids") or [])],

@@ -3,20 +3,15 @@
 "we shouldn't need a fallback. if it fails, it should add information to a temporary error file in untracked/ so we
 know what's failing and how to fix it at the source."
 
-A record the entity names itself (an elected interest, lesson or realization: the block's `title:` first line; a
-public diary entry: its `gist:` line) gets NO title from his words when that line is missing or unusable. No text
-heuristic stands in for it (a first line or a first sentence used to: "Dr. Smith taught me patience." became "Dr.").
-AbstractMemory refuses a record without a title (`MemoryRecordInput` requires a non-empty one), so until it accepts
-a missing title the record carries the visibly-untitled label `untitled_label(kind, block)` ("untitled lesson
-[3fa2c1]": the kind and a key of the block, none of his words; the key keeps two untitled records from reading as
-duplicates). Instead of a guess, one JSON line is appended to
+Every memory's title and summary are authored with it (identity/authoring.py; operator 2026-11-09). When that
+authoring fails, the record forms PENDING through AbstractMemory (its task queued) and, one JSON line is appended to
 
-    <workspace>/untracked/title-failures/<YYYY-MM-DD>.jsonl
+    <workspace>/untracked/authoring-failures/<YYYY-MM-DD>.jsonl
 
 where <workspace> is the parent of the data dir that holds the home (`<data_dir>/entities/<slug>`), when that parent
 holds an `untracked/` folder. No environment variable is read. When the folder does not resolve (a home outside a
 workspace, a test home), or the append fails, the same line goes to the home's own-time log after the
-`#TITLE_FAILURE` marker, and to the caller's `out` when one is given. Never silently.
+`#AUTHORING_FAILURE` marker, and to the caller's `out` when one is given. Never silently.
 """
 
 from __future__ import annotations
@@ -32,11 +27,10 @@ __all__ = [
     "TITLE_FAILURE_REASONS",
     "TITLE_MAX_CHARS",
     "TITLE_TEMPLATE_VERSION",
+    "record_authoring_failure",
     "record_title_failure",
     "title_failures_dir",
     "is_placeholder_title",
-    "untitled_attributes",
-    "untitled_label",
 ]
 
 TITLE_FAILURE_REASONS = ("missing", "empty", "multi_line", "too_long", "malformed")
@@ -47,25 +41,19 @@ TITLE_MAX_CHARS = 200
 # The date the prompts began asking for the `title:` first line (operator 2026-11-08). Bump it with any change to
 # the wording that asks for a title, so failures group by the prompt that produced them.
 TITLE_TEMPLATE_VERSION = "2026-11-08"
-TITLE_FAILURE_MARKER = "#TITLE_FAILURE"
-TITLE_FAILURES_DIRNAME = "title-failures"
-
-
-def untitled_label(kind: str, raw_block: str) -> str:
-    """The stored label of a record he did not title: `untitled <kind> [<6 hex>]`, the hex a key of the block he
-    wrote (sha256), never his words."""
-    import hashlib
-
-    key = hashlib.sha256(str(raw_block or "").encode("utf-8")).hexdigest()[:6]
-    return f"untitled {kind} [{key}]"
+# Renamed 2026-11-09 (the title AND summary are mandatory; the file records either missing): authoring-failures.
+TITLE_FAILURE_MARKER = "#AUTHORING_FAILURE"
+TITLE_FAILURES_DIRNAME = "authoring-failures"
+AUTHORING_MISSING = ("title", "summary", "both")
 
 
 _PLACEHOLDER_KINDS = ("interest", "lesson", "realization", "diary", "digest", "card")
 
 
 def is_placeholder_title(title: Any) -> bool:
-    """True for a label `untitled_label` made (`untitled <kind> [<6 hex>]`): the runtime's own storage placeholder,
-    never his words. Renderers show no title for it (Codex review 2026-11-09 #9, interim until memory stores None)."""
+    """True for the retired storage placeholder `untitled <kind> [<6 hex>]` (runtime 8e72975, before memory stored a
+    pending title as None): never his words. Renderers show no title for it, and the sleep's repair declares the
+    record pending so its title is authored."""
     text = str(title or "")
     if not text.startswith("untitled ") or not text.endswith("]"):
         return False
@@ -73,13 +61,8 @@ def is_placeholder_title(title: Any) -> bool:
     return bool(sep) and kind in _PLACEHOLDER_KINDS and len(key) == 6 and all(c in "0123456789abcdef" for c in key)
 
 
-def untitled_attributes(reason: str) -> Dict[str, Any]:
-    """The record attributes that say its title is a storage placeholder (title_missing) and why."""
-    return {"title_missing": True, "title_failure_reason": str(reason)}
-
-
 def title_failures_dir(home_dir: Any) -> Optional[Path]:
-    """`<workspace>/untracked/title-failures` for a home at `<data_dir>/entities/<slug>`, or None when the data dir's
+    """`<workspace>/untracked/authoring-failures` for a home at `<data_dir>/entities/<slug>`, or None when the data dir's
     parent holds no `untracked/` folder."""
     if home_dir is None:
         return None
@@ -91,7 +74,13 @@ def title_failures_dir(home_dir: Any) -> Optional[Path]:
     return untracked / TITLE_FAILURES_DIRNAME if untracked.is_dir() else None
 
 
-def record_title_failure(
+def record_title_failure(home_dir: Any, **kw: Any) -> Dict[str, Any]:
+    """A missing title (record_authoring_failure with missing="title")."""
+    kw.setdefault("missing", "title")
+    return record_authoring_failure(home_dir, **kw)
+
+
+def record_authoring_failure(
     home_dir: Any,
     *,
     entity: Optional[str],
@@ -102,6 +91,7 @@ def record_title_failure(
     provider: Optional[str],
     model: Optional[str],
     reason: str,
+    missing: str = "title",
     template_version: str = TITLE_TEMPLATE_VERSION,
     extra: Optional[Dict[str, Any]] = None,
     out: Optional[Callable[[str], None]] = None,
@@ -120,6 +110,7 @@ def record_title_failure(
         "provider": provider or None,
         "model": model or None,
         "reason": str(reason),
+        "missing": str(missing) if str(missing) in AUTHORING_MISSING else "title",
     }
     for key, value in (extra or {}).items():
         line.setdefault(str(key), value)

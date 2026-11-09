@@ -677,10 +677,12 @@ def test_image_only_turn_runs_and_an_empty_turn_still_parks(tmp_path: Path) -> N
 
         # The episode's verbatim names what was shown, not an empty utterance.
         rows = ert.home.ms.query(TripleQuery(scope="life", owner_id=ert.entity_id, limit=0))
-        episodes = [a.attributes for a in rows
+        episodes = [a for a in rows
                     if isinstance(a.attributes, dict) and a.attributes.get("record_kind") == "episode"]
         assert len(episodes) == 1
-        assert "shared/Screenshot.png" in json.dumps(episodes[0])
+        # (The title is authored - pending on this lane until the drainer runs - so the provisional summary and
+        # the keywords name what was shown.)
+        assert "shared/Screenshot.png" in json.dumps(episodes[0].attributes) + str(episodes[0].object)
     finally:
         ert.close()
 

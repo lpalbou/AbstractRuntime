@@ -105,8 +105,8 @@ class _ApplyStub:
 
     _resolve_evidence_token = ChatSession._resolve_evidence_token
     _apply_realizations = ChatSession._apply_realizations
-    _title_failure = ChatSession._title_failure  # an untitled realization is recorded (title_failures)
     model_info: Dict[str, str] = {}
+    llm_for_capability = None
 
     def __init__(self, effect_result=None, effect_raises=None):
         self._memory_reader = _Reader()

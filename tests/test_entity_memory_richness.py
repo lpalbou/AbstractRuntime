@@ -464,8 +464,10 @@ def test_reflection_loss_guard_write_ahead_and_salvage(tmp_path: Path) -> None:
     from abstractmemory import TripleQuery
 
     rows = home2.ms.query(TripleQuery(scope="life", owner_id=home2.entity_id, limit=0))
+    # (The summary's title is authored now - operator 2026-11-09 - so the session it belongs to is read from its
+    # attributes, never from a mechanical "session reflection: <id>" title.)
     assert any(
-        "session reflection: died-1" in json.dumps(a.attributes or {}) + str(a.object)
+        (a.attributes or {}).get("record_kind") == "summary" and (a.attributes or {}).get("session_id") == "died-1"
         for a in rows
     ), "the look-back must belong to the session that ended"
     # A clean session leaves no marker behind.

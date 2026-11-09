@@ -2436,6 +2436,9 @@ def spawn_loop_process(
     # The phase the run is started to (re)enter: "personal" (the operator's act, or a restore of own time), "work"
     # (a restore of work alone) or None (the home's resume_to decides; the default for hosts that predate it).
     return_to: Optional[str] = None,
+    # {capability: {"spec": <provider spec>, "profile": <the host's private resolution>}} for the capability clients
+    # (summaries authors titles and summaries). May carry secrets: one env key, never logged.
+    capability_endpoint_profiles: Optional[Dict[str, Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
     """Spawn the own-time loop, detached, logging to <home>/own_time.log.
     The RUNTIME owns the home's files (single-writer discipline): hosts
@@ -2544,6 +2547,12 @@ def spawn_loop_process(
 
         # The host-resolved endpoint profile rides the child env keyed to the
         # exact provider spec — main() installs it as the ambient resolver.
+        if capability_endpoint_profiles:
+            env["ABSTRACTRUNTIME_CAPABILITY_ENDPOINT_PROFILES_JSON"] = json.dumps({
+                str(cap): {"spec": str((v or {}).get("spec") or "").strip().lower(),
+                           "profile": dict((v or {}).get("profile") or {})}
+                for cap, v in capability_endpoint_profiles.items() if isinstance(v, dict)
+            })
         if endpoint_profile:
             env["ABSTRACTRUNTIME_ENDPOINT_PROFILE_JSON"] = json.dumps(
                 {"spec": str(provider or "").strip().lower(), "profile": dict(endpoint_profile)}
@@ -3941,6 +3950,13 @@ class LifeLoop:
                                         f"#FALLBACK the tick's look-back failed ({lookback_err}); "
                                         "the tick stands"
                                     )
+                            # THE AUTHORING DRAINER at the tick boundary (operator 2026-11-09): pending titles and
+                            # summaries, bounded by the profile's cap_per_turn, inside this tick's writer window;
+                            # a visitor at the door goes first.
+                            if not visitor_waiting(self._operator_state()) and callable(
+                                getattr(session, "drain_authoring", None)
+                            ):
+                                session.drain_authoring(window="turn")
                         finally:
                             if tick_lease is not None:
                                 tick_lease.release()  # the tick's writer window ends HERE
@@ -4238,6 +4254,8 @@ def build_consolidator(
     embedding_base_url: str = "http://127.0.0.1:1234/v1",
     narrator_llm_factory: Optional[Callable[[], Any]] = None,
     out: Callable[[str], None] = print,
+    llm_for_capability: Optional[Callable[[str], Any]] = None,
+    authoring_cap: int = 64,
 ) -> Callable[[], Optional[Dict[str, Any]]]:
     """The sleep-window pass (maintainer rulings 2026-07-08/09: sleep is
     where the graph is worked on — tending first, then the dream).
@@ -4350,6 +4368,14 @@ def build_consolidator(
             if engine.get("cancelled_after"):
                 out(f"(the night ended early - host transition after {engine['cancelled_after']}; "
                     "the next sleep resumes there)")
+            # METADATA REPAIR, one step among the night's work (operator 2026-11-09: "the sleep phase is just to
+            # repair any issue that may still be there"): a record whose formation-time authoring failed (pending)
+            # or a legacy record without a title or summary (declared pending here) is authored, bounded by the
+            # pass's cap; skipped when the night was ended (a visitor, a wake). Never a cut.
+            authoring = (
+                _sleep_authoring(home, eid, scopes, llm_for_capability, authoring_cap, out)
+                if _night_should_continue() else {"skipped": "the night ended before the repair step"}
+            )
             dream = engine.get("dream") or {}
             maintenance = engine.get("maintenance") or {}
             # WAVE-5 NARRATOR HALF (dm#75 ratified; frozen shape c3708):
@@ -4388,6 +4414,7 @@ def build_consolidator(
                 except Exception as e:  # noqa: BLE001 - the voice never breaks a night
                     out(f"#FALLBACK night voice errored ({e}); the night stays mechanical")
             return {
+                "authoring": authoring,
                 "formed": bool(dream.get("created")),
                 "dream_record_id": dream.get("dream_record_id"),
                 "maintenance_candidates": int(maintenance.get("created_count") or 0),
@@ -4404,6 +4431,74 @@ def build_consolidator(
     return _consolidate
 
 
+def _sleep_authoring(home: Any, eid: str, scopes: List[Tuple[str, str]],
+                     llm_for_capability: Optional[Callable[[str], Any]], cap: int,
+                     out: Callable[[str], None]) -> Dict[str, Any]:
+    """The sleep's metadata work (operator 2026-11-09): declare what lacks a title or summary, then author what is
+    pending. Returns {declared, authored, deferred, failed} for the pass's receipt; never raises."""
+    from .authoring import declare_missing_metadata, drain_authoring
+
+    receipt: Dict[str, Any] = {"declared": 0, "authored": 0, "deferred": 0, "failed": 0}
+    try:
+        receipt["declared"] = int(declare_missing_metadata(home.ms, scopes=scopes, out=out).get("declared") or 0)
+
+        def _diary_text(entry_id: str) -> Optional[str]:
+            entry = home.diary.get_entry(entry_id) if entry_id else None
+            return str((entry or {}).get("text") or "") or None
+
+        drained = drain_authoring(home.ms, llm_for_capability=llm_for_capability, artifacts=home.artifacts,
+                                  home_dir=home.home_dir, entity=eid, holder="sleep", cap=int(cap), window="nap",
+                                  diary_text=_diary_text, out=out)
+        for key in ("authored", "deferred", "failed"):
+            receipt[key] = int(drained.get(key) or 0)
+    except Exception as e:  # noqa: BLE001 - the night's other work still runs
+        receipt["error"] = f"{type(e).__name__}: {e}"
+        out(f"#FALLBACK the sleep's authoring did not run ({receipt['error']})")
+    return receipt
+
+
+def build_capability_llm_factory(
+    home_dir: Path,
+    *,
+    base_url: Optional[str],
+    out: Callable[[str], None] = print,
+) -> Callable[[str], Any]:
+    """`llm_for_capability(name)` in the loop process, built like the day client (the parked understanding-drain
+    design, 2026-11-08): each call resolves the cognition profile (`resolve_capability(home, name)`: the profile's
+    own model, else the mind) and builds the client with the entity patience window and `base_url` for the
+    lmstudio / openai-compatible families. An endpoint:* capability resolves through the ambient endpoint resolver
+    `main` installs from the spawn's capability profiles. Nothing resolvable raises (`SubstrateUnset`): the caller
+    defers, never a silent fallback."""
+    from .cognition_profile import resolve_capability
+
+    def _llm_for_capability(capability: str) -> Any:
+        from abstractcore import create_llm
+
+        res = resolve_capability(home_dir, capability)
+        provider = str(res["provider"]).strip().lower()
+        kwargs: Dict[str, Any] = {
+            "model": res["model"],
+            **dict(zip(("timeout", "retry_wall_clock_budget_s"), _entity_patience_window())),
+            "read_idle_timeout_s": ENTITY_LLM_READ_IDLE_TIMEOUT_S,
+        }
+        if base_url and provider in ("lmstudio", "openai-compatible", "openai_compatible"):
+            kwargs["base_url"] = base_url
+        try:
+            llm = create_llm(provider, **kwargs)
+        except TypeError:
+            kwargs.pop("retry_wall_clock_budget_s", None)
+            kwargs.pop("read_idle_timeout_s", None)
+            out("#FALLBACK core predates retry_wall_clock_budget_s; timeout-only guard on the capability client")
+            llm = create_llm(provider, **kwargs)
+        try:
+            llm.model_info = {"provider": provider, "model": res["model"], "thinking": res.get("thinking")}
+        except Exception:  # noqa: BLE001 - the reader label is read with a fallback in authoring._reader_of
+            pass
+        return _beat_before_each_call(llm, home_dir)
+
+    return _llm_for_capability
+
+
 def build_session_factory(
     home_dir: Path,
     *,
@@ -4418,6 +4513,7 @@ def build_session_factory(
     shelf_size: Optional[int] = None,
     thinking: Optional[str] = None,
     out: Callable[[str], None] = print,
+    llm_for_capability: Optional[Callable[[str], Any]] = None,
 ) -> Callable[[], ChatSession]:
     """Production factory: one fresh summon (home + LLM + session) per day.
 
@@ -4610,6 +4706,8 @@ def build_session_factory(
             # read it at construction; the re-compose must not drop it).
             capability_map=getattr(session, "capability_map", ""),
         )
+        # The capability clients (the summaries model authors titles and summaries; identity/authoring.py).
+        session.llm_for_capability = llm_for_capability
         return session
 
     return _factory
@@ -4889,6 +4987,36 @@ def main(argv: Optional[List[str]] = None) -> int:
         except Exception as e:
             print(f"#FALLBACK spawn-provided endpoint profile unusable ({type(e).__name__}) - resolving from local config only")
 
+    # CAPABILITY CLIENTS (operator 2026-11-09: the summaries model authors titles and summaries): the spawn's
+    # capability endpoint profiles join the ambient resolver beside the mind's, and the factory builds each client
+    # like the day client.
+    _raw_cap_profiles = _ep_os.environ.get("ABSTRACTRUNTIME_CAPABILITY_ENDPOINT_PROFILES_JSON", "").strip()
+    if _raw_cap_profiles:
+        try:
+            _cap_packed = _ep_json.loads(_raw_cap_profiles)
+            _cap_by_spec = {
+                str(v.get("spec") or "").strip().lower(): dict(v.get("profile") or {})
+                for v in (_cap_packed.values() if isinstance(_cap_packed, dict) else [])
+                if isinstance(v, dict) and str(v.get("spec") or "").strip()
+            }
+            from abstractcore.providers.endpoint_context import use_provider_endpoint_profile_resolver
+
+            _mind_resolver_spec = locals().get("_spec")
+            _mind_resolver_payload = locals().get("_payload")
+
+            def _capability_profile_resolver(spec: str) -> Optional[Dict[str, Any]]:
+                key = str(spec or "").strip().lower()
+                if _mind_resolver_spec and key == _mind_resolver_spec:
+                    return dict(_mind_resolver_payload or {})
+                return dict(_cap_by_spec[key]) if key in _cap_by_spec else None
+
+            _cap_resolver_cm = use_provider_endpoint_profile_resolver(_capability_profile_resolver)
+            _cap_resolver_cm.__enter__()  # process-lifetime; exits with the process
+        except Exception as e:  # noqa: BLE001
+            print(f"#FALLBACK spawn-provided capability profiles unusable ({type(e).__name__}) - "
+                  "capabilities resolve from local config only")
+    llm_for_capability = build_capability_llm_factory(home_dir, base_url=args.base_url)
+
     factory = build_session_factory(
         home_dir,
         provider=provider.strip().lower(),
@@ -4899,6 +5027,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         embedding_base_url=args.embedding_base_url,
         context_window=args.context_window,
         shelf_size=args.shelf_size,
+        llm_for_capability=llm_for_capability,
     )
     # Sleep is where consolidation runs (maintainer ruling 2026-07-08): wire
     # the dream pass into every self-elected rest window. In supervised mode
@@ -4935,6 +5064,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         embedding_model=args.embedding_model,
         embedding_base_url=args.embedding_base_url,
         narrator_llm_factory=_narrator_llm,
+        llm_for_capability=llm_for_capability,
     )
     # Substrate-heal (entity c75): the loop asks this before a terminal
     # failure cull — True when the home's substrate now differs from the

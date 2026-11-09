@@ -54,7 +54,7 @@ from ..core.runtime import utc_now_iso
 from ..session_history import window_transcript
 from .diary import DiaryStore, build_diary_effect_handlers
 from .digest import mechanical_digest_v2
-from .title_failures import is_placeholder_title, untitled_attributes, untitled_label
+from .title_failures import is_placeholder_title
 from .prelude import render_summon_prelude
 from .prompt_overlay import overlay_note, read_prompt_overlay
 from .reflection import (
@@ -648,7 +648,9 @@ def open_home(home_dir: Path, *, embedder: Any = None, attention_window: Optiona
     # session-scale (512 events); a RESIDENT (24/7 loop) outgrows it within
     # days — old records' temporal activation zeroes while global counts
     # hold. Version-tolerant: engines without AttentionConfig ignore it.
-    ms_kwargs: Dict[str, Any] = {"store": store, "journal": journal, "embedder": embedder}
+    # task_queue=True (AbstractMemory c4ffc45): a record formed with a title or summary still to be authored queues
+    # its authoring task in the same call, and memory refuses a pending record on a home without a queue.
+    ms_kwargs: Dict[str, Any] = {"store": store, "journal": journal, "embedder": embedder, "task_queue": True}
     if attention_window:
         try:
             from abstractmemory import AttentionConfig
@@ -659,7 +661,7 @@ def open_home(home_dir: Path, *, embedder: Any = None, attention_window: Optiona
     try:
         ms = MemorySystem(**ms_kwargs)
     except TypeError:  # older facade without embedder/attention kwargs
-        ms = MemorySystem(store=store, journal=journal)
+        ms = MemorySystem(store=store, journal=journal, task_queue=True)
     ledger = SqliteLedgerStore(SqliteDatabase(str(home_dir / "home.sqlite3")))
     diary = DiaryStore(entity_id=entity_id, ledger_store=ledger)
     # Verbatims live IN the home (copy-the-home keeps the life whole).
@@ -1112,6 +1114,9 @@ class ChatSession:
         # tools and ends on what he has said. True means a visitor is at the door; a string names the cause
         # (e.g. "Work was turned off": a work day pauses at its next effect boundary, contract-phases v2 §10.2).
         self.yield_check: Optional[Callable[[], Any]] = None
+        # `capability -> client` for the models other than the mind (the summaries capability authors titles and
+        # summaries, identity/authoring.py). Set by the host; None = records stay pending for the drainer.
+        self.llm_for_capability: Optional[Callable[[str], Any]] = None
         # Which mind-substrate formed each memory (capability ≠ identity, but
         # provenance matters: "which model was I running on when I thought
         # this" is a legitimate question for him AND for the operator's
@@ -1608,12 +1613,14 @@ class ChatSession:
                     {
                         "records": [{
                             "kind": "lesson",
-                            "title": lesson_title or untitled_label("lesson", lesson_text),
+                            "title": lesson_title,
+                            **({"pending": ["title"], "_authoring": {
+                                "body": lesson_words, "raw_block": lesson_text, "template_id": "chat.turn",
+                                "block_reason": lesson_reason}} if lesson_reason else {}),
                             "digest": lesson_words,
                             "keywords": [],
                             "edges": [],
-                            "attributes": {"session_id": self.session_id, "phase": self.phase,
-                                           **(untitled_attributes(lesson_reason) if lesson_reason else {})},
+                            "attributes": {"session_id": self.session_id, "phase": self.phase},
                             "provenance": {"source": "entity-midturn-v1", "actor": "entity-reflection"},
                         }],
                         "scope": "life", "owner_id": self.home.entity_id,
@@ -1621,8 +1628,6 @@ class ChatSession:
                     },
                 )
                 report.notices.extend(out.get("warnings", []))
-                if lesson_reason:
-                    self._title_failure("lesson", lesson_text, lesson_reason, out, template_id="chat.turn")
                 self.out(f'(lesson kept: "{lesson_title or lesson_words}")')
             except RuntimeError as exc:
                 report.notices.append(f"#FALLBACK mid-turn lesson refused: {exc}")
@@ -1634,12 +1639,14 @@ class ChatSession:
                     {
                         "records": [{
                             "kind": "interest",
-                            "title": interest_title or untitled_label("interest", interest_text),
+                            "title": interest_title,
+                            **({"pending": ["title"], "_authoring": {
+                                "body": interest_words, "raw_block": interest_text, "template_id": "chat.turn",
+                                "block_reason": interest_reason}} if interest_reason else {}),
                             "digest": interest_words,
                             "keywords": [],
                             "edges": [],
-                            "attributes": {"session_id": self.session_id,
-                                           **(untitled_attributes(interest_reason) if interest_reason else {})},
+                            "attributes": {"session_id": self.session_id},
                             "provenance": {"source": "entity-midturn-v1", "actor": "entity-reflection"},
                         }],
                         "scope": "self", "owner_id": self.home.entity_id,
@@ -1647,8 +1654,6 @@ class ChatSession:
                     },
                 )
                 report.notices.extend(out.get("warnings", []))
-                if interest_reason:
-                    self._title_failure("interest", interest_text, interest_reason, out, template_id="chat.turn")
                 self.out(f'(interest kept: "{interest_title or interest_words}")')
             except RuntimeError as exc:
                 report.notices.append(f"#FALLBACK mid-turn interest refused: {exc}")
@@ -1722,17 +1727,17 @@ class ChatSession:
             touches = getattr(r, "touches", "") or ""
             if touches:
                 attributes["touches"] = touches
-            if getattr(r, "title_reason", None):
-                attributes.update(untitled_attributes(r.title_reason))
             try:
                 out = self._effect(
                     EffectType.MEMORY_FORM,
                     {
                         "records": [{
                             "kind": "realization",
-                            "title": getattr(r, "title", None) or untitled_label(
-                                "realization", getattr(r, "raw", "") or r.text
-                            ),
+                            "title": getattr(r, "title", None),
+                            **({"pending": ["title"], "_authoring": {
+                                "body": r.text, "raw_block": getattr(r, "raw", "") or r.text,
+                                "template_id": "chat.turn", "block_reason": r.title_reason,
+                            }} if getattr(r, "title_reason", None) else {}),
                             "digest": r.text,
                             "keywords": [],
                             "edges": [["derived_from", gid] for gid in gids],
@@ -1745,11 +1750,6 @@ class ChatSession:
                     },
                 )
                 notices.extend(out.get("warnings", []))
-                if getattr(r, "title_reason", None):
-                    self._title_failure(
-                        "realization", getattr(r, "raw", "") or r.text, r.title_reason, out,
-                        template_id="chat.turn",
-                    )
                 self.out(f'(realization held for sleep: "{getattr(r, "title", None) or r.text}")')
             except (RuntimeError, ValueError) as exc:
                 # Version-skew half: the kind vocabulary is MEMORY's to grow
@@ -1915,12 +1915,18 @@ class ChatSession:
 
     # ---------------------------------------------------------------- effects
     def _effect(self, etype: EffectType, payload: Dict[str, Any]) -> Dict[str, Any]:
+        authoring: List[Dict[str, Any]] = []
+        if etype == EffectType.MEMORY_FORM:
+            payload, authoring = self._author_records(payload)
         out = self.home.handlers[etype](self.run, Effect(type=etype, payload=payload), None)
         if out.status != "completed":
             # strict entity posture: the engine failing is an identity failure —
             # end the session honestly rather than continue as someone else.
             raise RuntimeError(f"{etype.value} failed: {getattr(out, 'error', 'unknown error')}")
         json.dumps(out.result)  # ledger-safety invariant
+        if authoring:
+            self._log_authoring_failures(authoring, out.result)
+            return {**out.result, "authored": [o.get("authored") for o in authoring]}
         return out.result
 
     # ------------------------------------------------------------------ turn
@@ -2700,7 +2706,14 @@ class ChatSession:
                         # record one carries the right type (append-only: no
                         # re-typing later).
                         "kind": "episode",
-                        "title": title,
+                        # The title and the summary are AUTHORED (operator 2026-11-09): formed pending - the
+                        # mechanical digest is the provisional summary, never the title - and authored by the
+                        # summaries capability model right after (below), else by the drainer.
+                        "title": None,
+                        "pending": ["title", "summary"],
+                        "_authoring": {"body": f"{speaker_label or self.participants[0]}: {user_text}\n\n"
+                                               f"{self.home.name}: {marked_reply}",
+                                       "raw_block": marked_reply, "template_id": "chat.episode"},
                         "digest": digest,
                         "keywords": keywords,
                         "verbatim": verbatim,
@@ -2716,6 +2729,9 @@ class ChatSession:
         )
         report.formed = list(formed.get("record_ids", []))
         report.notices.extend(formed.get("warnings", []))
+        authored = next(iter(formed.get("authored") or []), None)
+        if authored and authored.get("summary"):
+            digest = str(authored["summary"])
         for rid in report.formed:
             self.session_sheet.append((str(rid), str(digest or "")))  # whole (root ADR 0054)
             self._last_episode_id = str(rid)
@@ -2978,7 +2994,34 @@ class ChatSession:
                     result["world_models_authored"] = authored
             except Exception as e:  # noqa: BLE001
                 self.out(f"#FALLBACK world-model authoring skipped ({e})")
+        # THE AUTHORING DRAINER at the session's close (operator 2026-11-09): the titles and summaries still pending
+        # (a failed authoring, a visit lane's elections) are authored now, bounded by the cognition profile's
+        # cap_per_turn; an unreachable endpoint defers them.
+        receipt = self.drain_authoring(window="visit")
+        if result is not None and receipt.get("considered"):
+            result["authoring"] = receipt
         return result
+
+    def drain_authoring(self, *, window: str = "turn", cap: Optional[int] = None) -> Dict[str, Any]:
+        """Run the title.author / digest.author drainer over this home (identity/authoring.py). Never raises."""
+        from .authoring import drain_authoring
+        from .cognition_profile import rebuild_policy
+
+        try:
+            bound = int(cap if cap is not None else rebuild_policy(self.home.home_dir)["cap_per_turn"])
+
+            def _diary_text(entry_id: str) -> Optional[str]:
+                entry = self.home.diary.get_entry(entry_id) if entry_id else None
+                return str((entry or {}).get("text") or "") or None
+
+            return drain_authoring(
+                self.home.ms, llm_for_capability=self.llm_for_capability, artifacts=self.home.artifacts,
+                home_dir=self.home.home_dir, entity=self.home.entity_id, holder=f"session:{self.session_id}",
+                cap=bound, window=window, diary_text=_diary_text, out=self.out,
+            )
+        except Exception as e:  # noqa: BLE001 - authoring never breaks a close
+            self.out(f"#FALLBACK the authoring drainer did not run ({type(e).__name__}: {e})")
+            return {"authored": 0, "deferred": 0, "failed": 0, "considered": 0, "error": str(e)}
 
     # Cap per session: the authoring is one LLM call per target — bounded
     # like every election surface (interests 2, lessons 2, cards 2).
@@ -3184,7 +3227,11 @@ class ChatSession:
                         # lived records (the kind vocabulary is memory's to
                         # grow; a dedicated "reflection" kind is a candidate).
                         "kind": "summary",
-                        "title": title or f"session reflection: {session_id}",
+                        # Authored (operator 2026-11-09): formed pending, authored right after (below) or by the drainer.
+                        "title": title or None,
+                        "pending": ["summary"] if title else ["title", "summary"],
+                        "_authoring": {"body": marked_reply, "raw_block": marked_reply,
+                                       "template_id": "reflection.summary"},
                         # MECHANICAL FLOOR (r-rt-2): never marker-only.
                         "digest": refl_digest,
                         "keywords": [],
@@ -3220,27 +3267,78 @@ class ChatSession:
         )
         return next(iter(formed.get("record_ids", [])), None)
 
-    def _title_failure(
-        self, kind: str, raw_block: str, reason: str, formed: Any, *, template_id: str
-    ) -> None:
-        """Record one title failure (operator 2026-11-09: no fallback; see `title_failures`): the record was formed
-        without a title; the line names it, the block he wrote, the prompt and the mind that answered."""
-        from .title_failures import record_title_failure
+    def _author_records(self, payload: Dict[str, Any]) -> Tuple[Dict[str, Any], List[Dict[str, Any]]]:
+        """AUTHORED AT FORMATION (operator 2026-11-09: "the metadata of any newly generated memory must be generated
+        along with the memory"): a record that declares `pending` fields and carries `_authoring` {body, raw_block,
+        template_id, block_reason?} gets them from the summaries capability model in this same step, BEFORE it
+        forms - the title and/or the summary are then the authored ones and nothing is pending. Only when that
+        step fails does the record form pending (memory queues its task) and the failure is logged once it has an
+        id. The call is kept as a home artifact (the author's source). Returns (payload, per-record outcomes)."""
+        from .authoring import AuthoringUnavailable, _reader_of, _source_artifact, author_metadata
 
-        ids = list((formed or {}).get("record_ids") or []) if isinstance(formed, dict) else []
-        record_title_failure(
-            getattr(self.home, "home_dir", None),
-            entity=self.home.entity_id,
-            record_id=str(ids[0]) if ids else None,
-            kind=kind,
-            raw_block=raw_block,
-            template_id=template_id,
-            provider=self.model_info.get("provider"),
-            model=self.model_info.get("model"),
-            reason=reason,
-            extra={"session_id": self.session_id, "stored_title": untitled_label(kind, raw_block)},
-            out=self.out,
-        )
+        records = list((payload or {}).get("records") or [])
+        if not any(isinstance(r, dict) and r.get("_authoring") for r in records):
+            return payload, []
+        outcomes: List[Dict[str, Any]] = []
+        new_records: List[Dict[str, Any]] = []
+        for rec in records:
+            rec = dict(rec) if isinstance(rec, dict) else rec
+            meta = rec.pop("_authoring", None) if isinstance(rec, dict) else None
+            need = [str(f) for f in (rec.get("pending") or [])] if isinstance(rec, dict) else []
+            if not meta or not need:
+                outcomes.append({})
+                new_records.append(rec)
+                continue
+            kind = str(rec.get("kind") or "memory")
+            body = str(meta.get("body") or "")
+            llm = None
+            try:
+                if self.llm_for_capability is None:
+                    raise AuthoringUnavailable("no summaries capability model in this session")
+                try:
+                    llm = self.llm_for_capability("summaries")
+                except Exception as e:  # noqa: BLE001
+                    raise AuthoringUnavailable(f"{type(e).__name__}: {e}") from e
+                authored = author_metadata(llm, kind=kind, body=body)
+                reader = _reader_of(llm)
+                sources = _source_artifact(self.home.artifacts, record_id=str(meta.get("template_id") or ""),
+                                           kind=kind, body=body, authored=authored, reader=reader)
+                if "title" in need:
+                    rec["title"] = authored["title"]
+                if "summary" in need:
+                    rec["digest"] = authored["summary"]
+                rec.pop("pending", None)
+                attrs = dict(rec.get("attributes") or {})
+                attrs["metadata_authored"] = {"fields": need, "capability": "summaries", "reader": reader,
+                                              "source": sources[0]}
+                rec["attributes"] = attrs
+                outcomes.append({"authored": authored})
+            except Exception as e:  # noqa: BLE001 - the record forms pending; the failure is logged with its id
+                reader = _reader_of(llm) if llm is not None else {}
+                outcomes.append({"failure": {
+                    "kind": kind, "raw_block": str(meta.get("raw_block") or body),
+                    "template_id": str(meta.get("template_id") or ""), "provider": reader.get("provider"),
+                    "model": reader.get("model"),
+                    "reason": "unavailable" if isinstance(e, AuthoringUnavailable) else "malformed",
+                    "missing": "both" if len(need) == 2 else need[0],
+                    "extra": {"session_id": self.session_id, "error": f"{type(e).__name__}: {e}",
+                              **({"block_reason": meta["block_reason"]} if meta.get("block_reason") else {})},
+                }})
+            new_records.append(rec)
+        return {**payload, "records": new_records}, outcomes
+
+    def _log_authoring_failures(self, outcomes: List[Dict[str, Any]], result: Dict[str, Any]) -> None:
+        from .title_failures import record_authoring_failure
+
+        ids = list((result or {}).get("record_ids") or [])
+        for i, o in enumerate(outcomes):
+            f = o.get("failure") if isinstance(o, dict) else None
+            if not f:
+                continue
+            record_authoring_failure(
+                getattr(self.home, "home_dir", None), entity=self.home.entity_id,
+                record_id=str(ids[i]) if i < len(ids) else None, out=self.out, **f,
+            )
 
     def _session_room(self, kind: str) -> int:
         """How many more of `kind` ("interest" | "lesson") this session may
@@ -3395,7 +3493,11 @@ class ChatSession:
                     "records": [
                         {
                             "kind": "interest",
-                            "title": interest_title or untitled_label("interest", interest_text),
+                            "title": interest_title,
+                            **({"pending": ["title"], "_authoring": {
+                                "body": interest_words, "raw_block": interest_text,
+                                "template_id": "reflection.lookback", "block_reason": interest_reason,
+                            }} if interest_reason else {}),
                             "digest": interest_words,  # his words verbatim (embedded)
                             "keywords": [],
                             "edges": (
@@ -3403,8 +3505,7 @@ class ChatSession:
                                 if session_record_id
                                 else []
                             ),
-                            "attributes": {"session_id": session_id,
-                                           **(untitled_attributes(interest_reason) if interest_reason else {})},
+                            "attributes": {"session_id": session_id},
                             "provenance": {
                                 "source": "entity-reflection-v1",
                                 "actor": "entity-reflection",
@@ -3418,10 +3519,6 @@ class ChatSession:
             )
             interest_record_ids.extend(interest_out.get("record_ids", []))
             notices.extend(interest_out.get("warnings", []))
-            if interest_reason:
-                self._title_failure(
-                    "interest", interest_text, interest_reason, interest_out, template_id="reflection.lookback"
-                )
 
         # LESSONS — semantic knowledge (laurent's directive 2026-07-18: the
         # entity "still hasn't learned anything"; root issue = nothing ever
@@ -3454,15 +3551,18 @@ class ChatSession:
                     "records": [
                         {
                             "kind": "lesson",
-                            "title": lesson_title or untitled_label("lesson", lesson_text),
+                            "title": lesson_title,
+                            **({"pending": ["title"], "_authoring": {
+                                "body": lesson_words, "raw_block": lesson_text,
+                                "template_id": "reflection.lookback", "block_reason": lesson_reason,
+                            }} if lesson_reason else {}),
                             "digest": lesson_words,  # his words verbatim (embedded)
                             "keywords": [],
                             "edges": (
                                 ([["from_session", session_record_id]] if session_record_id else [])
                                 + ([["derived_from", derived_from_id]] if derived_from_id else [])
                             ),
-                            "attributes": {"session_id": session_id, "phase": phase or self.phase,
-                                           **(untitled_attributes(lesson_reason) if lesson_reason else {})},
+                            "attributes": {"session_id": session_id, "phase": phase or self.phase},
                             "provenance": {
                                 "source": "entity-reflection-v1",
                                 "actor": "entity-reflection",
@@ -3475,8 +3575,6 @@ class ChatSession:
                 },
             )
             notices.extend(lesson_out.get("warnings", []))
-            if lesson_reason:
-                self._title_failure("lesson", lesson_text, lesson_reason, lesson_out, template_id="reflection.lookback")
             if lesson_out.get("record_ids"):
                 self.out(f'(lesson kept: "{lesson_title or lesson_words}")')
 

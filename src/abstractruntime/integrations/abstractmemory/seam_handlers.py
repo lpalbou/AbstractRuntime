@@ -520,6 +520,9 @@ def build_memory_seam_effect_handlers(
                         confidence=float(rec["confidence"]) if isinstance(rec.get("confidence"), (int, float)) else None,
                         attributes=dict(rec.get("attributes") or {}),
                         provenance=provenance,
+                        # A title / summary still to be authored (AbstractMemory c4ffc45): declared, never guessed;
+                        # memory queues its title.author / digest.author task in the same call.
+                        **({"pending": tuple(str(f) for f in rec["pending"])} if rec.get("pending") else {}),
                     )
                 )
             except Exception as e:

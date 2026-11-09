@@ -85,25 +85,29 @@ def register_shell_session_teardown(runtime: Runtime) -> None:
     Backlog 0220: shell sessions are process-local resources namespaced by run id
     (`namespaced_session_id`); this hook guarantees an approved session never outlives
     the run it was approved for — including explicit cancel, which flows through the
-    same terminal seam. The same seam also reaps runtime-owned local-helper processes.
+    same terminal seam. Local helpers (dev servers) are CONVERSATION-scoped instead
+    (operator decision 2026-11-09): this runtime registers its session scope, so a
+    helper a session's run starts is kept by the session and outlives the run; the
+    terminal hook reaps only the helpers of a run without a session. The host closes a
+    session's helpers when it is archived or ends (`close_session_helpers`) and all of
+    them when it stops (`get_local_helper_registry().close_all()`).
     Safe to call on any runtime (no-op when the registries are unused or unavailable).
     """
     try:
         from abstractcore.tools.shell_session import get_shell_session_registry
     except Exception:  # pragma: no cover - abstractcore always present in this integration
         get_shell_session_registry = None  # type: ignore[assignment]
-    try:
-        from .local_helper_tools import get_local_helper_registry
-    except Exception:  # pragma: no cover - local helper module lives in this package
-        get_local_helper_registry = None  # type: ignore[assignment]
+    from .local_helper_tools import get_local_helper_registry, register_session_scope
+
+    register_session_scope(runtime)
 
     def _close_run_sessions(run: Any) -> None:
         run_id = str(getattr(run, "run_id", "") or "").strip()
         if run_id:
             if callable(get_shell_session_registry):
                 get_shell_session_registry().close_namespace(run_id)
-            if callable(get_local_helper_registry):
-                get_local_helper_registry().close_namespace(run_id)
+            # Only a session-less run's helpers are keyed by its run id: a session keeps its own.
+            get_local_helper_registry().close_namespace(run_id)
 
     add = getattr(runtime, "add_terminal_hook", None)
     if callable(add):

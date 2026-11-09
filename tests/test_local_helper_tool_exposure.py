@@ -167,3 +167,89 @@ def test_default_tool_map_and_approval_defaults_include_local_helper_tools():
     policy = ToolApprovalPolicy()
     assert "local_helper_status" in policy.auto_approve_tools
     assert {"local_helper_start", "local_helper_stop"} <= policy.require_approval_tools
+
+
+# ---------------------------------------------------------------------------- conversation lifetime (2026-11-09)
+
+
+def _session_runtime() -> Runtime:
+    runtime = Runtime(
+        run_store=InMemoryRunStore(),
+        ledger_store=InMemoryLedgerStore(),
+        effect_handlers={EffectType.TOOL_CALLS: make_tool_calls_handler(tools=_executor())},
+    )
+    register_shell_session_teardown(runtime)
+    return runtime
+
+
+def _one_call_workflow(workflow_id: str, name: str, arguments: Dict[str, Any]) -> WorkflowSpec:
+    """A turn that makes one helper call and ends (Code: each turn is one basic-agent run)."""
+
+    def call(run, ctx) -> StepPlan:
+        del ctx
+        return StepPlan(
+            node_id="call",
+            effect=Effect(type=EffectType.TOOL_CALLS,
+                          payload={"tool_calls": [{"name": name, "arguments": dict(arguments), "call_id": "c1"}]},
+                          result_key="tool_results"),
+            next_node="done",
+        )
+
+    def done(run, ctx) -> StepPlan:
+        del ctx
+        return StepPlan(node_id="done", complete_output={"ok": True})
+
+    return WorkflowSpec(workflow_id=workflow_id, entry_node="call", nodes={"call": call, "done": done})
+
+
+def _turn(runtime: Runtime, workflow: WorkflowSpec, session_id: str | None) -> Dict[str, Any]:
+    run_id = runtime.start(workflow=workflow, session_id=session_id) if session_id else runtime.start(workflow=workflow)
+    state = runtime.tick(workflow=workflow, run_id=run_id, max_steps=5)
+    assert state.status == RunStatus.COMPLETED, state
+    result = state.vars["tool_results"]["results"][0]
+    output = result.get("output")
+    return output if isinstance(output, dict) else result
+
+
+def test_a_helper_belongs_to_its_conversation_and_outlives_the_turn(tmp_path):
+    """Operator decision 2026-11-09: a dev server an agent starts in Code must outlive the turn (each turn is one
+    run; the run's end closed the helper, so the browser probe got ERR_CONNECTION_REFUSED). A helper started in run
+    1 of a session is alive after run 1 completed and reachable from run 2; an explicit stop closes it; archiving
+    the session closes it; another store's session of the same id never reaches it."""
+    port = _free_port()
+    runtime = _session_runtime()
+    start = {"command": f"{shlex.quote(sys.executable)} -m http.server {port}", "working_directory": str(tmp_path),
+             "ready_port": port, "ready_timeout": 10}
+    started = _turn(runtime, _one_call_workflow("turn-start", "local_helper_start", start), "conv-1")
+    assert started["success"] is True and started["alive"] is True
+    # Run 1 is completed: the helper is still serving.
+    assert socket.create_connection(("127.0.0.1", port), timeout=2)
+    status = _turn(runtime, _one_call_workflow("turn-status", "local_helper_status", {}), "conv-1")
+    assert status["success"] is True and status["alive"] is True and status["ready"] is True, status
+    # Another account's plane (another store), the same session id: not its helper.
+    other = _session_runtime()
+    foreign = _turn(other, _one_call_workflow("turn-foreign", "local_helper_status", {}), "conv-1")
+    assert foreign["success"] is False
+    # Explicit stop, from a later turn.
+    stopped = _turn(runtime, _one_call_workflow("turn-stop", "local_helper_stop", {}), "conv-1")
+    assert stopped["success"] is True and stopped["alive"] is False
+    gone = _turn(runtime, _one_call_workflow("turn-status-2", "local_helper_status", {}), "conv-1")
+    assert gone["success"] is False
+
+
+def test_archiving_the_conversation_closes_its_helpers_and_a_run_without_one_keeps_the_old_scope(tmp_path):
+    from abstractruntime.integrations.abstractcore.local_helper_tools import close_session_helpers
+
+    port = _free_port()
+    runtime = _session_runtime()
+    start = {"command": f"{shlex.quote(sys.executable)} -m http.server {port}", "working_directory": str(tmp_path),
+             "ready_port": port, "ready_timeout": 10}
+    assert _turn(runtime, _one_call_workflow("t1", "local_helper_start", start), "conv-2")["success"] is True
+    assert close_session_helpers(runtime, "conv-2") == 1
+    assert _turn(runtime, _one_call_workflow("t2", "local_helper_status", {}), "conv-2")["success"] is False
+
+    # No session: the helper ends with its run, as before.
+    port2 = _free_port()
+    start2 = {**start, "command": f"{shlex.quote(sys.executable)} -m http.server {port2}", "ready_port": port2}
+    assert _turn(runtime, _one_call_workflow("t3", "local_helper_start", start2), None)["success"] is True
+    assert not [k for k in get_local_helper_registry()._helpers if not k.startswith("session:")]

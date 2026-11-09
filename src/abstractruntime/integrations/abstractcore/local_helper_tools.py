@@ -2,13 +2,23 @@
 
 Narrower than persistent shell sessions:
 - purpose-built for starting / observing / stopping one long-lived helper;
-- run-scoped via a hidden `_registry_namespace` trust-boundary stamp;
+- scoped via a hidden `_registry_namespace` trust-boundary stamp (the calling run's id);
 - default-toolset eligible without exposing a general persistent shell.
 
-The helper registry is process-local and non-durable. Helpers are torn down
-by the runtime's terminal-hook seam when the owning run ends.
+LIFETIME (operator decision 2026-11-09): a helper belongs to its CONVERSATION. A run of a session
+(every turn of a chat is one run) starts a helper the session keeps: it outlives the run, and the
+session's next run reaches it under the same helper_id. It stops when the session is archived or
+ends (`close_session_helpers`, the host's call), when the agent or the operator stops it
+(`local_helper_stop`), or when the host process stops (`close_all`); never at run completion. A
+run without a session keeps the old scope: its helpers end with it (the terminal-hook seam).
+
+The session of a run is read from the run store of a runtime that registered for it
+(`register_session_scope`, done by the factory's terminal-hook wiring). The scope key names that
+runtime too, so the same session id in another store (another account's plane) never reaches
+these helpers. The registry is process-local and non-durable.
 """
 
+import itertools
 import os
 import shlex
 import signal
@@ -18,10 +28,11 @@ import tempfile
 import time
 import urllib.error
 import urllib.request
+import weakref
 from dataclasses import dataclass
 from pathlib import Path
 from threading import Lock
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from abstractcore.tools.core import tool
 
@@ -218,6 +229,79 @@ def get_local_helper_registry() -> LocalHelperRegistry:
     return _REGISTRY
 
 
+# ---------------------------------------------------------------------------- session scope
+_SCOPE_TOKENS = itertools.count(1)
+_SCOPE_RUNTIMES: List[Tuple[int, "weakref.ReferenceType[Any]"]] = []
+_SCOPE_LOCK = Lock()
+_MAX_PARENT_WALK = 32
+
+
+def register_session_scope(runtime: Any) -> int:
+    """Let this runtime's runs keep their helpers in their session (the factory's wiring). Returns
+    the runtime's scope token (stable for its life, never reused by another runtime)."""
+    with _SCOPE_LOCK:
+        token = getattr(runtime, "_local_helper_scope_token", None)
+        if not isinstance(token, int):
+            token = next(_SCOPE_TOKENS)
+            setattr(runtime, "_local_helper_scope_token", token)
+        _SCOPE_RUNTIMES[:] = [(t, ref) for t, ref in _SCOPE_RUNTIMES if ref() is not None and t != token]
+        _SCOPE_RUNTIMES.append((token, weakref.ref(runtime)))
+        return token
+
+
+def session_namespace(runtime: Any, session_id: str) -> str:
+    """The registry namespace of one session's helpers in this runtime's store."""
+    token = getattr(runtime, "_local_helper_scope_token", None)
+    if not isinstance(token, int):
+        token = register_session_scope(runtime)
+    return f"session:{token}:{str(session_id or '').strip()}"
+
+
+def close_session_helpers(runtime: Any, session_id: str) -> int:
+    """Stop every helper of this session (the host's call when the session is archived or ends).
+    Returns how many were stopped."""
+    sid = str(session_id or "").strip()
+    if not sid:
+        return 0
+    return get_local_helper_registry().close_namespace(session_namespace(runtime, sid))
+
+
+def _session_of(run_store: Any, run_id: str) -> Optional[str]:
+    """The session of a run (its own, else its nearest ancestor's), or None (unknown run, no session)."""
+    rid = str(run_id or "").strip()
+    for _ in range(_MAX_PARENT_WALK):
+        if not rid:
+            return None
+        try:
+            run = run_store.load(rid)
+        except Exception:
+            return None
+        if run is None:
+            return None
+        sid = str(getattr(run, "session_id", "") or "").strip()
+        if sid:
+            return sid
+        rid = str(getattr(run, "parent_run_id", "") or "").strip()
+    return None
+
+
+def helper_scope(run_namespace: str) -> str:
+    """The registry namespace a run's helper calls use: its session's when a registered runtime holds the
+    run and the run belongs to a session, else the run's own (`run_namespace`, the stamped run id)."""
+    rid = str(run_namespace or "").strip()
+    if not rid:
+        return rid
+    with _SCOPE_LOCK:
+        live = [(t, ref()) for t, ref in _SCOPE_RUNTIMES]
+    for token, runtime in live:
+        if runtime is None:
+            continue
+        sid = _session_of(getattr(runtime, "run_store", None), rid)
+        if sid:
+            return f"session:{token}:{sid}"
+    return rid
+
+
 def _parse_command(command: str) -> tuple[Optional[list[str]], Optional[str]]:
     raw = str(command or "").strip()
     if not raw:
@@ -262,12 +346,12 @@ def _start_result(helper: LocalHelperProcess, *, ready_timeout_s: float) -> Dict
 
 @tool(
     description=(
-        "Start one long-lived local helper process for this run (dev server, watcher, background helper) "
-        "with an optional readiness contract; sandboxed to this run's workspaces, auto-cleaned when the run ends."
+        "Start a long-lived local helper (dev server, watcher) for this conversation; it keeps running after the "
+        "answer until you stop it, the conversation is archived or the host stops."
     ),
     when_to_use=(
-        "When the task needs a local process that must keep running across tool calls: start a dev server, "
-        "wait for it to become ready, then inspect or stop it later."
+        "When a local process must keep running across tool calls or turns: start a dev server, wait until ready, "
+        "reach it later by helper_id (local_helper_status), stop it (local_helper_stop) when done."
     ),
     tags=["mutating"],
     hide_args=["_registry_namespace", "_sandbox"],
@@ -300,13 +384,13 @@ def local_helper_start(
         return refusal_result(sandbox, helper_id=str(helper_id or "").strip() or _DEFAULT_HELPER_ID)
     report_sandbox = sandbox.spec is not None or sandbox.kind != KIND_UNSANDBOXED
     hid = str(helper_id or "").strip() or _DEFAULT_HELPER_ID
-    key = namespaced_helper_id(_registry_namespace, hid)
+    key = namespaced_helper_id(helper_scope(_registry_namespace), hid)
     registry = get_local_helper_registry()
     existing = registry.get(key)
     if existing is not None and existing.is_alive():
         return {
             "success": False,
-            "error": f"helper '{hid}' is already running for this run; stop it first or use another helper_id",
+            "error": f"helper '{hid}' is already running in this conversation; stop it first or use another helper_id",
             "helper_id": hid,
         }
     if existing is not None:
@@ -384,7 +468,8 @@ def local_helper_start(
 
 @tool(
     description=(
-        "Check the current state of a previously started local helper process for this run."
+        "Check the current state of a local helper process started earlier in this conversation (this turn or "
+        "an earlier one)."
     ),
     when_to_use=(
         "After local_helper_start, to see whether the helper is still alive, whether its readiness "
@@ -397,12 +482,12 @@ def local_helper_status(
     _registry_namespace: str = "",
 ) -> Dict[str, Any]:
     hid = str(helper_id or "").strip() or _DEFAULT_HELPER_ID
-    key = namespaced_helper_id(_registry_namespace, hid)
+    key = namespaced_helper_id(helper_scope(_registry_namespace), hid)
     helper = get_local_helper_registry().get(key)
     if helper is None:
         return {
             "success": False,
-            "error": f"no active local helper '{hid}' for this run",
+            "error": f"no active local helper '{hid}' in this conversation",
             "helper_id": hid,
         }
     return helper.snapshot()
@@ -410,10 +495,11 @@ def local_helper_status(
 
 @tool(
     description=(
-        "Stop a previously started local helper process for this run, reaping its whole process group."
+        "Stop a local helper started in this conversation, reaping its whole process group."
     ),
     when_to_use=(
-        "When you are done with a helper or want to cleanly stop a server/watcher before the run ends."
+        "When you are done with a helper (a dev server, a watcher) or want to restart it cleanly: helpers keep "
+        "running after an answer until stopped."
     ),
     tags=["mutating"],
     hide_args=["_registry_namespace"],
@@ -423,12 +509,12 @@ def local_helper_stop(
     _registry_namespace: str = "",
 ) -> Dict[str, Any]:
     hid = str(helper_id or "").strip() or _DEFAULT_HELPER_ID
-    key = namespaced_helper_id(_registry_namespace, hid)
+    key = namespaced_helper_id(helper_scope(_registry_namespace), hid)
     helper = get_local_helper_registry().get(key)
     if helper is None:
         return {
             "success": False,
-            "error": f"no active local helper '{hid}' for this run",
+            "error": f"no active local helper '{hid}' in this conversation",
             "helper_id": hid,
         }
     snapshot = helper.snapshot()
@@ -443,9 +529,13 @@ LOCAL_HELPER_TOOLS = [local_helper_start, local_helper_status, local_helper_stop
 
 __all__ = [
     "LOCAL_HELPER_TOOLS",
+    "close_session_helpers",
     "get_local_helper_registry",
+    "helper_scope",
     "local_helper_start",
     "local_helper_status",
     "local_helper_stop",
     "namespaced_helper_id",
+    "register_session_scope",
+    "session_namespace",
 ]

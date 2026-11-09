@@ -708,3 +708,33 @@ def test_hard_stop_refuses_the_callers_own_pid_a_recycled_pid_and_a_foreign_proc
         assert out["killed"] is False and "recycled" in out["reason"] and foreign.poll() is None
     finally:
         foreign.kill()
+
+
+def test_the_operators_start_reaches_the_spawned_loop(tmp_path: Path, monkeypatch) -> None:
+    """spawn_loop_process(first_day_unconditional=True) - the operator's own act - passes the flag the CLI turns
+    into LifeLoop(first_day_unconditional=True); a restore (the default) does not."""
+    import subprocess
+
+    from abstractruntime.identity.life import spawn_loop_process
+
+    home_dir = _make_home(tmp_path)
+    seen: List[List[str]] = []
+
+    class _Proc:
+        pid = 999999
+
+        def poll(self):
+            return None
+
+    def fake_popen(argv, *a, **k):
+        seen.append(list(argv))
+        return _Proc()
+
+    monkeypatch.setattr(subprocess, "Popen", fake_popen)
+    for flag in (True, False):
+        try:
+            spawn_loop_process(home_dir, provider="lmstudio", model="m", first_day_unconditional=flag)
+        except Exception:  # noqa: BLE001 - only the argv handed to the child matters here
+            pass
+    assert len(seen) == 2, seen
+    assert "--first-day-unconditional" in seen[0] and "--first-day-unconditional" not in seen[1]

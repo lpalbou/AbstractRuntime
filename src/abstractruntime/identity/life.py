@@ -2354,6 +2354,9 @@ def spawn_loop_process(
     # env and becomes the child's ambient resolver (core's 2026-07-26
     # cross-package channel). May carry secrets — the child never logs it.
     endpoint_profile: Optional[Dict[str, Any]] = None,
+    # The operator's own act (his grant, start or retry): the child's first day is his whatever pulls. A restore
+    # after an interruption passes False (the gate governs: nothing pulling = he rests inside personal).
+    first_day_unconditional: bool = False,
 ) -> Dict[str, Any]:
     """Spawn the own-time loop, detached, logging to <home>/own_time.log.
     The RUNTIME owns the home's files (single-writer discipline): hosts
@@ -2438,6 +2441,8 @@ def spawn_loop_process(
             # in the spawn->boot window).
             "--skip-command-fast-forward",
         ]
+        if first_day_unconditional:
+            argv.append("--first-day-unconditional")
         if base_url:
             argv += ["--base-url", str(base_url)]
 
@@ -4601,6 +4606,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     )
     parser.add_argument("--state-reason", default="", help="reason recorded with --set-state")
     parser.add_argument(
+        "--first-day-unconditional", action="store_true",
+        help="the operator started own time (his grant, start or retry): the first day is his whatever pulls "
+        "(spec personal entered_by; contract-phases v2 §10). Without it the gate governs the first boundary too",
+    )
+    parser.add_argument(
         "--skip-command-fast-forward", action="store_true",
         help="internal (spawn_loop_process passes this): the starter already "
         "fast-forwarded the command inbox at the start-request moment; doing it "
@@ -4852,6 +4862,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         state_home=home_dir,
         on_sleep=consolidator,
         substrate_changed=_substrate_changed,
+        first_day_unconditional=bool(args.first_day_unconditional),
     )
     print(f"(own time starts: tick={args.tick_seconds}s, day={args.ticks_per_day} ticks, "
           f"stop: touch {stop_file} or Ctrl-C)")

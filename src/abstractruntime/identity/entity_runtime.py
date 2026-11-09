@@ -295,6 +295,10 @@ def open_entity_runtime(
         artifact_store=run_artifacts,
         **_rt_kwargs,
     )
+    # The Runtime registers its own built-ins (START_SUBWORKFLOW, ASK_USER, ANSWER_USER, the waits, MEMORY_QUERY...)
+    # beside the table it was given: they are effects of this run too, so the WHOLE table is fenced (Fable F2: a
+    # parent whose child the Stop cancelled went on through the unfenced START_SUBWORKFLOW and ended completed).
+    runtime._handlers.update(fence_handlers(dict(runtime._handlers), fence))
     return EntityRuntime(
         home=home,
         runtime=runtime,

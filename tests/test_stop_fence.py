@@ -987,9 +987,9 @@ def test_fence_hot_path_budget_through_the_handler_table_and_the_commit_guard(tm
     bump_lifecycle_generation(bumper, written_by="test:bench")
     bumper_counts, bumper_ns = bench(bumper)
     other_counts, other_ns = bench(_make_home(tmp_path / "other"))
-    assert bumper_counts.get("os.stat") == 2 * N_EFFECTS, bumper_counts
+    assert bumper_counts.get("os.stat") == 3 * N_EFFECTS, bumper_counts
     assert sum(v for k, v in bumper_counts.items() if k != "os.stat") == 0, bumper_counts
-    assert other_counts.get("os.stat") == 2 * N_EFFECTS, other_counts
+    assert other_counts.get("os.stat") == 3 * N_EFFECTS, other_counts  # before + after the effect, the guard
     assert sum(v for k, v in other_counts.items() if k != "os.stat") == 0, other_counts
     assert bumper_ns < BUDGET_CEILING_NS and other_ns < BUDGET_CEILING_NS, (bumper_ns, other_ns)
     with capsys.disabled():
@@ -1311,3 +1311,45 @@ def test_a_process_that_bumped_once_still_sees_another_processes_stop(tmp_path: 
     assert fence.moved(), "a Stop by another process was invisible to a process that had bumped once"
     with pytest.raises(StoppedByOperator):
         fence.check("before a model call")
+
+
+def test_a_parent_run_ends_cancelled_when_its_child_was_stopped(tmp_path: Path) -> None:
+    """Fable F2 (P2): START_SUBWORKFLOW answers `completed({output: {cancelled: True}})` for a child that ended
+    CANCELLED (the Stop is no cancel_run), and the Runtime's built-in handlers were never in the fenced table - so the
+    parent went on and ended COMPLETED after the Stop. Every outcome is post-checked now, built-ins included."""
+    from abstractruntime import WorkflowRegistry
+    from abstractruntime.core.models import Effect, EffectType, StepPlan
+    from abstractruntime.core.runtime import EffectOutcome
+    from abstractruntime.core.spec import WorkflowSpec
+    from abstractruntime.identity.entity_runtime import open_entity_runtime
+
+    home_dir = _make_home(tmp_path)
+    after_child: List[Any] = []
+
+    def mind(run, effect, default_next_node=None):
+        _stop_here(home_dir)  # the operator's Stop while the CHILD's model answers
+        return EffectOutcome.completed({"content": "late"})
+
+    child = WorkflowSpec(workflow_id="child", entry_node="c", nodes={
+        "c": lambda r, c: StepPlan(node_id="c", effect=Effect(type=EffectType.LLM_CALL, payload={"prompt": "hi"},
+                                                                result_key="ans"), next_node="d"),
+        "d": lambda r, c: StepPlan(node_id="d", complete_output={"ans": r.vars.get("ans")}),
+    })
+    parent = WorkflowSpec(workflow_id="parent", entry_node="spawn", nodes={
+        "spawn": lambda r, c: StepPlan(node_id="spawn", effect=Effect(
+            type=EffectType.START_SUBWORKFLOW, payload={"workflow_id": "child", "vars": {}}, result_key="sub"),
+            next_node="after"),
+        "after": lambda r, c: after_child.append(r.vars.get("sub")) or StepPlan(
+            node_id="after", complete_output={"sub": r.vars.get("sub")}),
+    })
+    registry = WorkflowRegistry()
+    registry.register(child)
+    registry.register(parent)
+    ert = open_entity_runtime(home_dir, extra_handlers={EffectType.LLM_CALL: mind}, workflow_registry=registry,
+                              fence=LifecycleFence.admit(home_dir))
+    try:
+        state = ert.runtime.tick(workflow=parent, run_id=ert.runtime.start(workflow=parent, vars={}))
+    finally:
+        ert.home.close()
+    assert after_child == [], f"the parent went on after the Stop: {after_child}"
+    assert state.status.value == "cancelled" and lf.KILL_SWITCH_REASON in str(state.error), (state.status, state.error)

@@ -318,10 +318,12 @@ def is_stopped_outcome(outcome: Any) -> bool:
 
 def fence_handlers(handlers: Dict[Any, Any], fence: LifecycleFence) -> Dict[Any, Any]:
     """THE EFFECT DISPATCH FENCE (STOP-LANE-DESIGN §2.2): every handler of a table, wrapped ONCE (a handler already
-    wrapped with this fence is kept). Before each effect: refused once the generation moved. An LLM_CALL whose reply
-    returned after the Stop is ABANDONED (§2.3: it lands nowhere). A handler that raised the operator's Stop (memory's
-    commit guard refusing inside the write) or failed after it reports the Stop. Every refusal is
-    `stopped_outcome` - cancelled, never failed. Cost: one fence compare per effect (two for a model call)."""
+    wrapped with this fence is kept). Before each effect: refused once the generation moved. After it, EVERY outcome
+    is checked again (Fable F2: a subworkflow whose child the Stop cancelled answers `completed` with `cancelled: True`
+    and the parent went on): a model reply that returned after the Stop is ABANDONED (§2.3: it lands nowhere), and any
+    effect that returns after it reports the Stop - its run ends there. A handler that raised the operator's Stop
+    (memory's commit guard refusing inside the write) reports it too. Every refusal is `stopped_outcome` - cancelled,
+    never failed. Cost: two fence checks per effect."""
     return {etype: _fence_handler(etype, handler, fence) for etype, handler in handlers.items()}
 
 
@@ -330,15 +332,12 @@ def _fence_handler(etype: Any, inner: Callable[..., Any], fence: LifecycleFence)
         return inner
     import inspect
 
-    from ..core.models import EffectType
-
     try:
         params = list(inspect.signature(inner).parameters.values())
         three = any(p.kind == inspect.Parameter.VAR_POSITIONAL for p in params) or len(params) >= 3
     except (TypeError, ValueError):
         three = True
     name = str(getattr(etype, "value", etype))
-    is_llm = etype == EffectType.LLM_CALL
     before = f"before {name}"
     after = f"after {name} returned"
 
@@ -349,7 +348,7 @@ def _fence_handler(etype: Any, inner: Callable[..., Any], fence: LifecycleFence)
             out = inner(run, effect, default_next_node) if three else inner(run, effect)
         except TurnCancelled as e:
             return stopped_outcome(name, str(getattr(e, "where", "") or after))
-        if (is_llm or getattr(out, "status", None) != "completed") and fence.moved():
+        if fence.moved():
             return stopped_outcome(name, after)
         return out
 

@@ -361,6 +361,23 @@ def drain_authoring(
         out(f"(authoring: cancelled - {len(left)} task(s) handed back unspent)")
         return True
 
+    def _failed(t: Dict[str, Any], *, kind: str, body: str, need: List[str], outcome: str, reason: str,
+                exc: Optional[BaseException], message: str = "") -> None:
+        """EVERY failed attempt leaves its failure line (Codex review 3 #10): retry and defer alike, with the
+        record id, the outcome, the original exception's class and message, and the capability model when one was
+        built."""
+        why = authoring_failure_fields(exc, llm) if exc is not None else {
+            "reason": reason, "provider": None, "model": None, "error_class": None, "error_message": message}
+        reader = _reader_of(llm) if llm is not None else {}
+        record_authoring_failure(
+            home_dir, entity=entity, record_id=str(t["target_id"]), kind=kind, raw_block=body,
+            template_id=AUTHORING_TEMPLATE_ID, provider=why["provider"] or reader.get("provider"),
+            model=why["model"] or reader.get("model"), reason=reason or why["reason"], missing=need[0], out=out,
+            extra={"task_id": t["task_id"], "outcome": outcome, "error": str(exc) if exc is not None else message,
+                   "error_class": why["error_class"], "error_message": why["error_message"] or message,
+                   "capability": AUTHORING_CAPABILITY},
+        )
+
     for n, t in enumerate(claimed):
         if _cancelled(claimed[n:]):
             break
@@ -371,6 +388,7 @@ def drain_authoring(
         except Exception as e:  # noqa: BLE001
             tasks.release(t["task_id"], holder=holder, outcome="retry", reason=f"packet unreadable: {e}")
             receipt["failed"] += 1
+            _failed(t, kind="memory", body="", need=need, outcome="retry", reason="packet_unreadable", exc=e)
             continue
         if packet.get("target_state") != "live":
             tasks.release(t["task_id"], holder=holder, outcome="skip", reason=f"target {packet.get('target_state')}")
@@ -383,6 +401,8 @@ def drain_authoring(
         if not body.strip():
             tasks.release(t["task_id"], holder=holder, outcome="retry", reason="no words to author from")
             receipt["failed"] += 1
+            _failed(t, kind=kind, body=body, need=need, outcome="retry", reason="no_source", exc=None,
+                    message="no words to author from (the record's body / the diary entry's text is empty)")
             continue
         try:
             if llm is None:
@@ -405,17 +425,11 @@ def drain_authoring(
             tasks.release(t["task_id"], holder=holder, outcome="defer", reason="endpoint unavailable",
                           until=until, detail={"error": str(e)})
             receipt["deferred"] += 1
+            _failed(t, kind=kind, body=body, need=need, outcome="defer", reason="unavailable", exc=e)
         except AuthoringFailed as e:
             tasks.release(t["task_id"], holder=holder, outcome="retry", reason=str(e))
             receipt["failed"] += 1
-            why = authoring_failure_fields(e, llm)
-            record_authoring_failure(
-                home_dir, entity=entity, record_id=str(t["target_id"]), kind=kind, raw_block=body,
-                template_id=AUTHORING_TEMPLATE_ID, provider=why["provider"], model=why["model"], reason=why["reason"],
-                missing=need[0], out=out,
-                extra={"task_id": t["task_id"], "error": str(e), "error_class": why["error_class"],
-                       "error_message": why["error_message"], "capability": AUTHORING_CAPABILITY},
-            )
+            _failed(t, kind=kind, body=body, need=need, outcome="retry", reason="", exc=e)
     return receipt
 
 

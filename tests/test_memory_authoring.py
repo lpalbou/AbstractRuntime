@@ -760,3 +760,60 @@ def test_a_tick_lookback_summary_has_an_authored_title_never_the_tick_template(t
     assert row.attributes["lookback_label"] == f"{s.session_id} #1"
     assert row.attributes["metadata_authored"]["fields"] == ["title", "summary"]
     assert "pending" not in row.attributes
+
+
+def test_every_failed_drainer_attempt_leaves_its_failure_line(tmp_path: Path, monkeypatch) -> None:
+    """Codex review 3 #10: only a malformed reply used to be recorded. A deferred attempt (the endpoint unreachable),
+    a task whose source is empty and an unreadable packet each leave their line too - record id, outcome, the original
+    exception's class and message, the capability model when one was built."""
+    from abstractruntime.identity.authoring import drain_authoring
+
+    home_dir = _workspace_home(tmp_path)
+    home, s = _session(home_dir, ["Back.\n```interest\nwhy rivers bend\n```\n", "A quiet close."])
+    s.llm_for_capability = None  # forms pending
+    s.turn("hi")
+    target = str(_rows(home_dir, "interest")[-1].subject)
+
+    def lines_for(reason: str) -> List[Dict[str, Any]]:
+        return [f for f in _failures(tmp_path) if f.get("reason") == reason and f["record_id"] == target]
+
+    drain_authoring(home.ms, llm_for_capability=lambda name: _Capability(exc=ConnectionError("connection refused")),
+                    artifacts=home.artifacts, home_dir=home_dir, entity=home.entity_id, holder="t", cap=3, window="turn")
+    (deferred,) = [f for f in lines_for("unavailable") if f.get("outcome") == "defer"]  # (formation wrote its own)
+    assert (deferred["outcome"], deferred["error_class"], deferred["model"]) == ("defer", "ConnectionError", "summarizer")
+    assert deferred["error_message"] == "connection refused"
+
+    # An unreadable packet (the task's target cannot be read) - its own line, its exception named.
+    from datetime import datetime, timedelta, timezone
+
+    later = (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
+    real_select, real_claim = home.ms.tasks.select_for_window, home.ms.tasks.claim
+    monkeypatch.setattr(home.ms.tasks, "select_for_window", lambda *a, **k: real_select(*a, **{**k, "now": later}))
+    monkeypatch.setattr(home.ms.tasks, "claim", lambda *a, **k: real_claim(*a, **{**k, "now": later}))
+
+    def broken_packet(task_id: str) -> Dict[str, Any]:
+        raise KeyError(f"no packet for {task_id}")
+
+    monkeypatch.setattr(home.ms, "task_packet", broken_packet)
+    drain_authoring(home.ms, llm_for_capability=lambda name: _Capability(), artifacts=home.artifacts,
+                    home_dir=home_dir, entity=home.entity_id, holder="t", cap=3, window="turn")
+    home.close()
+    unreadable = lines_for("packet_unreadable")
+    assert unreadable and unreadable[0]["outcome"] == "retry" and unreadable[0]["error_class"] == "KeyError", unreadable
+
+
+def test_a_task_with_no_words_to_author_from_leaves_its_failure_line(tmp_path: Path) -> None:
+    from abstractruntime.identity.authoring import drain_authoring
+
+    home_dir = _workspace_home(tmp_path)
+    home, s = _session(home_dir, [_DIARY_GISTLESS, "A quiet close."])
+    s.llm_for_capability = None  # the entry's title forms pending
+    s.turn("hi")
+    (entry,) = _diary_rows(home_dir)
+    receipt = drain_authoring(home.ms, llm_for_capability=lambda name: _Capability(), artifacts=home.artifacts,
+                              home_dir=home_dir, entity=home.entity_id, holder="t", cap=3, window="turn",
+                              diary_text=lambda entry_id: "")  # the book's words cannot be read
+    home.close()
+    assert receipt["failed"] >= 1, receipt
+    lines = [f for f in _failures(tmp_path) if f.get("reason") == "no_source" and f["record_id"] == str(entry.subject)]
+    assert len(lines) == 1 and lines[0]["outcome"] == "retry" and "no words" in lines[0]["error_message"], lines

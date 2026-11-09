@@ -160,34 +160,22 @@ def read_work_order_verdicts(home_dir: Path) -> List[Dict[str, str]]:
 
 
 # ----------------------------------------------------------- the day gate
-# DM#89 (laurent, 2026-07-20 ~13:36, relayed room seq 253; spec v8): the
-# DAY GATE at every day boundary, order RULED:
-#   1. work_order.md present -> WORK day ("work is always granted by
-#      default if not sleeping and not visiting" - NO grant check).
-#   2. standing drives (drive_pressure.total_open > 0) AND armed personal
-#      grant -> PERSONAL day (the armed grant IS the standing consent;
-#      drives PULL, they never deny - the >20 bound is the operator
-#      ALARM, never this gate's input).
-#   3. settled desk -> SLEEP at the 6h unattended cadence ("it should
-#      wake at least once every 6h if i am not around"): the loop rests,
-#      re-gates at each wake, and a quiet desk re-sleeps WITHOUT
-#      summoning (zero LLM per cycle).
-# Engine absence degrades LOUDLY to the pre-drives shape (armed grant ->
-# personal day + #FALLBACK) - never a silently killed own time and never
-# a silent spend.
-UNATTENDED_NEED_CHECK_SECONDS = 6 * 3600
-# laurent #54 (relayed 2026-07-20 16:50): "should not sleep ... when
-# personal time was given and not used for at least 2h" — an armed grant
-# carries a 2h USE floor before settled-desk sleep is a legitimate gate
-# choice. Usage accumulates per GRANT (granted_at keys the meter; a new
-# grant resets the floor). Conservative accounting: personal-day time is
-# added at day close, so a killed day undercounts — undercounting gives
-# MORE personal time, never less (the floor fails toward his intent).
-PERSONAL_USE_FLOOR_SECONDS = 2 * 3600
+# THE DAY GATE (contract-phases v2 §10.3-§10.5; TARGET 2026-11-08 19:02/19:11; spec v23 OWN-TIME-IS-A-PRIVILEGE). One
+# decision per boundary, in this order:
+#   1. a visit posture -> the gate yields (the door owns the visit).
+#   2. HIS OWN SLEEP DECISION (a ```rest block he wrote in the day that just closed) -> sleep, cause self_elected,
+#      unless the last activity phase was already sleep (no sleep->sleep) or it came from own time the operator has
+#      since revoked (PERSONAL-OFF-NEVER-SLEEPS). Nothing else puts him to sleep: no clock, no gate leg, no toggle.
+#   3. a standing work order with Work on -> work (the gate reads the order before any grant check, dm#89).
+#   4. the personal grant armed (the operator's privilege) -> personal: a day when something pulls (standing drives),
+#      the first day after the operator's start, else he RESTS between days inside personal (awake, zero LLM).
+#   5. nothing allowed -> idle: own time ends AWAKE (the loop exits; only the operator's grant starts it again).
+# The retired v8-v13 machinery is gone: the settled-desk sleep leg, the 6 h unattended need-check, the 2 h grant-use
+# floor and the timed personal cycle (their dials stay readable, wired:false in the blueprint).
+UNATTENDED_NEED_CHECK_SECONDS = 6 * 3600  # retired (v22); kept for readers of the constant
+PERSONAL_USE_FLOOR_SECONDS = 2 * 3600  # retired (v22); kept for readers of the constant
 _PERSONAL_USAGE_FILE = "personal_usage.json"
-# v12 P1-4: the cycle clock persists (a respawn reset silently starved the
-# maintenance rationale); ANY completed sleep window resets it - cadence,
-# not quota.
+# v12 P1-4 cycle clock: retired with the timed cycle (v22); the read/write helpers stay for readers.
 _CYCLE_CLOCK_FILE = "personal_cycle_clock.json"
 
 
@@ -256,23 +244,53 @@ def record_personal_usage(home_dir: Path, seconds: float) -> None:
         pass
 
 
-def read_day_gate(home_dir: Path, *, skip_phases: frozenset = frozenset()) -> Dict[str, Any]:
-    """One decision per day boundary: {phase, cause, detail, note?}.
+def sleep_refusal(
+    home_dir: Path, *, last_phase: Optional[str], from_phase: Optional[str] = None
+) -> Optional[str]:
+    """Why his sleep decision cannot be honored now (None = it can). Pure read.
 
-    phase: "work" | "personal" | "sleep"; cause is the drive-cause TRACE
-    (wire shape for loop_status.day_cause, entity's render): work_order |
-    drives | grant_degraded | no_grant | settled_desk. Pure read.
+    - sleep -> sleep is refused (TARGET 19:11, spec NO-SLEEP-AFTER-SLEEP): after a sleep the next leg is personal,
+      work or a visit; `last_phase` is the last ACTIVITY phase he lived (a visit's close back into the interrupted
+      sleep is the same sleep, never a second one).
+    - a decision made during own time the operator has since revoked is dropped: personal off ends own time awake,
+      never asleep (PERSONAL-OFF-NEVER-SLEEPS). A decision made at work keeps the work->sleep#self_elected right.
+    - the effective graph must carry the edge (`from_phase`->sleep#self_elected)."""
+    if str(last_phase or "") == PHASE_SLEEP:
+        return "a sleep cannot follow a sleep - after a sleep he goes to personal, work or a visit"
+    origin = str(from_phase or last_phase or "")
+    if origin == PHASE_PERSONAL and personal_grant_refusal(read_personal_grant(home_dir)) is not None:
+        return "his own time was turned off - he stays awake, never asleep"
+    if origin in (PHASE_PERSONAL, PHASE_WORK):
+        try:
+            from .phase_graph import load_effective_graph
 
-    `skip_phases` (graph-edit build c4837): the caller's graph consult found
-    a landing REMOVED by a blueprint edge op — the gate skips that phase's
-    legs and the chain falls to the next legal landing (sleep is the floor).
-    The gate itself never reads the graph (one consult site per caller, the
-    consult owns the provenance/notes); it only honors the skip."""
-    # VISIT-PREEMPTS-THE-GATE (spec v10; laurent dm#94: the four states
-    # are mutually exclusive - an entity in visit can NOT be on personal
-    # time): a live visit posture yields the whole gate BEFORE any leg -
-    # no day arises, no landing writes (a settled-desk write here would
-    # CLOBBER the visit-door's posture; the door owns both edge writes).
+            graph, _w = load_effective_graph(home_dir)
+            if graph.legal_to(origin, PHASE_SLEEP, "self_elected") is None:
+                return f"the blueprint carries no {origin}->sleep#self_elected edge"
+        except Exception:  # noqa: BLE001 - an unreadable graph never blocks his own election (locked edge)
+            pass
+    return None
+
+
+def read_day_gate(
+    home_dir: Path,
+    *,
+    skip_phases: frozenset = frozenset(),
+    sleep_elected: Optional[str] = None,
+    last_phase: Optional[str] = None,
+    first_day: bool = False,
+) -> Dict[str, Any]:
+    """One decision per day boundary: {phase, cause, detail, note?, ...}.
+
+    phase: "visit" | "sleep" | "work" | "personal" | "idle" (see the order above). cause is the trace word served in
+    loop_status.day_cause: visit_open | self_elected | work_order | start | drives | grant_degraded | resting |
+    no_grant | work_off | edge_removed. A "personal" decision with `rest: True` opens no day: he rests between days.
+    "idle" means own time ends awake. Pure read.
+
+    `sleep_elected`: his own reason from a ```rest block (the decision); `last_phase`: the last activity phase he
+    lived (personal / work / sleep, None at a start); `first_day`: the operator just started own time (the start IS
+    the pull, the first day is unconditional). `skip_phases` (graph-edit build c4837): the caller's graph consult
+    found a landing removed - the chain falls to the next legal landing; the floor is idle (never sleep)."""
     try:
         state = read_entity_state(home_dir)
         if str(state.get("mode") or "").strip().lower() == "visiting":
@@ -280,20 +298,39 @@ def read_day_gate(home_dir: Path, *, skip_phases: frozenset = frozenset()) -> Di
                     "detail": "a visit session is open - the gate yields"}
     except Exception:  # noqa: BLE001 - an unreadable state never blocks a day
         pass
+    notes: List[str] = []
+    if sleep_elected is not None:
+        refused = sleep_refusal(home_dir, last_phase=last_phase)
+        if refused is None:
+            return {"phase": PHASE_SLEEP, "cause": "self_elected", "detail": str(sleep_elected),
+                    "reason": str(sleep_elected)}
+        notes.append(f"his sleep decision is not taken: {refused}")
     order = read_work_order(home_dir)
-    if order and PHASE_WORK not in skip_phases:
-        return {
+    work_on = work_enabled(home_dir)
+    if order and work_on and PHASE_WORK not in skip_phases:
+        out_work: Dict[str, Any] = {
             "phase": PHASE_WORK, "cause": "work_order",
             "detail": WORK_ORDER_FILENAME, "work_order": order,
         }
-    grant_refusal = personal_grant_refusal(read_personal_grant(home_dir))
-    # v13 dial threading: the gate's cadence + floor come FROM the blueprint
-    # (constants above remain the ruled seeds; an operator edit governs).
-    from .phase_spec import load_phase_tunables as _load_tunables
-
-    _tun, _ = _load_tunables(home_dir=home_dir)
-    _need_check_s = int(float(_tun["unattended_wake_cadence_h"]) * 3600.0)
-    _floor_s = float(_tun["grant_unused_floor_h"]) * 3600.0
+        if notes:
+            out_work["note"] = "; ".join(notes)
+        return out_work
+    if order and not work_on:
+        notes.append("a work order stands but Work is off - it waits until Work is back on")
+    grant = read_personal_grant(home_dir)
+    grant_refusal = personal_grant_refusal(grant)
+    if grant_refusal is not None or PHASE_PERSONAL in skip_phases:
+        if grant_refusal is None:
+            cause, detail = "edge_removed", "the blueprint removed this boundary's personal landing"
+        elif order and not work_on:
+            cause, detail = "work_off", grant_refusal
+        else:
+            cause, detail = "no_grant", grant_refusal
+        idle: Dict[str, Any] = {"phase": "idle", "cause": cause, "detail": detail,
+                                "grant_cause": personal_grant_end_cause(grant)}
+        if notes:
+            idle["note"] = "; ".join(notes)
+        return idle
     total_open = None
     degraded_note = None
     try:
@@ -320,43 +357,26 @@ def read_day_gate(home_dir: Path, *, skip_phases: frozenset = frozenset()) -> Di
         degraded_note = "#FALLBACK drive read unavailable (engine predates drive_pressure)"
     except Exception as e:  # noqa: BLE001
         degraded_note = f"#FALLBACK drive read failed: {e}"
+    if degraded_note:
+        notes.append(degraded_note)
+    note = "; ".join(notes) if notes else None
+    if first_day:
+        return {"phase": PHASE_PERSONAL, "cause": "start",
+                "detail": "the operator started his own time - the first day is his", "note": note}
+    if total_open is None:
+        # LOUD DEGRADE: pre-drives behavior (armed grant -> day), labeled.
+        return {"phase": PHASE_PERSONAL, "cause": "grant_degraded",
+                "detail": degraded_note or "", "note": note}
+    if total_open > 0:
+        return {"phase": PHASE_PERSONAL, "cause": "drives",
+                "detail": f"{total_open} standing drive(s)", "total_open": total_open, "note": note}
+    return {"phase": PHASE_PERSONAL, "cause": "resting", "rest": True,
+            "detail": "nothing pulls now - he rests between days inside his own time", "note": note}
 
-    if PHASE_PERSONAL in skip_phases:
-        # The personal landing was removed by a blueprint edge op (the
-        # caller's consult): the chain falls to the sleep floor, honestly
-        # named — never a fabricated no_grant.
-        return {"phase": PHASE_SLEEP, "cause": "edge_removed",
-                "detail": "the blueprint removed this boundary's personal landing",
-                "need_check_s": _need_check_s}
-    if grant_refusal is None:
-        if total_open is None:
-            # LOUD DEGRADE: pre-drives behavior (armed grant -> day), labeled.
-            return {"phase": PHASE_PERSONAL, "cause": "grant_degraded",
-                    "detail": degraded_note or "", "note": degraded_note}
-        if total_open > 0:
-            return {"phase": PHASE_PERSONAL, "cause": "drives",
-                    "detail": f"{total_open} standing drive(s)",
-                    "total_open": total_open}
-        # laurent #54: an armed grant used < 2h refuses the sleep leg —
-        # the given time must be LIVED before a settled desk may rest.
-        used = read_personal_usage(home_dir)
-        if used < _floor_s:
-            return {"phase": PHASE_PERSONAL, "cause": "granted_unused",
-                    "detail": (
-                        f"{used / 3600:.1f}h of granted personal time used; "
-                        f"the {_floor_s / 3600:g}h floor stands"
-                    )}
-        return {"phase": PHASE_SLEEP, "cause": "settled_desk",
-                "detail": "grant armed, zero standing drives, use floor met",
-                "need_check_s": _need_check_s}
-    return {"phase": PHASE_SLEEP, "cause": "no_grant",
-            "detail": grant_refusal,
-            # The RULED phase-vocabulary cause word (state machine v3):
-            # grant ends land as grant_expired/grant_revoked in the state
-            # reason, whatever the gate's trace word says.
-            "grant_cause": personal_grant_end_cause(read_personal_grant(home_dir)),
-            "need_check_s": _need_check_s,
-            "note": degraded_note}
+
+def work_enabled(home_dir: Path) -> bool:
+    """Whether Work is on for this home (the work toggle; contract-phases v2 §6.4). Default on."""
+    return True
 
 
 def consult_gate_landing(
@@ -365,23 +385,26 @@ def consult_gate_landing(
     decision: Dict[str, Any],
     cause: str,
     out: Any,
+    **gate_kwargs: Any,
 ) -> Tuple[Dict[str, Any], str]:
     """Graph consult over a gate decision (build order c4837; adversary A
     §3.2's day-gate row): the gate decides, the EFFECTIVE GRAPH governs.
 
     - REMOVED edge (legal_to -> None): the leg is skipped and the gate
-      re-reads with that phase excluded — the chain falls to the next legal
-      landing; sleep is the floor (never consulted, never skippable).
+      re-reads with that phase excluded (same `gate_kwargs`) — the chain falls
+      to the next legal landing; the floor is idle (own time ends awake,
+      contract-phases v2 §10; never a sleep).
     - REDIRECT: the landing's target substitutes BEFORE any write — with
       R8's guards-travel rule enforced here (a redirect into personal
-      requires the armed grant; into work requires a standing order;
-      refused redirects fall back to the skip path, loudly).
+      requires the armed grant; into work requires a standing order and
+      Work on; refused redirects fall back to the skip path, loudly).
     - INSTRUCTION: returned as the provenance-stamped cue line (STEERING,
-      never law) for the caller to ride on the wake reason / day cue.
+      never law) for the caller to ride on the day cue.
 
-    Returns (decision, instruction_cue). Sleep/visit decisions pass through
-    untouched (floor / derived). Any consult failure degrades loudly to the
-    gate's own decision — the graph must never wedge a boundary."""
+    Returns (decision, instruction_cue). Only work/personal landings are
+    consulted (visit is the door's, sleep is his own election - locked, idle
+    is no edge). Any consult failure degrades loudly to the gate's own
+    decision — the graph must never wedge a boundary."""
     instruction = ""
     try:
         from .phase_graph import instruction_cue, load_effective_graph
@@ -392,8 +415,16 @@ def consult_gate_landing(
         return decision, instruction
     for w in g_warns:
         out(f"({w})")
-    skipped: set = set()
-    for _hop in range(3):  # work -> personal -> sleep floor, bounded
+    skipped: set = set(gate_kwargs.pop("skip_phases", None) or ())
+
+    def _regate(reason: str) -> Dict[str, Any]:
+        try:
+            return read_day_gate(home_dir, skip_phases=frozenset(skipped), **gate_kwargs)
+        except Exception as e:  # noqa: BLE001
+            out(f"#FALLBACK re-gate after skip failed ({e}); own time ends awake")
+            return {"phase": "idle", "cause": "edge_removed", "detail": reason}
+
+    for _hop in range(3):  # work -> personal -> idle floor, bounded
         target = str(decision.get("phase") or "")
         if target not in (PHASE_WORK, PHASE_PERSONAL):
             return decision, instruction
@@ -404,12 +435,8 @@ def consult_gate_landing(
                 "graph - the leg is skipped)"
             )
             skipped.add(target)
-            try:
-                decision = read_day_gate(home_dir, skip_phases=frozenset(skipped))
-            except Exception as e:  # noqa: BLE001
-                out(f"#FALLBACK re-gate after skip failed ({e}); sleeping")
-                return {"phase": PHASE_SLEEP, "cause": "edge_removed",
-                        "detail": f"{from_phase}->{target}#{cause} removed"}, instruction
+            decision = _regate(f"{from_phase}->{target}#{cause} removed")
+            cause = _boundary_cause(from_phase, str(decision.get("phase") or ""), home_dir) or cause
             continue
         if landing.to != target:
             # R8 guards-travel: the substituted target's own invariants hold.
@@ -421,24 +448,22 @@ def consult_gate_landing(
                     "REFUSED: the grant is not armed - the guard travels with the arrow)"
                 )
                 skipped.add(target)
-                try:
-                    decision = read_day_gate(home_dir, skip_phases=frozenset(skipped))
-                except Exception:  # noqa: BLE001
-                    return {"phase": PHASE_SLEEP, "cause": "edge_removed",
-                            "detail": "redirect refused; re-gate failed"}, instruction
+                decision = _regate("redirect refused")
                 continue
-            if landing.to == PHASE_WORK and not read_work_order(home_dir):
+            if landing.to == PHASE_WORK and not (read_work_order(home_dir) and work_enabled(home_dir)):
                 out(
                     f"(blueprint redirect {from_phase}->{target}#{cause} -> work "
-                    "REFUSED: no standing order - a work day needs a desk)"
+                    "REFUSED: no standing order with Work on - a work day needs a desk)"
                 )
                 skipped.add(target)
-                try:
-                    decision = read_day_gate(home_dir, skip_phases=frozenset(skipped))
-                except Exception:  # noqa: BLE001
-                    return {"phase": PHASE_SLEEP, "cause": "edge_removed",
-                            "detail": "redirect refused; re-gate failed"}, instruction
+                decision = _regate("redirect refused")
                 continue
+            if landing.to not in (PHASE_WORK, PHASE_PERSONAL):
+                out(
+                    f"(#NOTE blueprint redirect {from_phase}->{target}#{cause} -> {landing.to!r} "
+                    "ignored - a day boundary opens work or personal only)"
+                )
+                return decision, instruction
             out(
                 f"(blueprint redirect: {from_phase}->{target}#{cause} lands "
                 f"{landing.to} instead - {landing.provenance})"
@@ -447,12 +472,32 @@ def consult_gate_landing(
             redirected["phase"] = landing.to
             redirected["redirected_from"] = target
             redirected["cause"] = decision.get("cause") or cause
+            redirected.pop("rest", None)
             decision = redirected
         cue_line = instruction_cue(landing)
         if cue_line:
             instruction = cue_line
         return decision, instruction
     return decision, instruction
+
+
+def _boundary_cause(from_phase: Optional[str], to: str, home_dir: Path) -> Optional[str]:
+    """The spec cause word of a LOOP-written day-boundary edge (spec v23 transitions; None = no loop edge: a start,
+    a visit's close, idle). work->work#task_complete and personal->personal#personal_cycle are the self-loops;
+    work->personal is #no_task when the order is gone and #operator when Work was turned off over a standing order;
+    personal->work#operator (work admitted); sleep->personal/work#maintenance_done (his own sleep's end)."""
+    frm = str(from_phase or "")
+    if frm == PHASE_PERSONAL:
+        return {"personal": "personal_cycle", "work": "operator"}.get(to)
+    if frm == PHASE_WORK:
+        if to == PHASE_WORK:
+            return "task_complete"
+        if to == PHASE_PERSONAL:
+            return "no_task" if not read_work_order(home_dir) else "operator"
+        return None
+    if frm == PHASE_SLEEP and to in (PHASE_PERSONAL, PHASE_WORK):
+        return "maintenance_done"
+    return None
 
 
 def append_phase_changed(
@@ -471,8 +516,8 @@ def append_phase_changed(
     append-only biography file the state writes ride
     (<home>/state_history.jsonl), distinguishable by the `marker` key:
     {marker: phase_changed, from, to, cause, written_by, at, provenance}.
-    `cause` is the spec cause word where one exists (cadence_need_check,
-    personal_cycle, grant_expired...) and the gate's trace word otherwise
+    `cause` is the spec cause word where one exists (self_elected,
+    personal_cycle, task_complete, maintenance_done...) and the gate's trace word otherwise
     (settled_desk, work_order — the evaluator internals, honestly named).
     Best-effort: a marker append must never kill a transition."""
     import json as _json
@@ -492,6 +537,48 @@ def append_phase_changed(
             fh.write(_json.dumps(rec) + "\n")
     except Exception:  # noqa: BLE001 - biography is best-effort, the transition is the control
         pass
+
+
+def maintenance_signals_note(home_dir: Path) -> str:
+    """The maintenance signals that FEED his own sleep decision (contract-phases v2 §10.4; TARGET: sleep is his
+    decision, e.g. memory saturated, too much new material): a structured, deterministic read
+    (abstractmemory.maintenance_due over his self/diary/life scopes), offered as one plain line of facts on the day
+    cue when a pass is due - never an order, never a mechanical sleep, no text read. "" when nothing is due or the
+    engine cannot answer (the signal is an offer; its absence is silent)."""
+    try:
+        from abstractmemory import SQLiteJournal, SQLiteTripleStore, maintenance_due
+    except ImportError:
+        return ""
+    db = Path(home_dir) / "memory.sqlite3"
+    if not db.exists():
+        return ""
+    try:
+        entity_id = _manifest_entity_id(home_dir)
+        store = SQLiteTripleStore(db)
+        journal = SQLiteJournal(db)
+        try:
+            due = maintenance_due(
+                store, journal, scopes=[("self", entity_id), ("diary", entity_id), ("life", entity_id)],
+            )
+        finally:
+            try:
+                store.close()
+                journal.close()
+            except Exception:  # noqa: BLE001
+                pass
+    except Exception:  # noqa: BLE001 - an offer never blocks a day-open
+        return ""
+    if not isinstance(due, dict) or not due.get("due"):
+        return ""
+    parts = [f"{int(due.get('new_records') or 0)} new record(s) since your last sleep"]
+    if int(due.get("duplicate_groups") or 0):
+        parts.append(f"{int(due['duplicate_groups'])} group(s) of records sharing a title")
+    if int(due.get("isolated") or 0):
+        parts.append(f"{int(due['isolated'])} record(s) connected to nothing")
+    return (
+        " Your memory has work only sleep does (" + ", ".join(parts) + "). Sleep is where it runs; a ```rest "
+        "block is yours to write if and when you choose."
+    )
 
 
 def _standing_drive_rotation(store: Any, journal: Any, entity_id: str, *, k: int = 4) -> List[Dict[str, Any]]:
@@ -2422,6 +2509,7 @@ class LifeLoop:
         substrate_changed: Optional[Callable[[], bool]] = None,
         sleep_fn: Callable[[float], None] = time.sleep,
         out: Callable[[str], None] = print,
+        first_day_unconditional: bool = False,
     ) -> None:
         if ticks_per_day < 1:
             raise ValueError("ticks_per_day must be >= 1")
@@ -2445,40 +2533,25 @@ class LifeLoop:
         # first-turn commit-exclusion half of the F2 contract).
         self._day_gate: Optional[Dict[str, Any]] = None
         self._cue_drive_ids: List[str] = []
-        # v11/v12 personal<->sleep maintenance cycle (laurent dm#104):
-        # personal seconds lived since the last completed sleep window.
-        # PERSISTED (v12 P1-4: in-memory reset on every respawn silently
-        # starved the maintenance rationale); loaded lazily at first use.
-        self._personal_cycle_seconds: float = 0.0  # loaded at run() start
-        # v13 no-churn need-check: quiet re-checks keep their next deadline
-        # in memory (the state file is NOT rewritten per check - no marker
-        # churn); reset whenever a fresh sleep landing is written.
-        self._need_check_at = None
-        # Graph-edit P0 fix (adversary 2, F1): the need-check's consult must
-        # GOVERN the day that opens — the wake returns to the top boundary,
-        # whose bare gate read would otherwise re-decide without the graph.
-        # The wake stashes its cause word here; the top-boundary consult
-        # consumes it (from=sleep) so removal/redirect survive the wake.
-        self._wake_gate_cause: Optional[str] = None
+        # THE GATE'S INPUTS (contract-phases v2 §10.3-§10.5, spec v23):
+        # - his own sleep decision, taken from a ```rest block at a day's close and consumed by the next gate;
+        # - the last ACTIVITY phase he lived (personal / work / sleep / "visit"; None at a start): the from-side of
+        #   the boundary's loop edges and the sleep->sleep refusal;
+        # - the first day after the operator's start is his (the start IS the pull, spec personal entered_by).
+        self._sleep_elected: Optional[str] = None
+        self._last_activity_phase: Optional[str] = None
+        self._first_day: bool = bool(first_day_unconditional)
+        # The first cue after his own sleep (composed by the sleep leg, read by the next day-open).
+        self._wake_cue: str = ""
         # Marker honesty (F7): the phase_changed marker for a day-opening
         # transition writes when the day actually OPENS (after the operator
-        # gate + belt), never at wake — staged here by the boundary consult.
+        # gate + belt), never at the gate — staged here by the boundary consult.
         self._pending_day_marker: Optional[Tuple[str, str, str, str]] = None
-        # The from-side of boundary transitions = the last day that actually
-        # OPENED (adversary-2 F7d, live-caught by the full-loop pin: deriving
-        # it from _day_gate recorded decisions the operator gate idled away —
-        # a work decision that never ran became the marker's from-side).
-        # None = the entity slept between (gate landing / operator sleep).
-        self._last_opened_phase: Optional[str] = None
-        # F7d: the from-side of boundary transitions = the last phase that
-        # actually OPENED (self._day_gate is staged before the operator
-        # gate/belt can still preempt — a staged-never-opened day must not
-        # become a marker's from-side). None = the entity was asleep.
-        self._last_opened_phase: Optional[str] = None
-        # rest_minutes > 0 = 24/7 mode: an elected rest is a NAP (the loop
-        # sleeps, then a fresh day begins). 0 = supervised mode: rest ends
-        # the loop. Either way rest is honored immediately and the stop
-        # file remains the operator's hard stop (checked after the nap).
+        # rest_minutes > 0 = 24/7 mode: an elected rest is HIS SLEEP (the gate
+        # takes the decision, the maintenance pass runs, he wakes), and when
+        # nothing pulls he rests this long between days inside personal.
+        # 0 = supervised mode: rest ends the loop. The stop file remains the
+        # operator's hard stop.
         self.rest_minutes = float(rest_minutes)
         # state_home enables the operator state surface (<home>/state,
         # a2a 0008): asleep/paused honored at tick boundaries only. The same
@@ -2581,7 +2654,8 @@ class LifeLoop:
             self.sleep_fn(STATE_POLL_SECONDS)
 
     def _sleep_window(
-        self, reason: str, *, include_dream: bool = True, include_identity: bool = True
+        self, reason: str, *, include_dream: bool = True, include_identity: bool = True,
+        mark_state: bool = True,
     ) -> Optional[Dict[str, Any]]:
         """Enter a self-elected sleep: mark state=asleep (written_by=self, so
         the navbar and biography show HE chose it), then run consolidation/
@@ -2602,13 +2676,14 @@ class LifeLoop:
             if current.get("state") == "paused":
                 self.out("(paused by operator - no sleep window opens under a freeze)")
                 return None
-            try:
-                write_entity_state(
-                    self.state_home, "asleep",
-                    reason=f"self-elected sleep: {reason}", mode="dreaming", written_by="self",
-                )
-            except Exception as e:  # noqa: BLE001 - sleep must not die over its own marker
-                self.out(f"#FALLBACK could not mark self-sleep state: {e}")
+            if mark_state:
+                try:
+                    write_entity_state(
+                        self.state_home, "asleep",
+                        reason=f"self-elected sleep: {reason}", mode="dreaming", written_by="self",
+                    )
+                except Exception as e:  # noqa: BLE001 - sleep must not die over its own marker
+                    self.out(f"#FALLBACK could not mark self-sleep state: {e}")
         self.out("(sleeping - consolidating the day)")
         if self.on_sleep is None:
             self._clear_dreaming_badge(reason)
@@ -2741,109 +2816,102 @@ class LifeLoop:
             "equally yours."
         )
 
-    def _bounded_asleep_or_paused(self, s: Dict[str, Any]) -> bool:
-        """Idle predicate for the asleep/paused gate, WITH the sleep bound
-        (decision:sleep-is-bounded, entity c2465 ask 2): a real sleep older
-        than its deadline wakes the entity instead of idling forever.
-        `paused` never auto-clears (kill switch); visit yields are excluded
-        inside sleep_bound_deadline (the gateway reaper's lane). The wake
-        write is the predicate's one deliberate side effect — documented
-        here because _idle_while's contract is otherwise pure reads."""
-        from datetime import datetime, timezone
-
-        if s["state"] == "paused":
-            return True
-        if s["state"] != "asleep":
-            self._need_check_at = None
-            return False
-        deadline = sleep_bound_deadline(s, home_dir=self.state_home)
-        # v13 no-churn law: after a quiet need-check, the state file's
-        # wake_at is deliberately stale - the in-memory deadline governs.
-        if self._need_check_at is not None:
-            deadline = self._need_check_at
-        if deadline is not None and datetime.now(timezone.utc) >= deadline:
-            if self.state_home is None:
-                return True
-            writer = str(s.get("written_by") or "")
-            if writer in ("day-gate", "grant-gate", "operator"):
-                # v13 cadence_need_check (wake_conditions, spec v13): a
-                # ZERO-TOKEN read over the standing sets, landing THROUGH
-                # the day gate. Nothing sanctioned = the SAME sleep
-                # continues - no awake/asleep marker pair, no biography
-                # event per check; a lightweight status trace at most.
-                try:
-                    decision = read_day_gate(self.state_home)
-                except Exception as e:  # noqa: BLE001 - unreadable gate keeps idling
-                    self.out(f"#FALLBACK need-check gate read failed: {e}")
-                    decision = {"phase": PHASE_SLEEP, "cause": "gate_degraded",
-                                "need_check_s": UNATTENDED_NEED_CHECK_SECONDS}
-                # GRAPH CONSULT (build c4837): the need-check's landings are
-                # the two genuinely operator-editable edges (B census #21/22,
-                # sleep->work / sleep->personal #cadence_need_check) —
-                # removal skips the leg, redirect substitutes (guards
-                # travel), instruction rides the wake reason into the first
-                # cue via the shipped wake-reason seed.
-                edge_cue = ""
-                if decision.get("phase") in (PHASE_WORK, PHASE_PERSONAL):
-                    decision, edge_cue = consult_gate_landing(
-                        self.state_home, PHASE_SLEEP, decision,
-                        "cadence_need_check", self.out,
-                    )
-                if decision["phase"] == PHASE_SLEEP:
-                    from datetime import timedelta
-
-                    cadence = int(decision.get("need_check_s") or UNATTENDED_NEED_CHECK_SECONDS)
-                    self._need_check_at = datetime.now(timezone.utc) + timedelta(seconds=cadence)
-                    self.out(
-                        f"(need-check: nothing sanctioned ({decision['cause']}) - "
-                        f"the same sleep continues; next check in {cadence // 3600}h)"
-                    )
-                    self._status("between")
-                    return True
-                # A sanctioned day (or an open visit) lands ONE wake marker.
-                try:
-                    wake_reason = (
-                        f"need-check: {decision['cause']} sanctions a day - waking"
-                        if decision["phase"] != "visit"
-                        else "need-check: a visit is open - waking"
-                    )
-                    if edge_cue:
-                        # The edge's steering prose rides the wake reason —
-                        # the shipped wake-reason seed folds it into the
-                        # first cue (never law, always labeled).
-                        wake_reason = f"{wake_reason}. {edge_cue}"
-                    write_entity_state(
-                        self.state_home, "awake",
-                        reason=wake_reason,
-                        written_by="need-check",
-                    )
-                    # P0 fix (adversary 2, F1): the wake's cause carries to
-                    # the top boundary so its consult re-derives the SAME
-                    # skip/redirect and the graph governs the day that
-                    # opens. The phase_changed marker moved there too (F7a:
-                    # a wake-time marker engraved transitions that the
-                    # operator gate could still preempt).
-                    if decision["phase"] in (PHASE_WORK, PHASE_PERSONAL):
-                        self._wake_gate_cause = "cadence_need_check"
-                    self.out(f"(need-check: {decision.get('cause') or decision['phase']} - waking)")
-                    self._need_check_at = None
-                    return False
-                except Exception as e:  # noqa: BLE001 - a failed wake write keeps idling honestly
-                    self.out(f"#FALLBACK need-check wake write failed: {e}")
-                    return True
+    def _own_sleep(self, reason: str, from_phase: Optional[str], report: "LifeReport") -> bool:
+        """HIS OWN SLEEP, taken by the gate (spec personal/work->sleep#self_elected; contract-phases v2 §10.4): the
+        state is written (written_by self, mode dreaming, his reason), the transition is marked, the maintenance pass
+        runs, and he wakes into what the toggles allow at the next boundary. Returns True when a stop arrived (the
+        caller ends the loop). Composes `self._wake_cue`."""
+        report.sleeps += 1
+        if self.state_home is not None:
+            current = read_entity_state(self.state_home)
+            if current.get("state") == "paused":
+                self.out("(paused by operator - no sleep window opens under a freeze)")
+                self._wake_cue = ""
+                return False
             try:
                 write_entity_state(
-                    self.state_home, "awake",
-                    reason=f"sleep bound reached (~{SLEEP_BOUND_SECONDS / 3600:g}h) - "
-                    "a sleep is bounded; own time resumes",
-                    written_by="sleep-bound",
+                    self.state_home, "asleep",
+                    reason=f"self-elected sleep: {reason}", mode="dreaming", written_by="self",
                 )
-                self.out("(sleep bound reached - waking)")
-                return False
-            except Exception as e:  # noqa: BLE001 - a failed wake write keeps idling honestly
-                self.out(f"#FALLBACK sleep-bound wake write failed: {e}")
+                # F7c: the marker rides the SUCCESSFUL state write.
+                if from_phase in (PHASE_PERSONAL, PHASE_WORK):
+                    append_phase_changed(
+                        self.state_home, from_phase=str(from_phase), to=PHASE_SLEEP,
+                        cause="self_elected", written_by="self",
+                    )
+            except Exception as e:  # noqa: BLE001 - sleep must not die over its own marker
+                self.out(f"#FALLBACK could not mark self-sleep state: {e}")
+        self._last_activity_phase = PHASE_SLEEP
+        dreamed = self._sleep_window(reason, mark_state=False)
+        if self._interruptible_sleep(self.rest_minutes * 60.0):
+            # Woken by a stop mid-sleep: honor it, leave state honest.
+            self._wake_from_self_sleep()
+            report.stopped_by = self.stop_cause or "stop_file"
             return True
-        return True
+        self._wake_from_self_sleep()
+        self._wake_cue = self._compose_wake_cue(dreamed)
+        report.dreams += 1 if (isinstance(dreamed, dict) and dreamed.get("formed")) else 0
+        return False
+
+    def _compose_wake_cue(self, dreamed: Any) -> str:
+        dream_note = ""
+        if isinstance(dreamed, dict) and dreamed.get("formed"):
+            dream_note = " while you slept a dream formed (candidate connections await your waking evidence)"
+            from .night_voice import wake_residue
+
+            dream_note += wake_residue(list(dreamed.get("signals") or []))
+        # P2-4 second wire: the night's grouping/mining work reaches
+        # the entity (it used to vanish into the report dict).
+        if isinstance(dreamed, dict) and int(dreamed.get("maintenance_candidates") or 0) > 0:
+            n_cand = int(dreamed["maintenance_candidates"])
+            dream_note += (
+                f" the night set out {n_cand} candidate(s) from your standing pile"
+                " - search_memory finds them when you want to look"
+            )
+        # R-D: offer back his own standing state (open questions)
+        # with the reread command, and name a circling run when the
+        # last stretch was one — directions, never orders.
+        circling = self._circling_note()
+        # NO ECHO OF THE REST REASON (operator 2026-11-08): the
+        # reason stays in his records (report.rest_reason, the
+        # sleep state's reason, own_time.log) and never opens the
+        # next day - nerin rested on 14 of 28 days and every day
+        # after a rest opened on his own reason to stop, then
+        # rested again (8 of 8; sleep-investigation-2026-11-08).
+        return f"{_today_stamp()}you rested and your own time resumes.{dream_note}{circling}"
+
+    def _resume_own_sleep(self, state: Dict[str, Any], report: "LifeReport") -> bool:
+        """A sleep of his own found at the operator gate (a visit's close handed it back, or an earlier loop left
+        it): it ends now - he wakes into what the toggles allow. Returns True when a stop arrived."""
+        try:
+            self._wake_own_leftover_sleep("his own sleep ends - awake")
+        except Exception as e:  # noqa: BLE001
+            self.out(f"#FALLBACK could not end his own sleep: {e}")
+        self._last_activity_phase = PHASE_SLEEP
+        self._wake_cue = f"{_today_stamp()}you rested and your own time resumes."
+        return False
+
+    def _rest_between_days(self, seconds: float) -> bool:
+        """He rests inside personal when nothing pulls (awake, no summon, zero LLM). Returns True on a stop; returns
+        early (False) when the boundary has something new to read: a state change (a visit, a sleep, a pause), a
+        work order with Work on, or the operator's grant revoked."""
+        remaining = float(seconds)
+        while remaining > 0:
+            if self._should_stop():
+                return True
+            self._status("between")
+            if self.state_home is not None:
+                st = self._operator_state()
+                if str(st.get("state") or "") != "awake" or str(st.get("mode") or ""):
+                    return False
+                if read_work_order(self.state_home) and work_enabled(self.state_home):
+                    return False
+                if personal_grant_refusal(read_personal_grant(self.state_home)) is not None:
+                    return False
+            chunk = min(STATE_POLL_SECONDS, remaining)
+            self.sleep_fn(chunk)
+            remaining -= chunk
+        return self._should_stop()
 
     def _wake_from_self_sleep(self) -> None:
         """Return to awake after a self-elected sleep — but only if the state
@@ -2870,6 +2938,20 @@ class LifeLoop:
                 )
         except Exception as e:  # noqa: BLE001
             self.out(f"#FALLBACK could not clear self-sleep state: {e}")
+
+    def _open_day_session(self) -> ChatSession:
+        """Open the day's session in the phase the GATE decided (work or personal). A factory that takes `phase`
+        (production: build_session_factory) is told; a zero-argument factory (harnesses) opens its own."""
+        import inspect
+
+        phase = str((self._day_gate or {}).get("phase") or "")
+        try:
+            takes_phase = "phase" in inspect.signature(self.open_session).parameters
+        except (TypeError, ValueError):
+            takes_phase = False
+        if takes_phase and phase in (PHASE_WORK, PHASE_PERSONAL):
+            return self.open_session(phase=phase)
+        return self.open_session()
 
     def _wake_own_leftover_sleep(self, reason: str) -> bool:
         """Write awake over a sleep the loop wrote for itself (LOOP_OWN_SLEEP_WRITERS) and nothing else: an
@@ -2972,9 +3054,6 @@ class LifeLoop:
         report = LifeReport()
         cue = self.first_cue
         day = 0
-        # v12 P1-4: the cycle clock persists across respawns.
-        if self.state_home is not None:
-            self._personal_cycle_seconds = read_cycle_clock(self.state_home)
         self._status("between")
         # SPAWN-WAKE (contract-phases v2 §1.2 rule 6, §10.1): a sleep an earlier loop wrote for itself (its own
         # election, the retired cycle, the retired gate/exit landings) has no process behind it any more; the new
@@ -2992,101 +3071,56 @@ class LifeLoop:
                 report.stopped_by = self.stop_cause or "stop_file"
                 break
 
-            # THE DAY GATE (dm#89, supersedes the 12:44 exit-on-unarmed
-            # shape): work_order -> WORK day (work is always granted, no
-            # grant check); standing drives + armed grant -> PERSONAL day
-            # (drives PULL, the armed grant is the standing consent);
-            # settled desk -> SLEEP at the 6h unattended need-check cadence
-            # ("wake at least once every 6h if i am not around") — the loop
-            # RESTS instead of exiting, so a work order left while
-            # unattended is picked up within one cadence. A quiet re-check
-            # re-sleeps without summoning: ZERO LLM per cycle. paused stays
-            # the kill switch (the operator state gate below); STOP always
-            # wins. Homes only (state_home=None = harness loops).
-            # Previous OPENED day's phase = the from-side of this boundary's
-            # edges (graph-edit build c4837: the work-close consult + marker
-            # honesty both need it; a decision the operator gate idled away
-            # never counts — only opened days do).
-            _prev_phase = self._last_opened_phase
+            # THE DAY GATE (contract-phases v2 §10.3-§10.5; spec v23; read_day_gate's order): visit > his own sleep
+            # decision (never after a sleep) > work order with Work on > personal while the operator's grant stands
+            # (a day when something pulls, the first day after his start, else rest between days) > idle (own time
+            # ends awake). The previous ACTIVITY phase is the from-side of this boundary's loop edges: the self-loops
+            # personal->personal#personal_cycle and work->work#task_complete, work<->personal, sleep->X#
+            # maintenance_done. A boundary after a start or a visit's close is no loop edge (the operator's or the
+            # door's act). STOP always wins; paused stays the kill switch (the operator state gate below).
+            _prev_phase = self._last_activity_phase
             self._day_gate = None
             self._pending_day_marker = None
+            if self.state_home is None and self._sleep_elected is not None:
+                # A harness loop (no home state): his sleep decision still runs its window (never after a sleep).
+                _elected = self._sleep_elected
+                self._sleep_elected = None
+                if _prev_phase != PHASE_SLEEP:
+                    if self._own_sleep(_elected, _prev_phase, report):
+                        break
+                    cue = self._wake_cue
+                    continue
             if self.state_home is not None:
-                decision = read_day_gate(self.state_home)
-                for note_key in ("note",):
-                    if decision.get(note_key):
-                        self.out(f"({decision[note_key]})")
-                # NEED-CHECK CARRY (P0 fix, adversary 2 F1): a wake that a
-                # graph consult shaped hands its cause to THIS boundary —
-                # the consult re-runs here (same graph, same skip/redirect)
-                # so the effective graph governs the day that actually
-                # opens, not just the wake's words. Consumed once.
-                _wake_cause = self._wake_gate_cause
-                self._wake_gate_cause = None
-                _carry_cue = ""
-                if _wake_cause and decision.get("phase") in (PHASE_WORK, PHASE_PERSONAL):
-                    decision, _carry_cue = consult_gate_landing(
-                        self.state_home, PHASE_SLEEP, decision, _wake_cause, self.out,
-                    )
-                if _carry_cue and _carry_cue not in (cue or ""):
-                    cue = f"{(cue or '').strip()} {_carry_cue}".strip()
-                # WORK-CLOSE CONSULT (B census rows 10/11, the one consultable
-                # boundary transition here): a redirect on work->sleep
-                # (#task_complete / #no_task) substitutes the landing — e.g.
-                # "after finishing work, take personal time" — with guards
-                # traveling (grant checked inside the consult). Instruction
-                # prose rides the day cue below.
-                _boundary_edge_cue = ""
-                if (
-                    _prev_phase == PHASE_WORK
-                    and decision.get("phase") == PHASE_SLEEP
-                    and decision.get("cause") not in ("no_grant",)
-                ):
-                    _wc_cause = (
-                        "task_complete" if not read_work_order(self.state_home) else "no_task"
-                    )
-                    try:
-                        from .phase_graph import instruction_cue as _icue, load_effective_graph as _leg
-
-                        _g, _gw = _leg(self.state_home)
-                        for w in _gw:
-                            self.out(f"({w})")
-                        _landing = _g.legal_to(PHASE_WORK, PHASE_SLEEP, _wc_cause)
-                        if _landing is not None and _landing.to == PHASE_PERSONAL:
-                            if personal_grant_refusal(read_personal_grant(self.state_home)) is None:
-                                self.out(
-                                    f"(blueprint redirect: work->sleep#{_wc_cause} lands "
-                                    f"personal instead - {_landing.provenance})"
-                                )
-                                decision = {
-                                    "phase": PHASE_PERSONAL, "cause": _wc_cause,
-                                    "detail": f"blueprint redirect of work->sleep#{_wc_cause}",
-                                    "redirected_from": PHASE_SLEEP,
-                                }
-                                # Marker staged for day-open (F7b: writing
-                                # here preceded the operator gate/belt).
-                            else:
-                                self.out(
-                                    "(blueprint redirect to personal refused: the grant "
-                                    "is not armed - the guard travels with the arrow)"
-                                )
-                        if _landing is not None:
-                            _boundary_edge_cue = _icue(_landing)
-                    except Exception as e:  # noqa: BLE001 - consult never blocks a boundary
-                        self.out(f"#FALLBACK work-close graph consult failed: {e}")
-                if _boundary_edge_cue:
-                    cue = f"{(cue or '').strip()} {_boundary_edge_cue}".strip()
-                # MARKER STAGING (F7 honesty cluster): a day-opening
-                # transition's phase_changed writes when the day actually
-                # OPENS (after the operator gate + belt) — staged here,
-                # written at the summon, cleared every boundary iteration.
-                _from_boundary = _prev_phase or PHASE_SLEEP
+                _elected = self._sleep_elected
+                self._sleep_elected = None  # consumed at this boundary, honored or refused
+                decision = read_day_gate(
+                    self.state_home, sleep_elected=_elected, last_phase=_prev_phase, first_day=self._first_day,
+                )
+                if decision.get("note"):
+                    self.out(f"({decision['note']})")
+                _edge_cause = None
+                _edge_cue = ""
+                if decision.get("phase") in (PHASE_WORK, PHASE_PERSONAL) and not decision.get("rest"):
+                    _edge_cause = _boundary_cause(_prev_phase, str(decision["phase"]), self.state_home)
+                    if _edge_cause:
+                        decision, _edge_cue = consult_gate_landing(
+                            self.state_home, str(_prev_phase), decision, _edge_cause, self.out,
+                            last_phase=_prev_phase, first_day=self._first_day,
+                        )
+                        _edge_cause = _boundary_cause(_prev_phase, str(decision.get("phase") or ""), self.state_home)
+                if _edge_cue and _edge_cue not in (cue or ""):
+                    cue = f"{(cue or '').strip()} {_edge_cue}".strip()
+                # MARKER STAGING (F7 honesty cluster): a day-opening transition's phase_changed writes when the day
+                # actually OPENS (after the operator gate + belt). A self-loop is no phase moment (contract §5:
+                # from == to), and a start or a visit's close is not the loop's edge.
                 if (
                     decision.get("phase") in (PHASE_WORK, PHASE_PERSONAL)
-                    and _from_boundary != decision.get("phase")
+                    and not decision.get("rest")
+                    and _edge_cause
+                    and _prev_phase != decision.get("phase")
                 ):
                     self._pending_day_marker = (
-                        _from_boundary, str(decision["phase"]),
-                        str(_wake_cause or decision.get("cause") or ""),
+                        str(_prev_phase), str(decision["phase"]), str(_edge_cause),
                         "blueprint redirect" if decision.get("redirected_from") else "structural",
                     )
                 if decision["phase"] == "visit":
@@ -3095,78 +3129,70 @@ class LifeLoop:
                     # until the door's close writes the restore.
                     self.out("(a visit is open - the day gate yields)")
                 elif decision["phase"] == PHASE_SLEEP:
-                    from datetime import datetime, timedelta, timezone
-
-                    cadence = int(decision.get("need_check_s") or UNATTENDED_NEED_CHECK_SECONDS)
-                    self.out(
-                        f"(settled desk: {decision['cause']} ({decision['detail']}) - "
-                        f"the ruled landing is sleep)"
-                    )
-                    if decision["cause"] == "no_grant":
-                        # PERSONAL OFF ENDS OWN TIME AWAKE (contract-phases v2 §10.1, root 1178; spec v22
-                        # PERSONAL-OFF-NEVER-SLEEPS): no sleep, no 6 h cadence, in both modes. He stays awake
-                        # and visitable (idle); only the operator's grant starts own time again (v23).
-                        report.stopped_by = "personal_off"
-                        self.out(
-                            f"(own time ends: {decision.get('grant_cause') or 'grant_revoked'} - "
-                            "he stays awake and reachable)"
-                        )
+                    # HIS OWN SLEEP DECISION (spec personal/work->sleep#self_elected): the maintenance pass runs
+                    # under his own sleep; he wakes into what the toggles allow at the next boundary.
+                    if self._own_sleep(str(decision.get("reason") or "no reason kept"), _prev_phase, report):
                         break
-                    # SUPERVISED mode (rest_minutes == 0, the existing mode
-                    # axis): a sleep decision ENDS the run — the supervisor
-                    # owns respawn, and a bounded test run must never idle
-                    # 6h. 24/7 mode rests at the ruled cadence and re-gates.
-                    landing_reason = f"day gate: {decision['cause']} ({decision['detail']})"
-                    landing_writer = "day-gate"
+                    cue = self._wake_cue
+                    continue
+                elif decision["phase"] == "idle":
+                    # NOTHING ALLOWED: own time ends AWAKE (contract-phases v2 §10.1; spec v23: only the operator's
+                    # grant starts it again). The exit wakes any sleep of the loop's own.
+                    report.stopped_by = {"no_grant": "personal_off", "work_off": "work_off"}.get(
+                        str(decision.get("cause") or ""), str(decision.get("cause") or "personal_off")
+                    )
+                    self.out(
+                        f"(own time ends: {decision.get('grant_cause') or decision.get('cause')}: "
+                        f"{decision.get('detail') or ''} - he stays awake and reachable)"
+                    )
+                    break
+                elif decision.get("rest"):
+                    # NOTHING PULLS: he rests between days INSIDE personal (awake; zero LLM). Supervised mode ends
+                    # the run (the supervisor owns what comes next); 24/7 rests `rest_minutes`, returning early for
+                    # a stop, a state change (visit, sleep, pause), a work order or a revoked grant.
+                    self.out(f"(personal: {decision['detail']})")
                     if self.rest_minutes <= 0:
-                        # Supervised: the run ends; no sleep is written (the supervisor owns what comes next,
-                        # and an ended loop leaves him awake - contract-phases v2 §10.1).
                         report.stopped_by = "settled_desk"
                         break
-                    wake_at = (
-                        datetime.now(timezone.utc) + timedelta(seconds=cadence)
-                    ).isoformat()
-                    write_entity_state(
-                        self.state_home, "asleep",
-                        reason=f"{landing_reason} - need-check in {cadence // 3600}h",
-                        written_by=landing_writer,
-                        wake_at=wake_at,
-                    )
-                    # phase_changed marker (spelled with c4837): the gate's
-                    # sleep landing is a loop-written transition; the cause
-                    # is the RULED word where one exists (grant ends), the
-                    # gate trace otherwise (evaluator internals, honest).
-                    # F7d: never fabricate the from-side — no marker when
-                    # the previous phase is unknown (sleep->sleep is not a
-                    # transition; a guessed "personal" is a lie engraved).
-                    if _prev_phase and _prev_phase != PHASE_SLEEP:
-                        append_phase_changed(
-                            self.state_home,
-                            from_phase=_prev_phase, to=PHASE_SLEEP,
-                            cause=str(decision.get("grant_cause") or decision.get("cause") or "sleep"),
-                            written_by=landing_writer,
-                        )
-                    self._need_check_at = None  # fresh landing owns the clock
-                    self._last_opened_phase = None  # the entity sleeps; next from-side is sleep
                     self._status("between", day_cause=decision)
-                    continue  # the operator-state gate below idles on it
-                self._day_gate = decision
+                    if self._rest_between_days(self.rest_minutes * 60.0):
+                        report.stopped_by = self.stop_cause or "stop_file"
+                        break
+                    continue
+                else:
+                    self._day_gate = decision
 
             # Operator state gate before a day opens (a2a 0008): asleep or
             # paused idles here (dreams may run gateway-side while asleep -
             # the no-summon window is enforced by this very gate). Waking is
             # HONEST: the first cue names what happened and for how long.
             gate = self._operator_state()
+            if (
+                gate["state"] == "asleep"
+                and str(gate.get("mode") or "") != "visiting"
+                and str(gate.get("written_by") or "") in LOOP_OWN_SLEEP_WRITERS
+            ):
+                # A sleep of his own handed back by a visit's close (the door restores the interrupted sleep,
+                # contract-phases v2 §4.4) or left by an earlier loop: the loop owns it.
+                if self._resume_own_sleep(gate, report):
+                    break
+                cue = self._wake_cue
+                continue
             if gate["state"] in ("asleep", "paused"):
                 self.out(f"({gate['state']} by operator{self._since(gate)} - idling)")
-                # Something ended the running stretch (operator sleep, door
-                # yield): the next boundary's from-side is sleep, never the
-                # day this gate just idled away (marker honesty, F7d).
-                self._last_opened_phase = None
-                woke = self._idle_while(self._bounded_asleep_or_paused, phase="between")
+                # No clock ends a sleep (v22: the sleep bound and the 6 h need-check are retired): an operator sleep
+                # lasts until the operator's wake or its maintenance's end (the gateway writes awake); a visit until
+                # the door's close; paused until resume.
+                woke = self._idle_while(lambda s: s["state"] in ("asleep", "paused"), phase="between")
                 if woke["state"] == "stop":
                     report.stopped_by = self.stop_cause or "stop_file"
                     break
+                if str(gate.get("mode") or "") == "visiting" or visitor_waiting(gate):
+                    # The visit interrupted the leg it found; the door's close returns him to it (contract §4.4).
+                    # The boundary after it is the door's edge, never the loop's (no self-loop consult, no marker).
+                    self._last_activity_phase = "visit"
+                elif gate["state"] == "asleep":
+                    self._last_activity_phase = PHASE_SLEEP
                 # Wake-cue seeding (R3, 2026-07-09): the awake state's reason
                 # now carries the VISIT'S FACTS (gateway writes "visitor
                 # session ended (person:laurent; 12 turns) - you elected to
@@ -3255,14 +3281,16 @@ class LifeLoop:
                     )
                 # P2-2: BOTH note lanes' offered ids share one exclusion.
                 self._cue_drive_ids = drive_ids + standing_state_offered_ids()
+                # The maintenance signals feed his own sleep decision (contract-phases v2 §10.4): facts, offered.
+                maint_note = maintenance_signals_note(self.state_home)
                 base = (cue or "").strip()
                 if not base.lstrip().startswith("today is"):
-                    cue = f"{_today_stamp()}{base}{standing}{drives_note}"
+                    cue = f"{_today_stamp()}{base}{standing}{drives_note}{maint_note}"
                 else:
                     # A wake path already stamped the date; append offers
                     # only if the wake text does not already carry them.
                     if "Alive on your desk" not in base:
-                        cue = f"{base}{standing if 'You hold' not in base else ''}{drives_note}"
+                        cue = f"{base}{standing if 'You hold' not in base else ''}{drives_note}{maint_note}"
             # The day PHASE begins at the summon window (adversary find,
             # 2026-07-13): the doors' quiescence negotiation watches phase,
             # and a summon (open + possible salvage LLM call) that still
@@ -3281,11 +3309,12 @@ class LifeLoop:
             self._pending_day_marker = None
             # The day OPENS here: it becomes the next boundary's from-side.
             if isinstance(self._day_gate, dict) and self._day_gate.get("phase"):
-                self._last_opened_phase = str(self._day_gate["phase"])
+                self._last_activity_phase = str(self._day_gate["phase"])
+            self._first_day = False
             self._status("day", day_cause=self._day_gate)
             opened = False
             try:
-                session = self.open_session()
+                session = self._open_day_session()
                 # A VISITOR AT THE DOOR stops new work inside the tick
                 # (operator 2026-11-09: reachable within a minute or two): the
                 # session checks this before running the tools a reply elects.
@@ -3389,7 +3418,7 @@ class LifeLoop:
                     # normal ceremony; the TOP gate then does the ruled
                     # sleep-landing write and the exit (one mechanism, one
                     # write site).
-                    if self.state_home is not None:
+                    if self.state_home is not None and getattr(session, "phase", "") != PHASE_WORK:
                         mid_refusal = personal_grant_refusal(read_personal_grant(self.state_home))
                         if mid_refusal is not None:
                             self.out(f"(personal ended mid-day: {mid_refusal} - the day closes)")
@@ -3575,11 +3604,6 @@ class LifeLoop:
                     # session.phase; production stamps both).
                     _day_elapsed = time.monotonic() - _day_started_monotonic
                     record_personal_usage(self.state_home, _day_elapsed)
-                    # v11 cycle accumulator: cycle-sleep windows never count
-                    # (only lived day time accumulates; the meter above
-                    # already gives the floor leg the same property).
-                    self._personal_cycle_seconds += _day_elapsed
-                    write_cycle_clock(self.state_home, self._personal_cycle_seconds)
                 # The day closes with the look-back (feelings move on the
                 # entity's own time too) and an honest home close. A
                 # reflection failure never voids the day's formed ticks.
@@ -3678,161 +3702,7 @@ class LifeLoop:
                 session.home.close()
                 self._status("between")
 
-            # v11 PERSONAL<->SLEEP MAINTENANCE CYCLE (laurent dm#104: "when
-            # in personal time, the entity can go to sleep after 2h for 1h
-            # and wake up in personal time"). 24/7 residents only (a
-            # supervised run exits at its bounds); the windows are BLUEPRINT
-            # TUNABLES read fresh at each trigger; the grant is neither
-            # ended nor consumed - the wake returns to the gate, which
-            # lands personal while the grant stands (VISIT-PREEMPTS and a
-            # mid-sleep deactivation both resolve at the gate naturally).
-            # "max_ticks" is the loop's CONTINUE-marker (LifeReport's
-            # default; the rest branch resets to it) - a normally-ended day
-            # carries it; real stops carry their own words and break above.
-            if (
-                report.stopped_by == "max_ticks"
-                and self.rest_minutes > 0
-                and self.state_home is not None
-            ):
-                from .phase_spec import load_phase_tunables
-
-                tunables, t_warns = load_phase_tunables(home_dir=self.state_home)
-                for w in t_warns:
-                    self.out(f"({w})")
-                # R3 receipt: stamp WHAT this loop just read (cells honesty).
-                self._status("between", tunables=tunables)
-                cycle = tunables["personal_cycle"]
-                window_s = float(cycle["personal_window_h"]) * 3600.0
-                if not cycle.get("enabled", True):
-                    # v13 kill switch: the operator disabled the cycle -
-                    # the clock keeps counting (re-enable resumes cadence).
-                    window_s = float("inf")
-                # v12 PRECONDITIONS (design adversary P0-1): the cycle fires
-                # only on a QUIET boundary - no standing work order (v9b: a
-                # task must never be slept over), no visit/operator state
-                # standing (the v10 unguarded-writer class: a cycle write
-                # over a visiting posture would destroy the door's truth).
-                # A disqualifier HOLDS the clock; the next boundary re-checks.
-                _cycle_ok = self._personal_cycle_seconds >= window_s
-                if _cycle_ok and read_work_order(self.state_home):
-                    self.out("(cycle held: a work order stands - the desk outranks maintenance)")
-                    _cycle_ok = False
-                if _cycle_ok:
-                    try:
-                        _st = read_entity_state(self.state_home)
-                        if str(_st.get("state") or "") != "awake" or str(_st.get("mode") or ""):
-                            self.out("(cycle held: the state is not plainly awake - the door/operator owns it)")
-                            _cycle_ok = False
-                    except Exception:  # noqa: BLE001 - unreadable state holds the clock
-                        _cycle_ok = False
-                _cycle_instruction = ""
-                if _cycle_ok:
-                    # GRAPH CONSULT (c4837): personal->sleep#personal_cycle
-                    # is a consultable loop edge (B census #18 — removal is
-                    # the edge-shaped twin of personal_cycle.enabled=false;
-                    # one more way to say the same thing, both honest).
-                    # Instruction prose rides the cycle's wake cue. bound_h
-                    # is IGNORED here with a note: sleep_window_h is the
-                    # dial that governs this window (no two knobs).
-                    try:
-                        from .phase_graph import instruction_cue as _icue, load_effective_graph as _leg
-
-                        _g, _gw = _leg(self.state_home)
-                        for w in _gw:
-                            self.out(f"({w})")
-                        _cyc_landing = _g.legal_to(PHASE_PERSONAL, PHASE_SLEEP, "personal_cycle")
-                        if _cyc_landing is None:
-                            self.out(
-                                "(cycle held: the blueprint removed "
-                                "personal->sleep#personal_cycle - maintenance waits)"
-                            )
-                            _cycle_ok = False
-                        elif _cyc_landing.to != PHASE_SLEEP:
-                            # F6 (adversary 2): a redirect on the cycle edge
-                            # is DISOBEYED loudly — the maintenance window IS
-                            # a sleep by design (v19 policy=dial refuses the
-                            # op at the door; this is the belt for hand-made
-                            # files without edit_policy).
-                            self.out(
-                                f"(#NOTE cycle redirect to {_cyc_landing.to!r} ignored - "
-                                "the maintenance window sleeps by design)"
-                            )
-                            _cycle_instruction = _icue(_cyc_landing)
-                        else:
-                            if _cyc_landing.bound_h is not None:
-                                self.out(
-                                    "(#NOTE bound_h on the cycle edge is ignored - "
-                                    "sleep_window_h is the governing dial)"
-                                )
-                            _cycle_instruction = _icue(_cyc_landing)
-                    except Exception as e:  # noqa: BLE001 - consult never blocks the cycle
-                        self.out(f"#FALLBACK cycle graph consult failed: {e}")
-                if _cycle_ok:
-                    sleep_s = float(cycle["sleep_window_h"]) * 3600.0
-                    self.out(
-                        f"(personal cycle: ~{cycle['personal_window_h']:g}h lived - "
-                        f"a {cycle['sleep_window_h']:g}h maintenance sleep begins; "
-                        "your personal time resumes after)"
-                    )
-                    report.sleeps += 1
-                    from datetime import datetime, timedelta, timezone
-
-                    _cycle_wake_at = (
-                        datetime.now(timezone.utc) + timedelta(seconds=sleep_s)
-                    ).isoformat()
-                    try:
-                        write_entity_state(
-                            self.state_home, "asleep",
-                            reason=(
-                                f"personal_cycle maintenance ({cycle['sleep_window_h']:g}h) - "
-                                "the grant stands; personal time resumes at wake"
-                            ),
-                            written_by="personal-cycle",
-                            wake_at=_cycle_wake_at,
-                        )
-                        # F7c: the marker rides the SUCCESSFUL state write —
-                        # a failed write must not engrave a transition.
-                        append_phase_changed(
-                            self.state_home, from_phase=PHASE_PERSONAL, to=PHASE_SLEEP,
-                            cause="personal_cycle", written_by="personal-cycle",
-                        )
-                    except Exception as e:  # noqa: BLE001
-                        self.out(f"#FALLBACK cycle sleep state write failed: {e}")
-                    dreamed_cycle = self._sleep_window(
-                        "personal_cycle graph maintenance",
-                        # Cycle windows touch NEITHER dreams nor the self
-                        # (cti#399: "a 2h maintenance nap must not touch the
-                        # self"); both flags off, quality passes only.
-                        include_dream=False, include_identity=False,
-                    )
-                    if self._interruptible_sleep(sleep_s):
-                        self._wake_from_self_sleep()
-                        report.stopped_by = self.stop_cause or "stop_file"
-                        break
-                    self._wake_from_self_sleep()
-                    self._personal_cycle_seconds = 0.0
-                    if self.state_home is not None:
-                        write_cycle_clock(self.state_home, 0.0)
-                    cycle_note = ""
-                    if isinstance(dreamed_cycle, dict) and dreamed_cycle.get("formed"):
-                        from .night_voice import wake_residue
-
-                        cycle_note = " the maintenance window formed a dream (waking evidence disposes)"
-                        cycle_note += wake_residue(list(dreamed_cycle.get("signals") or []))
-                    # phase_changed markers for the cycle pair (c4837): the
-                    # entry landed before the window; the return lands here.
-                    if self.state_home is not None:
-                        append_phase_changed(
-                            self.state_home, from_phase=PHASE_SLEEP, to=PHASE_PERSONAL,
-                            cause="personal_cycle", written_by="personal-cycle",
-                        )
-                    _instr = f" {_cycle_instruction}" if _cycle_instruction else ""
-                    cue = (
-                        f"{_today_stamp()}your maintenance sleep is over - personal time "
-                        f"resumes, the grant stands.{cycle_note}{_instr}"
-                    )
-                    continue
-
+            # (v22 retires the v11 timed personal<->sleep cycle: no clock opens a sleep window.)
             if report.stopped_by == "rest" and self.rest_minutes > 0 and visitor_waiting(self._operator_state()):
                 # He chose rest as a visitor knocked: the visit comes first.
                 # Sleeping now would write asleep over the door's visiting
@@ -3842,55 +3712,18 @@ class LifeLoop:
                 report.rest_reason = None
                 continue
             if report.stopped_by == "rest" and self.rest_minutes > 0:
-                # 24/7 mode: rest is SLEEP, not a blank nap (maintainer ruling
-                # 2026-07-08). The window is where consolidation/dreams run —
-                # the passive pass over the graph that builds bridges and
-                # surfaces tensions for the waking self. State is marked asleep
-                # (written_by=self) so the navbar shows it; the nap is
-                # interruptible (a stop lands within seconds, not at nap's end).
-                # The reason rides the sleep state only (never the next
-                # cue, see below), whole (root ADR 0054).
-                rest_reason = report.rest_reason or "no reason kept"
-                report.sleeps += 1
-                dreamed = self._sleep_window(rest_reason)
-                if self._interruptible_sleep(self.rest_minutes * 60.0):
-                    # Woken by a stop mid-sleep: honor it, leave state honest.
-                    self._wake_from_self_sleep()
-                    report.stopped_by = self.stop_cause or "stop_file"
-                    break
-                self._wake_from_self_sleep()
-                # v12: ANY completed sleep window resets the cycle clock.
-                self._personal_cycle_seconds = 0.0
-                if self.state_home is not None:
-                    write_cycle_clock(self.state_home, 0.0)
-                report.stopped_by = "max_ticks"  # reset the marker; loop continues
-                dream_note = ""
-                if isinstance(dreamed, dict) and dreamed.get("formed"):
-                    dream_note = " while you slept a dream formed (candidate connections await your waking evidence)"
-                    from .night_voice import wake_residue
-
-                    dream_note += wake_residue(list(dreamed.get("signals") or []))
-                # P2-4 second wire: the night's grouping/mining work reaches
-                # the entity (it used to vanish into the report dict).
-                if isinstance(dreamed, dict) and int(dreamed.get("maintenance_candidates") or 0) > 0:
-                    n_cand = int(dreamed["maintenance_candidates"])
-                    dream_note += (
-                        f" the night set out {n_cand} candidate(s) from your standing pile"
-                        " - search_memory finds them when you want to look"
-                    )
-                # R-D: offer back his own standing state (open questions)
-                # with the reread command, and name a circling run when the
-                # last stretch was one — directions, never orders.
-                circling = self._circling_note()
-                # NO ECHO OF THE REST REASON (operator 2026-11-08): the
-                # reason stays in his records (report.rest_reason, the
-                # sleep state's reason, own_time.log) and never opens the
-                # next day - nerin rested on 14 of 28 days and every day
-                # after a rest opened on his own reason to stop, then
-                # rested again (8 of 8; sleep-investigation-2026-11-08).
-                cue = f"{_today_stamp()}you rested and your own time resumes.{dream_note}{circling}"
+                # 24/7 mode: his rest is HIS SLEEP DECISION (spec personal/work->sleep#self_elected). The gate at
+                # the top of the loop takes it (or refuses it: never after a sleep, never from own time the
+                # operator has revoked) - one decision point for every leg.
+                self._sleep_elected = report.rest_reason or "no reason kept"
+                report.stopped_by = "max_ticks"  # the loop's continue-marker
                 report.rest_reason = None
-                report.dreams += 1 if (isinstance(dreamed, dict) and dreamed.get("formed")) else 0
+                continue
+            if report.stopped_by == "work_done" and self.rest_minutes > 0:
+                # The order is archived: the gate chooses what follows - another order with Work on (work->work),
+                # own time while the operator's grant stands (work->personal#no_task), else idle (the loop ends,
+                # he stays awake). Supervised runs end here as before.
+                report.stopped_by = "max_ticks"
                 continue
             if report.stopped_by in ("rest", "stop_file", "stop_command", "failures"):
                 break
@@ -4184,7 +4017,7 @@ def build_session_factory(
             )
         return day_shelf
 
-    def _factory() -> ChatSession:
+    def _factory(phase: Optional[str] = None) -> ChatSession:
         day_provider, day_model, day_thinking = _resolve_current_substrate()
         day_shelf_size = _resolve_current_shelf_size()
         # Record the mind this day runs on so an observer's staleness cue
@@ -4263,8 +4096,13 @@ def build_session_factory(
         # day to phase=work — the work grant applies (incl. execute_command
         # where the operator's matrix says so) and the contract is a
         # mission, honestly. No order = his own time, exactly as before.
+        # The day's phase is the GATE's decision (the loop passes it: Work off with a standing order is a personal
+        # day; a blueprint redirect too); without one (a direct call) the order decides, as before.
         work_order = read_work_order(home_dir)
-        day_phase = PHASE_WORK if work_order else PHASE_PERSONAL
+        if phase in (PHASE_WORK, PHASE_PERSONAL):
+            day_phase = phase
+        else:
+            day_phase = PHASE_WORK if (work_order and work_enabled(home_dir)) else PHASE_PERSONAL
 
         session = ChatSession(
             home,
@@ -4300,7 +4138,7 @@ def build_session_factory(
             enable_tools=session.enable_tools,
             own_time_text=(
                 (WORK_CONTRACT + "\n\nTHE TASK, from your operator:\n" + work_order)
-                if work_order
+                if work_order and day_phase == PHASE_WORK
                 else (session.prompt_overlay.get("personal") or OWN_TIME_CONTRACT)
             ),
             # The memory-teaching layer rides the re-compose too (ChatSession

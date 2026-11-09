@@ -61,13 +61,16 @@ def _operator_copy(home: Path, doc) -> None:
 
 
 class TestInterpreter:
+    # Re-based to spec v23 (the v21 cadence_need_check / personal_cycle-window edges are retired): the consultable
+    # loop edges are personal->work#operator, work->work#task_complete, work->personal#no_task and
+    # personal->personal#personal_cycle.
     def test_added_edge_carries_instruction_and_provenance(self, tmp_path):
         doc = _spec_with_ops([
-            {"op": "add", "from": "sleep", "to": "personal", "cause": "cadence_need_check",
+            {"op": "add", "from": "work", "to": "personal", "cause": "no_task",
              "instruction": "ease back in - review your open questions first"},
         ])
         graph, warnings = load_effective_graph(spec_path=_write_spec(tmp_path, doc))
-        landing = graph.legal_to("sleep", "personal", "cadence_need_check")
+        landing = graph.legal_to("work", "personal", "no_task")
         assert landing is not None
         assert landing.instruction.startswith("ease back in")
         assert landing.provenance == "blueprint edit #8"
@@ -76,20 +79,20 @@ class TestInterpreter:
 
     def test_removed_edge_is_gone(self, tmp_path):
         doc = _spec_with_ops([
-            {"op": "remove", "edge": "sleep->work#cadence_need_check"},
+            {"op": "remove", "edge": "work->work#task_complete"},
         ])
         graph, _ = load_effective_graph(spec_path=_write_spec(tmp_path, doc))
-        assert graph.legal_to("sleep", "work", "cadence_need_check") is None
+        assert graph.legal_to("work", "work", "task_complete") is None
         # The sibling landing is untouched.
-        assert graph.legal_to("sleep", "personal", "cadence_need_check") is not None
+        assert graph.legal_to("work", "personal", "no_task") is not None
 
     def test_redirect_substitutes_target(self, tmp_path):
         doc = _spec_with_ops([
-            {"op": "redirect", "edge": "sleep->work#cadence_need_check", "to": "personal",
+            {"op": "redirect", "edge": "work->work#task_complete", "to": "personal",
              "instruction": "the desk is clear - take the evening"},
         ])
         graph, _ = load_effective_graph(spec_path=_write_spec(tmp_path, doc))
-        landing = graph.legal_to("sleep", "work", "cadence_need_check")
+        landing = graph.legal_to("work", "work", "task_complete")
         assert landing is not None
         assert landing.to == "personal"
         assert "take the evening" in landing.instruction
@@ -124,23 +127,22 @@ class TestInterpreter:
 
     def test_redirect_to_unknown_phase_refused(self, tmp_path):
         doc = _spec_with_ops([
-            {"op": "redirect", "edge": "sleep->work#cadence_need_check", "to": "mars"},
+            {"op": "redirect", "edge": "work->work#task_complete", "to": "mars"},
         ])
         graph, warnings = load_effective_graph(spec_path=_write_spec(tmp_path, doc))
-        landing = graph.legal_to("sleep", "work", "cadence_need_check")
+        landing = graph.legal_to("work", "work", "task_complete")
         assert landing is not None and landing.to == "work"  # untouched
         assert any("unknown phase" in w for w in warnings)
 
-    def test_add_onto_dial_edge_refused(self, tmp_path):
-        """v19 policy=dial (personal->sleep#personal_cycle): the dial governs;
-        instruction/bound attachment through an add op refuses (adversary-2
-        F3: the first cut let prose ride a dial edge into the wake cue)."""
+    def test_add_onto_locked_edge_refused(self, tmp_path):
+        """A locked edge (v23: sleep->personal#operator, the operator's wake) takes no instruction/bound attachment
+        through an add op (adversary-2 F3; re-based from the retired v19 dial edge personal->sleep#personal_cycle)."""
         doc = _spec_with_ops([
-            {"op": "add", "from": "personal", "to": "sleep", "cause": "personal_cycle",
-             "instruction": "INJECTED ONTO DIAL EDGE", "bound_h": 5.0},
+            {"op": "add", "from": "sleep", "to": "personal", "cause": "operator",
+             "instruction": "INJECTED ONTO A LOCKED EDGE", "bound_h": 5.0},
         ])
         graph, warnings = load_effective_graph(spec_path=_write_spec(tmp_path, doc))
-        landing = graph.legal_to("personal", "sleep", "personal_cycle")
+        landing = graph.legal_to("sleep", "personal", "operator")
         assert landing is not None
         assert landing.instruction == ""  # nothing attached
         assert landing.bound_h is None
@@ -152,13 +154,13 @@ class TestInterpreter:
         doc = _spec_with_ops([
             {"op": "remove", "edge": "sleep->visit#visit_open"},
             {"op": "remove", "edge": "personal->sleep#self_elected"},
-            {"op": "remove", "edge": "personal->sleep#grant_expired"},
+            {"op": "remove", "edge": "sleep->personal#maintenance_done"},
             {"op": "redirect", "edge": "sleep->personal#operator", "to": "work"},
         ])
         graph, warnings = load_effective_graph(spec_path=_write_spec(tmp_path, doc))
         assert graph.legal_to("sleep", "visit", "visit_open") is not None
         assert graph.legal_to("personal", "sleep", "self_elected") is not None
-        assert graph.legal_to("personal", "sleep", "grant_expired") is not None
+        assert graph.legal_to("sleep", "personal", "maintenance_done") is not None
         op_landing = graph.legal_to("sleep", "personal", "operator")
         assert op_landing is not None and op_landing.to == "personal"
         assert sum("protected" in w for w in warnings) == 4
@@ -178,18 +180,18 @@ class TestInterpreter:
         _graph, warnings = load_effective_graph(spec_path=_write_spec(tmp_path, doc))
         assert any("evidence, never elective landings" in w for w in warnings)
 
-    def test_removing_direct_sleep_edges_is_legal_when_sleep_stays_reachable(self, tmp_path):
-        """Adversary-2 F2: the floor is REACHABILITY-aware — removing both
-        work->sleep edges is a legal edit because work->personal->sleep
-        remains (locked personal->sleep edges guarantee it); the floor must
-        NOT resurrect door-legal removals."""
+    def test_removing_consultable_work_edges_leaves_sleep_reachable(self, tmp_path):
+        """Adversary-2 F2: the floor is REACHABILITY-aware. Re-based to v23 (every edge into sleep is locked: the
+        operator's act or his election): removing work's consultable exits is a legal edit and the floor must NOT
+        resurrect it - sleep stays reachable through the locked edges."""
         doc = _spec_with_ops([
-            {"op": "remove", "edge": "work->sleep#task_complete"},
-            {"op": "remove", "edge": "work->sleep#no_task"},
+            {"op": "remove", "edge": "work->work#task_complete"},
+            {"op": "remove", "edge": "work->personal#no_task"},
         ])
         graph, warnings = load_effective_graph(spec_path=_write_spec(tmp_path, doc))
-        assert graph.legal_to("work", "sleep", "task_complete") is None
-        assert graph.legal_to("work", "sleep", "no_task") is None
+        assert graph.legal_to("work", "work", "task_complete") is None
+        assert graph.legal_to("work", "personal", "no_task") is None
+        assert graph.legal_to("work", "sleep", "self_elected") is not None
         assert not any("sleep floor" in w for w in warnings)
 
     def test_sleep_floor_restores_on_true_totality_break(self, tmp_path):
@@ -235,44 +237,39 @@ class TestInterpreter:
 
     def test_sub_tick_bound_refused(self, tmp_path):
         doc = _spec_with_ops([
-            {"op": "add", "from": "sleep", "to": "personal", "cause": "cadence_need_check",
+            {"op": "add", "from": "work", "to": "personal", "cause": "no_task",
              "bound_h": 0.001},
         ])
         graph, warnings = load_effective_graph(spec_path=_write_spec(tmp_path, doc))
-        landing = graph.legal_to("sleep", "personal", "cadence_need_check")
+        landing = graph.legal_to("work", "personal", "no_task")
         assert landing is not None and landing.bound_h is None
         assert any("finer than a tick" in w for w in warnings)
 
 
 class TestConsultGateLanding:
+    # Re-based to spec v23: the consulted boundary is personal->work#operator (work admitted during own time;
+    # consultable, guards work_on + work_order_present). The floor is idle, never sleep.
     def test_removed_work_leg_skips_to_personal(self, tmp_path):
-        """A removed sleep->work#cadence_need_check means a standing order no
-        longer sanctions a work day at the need-check — the chain falls to
-        personal (grant armed)."""
         home = _arm_home(tmp_path, grant=True, work_order=True)
         _operator_copy(home, _spec_with_ops([
-            {"op": "remove", "edge": "sleep->work#cadence_need_check"},
+            {"op": "remove", "edge": "personal->work#operator"},
         ]))
         lines = []
         decision = read_day_gate(home)
         assert decision["phase"] == "work"  # the gate still says work
-        decision, cue = consult_gate_landing(
-            home, "sleep", decision, "cadence_need_check", lines.append
-        )
+        decision, cue = consult_gate_landing(home, "personal", decision, "operator", lines.append)
         assert decision["phase"] == "personal"
         assert any("skipped" in ln for ln in lines)
 
     def test_redirect_lands_substituted_target_with_guard(self, tmp_path):
         home = _arm_home(tmp_path, grant=True, work_order=True)
         _operator_copy(home, _spec_with_ops([
-            {"op": "redirect", "edge": "sleep->work#cadence_need_check", "to": "personal",
+            {"op": "redirect", "edge": "personal->work#operator", "to": "personal",
              "instruction": "start gently"},
         ]))
         lines = []
         decision = read_day_gate(home)
-        decision, cue = consult_gate_landing(
-            home, "sleep", decision, "cadence_need_check", lines.append
-        )
+        decision, cue = consult_gate_landing(home, "personal", decision, "operator", lines.append)
         assert decision["phase"] == "personal"
         assert decision.get("redirected_from") == "work"
         assert "start gently" in cue and "standing instruction" in cue
@@ -280,25 +277,21 @@ class TestConsultGateLanding:
     def test_redirect_to_personal_without_grant_is_refused(self, tmp_path):
         home = _arm_home(tmp_path, grant=False, work_order=True)
         _operator_copy(home, _spec_with_ops([
-            {"op": "redirect", "edge": "sleep->work#cadence_need_check", "to": "personal"},
+            {"op": "redirect", "edge": "personal->work#operator", "to": "personal"},
         ]))
         lines = []
         decision = read_day_gate(home)
-        decision, _cue = consult_gate_landing(
-            home, "sleep", decision, "cadence_need_check", lines.append
-        )
-        # Guard travels with the arrow: no grant -> the redirect refuses and
-        # the chain falls through (no grant -> sleep).
-        assert decision["phase"] == "sleep"
+        decision, _cue = consult_gate_landing(home, "personal", decision, "operator", lines.append)
+        # Guard travels with the arrow: no grant -> the redirect refuses and the chain falls through to idle (own
+        # time ends awake; never sleep).
+        assert decision["phase"] == "idle"
         assert any("guard travels" in ln for ln in lines)
 
     def test_untouched_graph_passes_decision_through(self, tmp_path):
         home = _arm_home(tmp_path, grant=True, work_order=True)
         lines = []
         decision = read_day_gate(home)
-        out_decision, cue = consult_gate_landing(
-            home, "sleep", decision, "cadence_need_check", lines.append
-        )
+        out_decision, cue = consult_gate_landing(home, "personal", decision, "operator", lines.append)
         assert out_decision == decision
         assert cue == ""
 
@@ -314,7 +307,7 @@ class TestPhaseChangedMarker:
         )
         append_phase_changed(
             home, from_phase="sleep", to="personal",
-            cause="cadence_need_check", written_by="need-check",
+            cause="maintenance_done", written_by="self",
             provenance="blueprint edit #8",
         )
         rows = [
@@ -326,7 +319,7 @@ class TestPhaseChangedMarker:
         assert len(markers) == 1
         m = markers[0]
         assert m["from"] == "sleep" and m["to"] == "personal"
-        assert m["cause"] == "cadence_need_check"
+        assert m["cause"] == "maintenance_done"
         assert m["provenance"] == "blueprint edit #8"
         assert m["at"]
         stats = life_sleep_stats(home)
@@ -349,72 +342,36 @@ class TestMarkerSingleConstruction:
 
 
 class TestFullLoopObedience:
-    def test_removed_need_check_work_edge_prevents_the_work_day(self, tmp_path, monkeypatch):
-        """The adversary's P0, pinned end-to-end: a removed
-        sleep->work#cadence_need_check must govern the day that OPENS, not
-        just the wake's words — the wake carries its cause to the top
-        boundary, whose consult re-derives the skip, and the day opens
-        PERSONAL despite the standing work order."""
+    def test_a_removed_personal_self_loop_ends_own_time_after_the_day(self, tmp_path, monkeypatch):
+        """Re-based to v23 (the need-check is retired): the boundary consult governs the loop's own edges end to end.
+        With personal->personal#personal_cycle removed by the operator's blueprint edit, the first day (the
+        operator's start) runs; at its close the self-loop is not in the graph, so the personal leg is skipped and
+        own time ends AWAKE (idle; never sleep)."""
         import sys
-        from datetime import datetime, timedelta, timezone
 
         sys.path.insert(0, str(Path(__file__).parent))
         from test_entity_life_loop import _ScriptedLLM, _factory_for, _make_home
 
-        from abstractruntime.identity.life import LifeLoop, write_entity_state
+        from abstractruntime.identity.life import LifeLoop, read_entity_state
         from abstractruntime.identity.phase_spec import PHASE_SPEC_ENV
 
         home_dir = _make_home(tmp_path)
-        (home_dir / "phases.yaml").write_text(
-            "personal:\n  mode: until_revoked\n", encoding="utf-8"
-        )
-        (home_dir / "work_order.md").write_text("build the thing\n", encoding="utf-8")
-        # The operator's edit: need-checks never sanction work days.
-        spec = {
-            "tunables": {},
-            "graph": {"edge_ops": [
-                {"op": "remove", "edge": "sleep->work#cadence_need_check"},
-            ]},
-            "_operator": {"edit_seq": 9},
-        }
         p = tmp_path / "spec.json"
-        p.write_text(json.dumps(spec), encoding="utf-8")
+        p.write_text(json.dumps(_spec_with_ops([
+            {"op": "remove", "edge": "personal->personal#personal_cycle"},
+        ], edit_seq=9)), encoding="utf-8")
         monkeypatch.setenv(PHASE_SPEC_ENV, str(p))
-        # Asleep on a gate-written landing whose deadline is already past:
-        # the need-check fires on the loop's first idle poll.
-        # (An operator sleep: since contract-phases v2 §10.1 a new loop wakes a gate sleep an earlier loop left,
-        # and the need-check governs operator sleeps the same way.)
-        write_entity_state(
-            home_dir, "asleep", reason="settled desk", written_by="operator",
-            wake_at=(datetime.now(timezone.utc) - timedelta(seconds=5)).isoformat(),
-        )
-
-        llm = _ScriptedLLM(["One.", "R1.", "Two.", "R2."])
-        loop = LifeLoop(
-            _factory_for(home_dir, llm),
-            tick_seconds=1, ticks_per_day=1, max_ticks=1,
-            stop_file=home_dir / "STOP", state_home=home_dir,
-            rest_minutes=0.001,
-            sleep_fn=lambda s: None, out=lambda s: None,
-        )
-        loop.run()
-
-        rows = [
-            json.loads(ln)
-            for ln in (home_dir / "state_history.jsonl").read_text(encoding="utf-8").splitlines()
-            if ln.strip()
-        ]
-        day_markers = [
-            r for r in rows
-            if r.get("marker") == "phase_changed" and r.get("to") in ("work", "personal")
-        ]
-        assert day_markers, "a day opened and was marked"
-        first = day_markers[0]
-        # THE PIN: despite the standing work order, the first day that
-        # opened is PERSONAL — the removed edge governed the boundary.
-        assert first["to"] == "personal", f"work day opened over a removed edge: {first}"
-        assert first["from"] == "sleep"
-        assert first["cause"] == "cadence_need_check"
+        lines = []
+        llm = _ScriptedLLM(["One.", "R1.", "Two - never.", "R2."])
+        report = LifeLoop(
+            _factory_for(home_dir, llm), tick_seconds=1, ticks_per_day=1, max_ticks=3,
+            stop_file=home_dir / "STOP", state_home=home_dir, rest_minutes=0.001,
+            sleep_fn=lambda s: None, out=lines.append,
+        ).run()
+        assert report.days == 1 and report.ticks == 1
+        assert report.stopped_by == "edge_removed"
+        assert any("personal->personal#personal_cycle is not in the effective graph" in ln for ln in lines), lines
+        assert read_entity_state(home_dir)["state"] == "awake"
 
 
 class TestGateSkipPhases:
@@ -423,8 +380,9 @@ class TestGateSkipPhases:
         decision = read_day_gate(home, skip_phases=frozenset({"work"}))
         assert decision["phase"] == "personal"
 
-    def test_skip_personal_lands_sleep_honestly_named(self, tmp_path):
+    def test_skip_personal_lands_idle_honestly_named(self, tmp_path):
+        # Re-based (v22): the floor is idle - own time ends awake - never sleep.
         home = _arm_home(tmp_path, grant=True, work_order=False)
         decision = read_day_gate(home, skip_phases=frozenset({"personal"}))
-        assert decision["phase"] == "sleep"
+        assert decision["phase"] == "idle"
         assert decision["cause"] == "edge_removed"

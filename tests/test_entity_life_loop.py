@@ -1585,27 +1585,22 @@ def test_day_gate_drives_plus_grant_open_personal(tmp_path: Path) -> None:
     assert decision["total_open"] >= 1
 
 
-def test_day_gate_settled_desk_sleeps_at_the_6h_cadence(tmp_path: Path) -> None:
-    """dm#89 (2): armed grant + ZERO standing drives -> sleep with the 6h
-    unattended need-check cadence (never exempt-forever, never hourly)."""
-    from abstractruntime.identity.life import (
-        UNATTENDED_NEED_CHECK_SECONDS,
-        read_day_gate,
-    )
-
+def test_day_gate_settled_desk_rests_inside_personal_never_sleeps(tmp_path: Path) -> None:
+    """Re-based (spec v22 DRIVES-ARE-DRIVERS / SLEEP-IS-A-DECISION; contract-phases v2 §10.4): armed grant + ZERO
+    standing drives no longer sleeps at the 6h cadence - the gate never chooses sleep. He rests between days INSIDE
+    personal (awake, zero LLM); the 6 h need-check is retired."""
     from abstractruntime.identity.life import (
         PERSONAL_USE_FLOOR_SECONDS,
+        read_day_gate,
         record_personal_usage,
     )
 
     home_dir = _make_home_no_drives(tmp_path)
-    # laurent #54: the 2h use floor comes first - meter it as lived so the
-    # settled-desk leg under test is reachable.
     record_personal_usage(home_dir, PERSONAL_USE_FLOOR_SECONDS + 1)
     decision = read_day_gate(home_dir)
-    assert decision["phase"] == "sleep"
-    assert decision["cause"] == "settled_desk"
-    assert decision["need_check_s"] == UNATTENDED_NEED_CHECK_SECONDS == 6 * 3600
+    assert decision["phase"] == "personal" and decision.get("rest") is True
+    assert decision["cause"] == "resting"
+    assert "need_check_s" not in decision
 
 
 def _make_home_no_drives(tmp_path: Path) -> Path:
@@ -1866,31 +1861,20 @@ def test_loop_exit_landing_wakes_on_next_spawn(tmp_path: Path) -> None:
     assert report.ticks == 1, "the spawn woke the exit landing and a day ran"
 
 
-def test_use_floor_holds_sleep_until_2h_lived(tmp_path: Path) -> None:
-    """laurent #54: an armed grant used <2h refuses the settled-desk sleep
-    leg - the given time must be LIVED first; past the floor, a settled
-    desk sleeps. A NEW grant resets the meter."""
+def test_use_floor_is_retired_with_the_sleep_leg(tmp_path: Path) -> None:
+    """Re-based (spec v22: grant_unused_floor_h retired_by 'its only consumer, the day gate's sleep leg, is gone'):
+    whatever the usage meter says, a zero-drive desk with the grant armed rests inside personal; nothing sleeps."""
     from abstractruntime.identity.life import (
         PERSONAL_USE_FLOOR_SECONDS,
         read_day_gate,
-        read_personal_usage,
         record_personal_usage,
-        write_personal_grant,
     )
 
     home_dir = _make_home_no_drives(tmp_path)  # zero drives, grant armed
-    decision = read_day_gate(home_dir)
-    assert decision["phase"] == "personal"
-    assert decision["cause"] == "granted_unused", decision
-    # Live 2h against the grant: the floor is met, the desk may rest.
+    assert read_day_gate(home_dir)["cause"] == "resting"
     record_personal_usage(home_dir, PERSONAL_USE_FLOOR_SECONDS + 60)
-    assert read_personal_usage(home_dir) >= PERSONAL_USE_FLOOR_SECONDS
-    decision2 = read_day_gate(home_dir)
-    assert decision2["phase"] == "sleep" and decision2["cause"] == "settled_desk"
-    # A fresh grant resets the floor (granted_at keys the meter).
-    write_personal_grant(home_dir, mode="until_revoked", granted_by="person:test-operator")
-    assert read_personal_usage(home_dir) == 0.0
-    assert read_day_gate(home_dir)["cause"] == "granted_unused"
+    decision = read_day_gate(home_dir)
+    assert decision["phase"] == "personal" and decision["cause"] == "resting"
 
 
 def test_work_order_always_beats_sleep(tmp_path: Path) -> None:

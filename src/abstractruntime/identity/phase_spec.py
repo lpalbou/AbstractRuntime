@@ -33,7 +33,7 @@ import os
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
-__all__ = ["PHASE_SPEC_ENV", "load_phase_tunables", "vendored_spec_path"]
+__all__ = ["PHASE_SPEC_ENV", "TUNABLE_RETIRED", "load_phase_tunables", "vendored_spec_path"]
 
 PHASE_SPEC_ENV = "ABSTRACTRUNTIME_PHASE_SPEC"
 
@@ -41,7 +41,8 @@ PHASE_SPEC_ENV = "ABSTRACTRUNTIME_PHASE_SPEC"
 # last-resort defaults when NO artifact is readable. These mirror the
 # blueprint's seeds; they are a safety floor, never the tuning surface.
 _RULED_DEFAULTS: Dict[str, Any] = {
-    "personal_cycle": {"personal_window_h": 2.0, "sleep_window_h": 1.0, "enabled": True},
+    # v22 retires the timed cycle (enabled false in the blueprint; no loop reads the window any more).
+    "personal_cycle": {"personal_window_h": 2.0, "sleep_window_h": 1.0, "enabled": False},
     # v12 rename: sleep_bound_h (was sleep_bound_s - the one seconds-dial
     # in an hours block, renamed while still unwired).
     "sleep_bound_h": 1.0,
@@ -60,18 +61,26 @@ _RULED_DEFAULTS: Dict[str, Any] = {
 # the blueprint UI renders unwired dials read-only. Flipping one true =
 # threading the blueprint read through the consumer named here.
 TUNABLE_WIRED: Dict[str, bool] = {
-    "personal_cycle.personal_window_h": True,   # the cycle trigger (life.py)
-    "personal_cycle.sleep_window_h": True,      # the cycle window (life.py)
-    "personal_cycle.enabled": True,             # the cycle kill switch (life.py)
-    "sleep_bound_h": True,                      # sleep_bound_deadline(home_dir=) reads it (v14; sweeper adopts the kwarg)
-    "unattended_wake_cadence_h": True,          # the day gate's need_check_s (life.py read_day_gate)
-    "grant_unused_floor_h": True,               # the day gate's use floor (life.py read_day_gate)
+    # RETIRED (spec v22, contract-phases v2 §10.4-§10.6; restart #3): no clock opens, bounds or wakes a sleep, and the
+    # day gate never chooses sleep. The keys stay readable (dials UI, cognition_graph); editing them changes nothing.
+    "personal_cycle.personal_window_h": False,
+    "personal_cycle.sleep_window_h": False,
+    "personal_cycle.enabled": False,
+    "sleep_bound_h": False,
+    "unattended_wake_cadence_h": False,
+    "grant_unused_floor_h": False,
     # Runtime half threaded (loop home-open + cue read); the blueprint meta
     # flips wired:true when GATEWAY's home-open sites thread too (v16 rule:
     # both hosts, one horizon).
     "window_limit": True,
     "drive_window_limit": True,
 }
+
+
+TUNABLE_RETIRED = frozenset({
+    "personal_cycle.personal_window_h", "personal_cycle.sleep_window_h", "personal_cycle.enabled",
+    "sleep_bound_h", "unattended_wake_cadence_h", "grant_unused_floor_h",
+})
 
 
 def vendored_spec_path() -> Path:
@@ -141,7 +150,7 @@ def load_phase_tunables(
         "sleep_window_h": _pos_float(cycle_raw.get("sleep_window_h"), cycle_defaults["sleep_window_h"], warnings, "personal_cycle.sleep_window_h"),
         # v13: the cycle kill switch (bool dial - only a literal false
         # disables; anything unreadable keeps the ruled default, loudly).
-        "enabled": _bool(cycle_raw.get("enabled"), True, warnings, "personal_cycle.enabled"),
+        "enabled": _bool(cycle_raw.get("enabled"), cycle_defaults["enabled"], warnings, "personal_cycle.enabled"),
     }
     for key in ("sleep_bound_h", "unattended_wake_cadence_h", "grant_unused_floor_h",
                 "window_limit", "drive_window_limit"):
@@ -151,7 +160,8 @@ def load_phase_tunables(
             warnings.append(f"#NOTE tunable {key} absent from the edited blueprint; ruled default {_RULED_DEFAULTS[key]} stands")
         out[key] = _pos_float(raw.get(key), _RULED_DEFAULTS[key], warnings, key)
     # Unwired dials that DIFFER from the ruled defaults are edits with no
-    # engine behind them yet - say so (P0-4's silent-no-op class).
+    # engine behind them - say so (P0-4's silent-no-op class). A RETIRED dial
+    # (spec v22) says why: nothing it drove exists any more.
     for dotted, wired in TUNABLE_WIRED.items():
         if wired:
             continue
@@ -159,10 +169,16 @@ def load_phase_tunables(
         current = out.get(head, {}).get(tail) if tail else out.get(head)
         default = _RULED_DEFAULTS.get(head, {}).get(tail) if tail else _RULED_DEFAULTS.get(head)
         if current != default:
-            warnings.append(
-                f"#NOTE tunable {dotted}={current} is edited but NOT YET WIRED "
-                f"(hardcoded twin governs; the edit is recorded, not applied)"
-            )
+            if dotted in TUNABLE_RETIRED:
+                warnings.append(
+                    f"#NOTE tunable {dotted}={current} is edited but RETIRED (spec v22: no clock opens, bounds "
+                    "or wakes a sleep and the day gate never chooses sleep) - the edit governs nothing"
+                )
+            else:
+                warnings.append(
+                    f"#NOTE tunable {dotted}={current} is edited but NOT YET WIRED "
+                    f"(hardcoded twin governs; the edit is recorded, not applied)"
+                )
     return out, warnings
 
 

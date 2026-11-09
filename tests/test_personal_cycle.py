@@ -1,5 +1,6 @@
-"""v11 personal<->sleep maintenance cycle (laurent dm#104) + the blueprint
-tunables reader (the operator's dials consumed FROM the artifact)."""
+"""The blueprint tunables reader (the operator's dials consumed FROM the artifact), and the v22 retirement of the
+v11 personal<->sleep maintenance cycle (laurent dm#104), the v13 need-check and the sleep bound: TARGET 2026-11-08
+'a fixed clock never forces sleep' (contract-phases v2 §10.4-§10.6). Those dials stay readable and govern nothing."""
 from __future__ import annotations
 
 import json
@@ -62,54 +63,40 @@ def test_vendored_artifact_carries_the_cycle_tunables() -> None:
     assert "sleep_bound_h" in (data.get("tunables") or {}), "the v12 rename"
 
 
-def test_cycle_sleep_fires_after_the_window_and_wakes_into_personal(tmp_path: Path, monkeypatch) -> None:
-    """The cycle end-to-end in a 24/7 loop: after >= personal_window_h of
-    lived personal time, a bounded maintenance sleep runs (consolidator
-    invoked, state honest) and the loop wakes BACK INTO PERSONAL with the
-    grant standing."""
+def test_no_clock_opens_a_sleep_window(tmp_path: Path, monkeypatch) -> None:
+    """Re-based (v22): even with the cycle dials edited to tiny windows and the switch on, no timed maintenance sleep
+    opens - personal days chain, and sleep is only his own decision (a ```rest block) or the operator's."""
     import sys
 
     sys.path.insert(0, str(Path(__file__).parent))
     from test_entity_life_loop import _ScriptedLLM, _factory_for, _make_home
 
-    from abstractruntime.identity.life import LifeLoop, read_entity_state
+    from abstractruntime.identity.life import LifeLoop, write_cycle_clock
 
     home_dir = _make_home(tmp_path)
-    # Tiny windows via the operator-override lane (the modulation path IS
-    # the test seam - no monkeypatching internals).
     edited = {"tunables": {"personal_cycle": {"personal_window_h": 0.000001,
-                                              "sleep_window_h": 0.0001}}}
+                                              "sleep_window_h": 0.0001, "enabled": True}}}
     p = tmp_path / "spec.json"
     p.write_text(json.dumps(edited), encoding="utf-8")
     monkeypatch.setenv(PHASE_SPEC_ENV, str(p))
-
+    write_cycle_clock(home_dir, 99999.0)  # a clock far past any window: still nothing opens
     slept = {"n": 0}
 
-    def on_sleep():
+    def on_sleep(**_kw):
         slept["n"] += 1
         return {"formed": False, "signals": []}
 
     llm = _ScriptedLLM(["One.", "R1.", "Two.", "R2.", "Three.", "R3."])
-    loop = LifeLoop(
+    report = LifeLoop(
         _factory_for(home_dir, llm),
         tick_seconds=1, ticks_per_day=1, max_ticks=3,
         stop_file=home_dir / "STOP", state_home=home_dir,
-        rest_minutes=0.001,  # 24/7 mode: the cycle lane is armed
-        on_sleep=on_sleep,
+        rest_minutes=0.001, on_sleep=on_sleep,
         sleep_fn=lambda s: None, out=lambda s: None,
-    )
-    report = loop.run()
-    assert slept["n"] >= 1, "the maintenance window ran the consolidator"
-    assert report.sleeps >= 1
-    assert report.days >= 2, "personal time RESUMED after the cycle sleep"
-    # The wake cue (operator 2026-11-08): no "nothing owed" left in it.
-    cycle_cues = [r.cue for r in report.records if "maintenance sleep is over" in r.cue]
-    assert cycle_cues, [r.cue for r in report.records]
-    assert all("personal time resumes, the grant stands." in c for c in cycle_cues)
-    assert not any("owed" in c for c in cycle_cues)
-    # The wake left an honest awake state (not stranded asleep).
-    state = read_entity_state(home_dir)
-    assert state.get("state") in ("awake", "asleep")  # asleep only via exit landing
+    ).run()
+    assert slept["n"] == 0 and report.sleeps == 0, "no clock opens a sleep window"
+    assert report.days == 3, "personal days chain (personal->personal)"
+    assert not any("maintenance sleep is over" in r.cue for r in report.records)
 
 
 def test_gateway_operator_copy_wins_over_vendored(tmp_path: Path) -> None:
@@ -131,44 +118,6 @@ def test_gateway_operator_copy_wins_over_vendored(tmp_path: Path) -> None:
     assert t2["personal_cycle"]["sleep_window_h"] == 1.0, "partial edit fills"
 
 
-def test_cycle_preconditions_hold_the_clock(tmp_path: Path, monkeypatch) -> None:
-    """v12 P0-1: a standing work order or a non-plain-awake state HOLDS the
-    cycle (the clock keeps, the sleep never opens over the desk or the
-    door's posture)."""
-    import sys
-
-    sys.path.insert(0, str(Path(__file__).parent))
-    from test_entity_life_loop import _ScriptedLLM, _factory_for, _make_home
-
-    from abstractruntime.identity.life import LifeLoop, write_cycle_clock
-
-    home_dir = _make_home(tmp_path)
-    p = tmp_path / "spec.json"
-    p.write_text(json.dumps({"tunables": {"personal_cycle": {
-        "personal_window_h": 0.000001, "sleep_window_h": 0.0001}}}), encoding="utf-8")
-    monkeypatch.setenv(PHASE_SPEC_ENV, str(p))
-    # The clock is ALREADY over the window (persisted from prior personal
-    # days) and a work order stands: the cycle must hold, never sleep over
-    # the desk. (The order routes the day to work, so the clock cannot
-    # accumulate in-test - the pre-seeded file is the honest fixture.)
-    write_cycle_clock(home_dir, 99999.0)
-    (home_dir / "work_order.md").write_text("stand by", encoding="utf-8")
-    outs: list = []
-    slept = {"n": 0}
-    llm = _ScriptedLLM(["One.", "R1.", "Two.", "R2."])
-    loop = LifeLoop(
-        _factory_for(home_dir, llm),
-        tick_seconds=1, ticks_per_day=1, max_ticks=2,
-        stop_file=home_dir / "STOP", state_home=home_dir,
-        rest_minutes=0.001,
-        on_sleep=lambda: slept.__setitem__("n", slept["n"] + 1) or {"formed": False},
-        sleep_fn=lambda s: None, out=outs.append,
-    )
-    loop.run()
-    assert slept["n"] == 0, "the cycle never fired over a standing order"
-    assert any("cycle held" in o for o in outs), "the hold is loud"
-
-
 def test_cycle_clock_persists_across_respawns(tmp_path: Path) -> None:
     """v12 P1-4: the clock survives a respawn (read/write helpers)."""
     from abstractruntime.identity.life import read_cycle_clock, write_cycle_clock
@@ -181,30 +130,29 @@ def test_cycle_clock_persists_across_respawns(tmp_path: Path) -> None:
 
 
 def test_unwired_dial_edit_warns(tmp_path: Path, monkeypatch) -> None:
-    """v12 P0-4 machinery pin: ALL dials are wired as of v14 (the ledger is
-    all-True - zero dead dials), so the unwired-edit warning is exercised
-    through a patched ledger; the machinery must hold for any FUTURE dial
-    born unwired. Missing known keys stay noted."""
+    """v12 P0-4 machinery pin, re-based for v22: the timed dials are RETIRED (wired:false) - an edit is read, and the
+    warning says it governs nothing; a dial born unwired still says NOT YET WIRED. Missing known keys stay noted."""
     from abstractruntime.identity import phase_spec as ps
 
-    assert all(ps.TUNABLE_WIRED.values()), "v14: zero dead dials - all wired"
+    assert ps.TUNABLE_WIRED["sleep_bound_h"] is False and "sleep_bound_h" in ps.TUNABLE_RETIRED
+    assert ps.TUNABLE_WIRED["window_limit"] is True
     p = tmp_path / "spec.json"
     p.write_text(json.dumps({"tunables": {
         "personal_cycle": {"personal_window_h": 2.0, "sleep_window_h": 1.0},
-        "sleep_bound_h": 2.5,
+        "sleep_bound_h": 2.5, "window_limit": 9000,
     }}), encoding="utf-8")
     monkeypatch.setenv(PHASE_SPEC_ENV, str(p))
-    monkeypatch.setitem(ps.TUNABLE_WIRED, "sleep_bound_h", False)
+    monkeypatch.setitem(ps.TUNABLE_WIRED, "window_limit", False)
     t, warns = load_phase_tunables()
     assert t["sleep_bound_h"] == 2.5, "the edit is READ (recorded)"
-    assert any("NOT YET WIRED" in w for w in warns), "and loudly not applied"
+    assert any("sleep_bound_h=2.5 is edited but RETIRED" in w for w in warns), warns
+    assert any("window_limit=9000.0 is edited but NOT YET WIRED" in w for w in warns), warns
     assert any("unattended_wake_cadence_h absent" in w for w in warns), "missing known key noted"
 
 
-def test_gate_dials_are_wired(tmp_path, monkeypatch) -> None:
-    """v13: unattended_wake_cadence_h + grant_unused_floor_h edits GOVERN
-    the day gate (no longer dead dials); personal_cycle.enabled=false
-    disables the cycle."""
+def test_retired_gate_dials_govern_nothing(tmp_path, monkeypatch) -> None:
+    """Re-based (v22): the 6h cadence and the 2h use floor drove the gate's sleep leg, which is gone. Edited, they
+    change nothing: no grant -> own time ends (idle, no need-check deadline); armed + zero drives -> he rests."""
     from abstractruntime.identity.life import read_day_gate, write_personal_grant
 
     p = tmp_path / "spec.json"
@@ -215,68 +163,54 @@ def test_gate_dials_are_wired(tmp_path, monkeypatch) -> None:
         "grant_unused_floor_h": 0.5,
     }}), encoding="utf-8")
     monkeypatch.setenv(PHASE_SPEC_ENV, str(p))
-    t, _ = load_phase_tunables()
-    assert t["personal_cycle"]["enabled"] is False
-
     home = tmp_path / "home"
     home.mkdir()
-    # No grant -> sleep leg carries the EDITED cadence (3h, not the 6h seed).
     d = read_day_gate(home)
-    assert d["phase"] == "sleep" and d["need_check_s"] == int(3.0 * 3600)
-    # Grant armed, zero drives, zero use -> the EDITED 0.5h floor governs.
+    assert d["phase"] == "idle" and d["cause"] == "no_grant" and "need_check_s" not in d
     write_personal_grant(home, mode="until_revoked", granted_by="operator:test")
     d = read_day_gate(home)
-    if d["cause"] == "granted_unused":
-        assert "0.5h floor" in d["detail"]
+    assert d["phase"] == "personal" and d["cause"] in ("resting", "grant_degraded"), d
 
 
-def test_need_check_is_no_churn(tmp_path, monkeypatch) -> None:
-    """v13 cadence_need_check: a quiet check re-sleeps WITHOUT a marker
-    pair (no awake/asleep churn - the same sleep continues); a sanctioned
-    day lands ONE wake with written_by=need-check."""
+def test_no_need_check_and_no_bound_wake_an_operator_sleep(tmp_path, monkeypatch) -> None:
+    """Re-based (v22 wake_conditions: no clock wakes him; the 6h need-check and the 1h sleep bound are retired): an
+    operator sleep past its stamped wake_at, over a standing work order, keeps idling - no need-check wake, no
+    sleep-bound wake - until the operator's wake lands; then the work day opens."""
     import sys
     from datetime import datetime, timedelta, timezone
 
     sys.path.insert(0, str(Path(__file__).parent))
     from test_entity_life_loop import _ScriptedLLM, _factory_for, _make_home
 
-    from abstractruntime.identity.life import (
-        LifeLoop, read_entity_state, write_entity_state,
-    )
+    from abstractruntime.identity.life import LifeLoop, read_entity_state, write_entity_state
 
     home_dir = _make_home(tmp_path)
-    # The quiet premise: NO grant (the fixture arms one - drop it), no
-    # order; the seeded drive alone cannot sanction a day without a grant.
-    from abstractruntime.identity.life import PHASES_FILENAME
-
-    (home_dir / PHASES_FILENAME).unlink()
-    llm = _ScriptedLLM(["One."] * 4)
-    loop = LifeLoop(
-        _factory_for(home_dir, llm),
-        tick_seconds=1, ticks_per_day=1, max_ticks=1,
-        stop_file=home_dir / "STOP", state_home=home_dir,
-        rest_minutes=0.001, sleep_fn=lambda s: None, out=lambda s: None,
-    )
-    # A gate-written unarmed sleep whose deadline is already past.
-    write_entity_state(
-        home_dir, "asleep", reason="day gate: no_grant (x) - need-check in 6h",
-        written_by="grant-gate",
-        wake_at=(datetime.now(timezone.utc) - timedelta(seconds=5)).isoformat(),
-    )
-    before = json.loads((home_dir / "state_history.jsonl").read_text().strip().splitlines()[-1])
-    # Quiet check: no grant, no order, no drives -> the same sleep continues.
-    still = loop._bounded_asleep_or_paused(read_entity_state(home_dir))
-    assert still is True, "nothing sanctioned - keeps idling"
-    after_lines = (home_dir / "state_history.jsonl").read_text().strip().splitlines()
-    assert json.loads(after_lines[-1]) == before, "NO marker churn on a quiet check"
-    assert loop._need_check_at is not None, "next deadline held in memory"
-    # Sanction a day (work order) and force the in-memory deadline due.
     (home_dir / "work_order.md").write_text("desk", encoding="utf-8")
-    loop._need_check_at = datetime.now(timezone.utc) - timedelta(seconds=1)
-    still = loop._bounded_asleep_or_paused(read_entity_state(home_dir))
-    assert still is False, "a sanctioned day wakes"
-    state = read_entity_state(home_dir)
-    assert state["state"] == "awake" and state["written_by"] == "need-check"
+    write_entity_state(
+        home_dir, "asleep", reason="sleep now", written_by="operator",
+        wake_at=(datetime.now(timezone.utc) - timedelta(hours=7)).isoformat(),
+    )
+    polls = {"n": 0}
+    seen = []
+
+    def sleeper(_s: float) -> None:
+        polls["n"] += 1
+        st = read_entity_state(home_dir)
+        seen.append((st["state"], st.get("written_by")))
+        if polls["n"] == 20:
+            write_entity_state(home_dir, "awake", reason="operator wake")
+
+    llm = _ScriptedLLM(["Working.\n```work\ndone: sorted\n```", "R."])
+    report = LifeLoop(
+        _factory_for(home_dir, llm), tick_seconds=1, ticks_per_day=1, max_ticks=1,
+        stop_file=home_dir / "STOP", state_home=home_dir, rest_minutes=0.001,
+        sleep_fn=sleeper, out=lambda s: None,
+    ).run()
+    assert seen[:19] == [("asleep", "operator")] * 19, "no clock woke him"
+    assert report.ticks == 1, "the operator's wake opened the work day"
+    writers = [json.loads(ln).get("written_by") for ln in
+               (home_dir / "state_history.jsonl").read_text().splitlines() if ln.strip()]
+    assert "need-check" not in writers and "sleep-bound" not in writers
 
 
 def test_sleep_bound_reads_the_blueprint_dial(tmp_path, monkeypatch) -> None:
@@ -390,10 +324,10 @@ def test_cue_attention_kwargs_exist_on_the_engine(tmp_path) -> None:
     assert 'drive_window_limit=int(_tun["drive_window_limit"])' in src
 
 
-def test_cycle_window_is_maintenance_only(tmp_path, monkeypatch) -> None:
-    """memory c379 wiring: the cycle window calls the consolidator with
-    include_dream=False (quality passes only); the engine receives the flag
-    through build_consolidator; hooks without the kwarg still work."""
+def test_consolidator_flags_reach_the_engine_and_his_sleep_runs_the_whole_night(tmp_path, monkeypatch) -> None:
+    """memory c379 wiring: build_consolidator passes include_dream to the engine. Re-based (v22): the maintenance-
+    only cycle window is gone - his own sleep (a ```rest block) runs the nightly composition (dream on); a hook
+    without the kwarg still works."""
     import sys
 
     sys.path.insert(0, str(Path(__file__).parent))
@@ -416,29 +350,21 @@ def test_cycle_window_is_maintenance_only(tmp_path, monkeypatch) -> None:
     consolidate()
     assert captured["include_dream"] is True, "nightly default unchanged"
 
-    # The cycle branch passes include_dream=False through _sleep_window;
-    # a zero-arg on_sleep hook (older consolidators, test doubles) still
-    # works - the flag is composition, never a requirement.
-    p = tmp_path / "spec.json"
-    p.write_text(json.dumps({"tunables": {"personal_cycle": {
-        "personal_window_h": 0.000001, "sleep_window_h": 0.0001}}}), encoding="utf-8")
-    monkeypatch.setenv(PHASE_SPEC_ENV, str(p))
     seen = {"flags": []}
 
     def _hook(include_dream=True):
         seen["flags"].append(include_dream)
         return {"formed": False}
 
-    llm = _ScriptedLLM(["One.", "R1.", "Two.", "R2.", "Three.", "R3."])
-    loop = LifeLoop(
+    llm = _ScriptedLLM(["Enough.\n```rest\nthe day is full\n```", "R1.", "Two.", "R2."])
+    LifeLoop(
         _factory_for(home_dir, llm),
         tick_seconds=1, ticks_per_day=1, max_ticks=2,
         stop_file=home_dir / "STOP", state_home=home_dir,
         rest_minutes=0.001, on_sleep=_hook,
         sleep_fn=lambda s: None, out=lambda s: None,
-    )
-    loop.run()
-    assert False in seen["flags"], "the cycle window ran maintenance-only"
+    ).run()
+    assert seen["flags"] == [True], "his own sleep ran the nightly composition"
 
 
 def test_window_dials_resolve_from_the_blueprint(tmp_path, monkeypatch) -> None:
@@ -518,12 +444,9 @@ def test_explored_ratio_derives_from_the_shared_fold(tmp_path) -> None:
     assert "1 ever explored" in note, f"the stamp discharges into the ratio: {note!r}"
 
 
-def test_operator_sleep_is_absolute_through_the_need_check(tmp_path) -> None:
-    """spec v17 (laurent dm#127): an operator-written sleep on a BARE desk
-    (no grant, no order - the composite act's aftermath) never wakes into
-    a day: the need-check runs quietly (no marker churn) and the same
-    sleep continues. Arming the desk later sanctions a day - two facts,
-    one law."""
+def test_an_operator_sleep_on_a_bare_desk_never_wakes_into_a_day(tmp_path) -> None:
+    """Re-based (v22): an operator sleep on a bare desk (no grant, no order) past its stamped wake_at stays a sleep -
+    no need-check, no bound, no marker churn - until a STOP ends the loop; the sleep is still the operator's."""
     import sys
     from datetime import datetime, timedelta, timezone
 
@@ -535,27 +458,25 @@ def test_operator_sleep_is_absolute_through_the_need_check(tmp_path) -> None:
     )
 
     home_dir = _make_home(tmp_path)
-    (home_dir / PHASES_FILENAME).unlink()  # grant disarmed (composite act)
-    llm = _ScriptedLLM(["One."] * 2)
-    loop = LifeLoop(
-        _factory_for(home_dir, llm),
-        tick_seconds=1, ticks_per_day=1, max_ticks=1,
-        stop_file=home_dir / "STOP", state_home=home_dir,
-        rest_minutes=0.001, sleep_fn=lambda s: None, out=lambda s: None,
-    )
-    # The operator's click (past its bound - the dangerous instant).
+    (home_dir / PHASES_FILENAME).unlink()
     write_entity_state(
-        home_dir, "asleep", reason="operator sleep - composite act",
-        written_by="operator",
+        home_dir, "asleep", reason="sleep now", written_by="operator",
         wake_at=(datetime.now(timezone.utc) - timedelta(seconds=5)).isoformat(),
     )
     before = (home_dir / "state_history.jsonl").read_text().strip().splitlines()
-    still = loop._bounded_asleep_or_paused(read_entity_state(home_dir))
-    assert still is True, "bare desk: the operator's sleep CONTINUES"
+    polls = {"n": 0}
+
+    def sleeper(_s: float) -> None:
+        polls["n"] += 1
+        if polls["n"] == 10:
+            (home_dir / "STOP").write_text("halt", encoding="utf-8")
+
+    LifeLoop(
+        _factory_for(home_dir, _ScriptedLLM([])), tick_seconds=1, ticks_per_day=1, max_ticks=1,
+        stop_file=home_dir / "STOP", state_home=home_dir, rest_minutes=0.001,
+        sleep_fn=sleeper, out=lambda s: None,
+    ).run()
     after = (home_dir / "state_history.jsonl").read_text().strip().splitlines()
     assert after == before, "no marker churn - his one act stays one moment"
-    # He drops a work order later: the need-check sanctions a day.
-    (home_dir / "work_order.md").write_text("desk", encoding="utf-8")
-    loop._need_check_at = datetime.now(timezone.utc) - timedelta(seconds=1)
-    still = loop._bounded_asleep_or_paused(read_entity_state(home_dir))
-    assert still is False and read_entity_state(home_dir)["written_by"] == "need-check"
+    st = read_entity_state(home_dir)
+    assert st["state"] == "asleep" and st["written_by"] == "operator"

@@ -65,25 +65,19 @@ def test_spoken_synonyms_match_the_alias_table() -> None:
     assert set(LEGACY_PHASE_ALIASES.values()) <= set(graph["phases"].keys())
 
 
-def test_grant_end_causes_come_from_the_artifacts_closed_set() -> None:
-    """personal_grant_end_cause emits ONLY words from the artifact's
-    transition_causes, and the artifact carries a personal->sleep
-    transition for each — the ruled landing my loop enacts."""
+def test_no_grant_cause_lands_in_sleep_and_the_loop_still_names_it() -> None:
+    """Re-based to spec v22/v23 (PERSONAL-OFF-NEVER-SLEEPS; contract-phases v2 §10.1): no edge into sleep carries a
+    grant cause - a grant's end ends own time awake (idle, no edge). personal_grant_end_cause still names WHY in the
+    loop's own log, and every edge into sleep is the operator's act, his own election, or a visit/crash restore."""
     from abstractruntime.identity.life import personal_grant_end_cause
 
     graph = _graph()
-    causes = set(graph["transition_causes"])
-    expired = personal_grant_end_cause(
-        {"mode": "timer", "expires_at": "2020-01-01T00:00:00+00:00"}
-    )
-    revoked = personal_grant_end_cause({"mode": "disabled"})
-    assert expired == "grant_expired" and expired in causes
-    assert revoked == "grant_revoked" and revoked in causes
-    landings = {
-        (t["from"], t["to"], t["cause"]) for t in graph["transitions"]
-    }
-    assert ("personal", "sleep", "grant_expired") in landings
-    assert ("personal", "sleep", "grant_revoked") in landings
+    assert personal_grant_end_cause({"mode": "timer", "expires_at": "2020-01-01T00:00:00+00:00"}) == "grant_expired"
+    assert personal_grant_end_cause({"mode": "disabled"}) == "grant_revoked"
+    into_sleep = {t["cause"] for t in graph["transitions"] if t["to"] == "sleep"}
+    assert not ({"grant_expired", "grant_revoked"} & into_sleep), into_sleep
+    assert into_sleep <= {"operator", "self_elected", "visit_close", "crash_recovered"}, into_sleep
+    assert not [t for t in graph["transitions"] if t["from"] == "sleep" and t["to"] == "sleep"], "no sleep->sleep"
 
 
 def test_personal_gating_matches_the_artifacts_invariant() -> None:

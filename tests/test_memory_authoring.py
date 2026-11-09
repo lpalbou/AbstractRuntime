@@ -284,3 +284,87 @@ def test_a_failed_or_unrouted_authoring_call_forms_pending_with_a_failure_line(t
         assert line["reason"] == ("unavailable" if wiring == "failing" else "capability_unrouted"), line
     finally:
         ert.close()
+
+
+def _close_visit(tmp_path: Path, capability_handlers: Any):
+    """One visit turn, then the close: the look-back elects an interest, a lesson and a realization, none titled."""
+    from test_visit_midturn_elections import _ScriptedHandler, _make_home as _visit_home
+
+    from abstractruntime.core.models import EffectType, RunStatus
+    from abstractruntime.identity.entity_runtime import open_entity_runtime
+    from abstractruntime.identity.visit_workflow import VISITOR_WAIT_KEY, build_visit_workflow
+
+    def look_back(run: Any) -> str:
+        rid = str(list((run.vars.get("_visit") or {}).get("sheet") or [])[0][0])
+        return ("A good visit.\n```interest\nwhy rivers bend\n```\n```lesson\nwait before answering\n```\n"
+                f"```realize\nI keep returning to rivers.\nevidence={rid}\n```\n")
+
+    home_dir = _visit_home(tmp_path)
+    ert = open_entity_runtime(home_dir, extra_handlers={
+        EffectType.LLM_CALL: _ScriptedHandler(["A plain reply.", look_back])}, capability_handlers=capability_handlers)
+    wf = build_visit_workflow(ert.home, participants=["person:admin"], idle_seconds=3600,
+                              model_info={"provider": "test", "model": "scripted"}, visit_id="visit-close")
+    run_id = ert.runtime.start(workflow=wf, vars={}, session_id="visit-close")
+    ert.runtime.tick(workflow=wf, run_id=run_id, max_steps=50)
+    ert.runtime.resume(workflow=wf, run_id=run_id, wait_key=VISITOR_WAIT_KEY,
+                       payload={"text": "hello", "speaker": "person:admin"}, max_steps=200)
+    state = ert.runtime.resume(workflow=wf, run_id=run_id, wait_key=VISITOR_WAIT_KEY,
+                               payload={"kind": "close"}, max_steps=600)
+    assert state.status == RunStatus.COMPLETED, state.error
+    from abstractmemory import TripleQuery
+
+    rows = {}
+    for a in ert.home.ms.store.query(TripleQuery(predicate="dcterms:abstract", limit=0)):
+        kind = (a.attributes or {}).get("record_kind")
+        if kind in ("summary", "interest", "lesson", "realization", "episode"):
+            rows.setdefault(kind, []).append(a)
+    return ert, home_dir, rows
+
+
+def test_every_record_a_visit_close_forms_carries_its_authored_metadata(tmp_path: Path) -> None:
+    from abstractruntime.core.runtime import EffectOutcome
+
+    asked: List[str] = []
+
+    def summaries(run: Any, effect: Any, dnn: Any = None) -> Any:
+        content = effect.payload["messages"][0]["content"]
+        kind = content.split("(kind: ", 1)[1].split(")", 1)[0]
+        asked.append(kind)
+        return EffectOutcome.completed({"content": json.dumps(
+            {"title": f"{kind.capitalize()} title", "summary": f"What this {kind} holds."})})
+
+    ert, home_dir, rows = _close_visit(tmp_path, {"summaries": summaries})
+    try:
+        for kind in ("summary", "interest", "lesson", "realization", "episode"):
+            assert rows.get(kind), (kind, sorted(rows))
+            for a in rows[kind]:
+                assert "pending" not in (a.attributes or {}), (kind, a.attributes)
+                assert a.attributes["title"] == f"{kind.capitalize()} title", (kind, a.attributes.get("title"))
+                assert a.attributes["metadata_authored"]["capability"] == "summaries"
+        # The summary's words are authored; an elected record keeps the entity's words as its summary.
+        assert str(rows["summary"][0].object) == "What this summary holds."
+        assert str(rows["interest"][0].object) == "why rivers bend"
+        assert str(rows["lesson"][0].object) == "wait before answering"
+        assert sorted(asked) == ["episode", "interest", "lesson", "realization", "summary"]
+        assert not ert.home.ms.tasks.tasks(kind=("title.author", "digest.author"))
+    finally:
+        ert.close()
+
+
+def test_a_failing_handler_leaves_the_close_records_pending_with_their_failure_lines(tmp_path: Path) -> None:
+    from abstractruntime.core.runtime import EffectOutcome
+
+    ert, home_dir, rows = _close_visit(
+        tmp_path, {"summaries": lambda run, effect, dnn=None: EffectOutcome.failed("endpoint refused")})
+    try:
+        log = (home_dir / "own_time.log").read_text(encoding="utf-8")
+        lines = [json.loads(ln[len("#AUTHORING_FAILURE "):]) for ln in log.splitlines()
+                 if ln.startswith("#AUTHORING_FAILURE ")]
+        for kind, missing in (("summary", "both"), ("interest", "title"), ("lesson", "title"),
+                              ("realization", "title")):
+            a = rows[kind][0]
+            assert a.attributes["pending"]["title"] is True, (kind, a.attributes)
+            mine = [ln for ln in lines if ln["kind"] == kind]
+            assert len(mine) == 1 and mine[0]["record_id"] == str(a.subject) and mine[0]["missing"] == missing, mine
+    finally:
+        ert.close()

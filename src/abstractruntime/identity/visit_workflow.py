@@ -1156,6 +1156,31 @@ def build_visit_workflow(
         the diary + feelings queued behind it."""
         visit = _ns(run, "_visit")
         refl = _ns(run, "_reflect")
+        # AUTHORED AT FORMATION (operator 2026-11-09): a record of the close whose title / summary is not the
+        # entity's own gets ONE capability=summaries LLM_CALL before it forms (`_reflect.authored.<key>`); a failed
+        # call forms it pending and its failure line is written here, at the next APPLY, once the record has its id.
+        authored_ns = refl.setdefault("authored", {})
+        failed = refl.pop("authoring_failure_pending", None)
+        if isinstance(failed, dict):
+            _log_visit_authoring_failure(home, visit, failed, refl.get(str(failed.get("result_key") or "")))
+
+        def _author_first(key: str, kind: str, body: str) -> Optional[StepPlan]:
+            if key in authored_ns:
+                return None
+            authored_ns[key] = None  # requested; the call's result lands here
+            return _authoring_step("APPLY", kind, body, result_key=f"_reflect.authored.{key}", next_node="APPLY")
+
+        def _fields_for(key: str, *, kind: str, need: List[str], raw: str, result_key: str, title: Optional[str] = None,
+                        digest: str = "", block_reason: Optional[str] = None) -> Dict[str, Any]:
+            fields, failure = _authored_fields(authored_ns.get(key), need=need, run_id=str(run.run_id),
+                                               title=title, digest=digest)
+            if failure:
+                refl["authoring_failure_pending"] = {
+                    **failure, "kind": kind, "raw_block": raw, "template_id": "visit_workflow.close",
+                    "result_key": result_key, **({"block_reason": block_reason} if block_reason else {}),
+                }
+            return fields
+
         def _note_absorbed(stage_key: str, label: str) -> None:
             out = refl.get(stage_key)
             if isinstance(out, dict) and out.get("absorbed_failure") and not out.get("_noted"):
@@ -1252,6 +1277,9 @@ def build_visit_workflow(
         rid_scope = str(run.run_id)
 
         if stage == "summary":
+            plan = _author_first("summary", "summary", str(refl["marked_reply"]))
+            if plan is not None:
+                return plan
             refl["stage"] = "interest"
             refl["i"] = 0
             # MECHANICAL FLOOR (r-rt-2, Ephemeral incident): never a
@@ -1262,6 +1290,9 @@ def build_visit_workflow(
             refl_digest, refl_floored = floored_reflection_digest(
                 str(refl["marked_reply"]), [(r, d) for r, d in sheet]
             )
+            _sum = _fields_for("summary", kind="summary", need=["title", "summary"], raw=str(refl["marked_reply"]),
+                               result_key="summary_out", digest=refl_digest)
+            _sum_authored = _sum.pop("_metadata_authored", None)
             return StepPlan(
                 node_id="APPLY",
                 effect=Effect(
@@ -1269,9 +1300,9 @@ def build_visit_workflow(
                     payload={
                         "records": [{
                             "kind": "summary",
-                            "title": None,
-                            "pending": ["title", "summary"],
-                            "digest": refl_digest,
+                            "title": _sum.get("title"),
+                            **({"pending": _sum["pending"]} if _sum.get("pending") else {}),
+                            "digest": _sum["digest"],
                             "keywords": [],
                             "verbatim": str(refl["marked_reply"]),
                             "edges": [["summarizes", rid] for rid, _ in sheet if rid],
@@ -1283,8 +1314,10 @@ def build_visit_workflow(
                                 # targets in memory's evidence scan.
                                 **({"topics": [str(t) for t in refl.get("topics") or []]}
                                    if refl.get("topics") else {}),
-                                **({"digest_method": "mechanical-floor-v1"} if refl_floored else {}),
+                                **({"digest_method": "mechanical-floor-v1"}
+                                   if refl_floored and not _sum_authored else {}),
                                 **({"visit_id": str(visit_id)} if visit_id else {}),
+                                **({"metadata_authored": _sum_authored} if _sum_authored else {}),
                             },
                             "provenance": {"source": "entity-visit-run-reflection-v0"},
                         }],
@@ -1305,13 +1338,20 @@ def build_visit_workflow(
                 refl["stage"] = "lesson"
                 refl["i"] = 0
                 return StepPlan(node_id="APPLY", next_node="APPLY")
+            _t, _w, _why = parse_elected_title(str(interests[i]))
+            if _why:
+                plan = _author_first(f"interest-{i}", "interest", _w)
+                if plan is not None:
+                    return plan
             refl["i"] = i + 1
             session_record_id = next(
                 iter((refl.get("summary_out") or {}).get("record_ids") or []), None
             )
             # Title and words WHOLE (operator 2026-11-08; root ADR 0054): his `title:` first line; without one, no
             # title and a recorded failure (operator 2026-11-09: no fallback). A plain pending string reads too.
-            _t, _w, _why = parse_elected_title(str(interests[i]))
+            _tf = _fields_for(f"interest-{i}", kind="interest", need=["title"], raw=str(interests[i]),
+                              result_key="interest_out", title=_t, digest=_w, block_reason=_why) if _why else {"title": _t}
+            _t_authored = _tf.pop("_metadata_authored", None)
             # No usable `title:` line: the record forms with its title PENDING (memory queues title.author) and the
             # authoring drainer writes it with the summaries capability model - never a guess from his words.
             return StepPlan(
@@ -1321,14 +1361,15 @@ def build_visit_workflow(
                     payload={
                         "records": [{
                             "kind": "interest",
-                            "title": _t,
-                            **({"pending": ["title"]} if _why else {}),
+                            "title": _tf.get("title"),
+                            **({"pending": _tf["pending"]} if _tf.get("pending") else {}),
                             "digest": _w,
                             "keywords": [],
                             "edges": (
                                 [["from_session", str(session_record_id)]] if session_record_id else []
                             ),
-                            "attributes": {"session_id": str(run.session_id or "")},
+                            "attributes": {"session_id": str(run.session_id or ""),
+                                           **({"metadata_authored": _t_authored} if _t_authored else {})},
                             "provenance": {
                                 "source": "entity-visit-run-reflection-v0",
                                 "actor": "entity-reflection",
@@ -1354,11 +1395,18 @@ def build_visit_workflow(
                 refl["stage"] = "realize"
                 refl["i"] = 0
                 return StepPlan(node_id="APPLY", next_node="APPLY")
+            _t, _w, _why = parse_elected_title(str(lessons[i]))
+            if _why:
+                plan = _author_first(f"lesson-{i}", "lesson", _w)
+                if plan is not None:
+                    return plan
             refl["i"] = i + 1
             session_record_id = next(
                 iter((refl.get("summary_out") or {}).get("record_ids") or []), None
             )
-            _t, _w, _why = parse_elected_title(str(lessons[i]))
+            _tf = _fields_for(f"lesson-{i}", kind="lesson", need=["title"], raw=str(lessons[i]),
+                              result_key="lesson_out", title=_t, digest=_w, block_reason=_why) if _why else {"title": _t}
+            _t_authored = _tf.pop("_metadata_authored", None)
             # No usable `title:` line: the record forms with its title PENDING (memory queues title.author) and the
             # authoring drainer writes it with the summaries capability model - never a guess from his words.
             return StepPlan(
@@ -1368,8 +1416,8 @@ def build_visit_workflow(
                     payload={
                         "records": [{
                             "kind": "lesson",
-                            "title": _t,
-                            **({"pending": ["title"]} if _why else {}),
+                            "title": _tf.get("title"),
+                            **({"pending": _tf["pending"]} if _tf.get("pending") else {}),
                             "digest": _w,
                             "keywords": [],
                             "edges": (
@@ -1378,6 +1426,7 @@ def build_visit_workflow(
                             "attributes": {
                                 "session_id": str(run.session_id or ""),
                                 "phase": "visit",
+                                **({"metadata_authored": _t_authored} if _t_authored else {}),
                             },
                             "provenance": {
                                 "source": "entity-visit-run-reflection-v0",
@@ -1408,22 +1457,36 @@ def build_visit_workflow(
                 refl["stage"] = "diary"
                 refl["i"] = 0
                 return StepPlan(node_id="APPLY", next_node="APPLY")
-            refl["i"] = i + 1
             r = realizations[i] if isinstance(realizations[i], dict) else {}
             r_text = str(r.get("text") or "")
+            _pre_title = str(r.get("title") or "").strip() or None
+            _pre_why = r.get("title_reason")
+            if _pre_title is None and not _pre_why and "title_reason" not in r:
+                _pre_title, _unused_w, _pre_why = parse_elected_title(r_text)
+            if _pre_why:
+                plan = _author_first(f"realize-{i}", "realization", r_text)
+                if plan is not None:
+                    return plan
+            refl["i"] = i + 1
             # His `title:` first line (parsed at election); without one, no title and a recorded failure (operator
             # 2026-11-09: no fallback). A pending election of an older run carries no reason: it is re-read here.
             _r_title = str(r.get("title") or "").strip() or None
             _r_why = r.get("title_reason")
             if _r_title is None and not _r_why and "title_reason" not in r:
                 _r_title, _unused, _r_why = parse_elected_title(r_text)
-            # No usable `title:` line: formed pending; the authoring drainer writes the title.
+            # No usable `title:` line: authored by the capability call above; pending only if it failed.
+            _rf = _fields_for(f"realize-{i}", kind="realization", need=["title"], raw=str(r.get("raw") or r_text),
+                              result_key="realize_out", title=_r_title, digest=r_text,
+                              block_reason=str(_r_why)) if _r_why else {"title": _r_title}
+            _r_authored = _rf.pop("_metadata_authored", None)
             r_attrs: Dict[str, Any] = {
                 "session_id": str(run.session_id or ""),
                 "phase": "visit",
             }
             if r.get("touches"):
                 r_attrs["touches"] = str(r["touches"])
+            if _r_authored:
+                r_attrs["metadata_authored"] = _r_authored
             return StepPlan(
                 node_id="APPLY",
                 effect=Effect(
@@ -1431,8 +1494,8 @@ def build_visit_workflow(
                     payload={
                         "records": [{
                             "kind": "realization",
-                            "title": _r_title,
-                            **({"pending": ["title"]} if _r_why else {}),
+                            "title": _rf.get("title"),
+                            **({"pending": _rf["pending"]} if _rf.get("pending") else {}),
                             "digest": r_text,
                             "keywords": [],
                             "edges": [["derived_from", str(g)] for g in (r.get("gids") or [])],

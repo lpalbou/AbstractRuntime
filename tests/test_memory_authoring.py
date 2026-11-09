@@ -544,9 +544,10 @@ def _diary_rows(home_dir: Path) -> List[Any]:
 
 
 def test_a_diary_entry_forms_with_its_authored_title_and_summary_never_a_template(tmp_path: Path) -> None:
-    """Live 2026-11-09 (castor): a new diary entry's record read "Diary entry (note) - <date>: ...". Without a gist
-    its title is authored BEFORE its record forms (one summaries call); with one, his gist is his title, whole; the
-    summary is always his words (a diary entry is his act: memory never authors its body); nothing is pending."""
+    """Live 2026-11-09 (castor): a new diary entry's record read "Diary entry (note) - <date>: ...". Its SUMMARY is
+    authored BEFORE its record forms (one summaries call; AbstractMemory 71de051 takes it with its provenance), and so
+    is its title without a gist; with one, his gist is his title, whole. Nothing is pending; no first line stands in
+    (Codex review 3 #9/#11)."""
     home_dir = _workspace_home(tmp_path)
     cap = _Capability()
     both = _DIARY_GISTLESS + _DIARY_GIST.replace("Back.\n", "")
@@ -557,14 +558,19 @@ def test_a_diary_entry_forms_with_its_authored_title_and_summary_never_a_templat
     rows = _diary_rows(home_dir)
     assert len(rows) == 2, rows
     gistless, gisted = sorted(rows, key=lambda r: r.attributes.get("title") != TITLE)
-    assert (gistless.attributes["title"], str(gistless.object)) == (TITLE, "The tide leaves a readable line on the sand.")
-    assert (gisted.attributes["title"], str(gisted.object)) == ("the tide line", "the tide line")
+    assert (gistless.attributes["title"], str(gistless.object)) == (TITLE, SUMMARY)
+    assert (gisted.attributes["title"], str(gisted.object)) == ("the tide line", SUMMARY)
     for r in rows:
         assert "Diary entry" not in str(r.attributes["title"]) and "pending" not in r.attributes
-    assert gistless.attributes["metadata_authored"]["fields"] == ["title"]
-    assert gistless.attributes["metadata_authored"]["source"]["kind"] == "artifact"
-    assert "metadata_authored" not in gisted.attributes, "his gist is his title: nothing authored"
-    assert len(cap.prompts) >= 1 and any("The tide leaves a readable line" in p for p in cap.prompts)
+        assert "The tide leaves a readable line" not in str(r.object), "no first line stands in for the summary"
+        stamp = r.attributes["understanding"]
+        assert stamp["field"] == "digest" and stamp["author"] == {"kind": "capability-model", "id": "summaries"}
+        assert stamp["reader"]["model"] == "summarizer" and stamp["sources"][0]["kind"] == "artifact"
+        assert r.attributes["digest_method"] == "authored-v1"
+    assert gistless.attributes["metadata_authored"]["fields"] == ["title", "summary"]
+    assert gisted.attributes["metadata_authored"]["fields"] == ["summary"], "his gist stays his title"
+    diary_prompts = [p for p in cap.prompts if p.startswith("The memory (kind: diary)")]
+    assert len(diary_prompts) == 2 and all("The tide leaves a readable line" in p for p in diary_prompts)
     assert [f for f in _failures(tmp_path) if f["kind"] == "diary"] == []
 
 
@@ -576,17 +582,18 @@ def test_a_diary_entry_whose_authoring_fails_forms_pending_with_one_failure_line
     home.close()
     (row,) = _diary_rows(home_dir)
     assert row.attributes.get("title") in (None, "") and row.attributes["pending"]["title"] is True
-    assert str(row.object) == "The tide leaves a readable line on the sand.", "his words, never a template"
+    assert row.attributes["pending"]["summary"] is True, "the summary waits for its author, never a stand-in"
+    assert str(row.object) == "The tide leaves a readable line on the sand.", "provisional words, marked pending"
     lines = [f for f in _failures(tmp_path) if f["kind"] == "diary"]
     assert len(lines) == 1, lines
     line = lines[0]
-    assert (line["record_id"], line["missing"], line["reason"]) == (str(row.subject), "title", "client_error")
+    assert (line["record_id"], line["missing"], line["reason"]) == (str(row.subject), "both", "client_error")
     assert (line["error_class"], line["model"]) == ("RuntimeError", "summarizer"), line
 
 
 def test_a_visit_close_diary_entry_forms_with_its_authored_title(tmp_path: Path) -> None:
-    """Codex review 2 #10, the visit lane: a gistless public diary entry the close writes gets its title from one
-    capability=summaries LLM_CALL BEFORE its record forms; its summary stays his words."""
+    """Codex review 2 #10 / review 3 #9, the visit lane: a gistless public diary entry the close writes gets its title
+    and summary from one capability=summaries LLM_CALL BEFORE its record forms."""
     from abstractruntime.core.runtime import EffectOutcome
 
     asked: List[str] = []
@@ -603,8 +610,9 @@ def test_a_visit_close_diary_entry_forms_with_its_authored_title(tmp_path: Path)
         (entry,) = rows["diary"]
         assert entry.attributes["title"] == "Diary title" and "pending" not in entry.attributes, (
             sorted(entry.attributes.items()), asked, _failures(tmp_path))
-        assert str(entry.object) == "The visitor asked about rivers.", "his words stay the summary"
-        assert entry.attributes["metadata_authored"]["fields"] == ["title"]
+        assert str(entry.object) == "What this diary holds.", "the summary is authored too (Codex review 3 #9)"
+        assert entry.attributes["metadata_authored"]["fields"] == ["title", "summary"]
+        assert entry.attributes["understanding"]["sources"], "the authoring call is named as its source"
         assert "diary" in asked
     finally:
         ert.close()
@@ -816,4 +824,45 @@ def test_a_task_with_no_words_to_author_from_leaves_its_failure_line(tmp_path: P
     home.close()
     assert receipt["failed"] >= 1, receipt
     lines = [f for f in _failures(tmp_path) if f.get("reason") == "no_source" and f["record_id"] == str(entry.subject)]
-    assert len(lines) == 1 and lines[0]["outcome"] == "retry" and "no words" in lines[0]["error_message"], lines
+    # One line per task that could not run (its title and its summary are both still to be written).
+    assert sorted(f["missing"] for f in lines) == ["summary", "title"], lines
+    assert all(f["outcome"] == "retry" and "no words" in f["error_message"] for f in lines), lines
+
+
+def test_the_sleep_repairs_a_legacy_public_diary_records_title_and_asks_for_its_summary(tmp_path: Path,
+                                                                                       monkeypatch) -> None:
+    """Codex review 3 #9: a public diary record formed before today carries the act-frame template title and his
+    first line as summary. The sleep's repair declares its title pending (authored by the drainer) and its summary
+    on its own; memory 71de051 still refuses that declaration (protected_kind), which the repair says once per pass
+    instead of writing around it - the title is repaired either way."""
+    import abstractmemory
+    from abstractmemory import MemoryRecordInput
+
+    from abstractruntime.identity.chat import open_home
+    from abstractruntime.identity.life import build_consolidator, write_entity_state
+
+    from abstractruntime.identity.diary import DiaryEntry
+
+    home_dir = _workspace_home(tmp_path)
+    home = open_home(home_dir)
+    home.diary.append_entry(DiaryEntry(  # the book's entry the legacy record projects
+        entry_id="diary_legacy01", author=home.entity_id, kind="note", gist="the tide line",
+        text="The tide leaves a readable line on the sand.", visibility="self",
+        written_at="2026-11-08T10:00:00+00:00"))
+    (rid,) = home.ms.remember_many([MemoryRecordInput(
+        kind="diary", title="Diary entry (note) — 2026-11-08: the tide line", digest="the tide line",
+        attributes={"entry_id": "diary_legacy01", "diary_type": "note", "diary_kind": "note",
+                    "written_at": "2026-11-08T10:00:00+00:00"},
+        provenance={"source": "diary-projection", "entry_id": "diary_legacy01"})],
+        scope="diary", owner_id=home.entity_id, idempotency_key="legacy-diary", turn_id="legacy-diary")
+    home.close()
+    monkeypatch.setattr(abstractmemory, "sleep_pass", lambda *a, **k: {"maintenance": {}, "dream": {}})
+    write_entity_state(home_dir, "asleep", reason="self-elected sleep: full", mode="dreaming", written_by="self")
+    lines: List[str] = []
+    result = build_consolidator(home_dir, out=lines.append, llm_for_capability=lambda name: _Capability())()
+    receipt = result["authoring"]
+    assert receipt["declared"] >= 1 and receipt["authored"] >= 1, receipt
+    row = [r for r in _rows(home_dir, "diary") if str(r.subject) == str(rid)][-1]
+    assert row.attributes["title"] == TITLE, row.attributes.get("title")
+    refused = [ln for ln in lines if ln.startswith("#REPAIR_REFUSED") and "legacy public diary summary" in ln]
+    assert len(refused) == 1 and "protected_kind" in refused[0], lines

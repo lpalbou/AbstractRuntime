@@ -56,7 +56,7 @@ def capture_diary_elections(
     anchor_record_ids: Optional[List[str]] = None,
     anchor_graph_ids: Optional[List[str]] = None,
     rescue_dir: Any = None,
-    author_diary_title: Optional[Callable[[Any, str], Dict[str, Any]]] = None,
+    author_diary: Optional[Callable[[Any, str, bool], Dict[str, Any]]] = None,
 ) -> Tuple[str, List[Dict[str, Any]], List[str]]:
     """G1 WRITE DIRECTION at the result boundary: elections fly to the book
     the moment the reply arrives; only MARKS + word-free metadata rest.
@@ -103,13 +103,12 @@ def capture_diary_elections(
         )
     entries: List[Dict[str, Any]] = []
     for e in elections:
-        # A PUBLIC entry without a gist gets its TITLE authored BEFORE its write (Codex review 2 #10): the host's
-        # summaries capability, called here (`author_diary_title(run, text)` -> authored_metadata | authoring_failure);
-        # his gist is his title, the record's summary is his words, a private entry's words never leave the book.
+        # A PUBLIC entry's summary - and its title when he elected no gist - is authored BEFORE its write (Codex review
+        # 2 #10, review 3 #9): the host's summaries capability, called here (`author_diary(run, text, need_title)` ->
+        # authored_metadata | authoring_failure); his gist is his title; a private entry's words never leave the book.
         authoring: Dict[str, Any] = {}
-        if (author_diary_title is not None and str(e.visibility or "self").strip().lower() != "private"
-                and not str(e.gist or "").strip()):
-            authoring = dict(author_diary_title(run, e.text) or {})
+        if author_diary is not None and str(e.visibility or "self").strip().lower() != "private":
+            authoring = dict(author_diary(run, e.text, not str(e.gist or "").strip()) or {})
         out = diary_write_handler(
             run,
             Effect(type=EffectType.DIARY_WRITE, payload={
@@ -189,12 +188,11 @@ def capture_diary_elections(
             # vars + pending_reflection.json and rides the reflection
             # prompt graph-ward) silently re-opens the private-words leak.
             # test_private_diary_meta_carries_no_words pins it.
-            # ADR 0054 (2026-11-08): this key rests in run vars and the visit
-            # sheet, so it is STORED - his elected gist whole, else the first
-            # non-empty LINE of the entry whole (a line is structure; the old
-            # 120-character count was a cut). The book holds the whole text.
-            source = str(e.gist or "").strip() or str(e.text or "")
-            meta["gist"] = next((ln.strip() for ln in source.splitlines() if ln.strip()), "")
+            # This key rests in run vars and the visit sheet, so it is STORED: the
+            # record's TITLE as formed (his gist, else the authored title; None
+            # while it is still being written) - never his first line standing in
+            # (Codex review 3 #9). The book holds the whole text.
+            meta["title"] = out.result.get("title") if isinstance(out.result, dict) else None
         entries.append(meta)
     return marked, entries, warnings
 
@@ -325,7 +323,7 @@ def wrap_llm_handler_with_act_only(
     *,
     diary_write_handler: Optional[Callable[..., Any]] = None,
     rescue_dir: Any = None,
-    author_diary_title: Optional[Callable[[Any, str], Dict[str, Any]]] = None,
+    author_diary: Optional[Callable[[Any, str, bool], Dict[str, Any]]] = None,
     **_retired: Any,
 ) -> Callable[..., Any]:
     """Wrap a host LLM_CALL handler with the WRITE-boundary capture: the
@@ -371,7 +369,7 @@ def wrap_llm_handler_with_act_only(
                     anchor_record_ids=payload.get("anchor_record_ids"),
                     anchor_graph_ids=payload.get("anchor_graph_ids"),
                     rescue_dir=rescue_dir,
-                    author_diary_title=author_diary_title,
+                    author_diary=author_diary,
                 )
             except ActOnlyResolutionError as e:
                 # Losing elected words silently or leaking them are both

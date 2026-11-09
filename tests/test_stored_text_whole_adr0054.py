@@ -68,7 +68,7 @@ def test_diary_capture_gist_is_the_whole_first_line() -> None:
 
     class _Out:
         status = "completed"
-        result = {"entry_id": "diary_0000aaaa", "projected_record_id": "ex:p1", "warnings": []}
+        result = {"entry_id": "diary_0000aaaa", "projected_record_id": "ex:p1", "warnings": [], "title": None}
 
     class _Run:
         run_id = "run-whole"
@@ -79,8 +79,10 @@ def test_diary_capture_gist_is_the_whole_first_line() -> None:
         run=_Run(), turn_id="t-whole", diary_write_handler=lambda run, effect, dnn: _Out(),
     )
     assert len(entries) == 1
-    assert entries[0]["gist"] == LONG_LINE, "the first LINE whole - a line is structure, 120 characters was a cut"
-    assert json.dumps(entries[0])  # still JSON-safe for run vars
+    # Codex review 3 #9: the stored meta names the record's title as formed (None while it is still being written),
+    # never his first line standing in - nothing of the entry is cut or copied into run vars.
+    assert entries[0]["title"] is None and "gist" not in entries[0]
+    assert LONG_LINE not in json.dumps(entries[0])  # still JSON-safe for run vars
 
 
 # -------------------------------------------------------------- identity/life.py (the day-open cue: a visible prompt fold)
@@ -247,6 +249,9 @@ def test_chat_sheet_line_and_tool_arg_are_whole(tmp_path) -> None:
         )
         _reply, report = session.turn("Tell me about the dam.")
         assert report.tool_details[0]["arg"] == query, "the probe's tool argument is whole"
-        assert any(line.endswith(LONG_LINE) for _rid, line in session.session_sheet), session.session_sheet
+        # Codex review 3 #9: the sheet names the diary record by its title - here still being written (no summaries
+        # model in this session) - never his first line standing in.
+        assert any(line == "you kept a diary entry (note) whose title is still being written"
+                   for _rid, line in session.session_sheet), session.session_sheet
     finally:
         home.close()

@@ -43,7 +43,7 @@ __all__ = [
     "handler_formation_author",
     "log_pass_authoring_failures",
     "declare_missing_metadata",
-    "diary_title_payload",
+    "diary_authoring_payload",
     "drain_authoring",
     "rearm_exhausted_authoring",
 ]
@@ -151,19 +151,27 @@ def parse_authored_result(result: Any) -> Dict[str, Any]:
     return {"title": title.strip(), "summary": summary.strip(), "model": result.get("model")}
 
 
-def diary_title_payload(result: Any) -> Dict[str, Any]:
-    """The DIARY_WRITE payload keys for a public gistless entry's title, from its authoring LLM_CALL result: the
-    `authored_metadata` {title, reader}, or the `authoring_failure` (reason, class, message, the capability's model
-    when its result named it) - the projection then forms the title pending and writes the failure line."""
+def diary_authoring_payload(result: Any, *, need_title: bool, artifacts: Any, body: str) -> Dict[str, Any]:
+    """The DIARY_WRITE payload keys for a public entry's metadata from its authoring LLM_CALL result (Codex review 2
+    #10, review 3 #9): `authored_metadata` {summary, title (when he elected no gist), reader, sources (the call kept
+    as a home artifact)}, or `authoring_failure` (reason, class, message, the capability's model when its result named
+    it) - the projection then forms the missing fields pending and writes the failure line."""
+    res = result if isinstance(result, dict) else {}
     try:
-        authored = parse_authored_result(result)
+        parsed = parse_authored_result(result)
+        reader = {"provider": str(res.get("provider") or "capability"),
+                  "model": str(parsed.get("model") or res.get("model") or AUTHORING_CAPABILITY), "thinking": None}
+        authored = {**parsed, "raw": json.dumps({"title": parsed["title"], "summary": parsed["summary"]})}
+        sources = _source_artifact(artifacts, record_id="diary", kind="diary", body=body, authored=authored,
+                                   reader=reader)
     except Exception as e:  # noqa: BLE001
         why = authoring_failure_fields(e)
-        res = result if isinstance(result, dict) else {}
         return {"authoring_failure": {**why, "provider": res.get("provider"), "model": res.get("model"),
                                       "error": f"{type(e).__name__}: {e}"}}
-    return {"authored_metadata": {"title": authored["title"],
-                                  "reader": {"capability": AUTHORING_CAPABILITY, "model": authored.get("model")}}}
+    meta: Dict[str, Any] = {"summary": parsed["summary"], "reader": reader, "sources": sources}
+    if need_title:
+        meta["title"] = parsed["title"]
+    return {"authored_metadata": meta}
 
 
 def _model_class():
@@ -443,6 +451,30 @@ def _write_cause(task: Dict[str, Any]) -> str:
     return "repair" if declared or word in ("repair", "legacy_missing") else "formation"
 
 
+def _public_diary_projection(kind: str, a: Any) -> bool:
+    """A PUBLIC book projection (AbstractMemory 71de051): its summary is authored like any record's; a private one
+    (act-only) and an owner-direct one are not."""
+    attrs = a.attributes if isinstance(a.attributes, dict) else {}
+    prov = a.provenance if isinstance(getattr(a, "provenance", None), dict) else {}
+    return kind == "diary" and not attrs.get("private") and str(prov.get("source") or "") == "diary-projection"
+
+
+def _legacy_diary_title(kind: str, title: Any, a: Any) -> bool:
+    """A public diary projection formed before 7dd32e1 carries the runtime's own act-frame template as its title
+    ("Diary entry (<kind>) — <date>[: ...]"): the runtime's label format, never his words."""
+    return _public_diary_projection(kind, a) and str(title or "").startswith("Diary entry (")
+
+
+def _legacy_diary_summary(kind: str, a: Any) -> bool:
+    """A public diary projection whose summary was never authored (formed before Codex review 3 #9: his gist or his
+    first line stood in, stamped by memory as the owner's own reading): its digest's reading names no capability
+    model or operator author."""
+    attrs = a.attributes if isinstance(a.attributes, dict) else {}
+    stamp = attrs.get("understanding") if isinstance(attrs.get("understanding"), dict) else {}
+    author = stamp.get("author") if isinstance(stamp.get("author"), dict) else {}
+    return _public_diary_projection(kind, a) and str(author.get("kind") or "") not in ("capability-model", "operator")
+
+
 def _legacy_mechanical_title(kind: str, title: Any, attrs: Dict[str, Any]) -> bool:
     """A card or dream stored before memory formed them pending (4f3a77e) carries memory's own mechanical label:
     "World model: <subject>" with no authored title provenance, or "Dream: ...". Memory's label formats, not text."""
@@ -487,6 +519,7 @@ def declare_missing_metadata(ms: Any, *, scopes: Sequence[Tuple[str, str]], out:
     receipt = {"declared": 0, "repaired": 0, "scanned": 0, "refused": 0}
     if getattr(ms, "tasks", None) is None:
         return receipt
+    diary_summary_refusals: Dict[str, int] = {}
     for scope, owner in scopes:
         for a in ms.store.query(TripleQuery(scope=scope, owner_id=owner or None, predicate="dcterms:abstract",
                                             limit=0)):
@@ -499,10 +532,22 @@ def declare_missing_metadata(ms: Any, *, scopes: Sequence[Tuple[str, str]], out:
             method = str(attrs.get("digest_method") or "")
             fields = []
             if (not (isinstance(title, str) and title.strip()) or is_placeholder_title(title)
-                    or attrs.get("title_missing") or _legacy_mechanical_title(kind, title, attrs)):
+                    or attrs.get("title_missing") or _legacy_mechanical_title(kind, title, attrs)
+                    or _legacy_diary_title(kind, title, a)):
                 fields.append("title")
             if not str(a.object or "").strip() or _legacy_mechanical_summary(kind, title, method):
                 fields.append("summary")
+            if _legacy_diary_summary(kind, a):
+                # A legacy public diary summary (his gist / first line stood in): declared on its own, so a memory
+                # that refuses it still lets the title be repaired; refusals are said once per pass (below).
+                res = ms.declare_pending(str(a.subject), fields=["summary"], cause="repair", reason="legacy_missing")
+                if res.get("outcome") == "refused":
+                    receipt["refused"] += 1
+                    why = str(res.get("reason") or "refused")
+                    diary_summary_refusals[why] = diary_summary_refusals.get(why, 0) + 1
+                else:
+                    receipt["declared"] += len(res.get("declared") or [])
+                    receipt["repaired"] += len(res.get("repaired") or [])
             if not fields:
                 continue
             res = ms.declare_pending(str(a.subject), fields=fields, cause="repair", reason="legacy_missing")
@@ -518,6 +563,9 @@ def declare_missing_metadata(ms: Any, *, scopes: Sequence[Tuple[str, str]], out:
                 continue
             receipt["declared"] += len(res.get("declared") or [])
             receipt["repaired"] += len(res.get("repaired") or [])
+    for why, count in sorted(diary_summary_refusals.items()):
+        out(f"#REPAIR_REFUSED memory refused to declare {count} legacy public diary summary(ies) pending ({why}): "
+            "their first-line stand-ins remain until memory accepts the declaration")
     if receipt["declared"]:
         out(f"(sleep: {receipt['declared']} missing title(s)/summary(ies) declared pending for their authoring)")
     return receipt

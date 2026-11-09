@@ -141,7 +141,7 @@ def test_diary_resolve_marker_names_the_resolved_question() -> None:
     db = home_dir / "memory.sqlite3"
     store = SQLiteTripleStore(db)
     journal = SQLiteJournal(db)
-    ms = MemorySystem(store=store, journal=journal)
+    ms = MemorySystem(store=store, journal=journal, task_queue=True)
     assert engram(ms, spark, owner_id=entity_id).created is True
     store.close()
     journal.close()
@@ -214,7 +214,7 @@ def test_lesson_election_forms_a_life_scope_lesson_record() -> None:
     db = home_dir / "memory.sqlite3"
     store = SQLiteTripleStore(db)
     journal = SQLiteJournal(db)
-    ms = MemorySystem(store=store, journal=journal)
+    ms = MemorySystem(store=store, journal=journal, task_queue=True)
     assert engram(ms, spark, owner_id=entity_id).created is True
     store.close()
     journal.close()
@@ -290,7 +290,7 @@ def test_invalid_resolves_keeps_entry_but_never_the_claim() -> None:
     db = home_dir / "memory.sqlite3"
     store = SQLiteTripleStore(db)
     journal = SQLiteJournal(db)
-    ms = MemorySystem(store=store, journal=journal)
+    ms = MemorySystem(store=store, journal=journal, task_queue=True)
     assert engram(ms, spark, owner_id=entity_id).created is True
     store.close()
     journal.close()
@@ -427,7 +427,7 @@ def test_midturn_lesson_fence_forms_the_record() -> None:
     db = home_dir / "memory.sqlite3"
     store = SQLiteTripleStore(db)
     journal = SQLiteJournal(db)
-    ms = MemorySystem(store=store, journal=journal)
+    ms = MemorySystem(store=store, journal=journal, task_queue=True)
     assert engram(ms, spark, owner_id=entity_id).created is True
     store.close()
     journal.close()
@@ -508,7 +508,7 @@ def test_reflection_authors_participant_world_model_cards() -> None:
     db = home_dir / "memory.sqlite3"
     store = SQLiteTripleStore(db)
     journal = SQLiteJournal(db)
-    ms = MemorySystem(store=store, journal=journal)
+    ms = MemorySystem(store=store, journal=journal, task_queue=True)
     assert engram(ms, spark, owner_id=entity_id).created is True
     store.close()
     journal.close()
@@ -611,7 +611,7 @@ def test_per_turn_card_update_forms_floor_cards_from_turns() -> None:
     db = home_dir / "memory.sqlite3"
     store = SQLiteTripleStore(db)
     journal = SQLiteJournal(db)
-    ms = MemorySystem(store=store, journal=journal)
+    ms = MemorySystem(store=store, journal=journal, task_queue=True)
     assert engram(ms, spark, owner_id=entity_id).created is True
     store.close()
     journal.close()
@@ -685,7 +685,7 @@ def test_explores_election_rides_to_the_drive_fold() -> None:
     db = home_dir / "memory.sqlite3"
     store = SQLiteTripleStore(db)
     journal = SQLiteJournal(db)
-    ms = MemorySystem(store=store, journal=journal)
+    ms = MemorySystem(store=store, journal=journal, task_queue=True)
     assert engram(ms, spark, owner_id=entity_id).created is True
     store.close()
     journal.close()
@@ -775,7 +775,7 @@ def test_problems_are_resolvable_too() -> None:
     db = home_dir / "memory.sqlite3"
     store = SQLiteTripleStore(db)
     journal = SQLiteJournal(db)
-    ms = MemorySystem(store=store, journal=journal)
+    ms = MemorySystem(store=store, journal=journal, task_queue=True)
     assert engram(ms, spark, owner_id=entity_id).created is True
     store.close()
     journal.close()
@@ -951,7 +951,7 @@ def test_tend_fence_wired_dispose_reaches_engine() -> None:
     db = home_dir / "memory.sqlite3"
     store = SQLiteTripleStore(db)
     journal = SQLiteJournal(db)
-    ms = MemorySystem(store=store, journal=journal)
+    ms = MemorySystem(store=store, journal=journal, task_queue=True)
     assert engram(ms, spark, owner_id=entity_id).created is True
     store.close()
     journal.close()
@@ -1042,7 +1042,7 @@ def test_tend_fence_resolves_hash_tags_and_refuses_honestly() -> None:
     db = home_dir / "memory.sqlite3"
     store = SQLiteTripleStore(db)
     journal = SQLiteJournal(db)
-    ms = MemorySystem(store=store, journal=journal)
+    ms = MemorySystem(store=store, journal=journal, task_queue=True)
     assert engram(ms, spark, owner_id=entity_id).created is True
     store.close()
     journal.close()
@@ -1133,7 +1133,7 @@ def test_tend_dispose_confirm_extras_resolve_tags_too() -> None:
     db = home_dir / "memory.sqlite3"
     store = SQLiteTripleStore(db)
     journal = SQLiteJournal(db)
-    ms = MemorySystem(store=store, journal=journal)
+    ms = MemorySystem(store=store, journal=journal, task_queue=True)
     assert engram(ms, spark, owner_id=entity_id).created is True
     store.close()
     journal.close()
@@ -1226,7 +1226,7 @@ def test_w1_midturn_feel_applies_with_session_cap() -> None:
     db = home_dir / "memory.sqlite3"
     store = SQLiteTripleStore(db)
     journal = SQLiteJournal(db)
-    ms = MemorySystem(store=store, journal=journal)
+    ms = MemorySystem(store=store, journal=journal, task_queue=True)
     assert engram(ms, spark, owner_id=entity_id).created is True
     store.close()
     journal.close()
@@ -1297,7 +1297,7 @@ def test_own_time_close_runs_one_model_lookback() -> None:
     db = home_dir / "memory.sqlite3"
     store = SQLiteTripleStore(db)
     journal = SQLiteJournal(db)
-    ms = MemorySystem(store=store, journal=journal)
+    ms = MemorySystem(store=store, journal=journal, task_queue=True)
     assert engram(ms, spark, owner_id=entity_id).created is True
     store.close()
     journal.close()

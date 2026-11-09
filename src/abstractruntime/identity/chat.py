@@ -1037,6 +1037,13 @@ def parse_diary_blocks(reply: str) -> Tuple[str, List[DiaryElection], List[str]]
     return marked.strip(), elections, notices
 
 
+def _diary_label(diary_out: Dict[str, Any], kind: str) -> str:
+    """How a public diary entry is named on the session sheet and its resolutions: by its record's title as formed
+    (his gist, else the authored title); while the title is still being written, said so - never his first line."""
+    title = str((diary_out or {}).get("title") or "").strip()
+    return f"a diary entry ({kind}): {title}" if title else f"a diary entry ({kind}) whose title is still being written"
+
+
 class TurnCancelled(RuntimeError):
     """The turn was cancelled by its host (the operator's Stop; `ChatSession.cancel_check`): no further tool, model
     call, formation or authoring ran after the check that saw it. `report` is the turn so far (the tools that really
@@ -2639,7 +2646,8 @@ class ChatSession:
                 word = "problem" if rs == "repaired_open_problem" else "question"
                 self.out(f"(resolved: {word} {e.resolves} leaves your open desk)")
                 self.session_resolutions.append(
-                    (str(e.resolves), word, (e.gist or e.text).strip().splitlines()[0])  # whole line
+                    # The entry named by its record's title (Codex review 3 #9), never his first line.
+                    (str(e.resolves), word, _diary_label(diary_out, e.kind))
                 )
             projected = diary_out.get("projected_record_id")
             if projected:
@@ -2658,10 +2666,9 @@ class ChatSession:
                 if e.visibility == "private":
                     sheet_line = "you kept a private diary entry"
                 else:
-                    # The first LINE, whole (root ADR 0054): a line is structure,
-                    # the old 120-character count was a cut on a stored sheet.
-                    gist_line = (e.gist or e.text).strip().splitlines()[0]
-                    sheet_line = f"you kept a diary entry ({e.kind}): {gist_line}"
+                    # The record's title as formed (Codex review 3 #9: his gist, else
+                    # the authored title), never his first line standing in.
+                    sheet_line = f"you kept {_diary_label(diary_out, e.kind)}"
                 self.session_sheet.append((str(projected), sheet_line))
                 # reflected_in edges only for non-private entries: a private
                 # projection carries no edges (containment; leak via
@@ -3395,12 +3402,12 @@ class ChatSession:
         return result
 
     def _author_diary_entry(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        """A public diary entry's TITLE, authored BEFORE the write when he elected no gist (operator 2026-11-09; Codex
-        review 2 #10): one summaries capability call over the entry's words (kept as a home artifact, its source).
-        His gist is his title; the record's summary is always his words (a diary entry is his act). The write
+        """A public diary entry's SUMMARY - and its TITLE when he elected no gist (or the gist is a mechanical note's)
+        - authored BEFORE the write (operator 2026-11-09; Codex review 2 #10, review 3 #9; AbstractMemory 71de051):
+        one summaries capability call over the entry's words, kept as a home artifact (its sources). The write
         carries `authored_metadata`, or `authoring_failure` (class, message, the capability model) when the call
-        failed, so the projection forms the record titled, or with its title pending and the failure line. A private
-        entry is left to the projection (its words never reach the graph)."""
+        failed, so the projection forms the record authored, or the missing fields pending with the failure line. A
+        private entry is left to the projection (its words never reach the graph)."""
         from .authoring import _reader_of, _source_artifact, author_metadata, authoring_failure_fields
         from .authoring import AuthoringUnavailable
 
@@ -3408,8 +3415,8 @@ class ChatSession:
             return payload
         if payload.get("authored_metadata") or payload.get("authoring_failure"):
             return payload
-        if str(payload.get("gist") or "").strip() and not payload.get("digest_method"):
-            return payload  # his gist is his title; nothing to author (a mechanical note's gist is machine words)
+        # His gist is his title; a mechanical note's gist is machine words, never a title (its title is authored).
+        need_title = not str(payload.get("gist") or "").strip() or bool(payload.get("digest_method"))
         body = str(payload.get("text") or "")
         llm = None
         try:
@@ -3423,8 +3430,10 @@ class ChatSession:
             reader = _reader_of(llm)
             sources = _source_artifact(self.home.artifacts, record_id=f"diary:{payload.get('turn_id') or ''}",
                                        kind="diary", body=body, authored=authored, reader=reader)
-            return {**payload, "authored_metadata": {"title": authored["title"], "reader": reader,
-                                                     "source": sources[0]}}
+            meta: Dict[str, Any] = {"summary": authored["summary"], "reader": reader, "sources": sources}
+            if need_title:
+                meta["title"] = authored["title"]
+            return {**payload, "authored_metadata": meta}
         except Exception as e:  # noqa: BLE001 - the entry is written; its record forms pending with the failure line
             why = authoring_failure_fields(e, llm)
             return {**payload, "authoring_failure": {**why, "error": f"{type(e).__name__}: {e}"}}

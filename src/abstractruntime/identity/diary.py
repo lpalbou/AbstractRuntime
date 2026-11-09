@@ -545,6 +545,15 @@ def build_diary_effect_handlers(
         }
         if projected_record_id:
             result["projected_record_id"] = projected_record_id
+            if str(stored.get("visibility") or entry.visibility) != "private":
+                # The record's metadata as formed (Codex review 3 #9): lanes name the entry by its title - never his
+                # first line - and see its authored summary (None = still being written).
+                from ..integrations.abstractmemory.identity_support import diary_record_metadata
+
+                meta = diary_record_metadata(gist=entry.gist, digest_method=entry.origin.get("digest_method"),
+                                             authored=authored)
+                result["title"] = meta["title"]
+                result["summary"] = meta["summary"]
         if stored.get("remind_at"):
             result["remind_at"] = stored.get("remind_at")
         if resolves_status:

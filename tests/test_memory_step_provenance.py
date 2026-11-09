@@ -53,7 +53,7 @@ class _Env:
             warnings.simplefilter("ignore", RuntimeWarning)
             self.store = SQLiteTripleStore(tmp_path / "memory.sqlite3")
             self.journal = SQLiteJournal(tmp_path / "memory.sqlite3")
-        self.ms = MemorySystem(store=self.store, journal=self.journal)
+        self.ms = MemorySystem(store=self.store, journal=self.journal, task_queue=True)
         self.facade = MemoryFacade(ledger_store=self.ledger, run_store=self.run_store, artifact_store=self.artifacts)
 
     def run_one(self, effect_type: EffectType, payload: Dict[str, Any], handlers: Dict[Any, Any]) -> tuple:

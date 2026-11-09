@@ -1032,8 +1032,11 @@ def build_visit_workflow(
                     if str(meta.get("visibility") or "") == "private":
                         sheet.append([str(projected), "you kept a private diary entry"])
                     else:
-                        gist = str(meta.get("gist") or "(no gist elected)")
-                        sheet.append([str(projected), f"you kept a diary entry ({meta.get('kind')}): {gist}"])
+                        # The record's title as formed (Codex review 3 #9), never his first line standing in.
+                        title = str(meta.get("title") or "").strip()
+                        sheet.append([str(projected), f"you kept a diary entry ({meta.get('kind')}): {title}" if title
+                                      else f"you kept a diary entry ({meta.get('kind')}) whose title is still being "
+                                           "written"])
             visit["sheet"] = sheet
             visit["last_folded_turn"] = turn["turn_id"]
         return StepPlan(

@@ -162,10 +162,11 @@ def test_a_diary_entry_without_a_gist_takes_no_title_from_its_text() -> None:
     record = _project(None, "Why do rivers bend?\nMore prose.")
     # No authored metadata reached the projection (this lane authored nothing): pending, never his first line as a
     # title, never a template standing in (Codex review 2 #10).
-    assert record.title in (None, "") and tuple(record.pending) == ("title",)
-    assert record.digest == "Why do rivers bend?", "his first line, whole: the record's summary is his words"
+    # The summary too is still to be authored (Codex review 3 #9): pending, his first line only its PROVISIONAL words.
+    assert record.title in (None, "") and tuple(record.pending) == ("title", "summary")
+    assert record.digest == "Why do rivers bend?"
     gisted = _project("Why rivers bend", "prose")
-    assert gisted.title == "Why rivers bend" and not tuple(gisted.pending or ()), "his gist, whole, no template"
+    assert gisted.title == "Why rivers bend" and tuple(gisted.pending) == ("summary",), "his gist, whole, no template"
 
 
 def test_a_legacy_placeholder_title_is_never_rendered_as_his() -> None:

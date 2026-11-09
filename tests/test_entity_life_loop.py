@@ -50,7 +50,7 @@ def _make_home(tmp_path: Path) -> Path:
     db = home_dir / "memory.sqlite3"
     store = SQLiteTripleStore(db)
     journal = SQLiteJournal(db)
-    ms = MemorySystem(store=store, journal=journal)
+    ms = MemorySystem(store=store, journal=journal, task_queue=True)
     assert engram(ms, spark, owner_id=entity_id).created is True
     # ONE standing drive (dm#89 day gate): a zero-drive desk RESTS
     # (settled_desk), so day-running tests seed a real open question —
@@ -64,6 +64,10 @@ def _make_home(tmp_path: Path) -> Path:
         visibility="normal", gist="what does a day owe its evening?",
         written_at="2026-07-19T08:00:00+00:00", turn_id="t-seed",
         origin={"run_id": "seed"},
+        # Its summary authored as every public entry's is (Codex review 3 #9): the seed is a complete record.
+        authored={"summary": "An open question about what a day owes its evening.",
+                  "reader": {"provider": "seed", "model": "seed", "thinking": None},
+                  "sources": [{"kind": "artifact", "artifact_id": "seed-authoring"}]},
     )
     store.close()
     journal.close()
@@ -1632,7 +1636,7 @@ def _make_home_no_drives(tmp_path: Path) -> Path:
     db = home_dir / "memory.sqlite3"
     store = SQLiteTripleStore(db)
     journal = SQLiteJournal(db)
-    ms = MemorySystem(store=store, journal=journal)
+    ms = MemorySystem(store=store, journal=journal, task_queue=True)
     assert engram(ms, spark, owner_id=entity_id).created is True
     store.close()
     journal.close()
@@ -1681,7 +1685,8 @@ def test_drives_cue_note_shows_each_drive_gist(tmp_path: Path) -> None:
     assert "#" in note and "read_memory" in note
     # The gist is the stored text's first line, never the machine title
     # (review R2-1: titles are cuts of the text).
-    assert '- "what does a day owe its evening?"' in note, note
+    # The seeded question's stored summary (authored, Codex review 3 #9) - its first line, as drive_gist reads it.
+    assert '- "An open question about what a day owes its evening."' in note, note
     assert "Diary entry (question)" not in note
     assert "owed" not in note and "the day is yours" not in note
     assert "next step" not in note, "no next step on the record, none shown"
@@ -1956,7 +1961,7 @@ def test_drives_cue_reserves_a_dust_slot(tmp_path: Path) -> None:
     db = home_dir / "memory.sqlite3"
     store = SQLiteTripleStore(db)
     journal = SQLiteJournal(db)
-    ms = MemorySystem(store=store, journal=journal)
+    ms = MemorySystem(store=store, journal=journal, task_queue=True)
     for i in range(5):
         project_diary_entry(
             ms, entity_id=entity_id, entry_id=f"diary_dust{i}", kind="question",

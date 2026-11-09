@@ -346,7 +346,7 @@ class TestProjectionPlane:
         assert projected.attributes["digest_method"] == "mechanical-flow-v1"
         # Codex review 2 #10: a mechanical note's gist is machine words, never his title, and no template or id tail
         # stands in: its title is authored - here none was passed, so it forms PENDING (with its failure line).
-        assert projected.title is None and tuple(projected.pending) == ("title",), projected
+        assert projected.title is None and tuple(projected.pending) == ("title", "summary"), projected
 
         # Undeclared entry: no attribute, slugged title (the entity's words).
         out2 = handler(

@@ -77,6 +77,26 @@ def identity_rows(memory_system: Any, *, scope: str, entity_id: str) -> List[Any
     )
 
 
+def diary_record_metadata(*, gist: Optional[str], digest_method: Optional[str],
+                          authored: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """A PUBLIC diary entry's record metadata, the one rule every lane reads (Codex review 2 #10, review 3 #9):
+    title = his elected gist, whole (a writer-declared MECHANICAL note's gist is machine words, never his title),
+    else the authored title; summary = the authored summary (the record's body is the book's entry, so its digest is
+    only a summary). Returns {title, summary, pending: [fields not authored], authored_fields}."""
+    got = authored if isinstance(authored, dict) else {}
+    his_title = None if digest_method else ((gist or "").strip() or None)
+    authored_title = str(got.get("title") or "").strip() or None
+    authored_summary = str(got.get("summary") or "").strip() or None
+    title = his_title or authored_title
+    return {
+        "title": title,
+        "summary": authored_summary,
+        "pending": [f for f, v in (("title", title), ("summary", authored_summary)) if v is None],
+        "authored_fields": [f for f, v in (("title", authored_title if not his_title else None),
+                                           ("summary", authored_summary)) if v is not None],
+    }
+
+
 def project_diary_entry(
     memory_system: Any,
     *,
@@ -169,21 +189,20 @@ def project_diary_entry(
             attributes["explores"] = explores
         provenance: Dict[str, Any] = {"source": "diary-projection", "entry_id": entry_id}
     else:
-        # AUTHORED AT FORMATION (operator 2026-11-09; Codex review 2 #10): no template, slug or cut. A diary record
-        # is his own act, so its SUMMARY is his words, never authored (memory refuses a pending summary on it): his
-        # elected gist, else his first line - a line is structure, kept whole (root ADR 0054). Its TITLE is his gist
-        # when he elected one, else authored by the summaries capability BEFORE the record forms (`authored`, passed
-        # by the lane that wrote the entry: ChatSession's DIARY_WRITE, the visit's close step). Only a recorded
-        # authoring failure forms the title pending - with its failure line (written below, once the record has its
-        # id); a lane that passed no authored title is that failure, said as such.
-        # A writer-declared MECHANICAL entry (digest_method: a deterministic close note) carries machine words, never
-        # his elected title: its title is authored like a gistless entry's.
-        his_title = None if digest_method else ((gist or "").strip() or None)
+        # AUTHORED AT FORMATION (operator 2026-11-09; Codex review 2 #10, review 3 #9): no template, slug, stand-in
+        # or cut (diary_record_metadata). The record's body is the book's entry, so its digest is only a SUMMARY -
+        # authored like any record's (AbstractMemory 71de051: `attributes.understanding` = the reading's provenance).
+        # Its TITLE is his elected gist, whole, else authored. Both come from the lane that wrote the entry
+        # (`authored`: ChatSession's DIARY_WRITE, the visit lane's act-only capture), BEFORE the record forms; only a
+        # recorded authoring failure forms a field pending - with its failure line (written below, once the record has
+        # its id); a lane that passed no authored metadata is that failure, said as such. The pending summary's
+        # provisional words are his gist, else his first line (memory marks them provisional).
+        meta = diary_record_metadata(gist=gist, digest_method=digest_method, authored=authored)
         got = authored if isinstance(authored, dict) else {}
-        authored_title = str(got.get("title") or "").strip() or None
-        title = his_title or authored_title
-        pending_fields = ["title"] if title is None else []
-        digest = (gist or "").strip() or (str(text or "").strip().splitlines() or [""])[0].strip()
+        title = meta["title"]
+        pending_fields = list(meta["pending"])
+        digest = meta["summary"] if meta["summary"] is not None else (
+            (gist or "").strip() or (str(text or "").strip().splitlines() or [""])[0].strip())
         attributes = {
             "entry_id": entry_id,
             "diary_type": diary_type,
@@ -196,10 +215,20 @@ def project_diary_entry(
             attributes["resolves"] = resolves
         if explores:
             attributes["explores"] = explores
-        authored_fields = ["title"] if (authored_title and not his_title) else []
-        if authored_fields:
-            attributes["metadata_authored"] = {"fields": authored_fields, "capability": "summaries",
+        if meta["authored_fields"]:
+            attributes["metadata_authored"] = {"fields": list(meta["authored_fields"]), "capability": "summaries",
                                                **{k: got[k] for k in ("reader", "source") if got.get(k)}}
+        if meta["summary"] is not None:
+            # The authored summary's reading (memory's `attributes.understanding`): a capability-model author, its
+            # reader and its ledger step (the authoring call kept as a home artifact).
+            from datetime import datetime, timezone
+
+            attributes["understanding"] = {
+                "version": 0, "field": "digest", "author": {"kind": "capability-model", "id": "summaries"},
+                "reader": dict(got.get("reader") or {}), "cause": {"cause": "formation"},
+                "sources": [dict(x) for x in (got.get("sources") or ([got["source"]] if got.get("source") else []))],
+                "derived_from": [], "understood_at": datetime.now(timezone.utc).isoformat(),
+            }
         provenance = {"source": "diary-projection", "entry_id": entry_id}
         provenance.update({k: v for k, v in origin.items() if v is not None})
 
@@ -207,8 +236,11 @@ def project_diary_entry(
     # memory): projections of machine-worded entries carry the writer's
     # digest_method so memory's machine-authorship bridge guard reads
     # projections and formed records through ONE key. Both branches — the
-    # attribute is authorship metadata, never content.
-    if digest_method:
+    # attribute is authorship metadata, never content. An AUTHORED summary is
+    # no machine words: its method is memory's authored one.
+    if not private and attributes.get("understanding"):
+        attributes["digest_method"] = "authored-v1"
+    elif digest_method:
         attributes["digest_method"] = digest_method
 
     edges = tuple(
@@ -265,10 +297,13 @@ def project_diary_entry(
             home_dir, entity=entity_id, record_id=record_id, kind="diary", raw_block=str(text or ""),
             template_id="diary.projection", provider=why.get("provider"), model=why.get("model"),
             reason=str(why.get("reason") or "unavailable"),
-            missing="title",
+            missing="both" if len(pending_fields) == 2 else pending_fields[0],
             extra={"entry_id": entry_id, "capability": "summaries",
                    **{k: why[k] for k in ("error_class", "error_message", "error") if why.get(k)}},
         )
-        if logged.get("logged"):
-            warnings.append(str(logged["logged"]))
+        # The warning that rides the handler's result (and so the run vars / ledger) is word-free: the entry's words
+        # stay in the book and in the operator's failure file, never in the run store (G1, act-only).
+        if logged.get("line") is not None:
+            warnings.append(f"#AUTHORING_FAILURE diary record {record_id}: {', '.join(pending_fields)} pending "
+                            f"({why.get('reason') or 'unavailable'})")
     return record_id, warnings

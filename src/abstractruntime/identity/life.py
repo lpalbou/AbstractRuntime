@@ -2497,6 +2497,16 @@ def loop_process_status(home_dir: Path) -> Dict[str, Any]:
     return status
 
 
+def loop_start_refusal(home_dir: Path) -> Optional[str]:
+    """Why a loop start is refused (None = admitted). A start is admitted when the loop has something it may do: a
+    queued job (work runs whatever the personal grant says, CONTRACT v3 D1) or the operator's personal grant. The
+    day gate decides the rest at every boundary. Pure read."""
+    grant_refusal = personal_grant_refusal(read_personal_grant(home_dir))
+    if grant_refusal is None or jobs_queued(home_dir):
+        return None
+    return f"no personal time: {grant_refusal} - and no job is queued"
+
+
 def spawn_loop_process(
     home_dir: Path,
     *,
@@ -2575,12 +2585,12 @@ def spawn_loop_process(
                 f"his own time is already running (pid {status.get('pid')}, phase {status.get('phase')})"
             )
 
-        # PERSONAL-GRANT GATE at the spawn door (laurent 12:44): a start
-        # surface must refuse SYNCHRONOUSLY when personal is not armed —
-        # spawning a child that dies in its own log is a silent refusal.
-        grant_refusal = personal_grant_refusal(read_personal_grant(home_dir))
-        if grant_refusal is not None:
-            raise RuntimeError(f"no personal time: {grant_refusal}")
+        # ADMISSION at the spawn door (laurent 12:44; CONTRACT v3 D1): a start surface refuses SYNCHRONOUSLY when
+        # the loop would have nothing it may do - spawning a child that dies in its own log is a silent refusal.
+        # A queued job is admitted whatever the personal grant says (work is the job queue, never a grant).
+        refusal = loop_start_refusal(home_dir)
+        if refusal is not None:
+            raise RuntimeError(refusal)
 
         # DIVERGENCE LANE KILLED (laurent 12:39, c1430 ask 2b: the night pid
         # ran OVH from argv regardless of substrate.yaml): a spawn whose
@@ -4980,14 +4990,14 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(f"stop file already present at {stop_file} - remove it to start")
         return 1
 
-    # PERSONAL-GRANT GATE at the start door (laurent 12:44: own time IS the
-    # personal phase, OFF by default, operator-armed): refuse BEFORE the
-    # substrate resolve or any state change. run() re-checks at every
-    # day-open; this gate makes the refusal immediate and the exit code
-    # scriptable for start surfaces.
-    start_refusal = personal_grant_refusal(read_personal_grant(home_dir))
+    # ADMISSION at the start door (laurent 12:44: own time IS the personal
+    # phase, OFF by default, operator-armed; CONTRACT v3 D1: a queued job
+    # runs whatever the grant says): refuse BEFORE the substrate resolve or
+    # any state change. run() re-checks at every day-open; this gate makes
+    # the refusal immediate and the exit code scriptable for start surfaces.
+    start_refusal = loop_start_refusal(home_dir)
     if start_refusal is not None:
-        print(f"no personal time: {start_refusal}")
+        print(start_refusal)
         return 3
 
     # CONTEXT RECOMMENDATION at the start door (operator re-ruling

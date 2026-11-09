@@ -1082,3 +1082,39 @@ def test_a_task_status_appends_without_flock_where_there_is_none(tmp_path: Path,
     monkeypatch.setitem(sys.modules, "fcntl", None)  # `import fcntl` raises ImportError
     append_task_status(home_dir, "t1", "done", by="entity:liveling", note="done: labelled")
     assert _task_status(home_dir, "t1") == [("done", "done: labelled")]
+
+
+# ---------------------------------------------------------------- Codex review 2 (2026-11-09)
+
+
+def test_queued_work_is_admitted_at_the_spawn_door_with_own_time_off(tmp_path: Path, monkeypatch) -> None:
+    """Codex-2 #5: the spawn door enforced the personal grant unconditionally, so a job queued with own time off
+    never started. A queued job is admitted whatever the grant says; nothing queued and no grant still refuses, and
+    the ownership checks (one start at a time, a running loop) stand."""
+    import subprocess
+
+    from abstractruntime.identity.life import spawn_loop_process
+
+    home_dir = _make_home(tmp_path)
+    write_personal_grant(home_dir, mode="disabled")
+    spawned: List[List[str]] = []
+
+    class _Proc:
+        pid = 999999
+
+        def poll(self):
+            return None
+
+    monkeypatch.setattr(subprocess, "Popen", lambda argv, *a, **k: spawned.append(list(argv)) or _Proc())
+    with pytest.raises(RuntimeError, match="no personal time"):
+        spawn_loop_process(home_dir, provider="lmstudio", model="m")
+    assert spawned == []
+    _add_task(home_dir, "t1", "Label the boxes")
+    try:
+        spawn_loop_process(home_dir, provider="lmstudio", model="m")
+    except Exception:  # noqa: BLE001 - only whether the child was launched matters here
+        pass
+    assert len(spawned) == 1 and "--home" in spawned[0], spawned
+    from abstractruntime.identity.life import loop_start_refusal
+
+    assert loop_start_refusal(home_dir) is None

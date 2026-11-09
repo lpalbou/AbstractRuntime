@@ -10,28 +10,31 @@ SKILL FOLDERS itself: the whole file, UTF-8, in the line-numbered shape core
 renders, ``start_line``/``end_line`` honoured — before core's tool (and its
 policies) is ever asked. Any other path reaches core unchanged.
 
-Skill folders derive from the run's own record, never from the model's words:
+WHERE a skill folder may be is the HOST's word, never the run's (review
+2026-11-09 finding 1): run vars are client-writable, so folders taken from a
+``skills`` mapping's roots, ``_runtime.skills_resolution`` or the ``<path>``
+of ``_runtime.skills_block`` let any client read every file beside any
+``SKILL.md`` on the machine. The host registers its skill roots once per
+process (``register_skill_roots``; AbstractGateway registers its curated shelf
+and its imported folder when it builds a service). With NO root registered,
+nothing is served here and every path goes to core (fail closed).
 
-- ``vars["skills"]`` as a mapping (the workforce payload shape,
-  ``abstractgateway.skills_union.resolve_backlog_skills``): roots ``shelf``,
-  ``imported_shelf``, ``roots`` (a list or a ``os.pathsep``-joined string) and
-  ``ABSTRACTCODE_SKILLS_ROOTS`` (joined the same way; also under ``env``),
-  names ``active``;
-- ``vars["skills"]`` as a list of names (the run-start selection a gateway
-  resolves): roots and the ``active`` names come from
-  ``vars["_runtime"]["skills_resolution"]`` (``shelf``, ``imported_shelf``,
-  ``roots``) when the host recorded them; without a resolution the listed
-  names stand;
-- ``vars["_runtime"]["skills_block"]``: the ``<path>`` each ``<skill>`` carries
-  (AbstractSkill 0.3.11 renders the SKILL.md the loader read) names its
-  folder directly.
+WHICH skills under those roots is the run's selection, by NAME only:
 
-A folder qualifies as ``<root>/<name>`` or ``<root>/skills/<name>`` only when
-it holds a ``SKILL.md``. A requested path qualifies when it lies lexically
-under a skill folder (as spelled, or as its real path); it is then resolved
-with ``os.path.realpath`` and must still lie under that folder's real path —
-a symlink leading out is REFUSED with a typed error, never served and never
-handed to core.
+- ``vars["_runtime"]["skills_resolution"]["active"]`` when the host recorded a
+  resolution (the trust-gated outcome; held and blocked names are not in it);
+- otherwise ``vars["skills"]``: a list of names, or the ``active`` names of a
+  mapping;
+- plus the ``<name>`` of each ``<skill>`` in ``vars["_runtime"]["skills_block"]``
+  (the block rides alone into Agent-node and subflow child runs).
+
+A folder qualifies as ``<root>/<name>`` or ``<root>/skills/<name>`` of a
+REGISTERED root, only when it holds a ``SKILL.md``; a name is one path segment
+(never ``/``, ``.`` or ``..``). A requested path qualifies when it lies
+lexically under such a folder (as spelled, or as its real path); it is then
+resolved with ``os.path.realpath`` and must still lie under that folder's real
+path — a symlink leading out is REFUSED with a typed error, never served and
+never handed to core.
 """
 
 from __future__ import annotations
@@ -39,15 +42,56 @@ from __future__ import annotations
 import html
 import os
 import re
+import threading
 from pathlib import Path
-from typing import Any, List, Mapping, Optional, Tuple
+from typing import Any, Iterable, List, Mapping, Optional, Tuple, Union
 
 SKILL_FILENAME = "SKILL.md"
-ROOTS_ENV_KEY = "ABSTRACTCODE_SKILLS_ROOTS"
-_PATH_RE = re.compile(r"<path>(.*?)</path>", re.DOTALL)
+_NAME_RE = re.compile(r"<name>(.*?)</name>", re.DOTALL)
+
+# The host's skill roots (absolute, normalized), registered once per process.
+_ROOTS_LOCK = threading.Lock()
+_REGISTERED_ROOTS: List[str] = []
 
 # (served?, output, error): the shape of one tool result's payload half.
 SkillRead = Tuple[bool, Optional[str], Optional[str]]
+
+
+def register_skill_roots(roots: Iterable[Union[str, "os.PathLike[str]"]]) -> List[str]:
+    """Add the HOST's skill roots for this process: folders whose ``<name>/SKILL.md`` or
+    ``skills/<name>/SKILL.md`` are skills. Only absolute paths count; a root need not exist yet
+    (a shelf seeded later is served once it holds the skill). Returns every registered root.
+
+    Only a host calls this, from its own configuration — never from run vars."""
+    added: List[str] = []
+    for raw in roots or ():
+        try:
+            text = os.fspath(raw)
+        except TypeError:
+            continue
+        if not isinstance(text, str) or not text.strip():
+            continue
+        expanded = os.path.expanduser(text.strip())
+        if not os.path.isabs(expanded):
+            continue
+        added.append(os.path.normpath(expanded))
+    with _ROOTS_LOCK:
+        for root in added:
+            if root not in _REGISTERED_ROOTS:
+                _REGISTERED_ROOTS.append(root)
+        return list(_REGISTERED_ROOTS)
+
+
+def registered_skill_roots() -> List[str]:
+    """The skill roots the host registered in this process (empty = nothing is served)."""
+    with _ROOTS_LOCK:
+        return list(_REGISTERED_ROOTS)
+
+
+def clear_skill_roots() -> None:
+    """Forget every registered root (tests; a host rebuilding its configuration)."""
+    with _ROOTS_LOCK:
+        _REGISTERED_ROOTS.clear()
 
 
 def _as_names(raw: Any) -> List[str]:
@@ -68,94 +112,54 @@ def _as_names(raw: Any) -> List[str]:
     return out
 
 
-def _as_roots(raw: Any) -> List[str]:
-    """A root value: one path, a ``os.pathsep``-joined string of paths, or a list of either."""
-    if raw is None or isinstance(raw, bool):
+def _names_in_block(block: Any) -> List[str]:
+    if not isinstance(block, str) or "<name>" not in block:
         return []
-    items: List[Any] = list(raw) if isinstance(raw, (list, tuple)) else [raw]
-    out: List[str] = []
-    for item in items:
-        if not isinstance(item, str):
-            continue
-        for piece in item.split(os.pathsep):
-            p = piece.strip()
-            if p:
-                out.append(p)
-    return out
+    return _as_names([html.unescape(m.group(1)).strip() for m in _NAME_RE.finditer(block)])
 
 
-def _roots_and_active(block: Mapping[str, Any]) -> Tuple[List[str], List[str]]:
-    roots: List[str] = []
-    for key in ("shelf", "imported_shelf", "roots", ROOTS_ENV_KEY):
-        roots.extend(_as_roots(block.get(key)))
-    env = block.get("env")
-    if isinstance(env, Mapping):
-        roots.extend(_as_roots(env.get(ROOTS_ENV_KEY)))
-    return roots, _as_names(block.get("active"))
-
-
-def _folders_from_skills_block(block: Any) -> List[Path]:
-    if not isinstance(block, str) or "<path>" not in block:
-        return []
-    out: List[Path] = []
-    for match in _PATH_RE.finditer(block):
-        raw = html.unescape(match.group(1)).strip()
-        if not raw:
-            continue
-        p = Path(os.path.expanduser(raw))
-        out.append(p.parent if p.name == SKILL_FILENAME else p)
-    return out
-
-
-def skill_folders_for_run_vars(vars: Optional[Mapping[str, Any]]) -> List[Path]:
-    """The skill folders this run was given, as absolute normalized paths that hold a SKILL.md."""
+def selected_skill_names(vars: Optional[Mapping[str, Any]]) -> List[str]:
+    """The skill NAMES this run selected (see the module doc); never a path."""
     if not isinstance(vars, Mapping):
         return []
-    roots: List[str] = []
     names: List[str] = []
-    folders: List[Path] = []
-
     skills = vars.get("skills")
     rt = vars.get("_runtime")
     resolution = rt.get("skills_resolution") if isinstance(rt, Mapping) else None
-
-    if isinstance(skills, Mapping):
-        r, n = _roots_and_active(skills)
-        roots.extend(r)
-        names.extend(n)
+    if isinstance(resolution, Mapping) and "active" in resolution:
+        names.extend(_as_names(resolution.get("active")))
+    elif isinstance(skills, Mapping):
+        names.extend(_as_names(skills.get("active")))
     elif isinstance(skills, (list, tuple, str)):
-        if isinstance(resolution, Mapping) and "active" in resolution:
-            names.extend(_as_names(resolution.get("active")))
-        else:
-            names.extend(_as_names(skills))
-    if isinstance(resolution, Mapping):
-        r, n = _roots_and_active(resolution)
-        roots.extend(r)
-        names.extend(x for x in n if x not in names)
+        names.extend(_as_names(skills))
     if isinstance(rt, Mapping):
-        folders.extend(_folders_from_skills_block(rt.get("skills_block")))
+        names.extend(n for n in _names_in_block(rt.get("skills_block")) if n not in names)
+    return names
 
-    for root in roots:
-        base = Path(os.path.expanduser(root))
-        if not base.is_absolute():
-            continue
-        for name in names:
-            folders.append(base / name)
-            folders.append(base / "skills" / name)
 
+def skill_folders_for_run_vars(vars: Optional[Mapping[str, Any]]) -> List[Path]:
+    """The skill folders this run may read: ``<root>/<name>`` or ``<root>/skills/<name>`` of a
+    REGISTERED root, holding a SKILL.md, for each name the run selected."""
+    roots = registered_skill_roots()
+    if not roots:
+        return []
+    names = selected_skill_names(vars)
     out: List[Path] = []
     seen: set = set()
-    for folder in folders:
-        try:
-            if not folder.is_absolute() or not (folder / SKILL_FILENAME).is_file():
-                continue
-        except OSError:
-            continue
-        key = os.path.normpath(str(folder))
-        if key in seen:
-            continue
-        seen.add(key)
-        out.append(Path(key))
+    for root in roots:
+        base = Path(root)
+        for name in names:
+            for folder in (base / name, base / "skills" / name):
+                try:
+                    if not (folder / SKILL_FILENAME).is_file():
+                        continue
+                except OSError:
+                    continue
+                key = os.path.normpath(str(folder))
+                if key in seen:
+                    continue
+                seen.add(key)
+                out.append(Path(key))
     return out
 
 

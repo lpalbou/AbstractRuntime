@@ -4460,8 +4460,11 @@ def make_tool_calls_handler(
             # `read_file` inside one of the run's own skill folders is answered
             # by the runtime, whole, BEFORE core's tool — and so before the
             # workspace `.abstractignore` and the workspace scope — can refuse
-            # it. The folders come from the run's record (skill_roots.py);
-            # any other path goes on to core exactly as before.
+            # it. The folders lie under the skill roots the HOST registered,
+            # for the skill names the run selected (skill_roots.py; never a
+            # path from run vars, review 2026-11-09 finding 1); nothing is
+            # registered = nothing served. Any other path goes on to core
+            # exactly as before.
             if name == "read_file":
                 served = skill_file_read(run.vars if isinstance(run.vars, dict) else None, arguments)
                 if served is not None:

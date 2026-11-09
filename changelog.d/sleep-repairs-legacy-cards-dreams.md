@@ -9,5 +9,6 @@
   (AbstractMemory 11687df: the marker and the `title.author` / `digest.author` tasks formation gives; a declared
   title reads None until authored, the old one kept in its history). The drainer then authors their titles
   (`retitle`) and their summaries (`rewrite_digest`; a card through its own write, a dream in place). A refused
-  declaration (e.g. `protected_kind`) is logged (`#REPAIR_REFUSED`) and counted; the receipt is
-  `authoring: {declared, refused, authored, deferred, failed}`.
+  declaration (e.g. `protected_kind`) is logged (`#REPAIR_REFUSED`) and counted; memory's `rearmed` answer (a
+  missing task repaired, AbstractMemory 39e479e) is a success counted with the re-arms; the receipt is
+  `authoring: {declared, refused, rearmed, authored, deferred, failed}`.

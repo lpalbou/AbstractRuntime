@@ -4753,9 +4753,10 @@ def _sleep_authoring(home: Any, eid: str, scopes: List[Tuple[str, str]],
         declared = declare_missing_metadata(home.ms, scopes=scopes, out=out)
         receipt["declared"] = int(declared.get("declared") or 0)
         receipt["refused"] = int(declared.get("refused") or 0)
-        # The marked records whose authoring tasks all ended get fresh ones (memory's re-arm), in this home's scopes.
+        # The marked records whose authoring tasks all ended get fresh ones (memory's re-arm), in this home's scopes;
+        # a declaration memory answered by repairing a missing task counts there too.
         rearmed = rearm_exhausted_authoring(home.ms, scopes=scopes, out=out)
-        receipt["rearmed"] = int(rearmed.get("rearmed") or 0)
+        receipt["rearmed"] = int(rearmed.get("rearmed") or 0) + int(declared.get("repaired") or 0)
         receipt["refused"] += int(rearmed.get("refused") or 0)
 
         def _diary_text(entry_id: str) -> Optional[str]:

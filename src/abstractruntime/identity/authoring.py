@@ -444,12 +444,14 @@ def declare_missing_metadata(ms: Any, *, scopes: Sequence[Tuple[str, str]], out:
     record formed pending gets, so the drainer authors its title and its summary through retitle / rewrite_digest -
     cards and dreams included. A declared title is stored None until authored (the old one stays in its history).
     Nothing is authored here and nothing is cut. A refusal (e.g. protected_kind: the summary of his own act) is
-    logged loudly and counted. Returns {declared (fields), scanned, refused}."""
+    logged loudly and counted. Memory may also answer outcome "rearmed" (or "applied" beside new fields) with the
+    fields whose task it REPAIRED (AbstractMemory 39e479e): a success, counted in `repaired`. Returns {declared
+    (fields), repaired (fields), scanned, refused}."""
     from abstractmemory import TripleQuery
 
     from .title_failures import is_placeholder_title
 
-    receipt = {"declared": 0, "scanned": 0, "refused": 0}
+    receipt = {"declared": 0, "repaired": 0, "scanned": 0, "refused": 0}
     if getattr(ms, "tasks", None) is None:
         return receipt
     for scope, owner in scopes:
@@ -471,12 +473,18 @@ def declare_missing_metadata(ms: Any, *, scopes: Sequence[Tuple[str, str]], out:
             if not fields:
                 continue
             res = ms.declare_pending(str(a.subject), fields=fields, cause="repair", reason="legacy_missing")
-            if res.get("outcome") == "refused":
+            outcome = res.get("outcome")
+            if outcome == "refused":
                 receipt["refused"] += 1
                 out(f"#REPAIR_REFUSED memory refused to declare {kind} {a.subject} pending ({', '.join(fields)}): "
                     f"{res.get('reason')}{' - ' + str(res.get('detail')) if res.get('detail') else ''}")
                 continue
+            if outcome not in ("applied", "rearmed", "unchanged"):
+                receipt["refused"] += 1
+                out(f"#REPAIR_REFUSED memory answered an unknown outcome {outcome!r} declaring {kind} {a.subject}")
+                continue
             receipt["declared"] += len(res.get("declared") or [])
+            receipt["repaired"] += len(res.get("repaired") or [])
     if receipt["declared"]:
         out(f"(sleep: {receipt['declared']} missing title(s)/summary(ies) declared pending for their authoring)")
     return receipt

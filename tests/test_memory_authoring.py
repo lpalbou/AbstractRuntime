@@ -494,3 +494,28 @@ def test_without_memorys_rearm_verb_the_drainer_says_so_once_and_writes_nothing(
     home.close()
     assert len([ln for ln in lines if ln.startswith("#MISSING_VERB abstractmemory.rearm_pending")]) == 1, lines
     assert [t["status"] for t in _tasks(home_dir, "title.author") if t["target_id"] == target] == ["failed"]
+
+
+def test_a_declaration_memory_answers_rearmed_is_a_repair_not_a_refusal() -> None:
+    """AbstractMemory 39e479e: declare_pending on a field already pending with no live task REPAIRS it and answers
+    outcome "rearmed" (`repaired` the fields); "applied" may carry `repaired` beside new fields. The sleep's scan
+    counts both as success, never as a refusal; an outcome it does not know is said loudly."""
+    from types import SimpleNamespace
+
+    from abstractruntime.identity.authoring import declare_missing_metadata
+
+    answers = iter([
+        {"outcome": "rearmed", "reason": None, "declared": [], "repaired": ["title"]},
+        {"outcome": "applied", "declared": ["summary"], "repaired": ["title"]},
+        {"outcome": "unchanged", "reason": "already_pending", "declared": [], "repaired": []},
+        {"outcome": "mystery"},
+    ])
+    rows = [SimpleNamespace(subject=f"ex:interest-{i}", object="", assertion_id=f"a{i}",
+                            attributes={"record_kind": "interest", "title": None}) for i in range(4)]
+    ms = SimpleNamespace(tasks=object(), store=SimpleNamespace(query=lambda q: rows),
+                         declare_pending=lambda rid, **kw: next(answers))
+    lines: List[str] = []
+    receipt = declare_missing_metadata(ms, scopes=[("self", "entity:x")], out=lines.append)
+    assert (receipt["declared"], receipt["repaired"], receipt["refused"]) == (1, 2, 1), receipt
+    assert [ln for ln in lines if ln.startswith("#REPAIR_REFUSED")] == [
+        "#REPAIR_REFUSED memory answered an unknown outcome 'mystery' declaring interest ex:interest-3"]

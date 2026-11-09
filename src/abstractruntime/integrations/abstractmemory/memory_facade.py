@@ -102,6 +102,8 @@ _REEXPORTS: Dict[str, str] = {
     "open_questions": "abstractmemory",
     "open_problems": "abstractmemory",
     "open_ideas": "abstractmemory",
+    # The sleep cadence (gateway entity_idle_sleep.py: an idle entity's sleep thresholds, AbstractMemory 26503e3).
+    "records_since_maintenance": "abstractmemory",
     # The graph (AbstractMemory 0.4.0+, ADR 0003): typed provenance, revisions, the one write path.
     "SourceRef": "abstractmemory.graph",
     "Provenance": "abstractmemory.graph",

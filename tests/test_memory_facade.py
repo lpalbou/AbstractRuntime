@@ -53,6 +53,7 @@ EXPECTED_GATEWAY_NAMES = (
     "TripleAssertion", "ClosureRecord", "cognition_health", "verify_diary_chain", "engram", "sleep_pass",
     "dream_pass", "reembed_store", "read_embedding_pin", "DRIVE_PRESSURE_BOUND", "drive_pressure",
     "promote_candidate", "reject_candidate", "open_questions", "open_problems", "open_ideas",
+    "records_since_maintenance",
     "SourceRef", "Provenance", "ProvenanceRequired", "InvalidSourceRef", "Revision", "RevisionOp", "RevisionResult",
     "MemoryGraph",
 )
@@ -136,6 +137,9 @@ def test_gateway_names_are_abstractmemorys_own_objects() -> None:
     assert (mf.open_questions, mf.open_problems, mf.open_ideas) == (
         diary.open_questions, diary.open_problems, diary.open_ideas)
     assert mf.open_questions is diary.open_questions and mf.open_ideas is diary.open_ideas
+    import abstractmemory.sleep_cadence as sleep_cadence
+
+    assert mf.records_since_maintenance is sleep_cadence.records_since_maintenance
     with pytest.raises(AttributeError):
         mf.NotAMemoryName  # noqa: B018 - an unknown name fails loudly
 

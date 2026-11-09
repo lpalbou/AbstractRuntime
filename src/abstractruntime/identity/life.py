@@ -1330,6 +1330,7 @@ def write_loop_status(
     home_dir: Path, phase: str, *, stopped_by: Optional[str] = None,
     day_kind: Optional[str] = None, day_cause: Optional[Dict[str, Any]] = None,
     tunables: Optional[Dict[str, Any]] = None,
+    owner: Optional[Tuple[Optional[int], Optional[str]]] = None,
 ) -> None:
     """Best-effort status write; the loop must never die over its status.
 
@@ -1352,11 +1353,17 @@ def write_loop_status(
 
     if phase not in LOOP_PHASES:
         raise ValueError(f"phase must be one of {LOOP_PHASES}, got {phase!r}")
+    # `owner` (a HOST writing the status of a loop it is not - the hard stop): the (pid, start-time token) of
+    # the loop the record is about, or (None, None). Never the caller's own pid: a later hard stop reading it
+    # would signal the caller (the gateway's own test process was SIGTERMed so, 2026-11-09).
     payload: Dict[str, Any] = {
         "phase": phase,
         "updated_at": datetime.now(timezone.utc).isoformat(),
-        "pid": os.getpid(),
     }
+    if owner is None:
+        payload["pid"] = os.getpid()
+    elif owner[0]:
+        payload["pid"] = int(owner[0])
     prior = read_loop_status(home_dir)
     if isinstance(prior.get("substrate"), dict):
         payload["substrate"] = dict(prior["substrate"])
@@ -1375,7 +1382,7 @@ def write_loop_status(
         payload["tunables"] = dict(prior["tunables"])
         if prior.get("tunables_at"):
             payload["tunables_at"] = str(prior["tunables_at"])
-    started = _own_start_time()
+    started = _own_start_time() if owner is None else (owner[1] or None)
     if started:
         payload["pid_started_at"] = started
     if stopped_by:
@@ -2133,65 +2140,127 @@ def hard_stop_loop(home_dir: Path, *, reason: str = "", requested_by: str = "adm
         pid = int(status.get("pid") or 0)
     except (TypeError, ValueError):
         pid = 0
+    stamped_token = str(status.get("pid_started_at") or "")
+
+    # SIGNAL ONLY A LIVE OWN-TIME LOOP INCARNATION (whole-package adversary P0-class 2026-07-13; gateway slice
+    # 2026-11-09: a status written by the CALLER named the caller's pid, and a second hard stop SIGTERMed the
+    # gateway's own process). Before any signal: the pid is not the caller's own; it is alive; its start-time
+    # token matches the stamp (an unstamped file keeps the legacy phase gate); and its command line runs the loop
+    # module (LOOP_MODULE_ARGV, the argv spawn_loop_process and the CLI use).
+    outcome = ""
+    target = False
+    if pid <= 0:
+        outcome = "no loop pid recorded"
+    elif pid == os.getpid():
+        outcome = "refused: the recorded pid is the calling process itself"
+    elif not _pid_alive(pid):
+        outcome = "no live process at the recorded pid"
+    elif stamped_token and _pid_start_time(pid) not in (None, stamped_token):
+        outcome = "refused: the pid now belongs to another process (recycled)"
+    elif not stamped_token and status.get("phase") not in ("day", "between"):
+        outcome = "refused: an unstamped status that does not say a loop is up"
+    elif LOOP_MODULE_ARGV not in (_pid_command(pid) or ""):
+        outcome = "refused: the process at the recorded pid is not an own-time loop"
+    else:
+        target = True
 
     killed = False
     escalated = False
-    # SIGNAL ONLY OUR OWN INCARNATION (whole-package adversary P0-class,
-    # 2026-07-13: a clean-stop file whose pid the OS recycled drew a
-    # SIGKILL at an innocent process — the token that detects exactly this
-    # was computed one line above and ignored). The predicate is IDENTITY,
-    # not the folded `running` (which also folds the staleness belt — a
-    # WEDGED same-incarnation loop reads not-running yet is exactly what an
-    # emergency freeze must still kill): kill when the pid is alive AND its
-    # start-time token matches the file's stamp; unstamped files (older
-    # writers) keep the legacy phase-gated behavior, so a clean "stopped"
-    # file never draws a signal either way.
-    stamped_token = str(status.get("pid_started_at") or "")
-    if pid > 0 and _pid_alive(pid):
-        if stamped_token:
-            same_incarnation = _pid_start_time(pid) == stamped_token
-        else:
-            same_incarnation = status.get("phase") in ("day", "between")
-    else:
-        same_incarnation = False
-    if same_incarnation:
+    signal_name: Optional[str] = None
+    if target:
         try:
             os.kill(pid, signal.SIGTERM)
+            signal_name = "SIGTERM"
         except (OSError, ProcessLookupError):
             pass
         # Short grace for the interpreter to die — NOT for ceremony (there is
         # none in a freeze); then escalate.
         deadline = _time.monotonic() + 3.0
         while _time.monotonic() < deadline:
-            if not _pid_alive(pid):
+            if _pid_gone(pid):
                 killed = True
                 break
             _time.sleep(0.1)
-        if not killed and _pid_alive(pid):
+        if not killed and not _pid_gone(pid):
             try:
                 os.kill(pid, signal.SIGKILL)
                 escalated = True
+                signal_name = "SIGKILL"
             except (OSError, ProcessLookupError):
                 pass
             _time.sleep(0.2)
-            killed = not _pid_alive(pid)
+            killed = _pid_gone(pid)
+        outcome = "killed" if killed else "the loop is still alive after SIGKILL"
 
-    # The status file must read stopped immediately (the dead process can no
-    # longer write its own transition).
+    # The status file must read stopped immediately (the dead process can no longer write its own transition) -
+    # naming the loop it is about (its pid and token when it was one), never this caller.
     try:
-        write_loop_status(home_dir, "stopped")
+        write_loop_status(
+            home_dir, "stopped", stopped_by="kill_switch",
+            owner=((pid, stamped_token or None) if target else (None, None)),
+        )
     except Exception:  # noqa: BLE001
         pass
 
     return {
-        "frozen": True,
+        # The explicit result (gateway contract, 2026-11-09): killed only once the process is confirmed gone.
+        "killed": bool(killed),
         "pid": pid or None,
-        "was_running": bool(pid and (killed or escalated)),
+        "signal": signal_name,
+        "reason": outcome,
+        "requested_reason": str(reason or ""),
+        # Legacy keys (kept for existing callers).
+        "frozen": True,
+        "was_running": bool(target and signal_name),
         "escalated_to_sigkill": escalated,
-        "reason": str(reason or ""),
         "requested_by": str(requested_by or "admin"),
         "status": loop_process_status(home_dir),
     }
+
+
+def _pid_gone(pid: Any) -> bool:
+    """True once `pid` is gone: reaped (our own child is reaped here), not signalable, or a zombie (exited, its
+    parent has not reaped it yet - os.kill(pid, 0) still succeeds on one)."""
+    import os
+    import subprocess
+
+    try:
+        done, _status = os.waitpid(int(pid), os.WNOHANG)
+        if done == int(pid):
+            return True
+    except (ChildProcessError, OSError, ValueError):
+        pass
+    if not _pid_alive(pid):
+        return True
+    try:
+        out = subprocess.run(
+            ["ps", "-p", str(int(pid)), "-o", "stat="], capture_output=True, text=True, timeout=5,
+            env={**os.environ, "LC_ALL": "C", "TZ": "UTC"},
+        )
+        return (out.stdout or "").strip().upper().startswith("Z")
+    except Exception:  # noqa: BLE001
+        return False
+
+
+# The loop's own command-line mark: spawn_loop_process and the CLI run `python -m abstractruntime.identity.life`.
+LOOP_MODULE_ARGV = "-m abstractruntime.identity.life"
+
+
+def _pid_command(pid: Any) -> Optional[str]:
+    """The command line of `pid` as ps prints it (None on any failure)."""
+    import os
+    import subprocess
+
+    try:
+        out = subprocess.run(
+            ["ps", "-p", str(int(pid)), "-o", "command="],
+            capture_output=True, text=True, timeout=5,
+            env={**os.environ, "LC_ALL": "C", "TZ": "UTC"},
+        )
+        text = (out.stdout or "").strip()
+        return text or None
+    except Exception:  # noqa: BLE001
+        return None
 
 
 def fast_forward_loop_commands(home_dir: Path) -> int:

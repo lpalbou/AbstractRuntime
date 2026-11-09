@@ -351,7 +351,9 @@ def test_hard_stop_freezes_now_without_ceremony(tmp_path: Path) -> None:
     # old timestamp now reads as a corpse by design.
     from datetime import datetime, timezone as _tz
 
-    proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(300)"])
+    # (Its command line carries the loop module's argv: the hard stop signals only an own-time loop process,
+    # gateway slice 2026-11-09.)
+    proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(300)", "-m abstractruntime.identity.life"])
     (home_dir / "loop_status").write_text(
         _json.dumps({
             "phase": "day",

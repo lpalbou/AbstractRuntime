@@ -639,3 +639,72 @@ def test_a_work_turn_cut_by_work_off_names_its_cause(tmp_path: Path) -> None:
     assert not (home_dir / "workspace" / "note.md").exists() and report.tools == []
     assert "[tool call not run: write_file - Work was turned off]" in reply
     assert any(n.startswith("#NOTE Work was turned off: 1 tool call(s) not run") for n in report.notices)
+
+
+# ---------------------------------------------------------------- the kill switch's runtime half (gateway slice
+# findings 2026-11-09): hard_stop_loop signals only a live own-time loop incarnation and says what it did
+
+
+def _stand_in_loop(argv_mark: str = "-m abstractruntime.identity.life"):
+    import subprocess
+
+    # A process whose command line carries the loop module's argv, like spawn_loop_process's child.
+    return subprocess.Popen([sys.executable, "-c", "import time; time.sleep(300)", argv_mark])
+
+
+def _status_for(home_dir: Path, pid: int, token: Any = None, phase: str = "day") -> None:
+    from datetime import datetime, timezone
+
+    rec = {"phase": phase, "updated_at": datetime.now(timezone.utc).isoformat(), "pid": pid}
+    if token:
+        rec["pid_started_at"] = token
+    (home_dir / "loop_status").write_text(json.dumps(rec) + "\n", encoding="utf-8")
+
+
+def test_hard_stop_kills_the_loop_and_never_records_the_caller(tmp_path: Path) -> None:
+    import os
+
+    from abstractruntime.identity.life import _pid_start_time, hard_stop_loop
+
+    home_dir = _make_home(tmp_path)
+    proc = _stand_in_loop()
+    try:
+        _status_for(home_dir, proc.pid, _pid_start_time(proc.pid))
+        first = hard_stop_loop(home_dir, reason="drill", requested_by="admin")
+        assert first["killed"] is True and first["pid"] == proc.pid and first["signal"] == "SIGTERM"
+        assert first["reason"] == "killed" and first["requested_reason"] == "drill"
+        assert proc.poll() is not None
+        raw = json.loads((home_dir / "loop_status").read_text(encoding="utf-8"))
+        assert raw.get("pid") != os.getpid(), "the status never names the calling process"
+        assert raw["phase"] == "stopped" and raw["stopped_by"] == "kill_switch"
+        # A second stop finds nothing to signal - and never signals the caller.
+        second = hard_stop_loop(home_dir, reason="again")
+        assert second["killed"] is False and second["signal"] is None
+        assert second["reason"] in ("no live process at the recorded pid", "no loop pid recorded")
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+
+
+def test_hard_stop_refuses_the_callers_own_pid_a_recycled_pid_and_a_foreign_process(tmp_path: Path) -> None:
+    import os
+
+    from abstractruntime.identity.life import _pid_start_time, hard_stop_loop, read_loop_status
+
+    home_dir = _make_home(tmp_path)
+    # The 2026-11-09 shape: a status that names the caller (written by an earlier hard stop from this process).
+    _status_for(home_dir, os.getpid(), _pid_start_time(os.getpid()), phase="between")
+    own = hard_stop_loop(home_dir)
+    assert own["killed"] is False and own["signal"] is None and "calling process" in own["reason"]
+    assert read_loop_status(home_dir).get("pid") is None, "the bogus pid is cleared, never kept"
+    foreign = _stand_in_loop(argv_mark="--not-the-loop")
+    try:
+        _status_for(home_dir, foreign.pid, _pid_start_time(foreign.pid))
+        out = hard_stop_loop(home_dir)
+        assert out["killed"] is False and "not an own-time loop" in out["reason"]
+        assert foreign.poll() is None, "a process that is not the loop is never signalled"
+        _status_for(home_dir, foreign.pid, "Mon Jan  1 00:00:00 2001")
+        out = hard_stop_loop(home_dir)
+        assert out["killed"] is False and "recycled" in out["reason"] and foreign.poll() is None
+    finally:
+        foreign.kill()

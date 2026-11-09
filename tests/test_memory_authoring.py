@@ -368,3 +368,40 @@ def test_a_failing_handler_leaves_the_close_records_pending_with_their_failure_l
             assert len(mine) == 1 and mine[0]["record_id"] == str(a.subject) and mine[0]["missing"] == missing, mine
     finally:
         ert.close()
+
+
+def test_the_sleep_repairs_legacy_mechanical_cards_and_dreams(tmp_path: Path, monkeypatch) -> None:
+    """Memory 4f3a77e forms cards and dreams pending; ones stored before it carry memory's mechanical labels ("World
+    model: <subject>", "Dream: ...", a mechanical-card body). The sleep's repair declares them and the drainer
+    authors their titles through retitle. Their SUMMARIES: memory refuses rewrite_digest on a card or dream that
+    carries no pending marker (use_author_world_model / use_narrate_dream) and offers no verb to declare a stored
+    record pending - the drainer logs that refusal loudly (memory_refused) instead of writing around it."""
+    import abstractmemory
+    from abstractmemory import MemoryRecordInput
+
+    from abstractruntime.identity.chat import open_home
+    from abstractruntime.identity.life import build_consolidator, write_entity_state
+
+    home_dir = _workspace_home(tmp_path)
+    home = open_home(home_dir)
+    ids = {}
+    for kind, title, attrs in (
+            ("world_model", "World model: person:sol",
+             {"target": "person:sol", "digest_method": "mechanical-card-v2", "revision": 1}),
+            ("dream", "Dream: rivers beside patience", {"interpretation_required": True})):
+        ids[kind] = home.ms.remember_many([MemoryRecordInput(kind=kind, title=title, digest=f"mechanical {kind} body",
+                                                             attributes=attrs)],
+                                          scope="self", owner_id=home.entity_id, idempotency_key=f"legacy-{kind}",
+                                          turn_id=f"legacy-{kind}")[0]
+    home.close()
+    monkeypatch.setattr(abstractmemory, "sleep_pass", lambda *a, **k: {"maintenance": {}, "dream": {}})
+    write_entity_state(home_dir, "asleep", reason="self-elected sleep: full", mode="dreaming", written_by="self")
+    result = build_consolidator(home_dir, out=lambda s: None, llm_for_capability=lambda name: _Capability())()
+    receipt = result["authoring"]
+    assert receipt["declared"] == 4, receipt  # both titles and both summaries
+    assert receipt["authored"] == 2, receipt  # the two titles
+    for kind, rid in ids.items():
+        row = [r for r in _rows(home_dir, kind) if str(r.subject) == str(rid)][-1]
+        assert row.attributes["title"] == TITLE, (kind, row.attributes["title"])
+    refused = [f for f in _failures(tmp_path) if f["reason"] == "memory_refused"]
+    assert {f["kind"] for f in refused} == {"world_model", "dream"} and all(f["missing"] == "summary" for f in refused)

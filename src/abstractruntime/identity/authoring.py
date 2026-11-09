@@ -327,10 +327,36 @@ def drain_authoring(
             receipt["failed"] += 1
             record_authoring_failure(
                 home_dir, entity=entity, record_id=str(t["target_id"]), kind=kind, raw_block=body,
-                template_id=AUTHORING_TEMPLATE_ID, provider=None, model=None, reason="malformed",
+                template_id=AUTHORING_TEMPLATE_ID, provider=None, model=None,
+                reason="memory_refused" if " write refused: " in str(e) else "malformed",
                 missing=need[0], extra={"task_id": t["task_id"], "error": str(e)}, out=out,
             )
     return receipt
+
+
+def _legacy_mechanical_title(kind: str, title: Any, attrs: Dict[str, Any]) -> bool:
+    """A card or dream stored before memory formed them pending (4f3a77e) carries memory's own mechanical label:
+    "World model: <subject>" with no authored title provenance, or "Dream: ...". Memory's label formats, not text."""
+    text = str(title or "")
+    if kind == "world_model":
+        return text.startswith("World model: ") and not attrs.get("title_provenance")
+    if kind == "dream":
+        return text.startswith("Dream: ")
+    return False
+
+
+def _legacy_mechanical_summary(kind: str, title: Any, method: str) -> bool:
+    """A legacy card whose body is memory's mechanical card (or carries a mechanical delta), or a legacy dream (its
+    body is the night's mechanical composition)."""
+    if kind == "world_model":
+        try:
+            from abstractmemory.understanding import MECHANICAL_CARD_METHODS
+        except ImportError:  # pragma: no cover - engine skew
+            MECHANICAL_CARD_METHODS = frozenset({"mechanical-card-v2"})
+        return method in MECHANICAL_CARD_METHODS or method.endswith("+delta")
+    if kind == "dream":
+        return str(title or "").startswith("Dream: ")
+    return False
 
 
 def declare_missing_metadata(ms: Any, *, scopes: Sequence[Tuple[str, str]], out: Callable[[str], None] = lambda _s: None
@@ -356,10 +382,13 @@ def declare_missing_metadata(ms: Any, *, scopes: Sequence[Tuple[str, str]], out:
                 continue
             receipt["scanned"] += 1
             title = attrs.get("title")
+            kind = str(attrs.get("record_kind") or "")
+            method = str(attrs.get("digest_method") or "")
             lacks = []
-            if not (isinstance(title, str) and title.strip()) or is_placeholder_title(title) or attrs.get("title_missing"):
+            if (not (isinstance(title, str) and title.strip()) or is_placeholder_title(title)
+                    or attrs.get("title_missing") or _legacy_mechanical_title(kind, title, attrs)):
                 lacks.append(("title.author", "title"))
-            if not str(a.object or "").strip():
+            if not str(a.object or "").strip() or _legacy_mechanical_summary(kind, title, method):
                 lacks.append(("digest.author", "summary"))
             for task_kind, fld in lacks:
                 res = tasks.enqueue(

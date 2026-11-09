@@ -90,14 +90,72 @@ def test_a_failed_model_call_answers_that_turn_and_the_visit_continues(tmp_path:
         state = _say(ert, wf, run_id, "and now?")
         assert state.status == RunStatus.WAITING
         assert _answers(ert, run_id)[-1]["message"].startswith("Third answer")
-        # The failed turn left no half in the transcript: the visit history holds only answered turns.
+        # The failed turn is folded with an explicit outcome (Codex #5): the history alternates, the next turn
+        # never stacks two user messages.
         history = list((state.vars.get("_visit") or {}).get("history") or [])
-        assert [m["role"] for m in history] == ["user", "assistant", "user", "assistant"], history
+        assert [m["role"] for m in history] == ["user", "assistant"] * 3, history
+        assert history[3]["content"].startswith("[this turn could not be answered: ")
+        assert "provider timed out" in history[3]["content"]
         if arm == "react":
             roles = [m.get("role") for m in (state.vars.get("context") or {}).get("messages") or []]
             assert "user" in roles and not any(a == b == "user" for a, b in zip(roles, roles[1:])), roles
         state = ert.runtime.resume(workflow=wf, run_id=run_id, wait_key=VISITOR_WAIT_KEY,
                                    payload={"kind": "close"}, max_steps=400)
         assert state.status == RunStatus.COMPLETED
+    finally:
+        ert.close()
+
+
+def test_a_failed_react_turn_keeps_what_it_already_did(tmp_path: Path) -> None:
+    """Codex #5's probe: the turn ran write_file, then its next model call failed. The completed tool result stays in
+    the transcript, the failed-turn outcome closes the turn, and the error answer reports the tool that really ran."""
+    home_dir = _make_home(tmp_path)
+    ran: List[str] = []
+
+    def tools(run: Any, effect: Effect, dnn: Any = None) -> EffectOutcome:
+        results = []
+        for tc in ((effect.payload or {}).get("tool_calls") or []):
+            ran.append(str(tc.get("name")))
+            results.append({"call_id": tc.get("call_id"), "name": tc.get("name"), "success": True,
+                            "output": "wrote note.md (12 bytes)", "error": None})
+        return EffectOutcome.completed({"mode": "executed", "results": results})
+
+    llm = _FlakyLLM([
+        {"content": "Hello.", "tool_calls": []},
+        {"content": "", "tool_calls": [{"name": "write_file", "arguments": {"path": "note.md", "content": "x"},
+                                        "call_id": "w1"}]},
+        RuntimeError("provider timed out after 1800 s"),
+        {"content": "Back now.", "tool_calls": []},
+    ])
+    ert = open_entity_runtime(home_dir, extra_handlers={EffectType.LLM_CALL: llm, EffectType.TOOL_CALLS: tools})
+    try:
+        pytest.importorskip("abstractagent")
+        from abstractagent.adapters.react_runtime import create_react_workflow, reset_react_turn
+        from abstractagent.logic.react import ReActLogic
+        from abstractcore.tools import ToolDefinition
+
+        react = create_react_workflow(
+            logic=ReActLogic(tools=[ToolDefinition(name="write_file", description="Write", parameters={})]),
+            workflow_id="entity-visit-react", provider="stub", model="stub",
+            allowed_tools=["write_file"], final_next_node=HARVEST_NODE,
+        )
+        wf = build_visit_workflow(
+            ert.home, participants=["person:admin"], idle_seconds=3600,
+            model_info={"provider": "test", "model": "scripted"}, visit_id="visit-keeps",
+            react_middle=ReactMiddle(nodes=react.nodes, entry="reason", reset_turn=reset_react_turn),
+        )
+        run_id = ert.runtime.start(workflow=wf, vars={}, session_id="visit-keeps")
+        assert ert.runtime.tick(workflow=wf, run_id=run_id, max_steps=50).status == RunStatus.WAITING
+        assert _say(ert, wf, run_id, "hello").status == RunStatus.WAITING
+        state = _say(ert, wf, run_id, "please write a note")
+        assert state.status == RunStatus.WAITING, state.error
+        assert ran == ["write_file"]
+        answer = _answers(ert, run_id)[-1]
+        assert answer["level"] == "error" and answer["tools_ran"] == ["write_file"], answer
+        msgs = state.vars["context"]["messages"]
+        assert any("wrote note.md" in str(m.get("content")) for m in msgs), "the completed tool result stays"
+        assert msgs[-1]["role"] == "assistant" and msgs[-1]["content"].startswith("[this turn could not be answered")
+        state = _say(ert, wf, run_id, "and now?")
+        assert state.status == RunStatus.WAITING and _answers(ert, run_id)[-1]["message"].startswith("Back now")
     finally:
         ert.close()

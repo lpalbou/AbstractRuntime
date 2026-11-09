@@ -1003,20 +1003,34 @@ def build_visit_workflow(
         return StepPlan(node_id=MODEL_GATE_NODE, next_node=after or "PARK")
 
     def turn_failed_node(run: RunState, ctx: Any) -> StepPlan:
-        """THIS turn could not be answered: answer the error for it (level error) and park - the visit continues.
-        The turn leaves no half in the transcript (the visitor's message of the failed turn is taken back out of
-        the adapter's messages, so the next turn never stacks two user messages); nothing is formed."""
+        """THIS turn could not be answered: answer the error for it (level error) and park - the visit continues
+        (Codex review 2026-11-09 #5). What the turn already did STAYS: its completed tool results and any operator
+        guidance remain in the transcript, an explicit failed-turn outcome closes the turn there (so the next turn
+        never stacks two user messages), the visit history folds the turn with that outcome, and the answer reports
+        the tools that really ran. Nothing is formed for the failed turn."""
+        visit = _ns(run, "_visit")
         turn = _ns(run, "_turn")
         err = str(turn.get("model_error") or "the model call failed")
-        runtime_ns = _ns(run, "_runtime")
-        start = runtime_ns.get("history_window_turn_start")
-        msgs = (run.vars.get("context") or {}).get("messages") if isinstance(run.vars.get("context"), dict) else None
-        if isinstance(msgs, list) and isinstance(start, int) and 0 <= start <= len(msgs):
-            del msgs[start:]
-        runtime_ns.pop("history_window_turn_start", None)
+        outcome = f"[this turn could not be answered: {err}]"
+        captures = ((run.vars.get("_temp") or {}).get("turn_captures") or {}) if isinstance(run.vars.get("_temp"), dict) else {}
+        tools_ran = [str(t) for t in (captures.get("tools_ran") or []) if str(t or "").strip()]
+        turn["tools_ran"] = tools_ran
         context_ns = run.vars.get("context")
         if isinstance(context_ns, dict):
+            msgs = context_ns.get("messages")
+            if isinstance(msgs, list) and msgs and _ns(run, "_runtime").get("history_window_turn_start") is not None:
+                msgs.append({"role": "assistant", "content": outcome,
+                             "metadata": {"kind": "turn_failed", "turn_id": turn.get("turn_id"), "error": err}})
             context_ns.pop("attachments", None)
+        if visit.get("last_folded_turn") != turn.get("turn_id"):
+            history = list(visit.get("history") or [])
+            user_entry: Dict[str, Any] = {"role": "user", "content": turn.get("rendered_user") or turn.get("text") or ""}
+            if turn.get("attachments"):
+                user_entry["attachments"] = list(turn["attachments"])
+            history.append(user_entry)
+            history.append({"role": "assistant", "content": outcome})
+            visit["history"] = history
+            visit["last_folded_turn"] = turn.get("turn_id")
         return StepPlan(
             node_id=TURN_FAILED_NODE,
             effect=Effect(
@@ -1026,7 +1040,7 @@ def build_visit_workflow(
                     "level": "error",
                     "turn_id": turn.get("turn_id"),
                     "turn_error": err,
-                    "tools_ran": [],
+                    "tools_ran": tools_ran,
                 },
                 result_key="_turn.answered",
             ),

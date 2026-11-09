@@ -2159,26 +2159,39 @@ def _pid_alive(pid: Any) -> bool:
         return False
 
 
+def visitor_waiting(state: Dict[str, Any]) -> bool:
+    """A visit door is waiting on this home: the visiting posture (asleep +
+    mode=visiting, or the door's auto-yield reason) — the same predicate the
+    tick boundary reads."""
+    return str(state.get("state") or "") == "asleep" and (
+        str(state.get("mode") or "") == "visiting" or "auto-yield" in str(state.get("reason") or "")
+    )
+
+
 def await_loop_quiescent(
     home_dir: Path,
     *,
-    timeout_seconds: float = 900.0,
+    timeout_seconds: Optional[float] = 900.0,
     poll_seconds: float = 2.0,
     sleep_fn: Callable[[float], None] = time.sleep,
 ) -> bool:
     """Block until no summon is open on this home (phase != "day").
 
-    A "day" status whose pid is dead counts as quiescent (a crashed loop
-    must not deadlock the visitor). Returns False on timeout — the caller
-    REFUSES to summon (one life, one summon; never a double)."""
-    deadline = time.monotonic() + float(timeout_seconds)
+    A "day" status that is not running (dead pid, recycled pid, stale
+    heartbeat — `read_loop_status`) counts as quiescent (a crashed loop must
+    not deadlock the visitor). `timeout_seconds=None` waits without a limit
+    (the visit doors: a visit never fails, operator 2026-11-09, root
+    ADR-0027). Returns False on timeout — the caller REFUSES to summon (one
+    life, one summon; never a double)."""
+    # #[WARNING:TIMEOUT] optional caller bound; None = no limit.
+    deadline = None if timeout_seconds is None else time.monotonic() + float(timeout_seconds)
     while True:
         status = read_loop_status(home_dir)
         if status.get("phase") != "day":
             return True
-        if not _pid_alive(status.get("pid")):
+        if not status.get("running"):
             return True  # stale status from a dead loop
-        if time.monotonic() >= deadline:
+        if deadline is not None and time.monotonic() >= deadline:
             return False
         sleep_fn(poll_seconds)
 
@@ -3279,6 +3292,10 @@ class LifeLoop:
             opened = False
             try:
                 session = self.open_session()
+                # A VISITOR AT THE DOOR stops new work inside the tick
+                # (operator 2026-11-09: reachable within a minute or two): the
+                # session checks this before running the tools a reply elects.
+                session.yield_check = lambda: visitor_waiting(self._operator_state())
                 # F2 commit-exclusion half: drive ids the cue names must not
                 # be strengthened BY the cue turn (a day-open mention is the
                 # composer's act, not his use). First turn only; a later
@@ -3420,9 +3437,13 @@ class LifeLoop:
                             # rest: the day's close runs the look-back over
                             # the whole day right after. Its failure never
                             # fails the tick (the turn already happened).
+                            # Skipped too when a visitor is at the door: the
+                            # day's look-back is deferred to the next open
+                            # (B1 fast-yield) and covers this tick.
                             if (
                                 getattr(session, "phase", "") == PHASE_PERSONAL
                                 and parse_rest_block(reply)[1] is None
+                                and not visitor_waiting(self._operator_state())
                             ):
                                 try:
                                     session.tick_lookback()
@@ -3538,7 +3559,13 @@ class LifeLoop:
                             break
 
                     cue = parse_next_cue(marked) or NEUTRAL_CUE
-                    if self.tick_seconds > 0 and self._interruptible_sleep(self.tick_seconds):
+                    # No pause between ticks while a visitor waits: the
+                    # boundary check right after yields to him.
+                    if (
+                        self.tick_seconds > 0
+                        and not visitor_waiting(self._operator_state())
+                        and self._interruptible_sleep(self.tick_seconds)
+                    ):
                         report.stopped_by = self.stop_cause or "stop_file"
                         break
             finally:
@@ -3570,14 +3597,18 @@ class LifeLoop:
                 # look-back at the next open over this home, attributed to
                 # THIS session. Quiescence (loop_status != "day") lands
                 # ~immediately after the in-flight turn instead of after a
-                # reflection LLM call, which is what keeps the visit door's
-                # 55s yield window honest.
+                # reflection LLM call, which keeps the waiting visitor's wait
+                # short.
                 #
                 # Normal closes (rest/max_ticks/failures/operator-sleep)
                 # reflect inline, under their own lease window: the
                 # reflection is a home writer too (APPRAISE + summary FORM).
                 # A held lease waits honestly (lease-free poll); a stop
                 # during the wait defers to the same salvage marker.
+                # A visitor who knocked during the day's LAST tick (or a
+                # rest/verdict tick) never met the tick-boundary check: the
+                # close yields fast for him too.
+                visit_yield = visit_yield or visitor_waiting(self._operator_state())
                 try:
                     if visit_yield:
                         if session.reports:
@@ -3808,6 +3839,14 @@ class LifeLoop:
                     )
                     continue
 
+            if report.stopped_by == "rest" and self.rest_minutes > 0 and visitor_waiting(self._operator_state()):
+                # He chose rest as a visitor knocked: the visit comes first.
+                # Sleeping now would write asleep over the door's visiting
+                # posture; the top gate idles on the visit instead.
+                self.out("(rest elected as a visitor knocked - the visit comes first)")
+                report.stopped_by = "max_ticks"  # the loop's continue-marker
+                report.rest_reason = None
+                continue
             if report.stopped_by == "rest" and self.rest_minutes > 0:
                 # 24/7 mode: rest is SLEEP, not a blank nap (maintainer ruling
                 # 2026-07-08). The window is where consolidation/dreams run —

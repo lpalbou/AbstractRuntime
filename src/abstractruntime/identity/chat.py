@@ -1103,6 +1103,9 @@ class ChatSession:
         self.out = out
         self.enable_tools = bool(enable_tools)
         self.web_search_fn = web_search_fn
+        # Set by the own-time loop only (life.py): True = a visitor is at the
+        # door, so the turn runs no new tools and ends on what he has said.
+        self.yield_check: Optional[Callable[[], bool]] = None
         # Which mind-substrate formed each memory (capability ≠ identity, but
         # provenance matters: "which model was I running on when I thought
         # this" is a legitimate question for him AND for the operator's
@@ -2019,6 +2022,13 @@ class ChatSession:
         # diary_read to fetch the words).
         lookup_phases: List[str] = []
         tool_result_phases: List[str] = []
+        visitor_cut = False
+
+        def _visitor_waiting() -> bool:
+            # The own-time loop's yield_check (life.py): a visitor is at the
+            # door, so no new tool, correction call or nudge runs this turn.
+            return visitor_cut or (self.yield_check is not None and bool(self.yield_check()))
+
         if self.enable_tools:
             from .tools import MAX_TOOL_BLOCKS_PER_TURN, MAX_TOOL_ROUNDS_PER_TURN, native_tool_elections
 
@@ -2063,7 +2073,7 @@ class ChatSession:
                     imitated = sorted(
                         set(re.findall(r"\[used tool: ([a-z_]+)\]", tool_marked)) - set(report.tools)
                     )
-                    if imitated and not corrected_imitation:
+                    if imitated and not corrected_imitation and not _visitor_waiting():
                         corrected_imitation = True
                         report.notices.append(
                             "#NOTE marker imitation caught in-turn "
@@ -2120,7 +2130,7 @@ class ChatSession:
                         )
                         raw_reply = original_before_nudge
                         break
-                    if malformed and not nudged_malformed and rounds < MAX_TOOL_ROUNDS_PER_TURN:
+                    if malformed and not nudged_malformed and rounds < MAX_TOOL_ROUNDS_PER_TURN and not _visitor_waiting():
                         nudged_malformed = True
                         original_before_nudge = tool_marked
                         rounds += 1  # the nudge consumes one round, never exceeds
@@ -2153,7 +2163,27 @@ class ChatSession:
                             break
                         raw_reply = nudged_reply
                         continue  # re-parse: the repaired attempt may hold real elections
+                    if malformed and _visitor_waiting():
+                        report.notices.append(
+                            f"#NOTE format-repair nudge skipped: a visitor is at the door ({malformed}; nothing ran)"
+                        )
                     raw_reply = tool_marked  # refused/unknown markers stay honest
+                    break
+                # A VISITOR AT THE DOOR (operator 2026-11-09: a visit never
+                # fails; he is reachable within a minute or two): the tools
+                # this reply elected do not run, the turn ends on what he has
+                # said, and the loop yields at the tick boundary right after.
+                if _visitor_waiting():
+                    visitor_cut = True
+                    for name in sorted({e.name for e in tool_elections}):
+                        tool_marked = tool_marked.replace(
+                            f"[used tool: {name}]", f"[tool call not run: {name} - a visitor arrived]"
+                        )
+                    report.notices.append(
+                        f"#NOTE a visitor is at the door: {len(tool_elections)} tool call(s) not run; "
+                        "the turn ends here"
+                    )
+                    raw_reply = tool_marked
                     break
                 rounds += 1
                 turn_budget -= len(tool_elections)
@@ -2260,7 +2290,7 @@ class ChatSession:
         # rest in the episode, teaching that wordless work is wrong). The
         # guard is a visit/work-lane honesty device; personal ticks may be
         # silent.
-        if self.enable_tools and self.phase != "personal":
+        if self.enable_tools and self.phase != "personal" and not _visitor_waiting():
             residue = re.sub(r"\[used tool: [a-z_ ]+\]", "", raw_reply)
             residue = re.sub(r"\[tool call [^\]]*\]", "", residue)
             residue = re.sub(r"\[diary block [^\]]*\]", "", residue)
@@ -2313,7 +2343,12 @@ class ChatSession:
         # the corrected reply elects tools, one bounded round runs them. A
         # persistent claim is delivered — with a loud notice (the observer's
         # independent render flag is the operator's second check).
-        if self.enable_tools and not report.tools and _LIVENESS_CLAIM_RE.search(raw_reply):
+        if self.enable_tools and not report.tools and _LIVENESS_CLAIM_RE.search(raw_reply) and _visitor_waiting():
+            report.notices.append(
+                f"#NOTE liveness claim without a lookup left uncorrected: a visitor is at the door "
+                f"({_LIVENESS_CLAIM_RE.search(raw_reply).group(0)!r}; no lookup ran)"
+            )
+        elif self.enable_tools and not report.tools and _LIVENESS_CLAIM_RE.search(raw_reply):
             claim = _LIVENESS_CLAIM_RE.search(raw_reply).group(0)
             report.notices.append(
                 f"#NOTE liveness claim without a lookup caught in-turn ({claim!r}); asked for honesty"

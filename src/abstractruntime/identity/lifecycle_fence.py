@@ -33,8 +33,9 @@ from __future__ import annotations
 
 import os
 import threading
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Callable, Dict, Optional, Tuple, TypeVar, Union
+from typing import Any, Callable, Dict, Iterator, Optional, Tuple, TypeVar, Union
 
 from .chat import TurnCancelled
 
@@ -93,6 +94,9 @@ _SENTINELS = (KILL_SWITCH, RESUME)
 _SIGNAL: Dict[str, Tuple[_Signature, int]] = {}
 _BUMPED_HERE: set = set()
 _table_lock = threading.Lock()
+# home -> the threading.Events of the model calls in flight under a fence of that home (LifecycleFence.cancel_event):
+# the bump sets them in the bumping process, so a provider that honours `cancel_event=` stops within a token (§2.3).
+_INFLIGHT: Dict[str, set] = {}
 
 
 def home_key(home_dir: Union[str, Path]) -> str:
@@ -171,6 +175,10 @@ def signal_bump(home_dir: Union[str, Path], generation: int) -> None:
     signature = _stat_signature(str(signal_path(home_dir)))
     _publish(key, signature, generation, authoritative=True)
     _BUMPED_HERE.add(key)
+    with _table_lock:
+        inflight = list(_INFLIGHT.get(key, ()))
+    for event in inflight:
+        event.set()  # the operator's own act stops the decode in flight (not an arbitrary interrupt, §2.3)
 
 
 def _reread_signal(key: str, path: str, signature: _Signature) -> Optional[int]:
@@ -240,6 +248,25 @@ class LifecycleFence:
         if self.moved():
             return True
         return read_truth(self.home_dir) != self.generation
+
+    @contextmanager
+    def cancel_event(self) -> Iterator[threading.Event]:
+        """A `threading.Event` for ONE model call (`cancel_event=` of a provider that honours it): set by the bump of
+        this home in this process, or already set when the generation moved. Registered for the call only."""
+        event = threading.Event()
+        with _table_lock:
+            _INFLIGHT.setdefault(self._key, set()).add(event)
+        try:
+            if self.moved():
+                event.set()
+            yield event
+        finally:
+            with _table_lock:
+                held = _INFLIGHT.get(self._key)
+                if held is not None:
+                    held.discard(event)
+                    if not held:
+                        _INFLIGHT.pop(self._key, None)
 
     def commit(self, what: str, fn: Callable[[], T]) -> T:
         """Run `fn` inside the home state lock after re-reading the generation there: refused (StaleLifecycleGeneration,

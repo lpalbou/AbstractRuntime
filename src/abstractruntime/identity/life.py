@@ -4403,9 +4403,10 @@ class LifeLoop:
                 # (operator 2026-11-09: reachable within a minute or two): the
                 # session checks this before running the tools a reply elects.
                 session.yield_check = lambda: visitor_waiting(self._operator_state())
-                # THE OPERATOR'S STOP cancels the turn at its next effect boundary (Codex review 2 #2): a moved
-                # lifecycle generation - no further tool, model call, formation or authoring in this process.
-                session.cancel_check = self._generation_moved
+                # THE OPERATOR'S STOP cancels the turn at its next effect boundary (Codex review 2 #2; STOP-LANE-DESIGN
+                # §2.2): the session carries the loop's fence - no further model attempt, tool, effect, formation or
+                # authoring in this process once it moved; a reply that returns after it is abandoned.
+                session.fence = self._fence
                 # F2 commit-exclusion half: drive ids the cue names must not
                 # be strengthened BY the cue turn (a day-open mention is the
                 # composer's act, not his use). First turn only; a later

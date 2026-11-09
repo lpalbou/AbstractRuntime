@@ -71,7 +71,7 @@ COMMIT_POINTS = (
 OPENERS = ("open_home", "open_entity_runtime")
 # Modules whose unfenced calls are still to be fenced in a later step of this lane (chat.py is another worker's file
 # until the lead frees it). The scan below fails when such a module is clean, so the exemption cannot outlive its fix.
-PENDING_FENCE = {"identity/chat.py"}
+PENDING_FENCE: set = set()  # chat.py was fenced in step 4 (its CLI visit and salvage pass the fence)
 
 
 def _bump_in_another_process(home_dir: Path) -> int:
@@ -1026,3 +1026,270 @@ def test_a_stop_inside_chat_effects_is_the_operators_stop_never_a_failure(tmp_pa
                                                "turn_id": "t"})
     finally:
         home.close()
+
+
+# ------------------------------------------------------------------ step 4: ChatSession carries the fence
+
+
+def _session_over(home_dir: Path, llm: Any):
+    from abstractruntime.identity.chat import ChatSession
+
+    home, fence = _fenced_home(home_dir)
+    s = ChatSession(home, llm, participants=["person:laurent"], context_window=20000, out=lambda _s: None,
+                    phase="visit", model_info={"provider": "lmstudio", "model": "qwen-test"})
+    assert s.fence is fence  # the session takes the home's fence
+    return home, s, fence
+
+
+def test_stop_fence_retry_model_call(tmp_path: Path) -> None:
+    """T1 (Codex review 3 #1; design class A): `_generate` checked cancellation once, before its harmony retry loop -
+    a Stop during attempt 1 still sent attempt 2 to the model. Now every attempt is checked: the first fails with the
+    known harmony 400 while the Stop lands, the second never runs."""
+    from abstractruntime.identity.chat import ChatSession
+
+    home_dir = _make_home(tmp_path)
+    calls: List[int] = []
+
+    class _HarmonyRace:
+        def generate(self, *, messages, system_prompt, **kw):
+            calls.append(len(calls))
+            _stop_here(home_dir)  # the operator's Stop during attempt 1
+            raise RuntimeError(f"400: {ChatSession._HARMONY_HEADER_400}")
+
+    home, s, _fence = _session_over(home_dir, _HarmonyRace())
+    try:
+        with pytest.raises(StoppedByOperator) as stopped:
+            s.turn("hello")
+    finally:
+        home.close()
+    assert calls == [0], f"a model attempt ran after the Stop: {calls}"
+    assert "attempt 2" in stopped.value.where or "answering" in stopped.value.where, stopped.value.where
+
+
+def test_stop_fence_abandons_late_reply(tmp_path: Path) -> None:
+    """T2 (design classes A/B/C): the model's reply returns AFTER the Stop: it is abandoned - the turn raises the
+    operator's Stop, nothing forms (no MEMORY_FORM), the book takes nothing, the spend does not count it, and no
+    further model call runs."""
+    home_dir = _make_home(tmp_path)
+    at_stop: Dict[str, Any] = {}
+
+    def _stop() -> None:
+        _stop_here(home_dir)
+        at_stop["snapshot"] = _snapshot(home_dir)
+
+    llm = _HookLLM(["A reply finished after the Stop.\n```diary kind=note\ngist: late\nLate words.\n```",
+                    "NEVER - no second call"], hooks={0: _stop})
+    home, s, _fence = _session_over(home_dir, llm)
+    spend_before = dict(s.spend)
+    try:
+        with pytest.raises(StoppedByOperator):
+            s.turn("hello")
+        spend_after = dict(s.spend)
+    finally:
+        home.close()
+    assert llm.n == 1 and llm.replies == ["NEVER - no second call"], (llm.n, llm.replies)
+    assert spend_after == spend_before, "the abandoned reply was counted as spend"
+    after = _snapshot(home_dir)
+    changed = sorted(k for k in set(after) | set(at_stop["snapshot"])
+                     if after.get(k) != at_stop["snapshot"].get(k))
+    assert not changed, f"the late reply landed: {changed}"
+
+
+def test_the_bump_stops_the_decode_in_flight_through_cancel_event(tmp_path: Path) -> None:
+    """§2.3: in the process that bumps (the gateway's Stop), a client that honours `cancel_event=` sees it set while
+    it is still decoding - the provider stops within a token; the reply is abandoned anyway."""
+    home_dir = _make_home(tmp_path)
+    seen: Dict[str, Any] = {}
+
+    class _Cancellable:
+        def generate(self, *, messages, system_prompt, cancel_event=None, **kw):
+            seen["before"] = cancel_event.is_set()
+            _stop_here(home_dir)
+            seen["after"] = cancel_event.is_set()
+            return type("R", (), {"content": "partial", "usage": None})()
+
+    home, s, _fence = _session_over(home_dir, _Cancellable())
+    try:
+        with pytest.raises(StoppedByOperator):
+            s.turn("hello")
+    finally:
+        home.close()
+    assert seen == {"before": False, "after": True}, seen
+    assert not lf._INFLIGHT, "an in-flight cancel event outlived its call"
+
+
+def test_the_host_set_cancel_check_is_gone_loudly(tmp_path: Path) -> None:
+    """The fence replaces `cancel_check`: a host that still sets it fails at once (silently ignoring it would leave
+    its turns unfenced)."""
+    home_dir = _make_home(tmp_path)
+    home, s, _fence = _session_over(home_dir, _HookLLM([]))
+    try:
+        with pytest.raises(AttributeError, match="LifecycleFence"):
+            s.cancel_check = lambda: True
+    finally:
+        home.close()
+
+
+def test_the_cli_visit_restores_never_land_after_stop(tmp_path: Path) -> None:
+    """T6 / Codex review 3 #5: the CLI visit's timeout restore wrote awake unconditionally and its close restore
+    checked then wrote. Both go through one locked, fenced step now: over a Stop's paused nothing is written; over
+    its own posture (no Stop) it wakes him."""
+    from abstractruntime.identity.chat import _restore_own_yield
+
+    home_dir = _make_home(tmp_path)
+    write_entity_state(home_dir, "asleep", reason="in conversation with person:laurent (auto-yield)",
+                       mode="visiting", written_by="visit-door", fence=LifecycleFence.admit(home_dir))
+    visit = LifecycleFence.admit(home_dir)
+    _stop_here(home_dir)
+    before = (home_dir / "state").read_bytes(), (home_dir / "state_history.jsonl").read_bytes()
+    assert _restore_own_yield(home_dir, visit, "visitor session ended (auto-yield return)") is False
+    assert ((home_dir / "state").read_bytes(), (home_dir / "state_history.jsonl").read_bytes()) == before
+    assert read_entity_state(home_dir)["state"] == "paused"
+    # No Stop: the visit's own posture is restored.
+    other = _make_home(tmp_path / "other")
+    write_entity_state(other, "asleep", reason="in conversation with person:laurent (auto-yield)",
+                       mode="visiting", written_by="visit-door", fence=LifecycleFence.admit(other))
+    assert _restore_own_yield(other, LifecycleFence.admit(other), "visitor session ended") is True
+    assert read_entity_state(other)["state"] == "awake"
+
+
+def test_a_refused_book_write_is_the_stop_and_rescues_nothing(tmp_path: Path) -> None:
+    """Codex review 3 #1 (durable diary capture): the visit lane's capture rescued the raw reply into
+    <home>/rescue/ whenever the book refused - after a Stop that is a write. A fenced refusal is the Stop now:
+    nothing written, no rescue."""
+    from abstractruntime.core.models import EffectType
+    from abstractruntime.identity.act_only import capture_diary_elections
+
+    home_dir = _make_home(tmp_path)
+    home, fence = _fenced_home(home_dir)
+    try:
+        _stop_here(home_dir)
+        before = _snapshot(home_dir)
+        with pytest.raises(StoppedByOperator):
+            capture_diary_elections("Hello.\n```diary kind=note\ngist: a note\nMy words.\n```", run=None,
+                                    turn_id="t-1", diary_write_handler=home.handlers[EffectType.DIARY_WRITE],
+                                    rescue_dir=home_dir)
+    finally:
+        home.close()
+    assert not (home_dir / "rescue").exists(), "the reply was rescued into the home after the Stop"
+    after = _snapshot(home_dir)
+    assert sorted(k for k in set(after) | set(before) if after.get(k) != before.get(k)) == []
+
+
+def test_the_visit_lanes_diary_authoring_call_never_runs_after_stop(tmp_path: Path) -> None:
+    """The visit lane authors a public diary entry's metadata with the host's summaries handler before the book
+    write: after a Stop that model call does not run, and the run ends CANCELLED."""
+    from abstractruntime.core.models import Effect, EffectType, StepPlan
+    from abstractruntime.core.runtime import EffectOutcome
+    from abstractruntime.core.spec import WorkflowSpec
+    from abstractruntime.identity.entity_runtime import open_entity_runtime
+
+    home_dir = _make_home(tmp_path)
+    summaries_calls: List[Any] = []
+
+    def mind(run, effect, default_next_node=None):
+        _stop_here(home_dir)  # the Stop lands while the mind answers
+        return EffectOutcome.completed({"content": "Here.\n```diary kind=note\ngist: a note\nMy words.\n```"})
+
+    def summaries(run, effect, default_next_node=None):
+        summaries_calls.append(effect)
+        return EffectOutcome.completed({"content": json.dumps({"title": "T", "summary": "S"})})
+
+    ert = open_entity_runtime(home_dir, extra_handlers={EffectType.LLM_CALL: mind},
+                              capability_handlers={"summaries": summaries}, fence=LifecycleFence.admit(home_dir))
+    try:
+        wf = WorkflowSpec(workflow_id="visit-ish", entry_node="a", nodes={
+            "a": lambda r, c: StepPlan(node_id="a", effect=Effect(type=EffectType.LLM_CALL,
+                                                                    payload={"prompt": "hi", "turn_id": "t-1"},
+                                                                    result_key="ans"), next_node="b"),
+            "b": lambda r, c: StepPlan(node_id="b", complete_output={"a": r.vars.get("ans")}),
+        })
+        state = ert.runtime.tick(workflow=wf, run_id=ert.runtime.start(workflow=wf, vars={}))
+    finally:
+        ert.home.close()
+    assert summaries_calls == [], "the summaries model was called after the Stop"
+    assert state.status.value == "cancelled" and lf.KILL_SWITCH_REASON in str(state.error), (state.status, state.error)
+    assert not (home_dir / "rescue").exists()
+
+
+def test_a_stop_between_two_model_attempts_stops_the_retry(tmp_path: Path) -> None:
+    """T1's narrow case: attempt 1 fails with the harmony 400 BEFORE the Stop, the Stop lands while the failure is
+    being classified - the retry is the next model call, and it is checked."""
+    from abstractruntime.identity.chat import ChatSession
+
+    home_dir = _make_home(tmp_path)
+    calls: List[int] = []
+
+    class _Harmony400(RuntimeError):
+        stopped = False
+
+        def __str__(self) -> str:
+            if not _Harmony400.stopped:
+                _Harmony400.stopped = True
+                _stop_here(home_dir)  # the Stop lands between attempt 1 and attempt 2
+            return f"400: {ChatSession._HARMONY_HEADER_400}"
+
+    class _HarmonyRace:
+        def generate(self, *, messages, system_prompt, **kw):
+            calls.append(len(calls))
+            raise _Harmony400()
+
+    home, s, _fence = _session_over(home_dir, _HarmonyRace())
+    try:
+        with pytest.raises(StoppedByOperator) as stopped:
+            s.turn("hello")
+    finally:
+        home.close()
+    assert calls == [0] and stopped.value.where == "before model attempt 2", (calls, stopped.value.where)
+
+
+def test_an_effect_after_stop_never_calls_its_authoring_model(tmp_path: Path) -> None:
+    """`_effect` checks the fence BEFORE its authoring call: no summaries model call after a Stop."""
+    from abstractruntime.core.models import EffectType
+
+    home_dir = _make_home(tmp_path)
+    home, s, _fence = _session_over(home_dir, _HookLLM([]))
+    calls: List[str] = []
+    s.llm_for_capability = lambda name: calls.append(name) or (_ for _ in ()).throw(AssertionError("called"))
+    payload = {"records": [{"kind": "lesson", "title": None, "pending": ["title"],
+                            "_authoring": {"body": "b", "raw_block": "b", "template_id": "t"}, "digest": "d"}],
+               "scope": "life", "owner_id": home.entity_id, "turn_id": "t"}
+    try:
+        _stop_here(home_dir)
+        with pytest.raises(StoppedByOperator):
+            s._effect(EffectType.MEMORY_FORM, payload)
+    finally:
+        home.close()
+    assert calls == [], "the authoring model was asked for after the Stop"
+
+
+def test_a_late_authoring_reply_is_abandoned_even_over_an_unguarded_home(tmp_path: Path) -> None:
+    """The session's own check after the authoring reply (a harness home opened without a fence, the session given
+    one): the late reply is not kept as an artifact and the write never runs."""
+    from abstractruntime.core.models import EffectType
+    from abstractruntime.identity.chat import ChatSession, open_home
+
+    home_dir = _make_home(tmp_path)
+    home = open_home(home_dir)  # unguarded stores
+    s = ChatSession(home, _HookLLM([]), participants=["person:laurent"], context_window=20000, out=lambda _s: None,
+                    phase="visit", model_info={"provider": "lmstudio", "model": "qwen-test"})
+    s.fence = LifecycleFence.admit(home_dir)
+
+    class _StopsWhileAnswering:
+        model_info = {"provider": "fake", "model": "summarizer"}
+
+        def generate(self, *, prompt: str, system_prompt: str, response_model: Any) -> Any:
+            _stop_here(home_dir)
+            return response_model(title="An authored title", summary="An authored summary.")
+
+    s.llm_for_capability = lambda name: _StopsWhileAnswering()
+    payload = {"records": [{"kind": "lesson", "title": None, "pending": ["title", "summary"],
+                            "_authoring": {"body": "b", "raw_block": "b", "template_id": "t"}, "digest": "d"}],
+               "scope": "life", "owner_id": home.entity_id, "turn_id": "t"}
+    before = _artifact_files(home_dir)
+    try:
+        with pytest.raises(StoppedByOperator):
+            s._effect(EffectType.MEMORY_FORM, payload)
+    finally:
+        home.close()
+    assert _artifact_files(home_dir) == before, "the late authoring reply was kept"

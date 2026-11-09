@@ -1268,13 +1268,14 @@ def test_a_cancelled_turn_runs_no_further_tool_no_model_call_and_forms_nothing(t
     home_dir = _make_home(tmp_path)
     llm = _LLM([_two_writes(), "SURPLUS - no model call after Stop"])
     s = _session(home_dir, llm)
-    stop = {"now": False}
-    s.cancel_check = lambda: stop["now"]
+    s.fence = LifecycleFence.admit(home_dir)  # the session's fence (it replaced the host-set cancel_check)
     real = tools_mod.TOOL_DESCRIPTORS["write_file"].executor
 
     def write_then_stop(e, ctx):  # the operator's Stop lands while the first write runs
+        from abstractruntime.identity.life import bump_lifecycle_generation
+
         out = real(e, ctx)
-        stop["now"] = True
+        bump_lifecycle_generation(home_dir, written_by="kill_switch")
         return out
 
     import dataclasses

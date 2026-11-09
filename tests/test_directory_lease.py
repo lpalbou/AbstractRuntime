@@ -473,7 +473,7 @@ def test_salvage_helper_repays_the_deferred_look_back_for_doors(tmp_path: Path) 
     marker = home_dir / "pending_reflection.json"
 
     # No marker: nothing to do, nothing opened.
-    assert salvage_pending_lookback(home_dir, _ScriptedLLM([])) is None
+    assert salvage_pending_lookback(home_dir, _ScriptedLLM([]), fence=LifecycleFence.admit(home_dir)) is None
 
     # A session turns and dies unreflected — the write-ahead marker pends.
     home = open_home(home_dir)
@@ -487,7 +487,7 @@ def test_salvage_helper_repays_the_deferred_look_back_for_doors(tmp_path: Path) 
 
     # The door salvages it (caller holds the lease, as the contract says).
     with acquire_directory_lease(home_dir, holder="visit-host"):
-        result = salvage_pending_lookback(home_dir, _ScriptedLLM(["Salvage look-back."]))
+        result = salvage_pending_lookback(home_dir, _ScriptedLLM(["Salvage look-back."]), fence=LifecycleFence.admit(home_dir))
     assert result is not None
     assert not marker.exists(), "the salvage must retire the marker"
 

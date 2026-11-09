@@ -244,10 +244,12 @@ def open_entity_runtime(
         target = dict(capability_handlers or {}).get(AUTHORING_CAPABILITY)
         if target is None:
             return _payload({"ok": False, "capability_unrouted": AUTHORING_CAPABILITY})
+        fence.check("before the diary entry's authoring call")  # no model call after the operator's Stop
         try:
             out = target(run, _Effect(type=_ET.LLM_CALL, payload=authoring_llm_call_payload("diary", text)), None)
         except Exception as e:  # noqa: BLE001 - the entry is still written; its metadata forms pending, said
             return _payload({"ok": False, "absorbed_failure": f"{type(e).__name__}: {e}"})
+        fence.check("after the diary entry's authoring call returned")  # a late reply is abandoned
         if getattr(out, "status", None) == "completed" and isinstance(getattr(out, "result", None), dict):
             return _payload({**out.result, AUTHORING_CAPABILITY_KEY: AUTHORING_CAPABILITY})
         return _payload({"ok": False, "absorbed_failure": str(getattr(out, "error", "") or "failed")})

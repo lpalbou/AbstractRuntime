@@ -1121,7 +1121,7 @@ def _diary_label(diary_out: Dict[str, Any], kind: str) -> str:
 
 
 class TurnCancelled(RuntimeError):
-    """The turn was cancelled by its host (the operator's Stop; `ChatSession.cancel_check`): no further tool, model
+    """The turn was cancelled by its host (the operator's Stop; `ChatSession.fence`): no further tool, model
     call, formation or authoring ran after the check that saw it. `report` is the turn so far (the tools that really
     ran, its notices, ending with the cancellation's own); `where` names the boundary that saw it. Nothing of the
     turn was formed: the host records the cancellation (a stopped-by-the-operator record), never a reply."""
@@ -1215,10 +1215,13 @@ class ChatSession:
         # Set by the own-time loop only (life.py): True = a visitor is at the
         # door, so the turn runs no new tools and ends on what he has said.
         self.yield_check: Optional[Callable[[], bool]] = None
-        # Set by a host (the gateway's Stop fence, the own-time loop's lifecycle generation): True = the turn is
-        # CANCELLED (Codex review 2 #2). Checked before every model call, before each tool, before the turn forms
-        # anything and inside the authoring drainer; the turn raises TurnCancelled and forms nothing.
-        self.cancel_check: Optional[Callable[[], bool]] = None
+        # THE LIFECYCLE FENCE (STOP-LANE-DESIGN §2.2; replaces the host-set `cancel_check`): the generation the
+        # session's work was admitted at - the home's own when it was opened with one, or set by the host. Checked
+        # before EVERY model attempt (retries included) and after each reply returns (a late reply is abandoned,
+        # never counted), before each tool, before each effect and its authoring and after the authoring reply,
+        # before the turn forms anything and inside the authoring drainer; the turn raises StoppedByOperator (a
+        # TurnCancelled) and forms nothing.
+        self.fence: Any = getattr(home, "fence", None)
         self._turn_report: Optional[Any] = None
         # `capability -> client` for the models other than the mind (the summaries capability authors titles and
         # summaries, identity/authoring.py). Set by the host; None = records stay pending for the drainer.
@@ -1969,12 +1972,14 @@ class ChatSession:
             # operator (or the home's substrate file) set one. Only when set:
             # clients and test doubles without the kwarg stay untouched.
             kwargs["thinking"] = self.thinking
-        self._check_cancelled("before a model call")
         last_error: Optional[Exception] = None
         for attempt in range(1 + self._HARMONY_RETRIES):
+            # EVERY attempt is a model call: checked before each (Codex review 3 #1 - a retry after the Stop called
+            # the model again), and the reply that comes back after a Stop is abandoned below.
+            self._check_cancelled("before a model call" if attempt == 0 else f"before model attempt {attempt + 1}")
             try:
                 try:
-                    resp = self.llm.generate(messages=messages, system_prompt=system_prompt, **kwargs)
+                    resp = self._call_model(messages, system_prompt, kwargs)
                 except TypeError as te:
                     # A client predating the thinking kwarg: drop the dial
                     # for this session with a labeled warning, keep talking.
@@ -1987,8 +1992,13 @@ class ChatSession:
                     # mind produced this" — after the fallback it would lie).
                     self.model_info.pop("thinking", None)
                     self.out("#FALLBACK this model client has no thinking parameter; the reasoning dial is off for this session")
-                    resp = self.llm.generate(messages=messages, system_prompt=system_prompt, **kwargs)
+                    resp = self._call_model(messages, system_prompt, kwargs)
+            except TurnCancelled:
+                raise
             except Exception as e:  # noqa: BLE001 - only the known race retries
+                if self._cancelled():
+                    # the call failed BECAUSE the operator's Stop cancelled it (or after it): the Stop, never a failure
+                    self._check_cancelled("while the model was answering")
                 if self._HARMONY_HEADER_400 not in str(e):
                     raise
                 last_error = e
@@ -1998,11 +2008,37 @@ class ChatSession:
                         f"(harmony race, attempt {attempt + 1}); regenerating"
                     )
                 continue
+            # A reply that returned after the Stop lands nowhere: not counted, not read, nothing formed from it.
+            self._check_cancelled("after the model answered (the reply is abandoned)")
             self._count_spend(resp)
             return resp
         raise RuntimeError(
             f"the model kept emitting malformed tool headers ({self._HARMONY_RETRIES + 1} attempts): {last_error}"
         )
+
+    def _call_model(self, messages: List[Dict[str, str]], system_prompt: str, kwargs: Dict[str, Any]) -> Any:
+        """One model call. A client that honours `cancel_event=` (abstractcore's providers) gets the fence's event: the
+        operator's Stop in this process stops the decode within a token (§2.3); elsewhere the reply is abandoned."""
+        if self.fence is None or not self._llm_accepts_cancel_event():
+            return self.llm.generate(messages=messages, system_prompt=system_prompt, **kwargs)
+        with self.fence.cancel_event() as event:
+            return self.llm.generate(messages=messages, system_prompt=system_prompt, cancel_event=event, **kwargs)
+
+    def _llm_accepts_cancel_event(self) -> bool:
+        cached = getattr(self, "_accepts_cancel_event", None)
+        if cached is None:
+            try:
+                import inspect
+
+                params = inspect.signature(self.llm.generate).parameters
+                cached = "cancel_event" in params or (
+                    callable(getattr(self.llm, "supports_generation_cancel", None))
+                    and any(p.kind == p.VAR_KEYWORD for p in params.values())
+                )
+            except (TypeError, ValueError):
+                cached = False
+            self._accepts_cancel_event = cached
+        return bool(cached)
 
     def _count_spend(self, resp: Any) -> None:
         """Fold one successful LLM response into the session spend counter.
@@ -2034,10 +2070,14 @@ class ChatSession:
     # ---------------------------------------------------------------- effects
     def _effect(self, etype: EffectType, payload: Dict[str, Any]) -> Dict[str, Any]:
         authoring: List[Dict[str, Any]] = []
+        # THE FENCE AT THE EFFECT (Codex review 3 #1): before its authoring call, and again before the handler (the
+        # authoring is a model call; a Stop during it leaves nothing - not the call's artifact, not the write).
+        self._check_cancelled(f"before {etype.value}")
         if etype == EffectType.MEMORY_FORM:
             payload, authoring = self._author_records(payload)
         elif etype == EffectType.DIARY_WRITE:
             payload = self._author_diary_entry(payload)
+        self._check_cancelled(f"before {etype.value} was written")
         out = self.home.handlers[etype](self.run, Effect(type=etype, payload=payload), None)
         from .lifecycle_fence import StoppedByOperator, is_stopped_outcome
 
@@ -2073,20 +2113,31 @@ class ChatSession:
             "entity_id": self.home.entity_id,
         }
 
+    @property
+    def cancel_check(self) -> None:
+        return None
+
+    @cancel_check.setter
+    def cancel_check(self, value: Any) -> None:
+        raise AttributeError("ChatSession.cancel_check is gone (STOP-LANE-DESIGN §2.2): give the session its "
+                             "LifecycleFence - open_home(..., fence=) or session.fence = <LifecycleFence>")
+
     def _cancelled(self) -> bool:
-        return self.cancel_check is not None and bool(self.cancel_check())
+        return self.fence is not None and self.fence.moved()
 
     def _check_cancelled(self, where: str) -> None:
-        """Raise TurnCancelled at this boundary when the host cancelled (nothing after it runs)."""
+        """Raise StoppedByOperator at this boundary once the operator's Stop moved the fence (nothing after it runs)."""
         if not self._cancelled():
             return
+        from .lifecycle_fence import StoppedByOperator
+
         report = self._turn_report
         if report is not None:
             report.notices.append(
                 f"#NOTE the turn was cancelled {where}: {len(report.tools)} tool call(s) ran before it; "
                 "nothing was formed"
             )
-        raise TurnCancelled(report, where)
+        raise StoppedByOperator(where, report=report)
 
     def turn(self, user_text: str, *, speaker_label: Optional[str] = None) -> Tuple[str, TurnReport]:
         self.turn_n += 1
@@ -3468,6 +3519,7 @@ class ChatSession:
                 except Exception as e:  # noqa: BLE001
                     raise AuthoringUnavailable(f"{type(e).__name__}: {e}") from e
                 authored = author_metadata(llm, kind=kind, body=body)
+                self._check_cancelled("after the summaries model answered")  # a late reply is abandoned
                 reader = _reader_of(llm)
                 sources = _source_artifact(self.home.artifacts, record_id=str(meta.get("template_id") or ""),
                                            kind=kind, body=body, authored=authored, reader=reader)
@@ -3541,6 +3593,7 @@ class ChatSession:
             except Exception as e:  # noqa: BLE001
                 raise AuthoringUnavailable(f"{type(e).__name__}: {e}") from e
             authored = author_metadata(llm, kind="diary", body=body)
+            self._check_cancelled("after the summaries model answered")  # a late reply is abandoned
             reader = _reader_of(llm)
             sources = _source_artifact(self.home.artifacts, record_id=f"diary:{payload.get('turn_id') or ''}",
                                        kind="diary", body=body, authored=authored, reader=reader)
@@ -3945,10 +3998,33 @@ class ChatSession:
         )
 
 
+def _restore_own_yield(home_dir: Path, fence: Any, reason: str) -> bool:
+    """The CLI visit's restore of the loop it yielded: awake ONLY over its own auto-yield posture, the check and the
+    write in one step inside the home state lock, fenced on the visit's admission (Codex review 3 #5: the timeout
+    restore wrote awake unconditionally, the close restore checked then wrote). False when the posture is no longer
+    the visit's - an operator's state, or the Stop's paused (refused: nothing written)."""
+    from .life import home_state_lock, read_entity_state, write_entity_state
+    from .lifecycle_fence import StoppedByOperator
+
+    try:
+        with home_state_lock(home_dir):
+            current = read_entity_state(home_dir)
+            is_our_yield = str(current.get("mode") or "") == "visiting" or (
+                "auto-yield" in str(current.get("reason") or "")
+            )
+            if current.get("state") != "asleep" or not is_our_yield:
+                return False
+            write_entity_state(home_dir, "awake", reason=reason, written_by="visit-door", fence=fence)
+            return True
+    except StoppedByOperator:
+        return False
+
+
 def salvage_pending_lookback(
     home_dir: Path,
     llm: Any,
     *,
+    fence: Any,
     embedder: Any = None,
     out: Callable[[str], None] = print,
 ) -> Optional[Dict[str, Any]]:
@@ -3967,7 +4043,7 @@ def salvage_pending_lookback(
         return None
     from datetime import datetime, timezone
 
-    home = open_home(Path(home_dir), embedder=embedder)
+    home = open_home(Path(home_dir), embedder=embedder, fence=fence)
     try:
         session = ChatSession(
             home,
@@ -4095,6 +4171,17 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 2
     provider = provider.strip().lower()
 
+    # THE VISIT'S FENCE (STOP-LANE-DESIGN §2.2; Codex review 3 #5): the visit is admitted at the home's generation
+    # here. Its posture, both restores, the home it opens and its session carry it: after the operator's Stop the
+    # visit writes nothing (no awake over paused) and ends saying so.
+    from .lifecycle_fence import LifecycleFence, LifecycleUnreadable, StoppedByOperator
+
+    try:
+        visit_fence = LifecycleFence.admit(home_dir)
+    except LifecycleUnreadable as e:
+        print(f"(the lifecycle generation is unreadable ({e}) - no visit opens)")
+        return 2
+
     # Programmatic yield (maintainer: "we need a programmatic way"): sleep
     # the loop, wait for its day to close at the tick boundary, visit, wake.
     yielded_loop = False
@@ -4111,22 +4198,25 @@ def main(argv: Optional[List[str]] = None) -> int:
             # is MACHINE bookkeeping, not an operator act — the default
             # "operator" stamp inflated life_sleep_stats' operator-sleep
             # count and fabricated attribution in biography surfaces.
-            write_entity_state(
-                home_dir, "asleep",
-                reason=f"in conversation with {visitor} (auto-yield)",
-                mode="visiting",
-                written_by="visit-door",
-            )
+            try:
+                write_entity_state(
+                    home_dir, "asleep",
+                    reason=f"in conversation with {visitor} (auto-yield)",
+                    mode="visiting",
+                    written_by="visit-door",
+                    fence=visit_fence,
+                )
+            except StoppedByOperator:
+                print("(stopped by the operator - Resume to visit)")
+                return 1
             print("(own-time loop asked to yield; waiting for its day to close...)")
             if not await_loop_quiescent(home_dir, timeout_seconds=900):
                 # Hand his time back before refusing (adversary find,
                 # 2026-07-13): abandoning the visiting posture would leave
                 # the loop yielded forever once it finally reaches its
                 # boundary — the gateway doors restore awake on timeout too.
-                write_entity_state(
-                    home_dir, "awake",
-                    reason="visit open aborted (loop did not yield in time)",
-                )
+                # Fenced: after a Stop the paused state stands (never awake over it).
+                _restore_own_yield(home_dir, visit_fence, "visit open aborted (loop did not yield in time)")
                 print("the loop did not reach a boundary within 15 minutes - refusing to "
                       "double-summon. Investigate the loop, then retry.")
                 return 1
@@ -4144,23 +4234,13 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     def _wake_loop_if_yielded() -> None:
         if yielded_loop:
-            from .life import read_entity_state, write_entity_state
-
             # Restore ONLY over our own auto-yield write (phase-machine
             # audit G7, 2026-07-13): an operator who wrote asleep/paused
             # MID-VISIT holds the newest standing intent — clobbering it to
             # awake would convert their act into ours. Same guard shape as
-            # _wake_from_self_sleep.
-            current = read_entity_state(home_dir)
-            is_our_yield = str(current.get("mode") or "") == "visiting" or (
-                "auto-yield" in str(current.get("reason") or "")
-            )
-            if current.get("state") == "asleep" and is_our_yield:
-                write_entity_state(
-                    home_dir, "awake",
-                    reason="visitor session ended (auto-yield return)",
-                    written_by="visit-door",
-                )
+            # _wake_from_self_sleep. The check and the write are ONE locked,
+            # fenced step (Codex review 3 #5).
+            if _restore_own_yield(home_dir, visit_fence, "visitor session ended (auto-yield return)"):
                 print("(loop asked to wake - a new stretch of his own time can begin)")
             else:
                 print("(the operator changed his state during the visit - leaving their intent standing)")
@@ -4213,7 +4293,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     home = None
     session = None
     try:
-        home = open_home(home_dir, embedder=embedder)
+        home = open_home(home_dir, embedder=embedder, fence=visit_fence)
         print(f"Summoning {home.name} ({home.entity_id})")
 
         from abstractcore import create_llm  # lazy: keeps the kernel import-light
@@ -4273,6 +4353,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     # its look-back NOW, over its own records, before this visit begins.
     try:
         salvage = session.run_pending_lookback()
+    except TurnCancelled:
+        salvage = None  # the operator's Stop: the visit loop below ends at once
     except Exception as e:  # noqa: BLE001 - salvage must never block a visit
         print(f"#FALLBACK pending look-back failed ({e}); the gap stays on the record")
         salvage = None
@@ -4305,6 +4387,9 @@ def main(argv: Optional[List[str]] = None) -> int:
                 break
             try:
                 reply, report = session.turn(user_text)
+            except TurnCancelled:
+                print("\n(stopped by the operator - the visit ends here; Resume to visit)")
+                break
             except RuntimeError as e:
                 # Kind to the human, honest to the entity: nothing half-written
                 # (the failed turn formed nothing; a retry re-runs it safely).
@@ -4327,7 +4412,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     finally:
         # The look-back: feelings move here (entity-reflection channel), then
         # the home closes. A reflection failure never voids the session.
-        if session.reports and not args.no_reflect:
+        if session.reports and not args.no_reflect and not session._cancelled():
             print(f"\n(the session is ending; {home.name} looks back...)")
             try:
                 refl = session.reflect()

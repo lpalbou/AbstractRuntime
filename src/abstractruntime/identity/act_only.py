@@ -125,6 +125,12 @@ def capture_diary_elections(
             }),
             None,
         )
+        from .lifecycle_fence import StoppedByOperator, is_stopped_outcome
+
+        if is_stopped_outcome(out):
+            # THE OPERATOR'S STOP refused the book write (the fenced DIARY_WRITE): nothing is written - not the
+            # entry, not a rescue copy of the reply (Codex review 3 #1: durable diary capture after Stop).
+            raise StoppedByOperator(str((getattr(out, "result", None) or {}).get("where") or "before the diary write"))
         if getattr(out, "status", None) != "completed":
             # A failed book write must not throw the reply away (gateway's
             # strip-review V1, record-everything ruling 2026-07-26): save

@@ -1653,6 +1653,92 @@ def _release_failed_reservation(home_dir: Path, *, fence: Any) -> None:
                                       started=None)
 
 
+class LoopAlreadyRunning(RuntimeError):
+    """Another live own-time loop (or a reservation naming another process) holds this home: this start refuses,
+    writing nothing (one loop per home). Not the operator's Stop."""
+
+
+def _foreign_live_loop(prior: Dict[str, Any], fence: Any) -> Optional[str]:
+    """Why `prior` (the raw loop_status) belongs to ANOTHER live loop, or None when this process may claim the home:
+    no live record, this process's own (a reservation naming it, or its own earlier registration), or the reservation
+    of the spawner that is this process's parent at this generation (a child booting before its spawner recorded
+    it). Liveness as read_loop_status reads it: the pid alive and, when a token is recorded, the same incarnation."""
+    import os
+
+    phase = prior.get("phase")
+    if phase not in ("starting", "between", "day"):
+        return None
+    me = os.getpid()
+    if phase == "starting":
+        child = prior.get("pid")
+        if child == me:
+            return None
+        if not child and prior.get("spawner_pid") in (me, os.getppid()) \
+                and prior.get("generation") == int(fence.generation):
+            return None
+        pid = child or prior.get("spawner_pid")
+        token = prior.get("pid_started_at") if child else prior.get("spawner_started_at")
+    else:
+        pid = prior.get("pid")
+        if pid == me:
+            return None
+        token = prior.get("pid_started_at")
+    if not _pid_alive_reaped(pid):
+        return None
+    if token:
+        current = _pid_start_time(pid)
+        if current is not None and current != str(token):
+            return None
+    return f"another own-time loop holds this home (pid {pid}, phase {phase})"
+
+
+def _claim_loop_status(home_dir: Path, *, fence: Any) -> None:
+    """THE BOOT CLAIM (STOP-LANE-DESIGN §2.4; Fable F7): one locked read-check-write - refused after a Stop
+    (StaleLifecycleGeneration) and when another live loop holds the home (LoopAlreadyRunning), else this process's
+    `between` replaces the reservation. Nothing is written on either refusal."""
+    with home_state_lock(home_dir):
+        _verify_fence(fence, home_dir, "claiming the home for a loop", read_lifecycle_generation(home_dir),
+                      sentinel_ok=False)
+        why = _foreign_live_loop(_read_loop_status_raw(home_dir), fence)
+        if why is not None:
+            raise LoopAlreadyRunning(why)
+        write_loop_status(home_dir, "between", fence=fence)
+
+
+@contextmanager
+def _spawn_lock(home_dir: Path) -> Iterator[None]:
+    """The start door's flock (`.loop_spawn.lock`, the one spawn_loop_process takes): one start at a time."""
+    fh = open(Path(home_dir) / ".loop_spawn.lock", "a+", encoding="utf-8")
+    try:
+        try:
+            import fcntl
+
+            fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except ImportError:
+            pass
+        except OSError:
+            raise RuntimeError("another start is already in progress for this home") from None
+        yield
+    finally:
+        fh.close()
+
+
+def _reserve_hand_start(home_dir: Path, *, fence: Any) -> None:
+    """A hand start (`python -m abstractruntime.identity.life` without --generation) reserves the home exactly as
+    a spawn does (Fable F7: it checked status outside any lock and never reserved): under the spawn lock, refused when
+    a loop runs or starts; the reservation names this process as the child, so its own boot claim takes it."""
+    import os
+
+    with _spawn_lock(home_dir):
+        current = loop_process_status(home_dir)
+        if current.get("running"):
+            word = "starting" if current.get("phase") == "starting" else "running"
+            raise RuntimeError(f"his own time is already {word} (pid {current.get('pid') or current.get('spawner_pid')})"
+                               " - one loop per home")
+        _reserve_loop_start(home_dir, fence=fence)
+        _record_spawned_child(home_dir, os.getpid(), fence=fence, token=_own_start_time())
+
+
 def _now_iso() -> str:
     from datetime import datetime, timezone
 
@@ -4114,10 +4200,21 @@ class LifeLoop:
                 self.out("(the last loop was stopped by the operator's kill switch - nothing is restored; own time "
                          "comes back only with the operator's grant)")
                 self._return_to = None
-        # THE BOOT CLAIM (STOP-LANE-DESIGN §2.4): the loop's first write replaces the spawn reservation with its
-        # own "between", fenced at the admitted generation - after a Stop it is refused and the loop ends here,
-        # having written nothing (the wake below runs only after it).
-        self._status("between")
+        # THE BOOT CLAIM (STOP-LANE-DESIGN §2.4; Fable F7): the loop's first write replaces the spawn reservation with
+        # its own "between" - one locked read-check-write, fenced at the admitted generation. After a Stop it is
+        # refused and the loop ends here; over another live loop's record it refuses too. Either way nothing is
+        # written (the wake below runs only after it).
+        if self.state_home is not None:
+            try:
+                _claim_loop_status(self.state_home, fence=self._fence)
+            except StoppedByOperator:
+                self._stopped_by_operator()
+            except LifecycleUnreadable as e:
+                self._generation_unreadable(e)
+            except LoopAlreadyRunning as e:
+                self.out(f"({e} - one loop per home; this loop writes nothing)")
+                report.stopped_by = "already_running"
+                return report
         if self.stop_cause in ("kill_switch", "generation_unreadable"):
             if self.stop_cause == "kill_switch":
                 self.out("(stopped before it started: the operator's Stop moved the lifecycle generation - this "
@@ -5760,6 +5857,13 @@ def main(argv: Optional[List[str]] = None) -> int:
     except LifecycleUnreadable as e:
         print(f"(the lifecycle generation is unreadable ({e}) - own time does not start; repair {PHASES_FILENAME})")
         return 2
+    if boot_fence is None:
+        # A HAND START reserves the home like a spawn (Fable F7), under the same lock; its loop's claim takes it.
+        try:
+            _reserve_hand_start(home_dir, fence=fence)
+        except (RuntimeError, StoppedByOperator) as e:
+            print(str(e))
+            return 1
     llm_for_capability = build_capability_llm_factory(home_dir, base_url=args.base_url, fence=fence)
 
     factory = build_session_factory(

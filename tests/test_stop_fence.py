@@ -64,7 +64,8 @@ COMMIT_POINTS = (
     "migrate_phase_sidecar", "write_loop_status", "touch_loop_heartbeat", "record_loop_substrate",
     "append_phase_changed", "_beat_before_each_call",
     # the spawn reservation (Codex review 3 #6) and the fenced builders of the loop process
-    "_reserve_loop_start", "_record_spawned_child", "_release_failed_reservation",
+    "_reserve_loop_start", "_record_spawned_child", "_release_failed_reservation", "_claim_loop_status",
+    "_reserve_hand_start",
     "build_consolidator", "build_session_factory", "build_capability_llm_factory",
 )
 # The lane openers a fence enters through (open_home's fence is optional for readers; every runtime call passes it).
@@ -584,7 +585,9 @@ def test_the_childs_boot_replaces_the_reservation_with_its_own_registration(tmp_
     write_loop_status(home_dir, "stopped", stopped_by="kill_switch", owner=(None, None), fence=KILL_SWITCH)
     sleeper = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(120)"])
     try:
-        launched = _stub_loop_popen(monkeypatch, sleeper.pid)
+        # THIS process plays the child that boots (its pid is the one the reservation names; Fable F7: a claim over
+        # a reservation naming another live child is refused).
+        launched = _stub_loop_popen(monkeypatch, os.getpid())
         spawn_loop_process(home_dir, provider="lmstudio", model="m", return_to="personal")
         assert read_loop_status(home_dir)["after_stopped_by"] == "kill_switch"
         g = int(launched[0][launched[0].index("--generation") + 1])
@@ -1473,3 +1476,54 @@ def test_a_start_the_stop_overtook_is_never_reported_started(tmp_path: Path, mon
         sleeper.wait()
     status = json.loads((home_dir / "loop_status").read_text(encoding="utf-8"))
     assert status["phase"] == "stopped" and status["stopped_by"] == "kill_switch", status
+
+
+def test_a_loop_never_claims_a_home_another_live_loop_holds(tmp_path: Path) -> None:
+    """Fable F7 (P3): a loop's boot claim merged its `between` over whatever stood - a reservation naming another
+    live child, or another live loop's registration, was replaced (two loops over one home). The claim is one locked
+    read-check-write now: a live record that is not this process's (nor a reservation naming it) refuses the start,
+    writing nothing."""
+    from abstractruntime.identity.life import read_loop_status
+
+    home_dir = _make_home(tmp_path)
+    sleeper = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(120)"])
+    try:
+        fence = LifecycleFence.admit(home_dir)
+        life._reserve_loop_start(home_dir, fence=fence)
+        life._record_spawned_child(home_dir, sleeper.pid, fence=fence, token=life._pid_start_time(sleeper.pid))
+        assert read_loop_status(home_dir)["running"] is True
+        before = (home_dir / "loop_status").read_bytes()
+        lines: List[str] = []
+
+        def _never():  # noqa: ANN202
+            raise AssertionError("no day may open over another loop's home")
+
+        report = LifeLoop(_never, tick_seconds=0, ticks_per_day=1, max_ticks=1, rest_minutes=30,
+                          stop_file=home_dir / "STOP", state_home=home_dir, sleep_fn=lambda s: None,
+                          out=lines.append, fence=LifecycleFence.admit(home_dir)).run()
+        assert report.stopped_by == "already_running", (report, lines)
+        assert (home_dir / "loop_status").read_bytes() == before, "the claim overwrote a live reservation"
+    finally:
+        sleeper.kill()
+        sleeper.wait()
+
+
+def test_a_hand_start_reserves_the_home_like_a_spawn(tmp_path: Path, monkeypatch) -> None:
+    """The hand start (`python -m abstractruntime.identity.life` without --generation) checked status outside any
+    lock and never reserved. It reserves now, under the spawn lock: a spawn meanwhile is refused, and its own loop
+    claims the reservation."""
+    from abstractruntime.identity.life import read_loop_status, spawn_loop_process
+
+    home_dir = _make_home(tmp_path)
+    fence = LifecycleFence.admit(home_dir)
+    life._reserve_hand_start(home_dir, fence=fence)
+    status = read_loop_status(home_dir)
+    assert status["phase"] == "starting" and status["pid"] == os.getpid() and status["running"] is True, status
+    monkeypatch.setattr(subprocess, "Popen", lambda *a, **k: (_ for _ in ()).throw(AssertionError("no spawn")))
+    with pytest.raises(RuntimeError, match="already starting"):
+        spawn_loop_process(home_dir, provider="lmstudio", model="m", first_day_unconditional=True)
+    report = LifeLoop(lambda: (_ for _ in ()).throw(RuntimeError("enough")), tick_seconds=0, ticks_per_day=1,
+                      max_ticks=0, rest_minutes=0, stop_file=home_dir / "STOP", state_home=home_dir,
+                      sleep_fn=lambda s: None, out=lambda s: None, fence=fence).run()
+    assert report.stopped_by == "max_ticks"
+    assert "spawner_pid" not in json.loads((home_dir / "loop_status").read_text(encoding="utf-8"))

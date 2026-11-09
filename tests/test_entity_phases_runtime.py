@@ -642,14 +642,26 @@ def test_a_work_turn_cut_by_work_off_names_its_cause(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------- the kill switch's runtime half (gateway slice
-# findings 2026-11-09): hard_stop_loop signals only a live own-time loop incarnation and says what it did
+# findings 2026-11-09; Codex review 2026-11-09 #4/#7): hard_stop_loop signals only a verified own-time loop of THIS
+# home, fails closed when anything is unknown, and says killed only on a confirmed exit
 
 
-def _stand_in_loop(argv_mark: str = "-m abstractruntime.identity.life"):
+def _fake_loop(tmp_path: Path, home_dir: Path, *, home_arg: Any = None):
+    """A process launched EXACTLY like spawn_loop_process's child (`<python> -m abstractruntime.identity.life --home
+    <home> ...`), whose module is a stand-in that only sleeps (found first on its PYTHONPATH)."""
+    import os
     import subprocess
 
-    # A process whose command line carries the loop module's argv, like spawn_loop_process's child.
-    return subprocess.Popen([sys.executable, "-c", "import time; time.sleep(300)", argv_mark])
+    mods = tmp_path / "fakemods" / "abstractruntime" / "identity"
+    mods.mkdir(parents=True, exist_ok=True)
+    (mods.parent / "__init__.py").write_text("", encoding="utf-8")
+    (mods / "__init__.py").write_text("", encoding="utf-8")
+    (mods / "life.py").write_text("import time\ntime.sleep(300)\n", encoding="utf-8")
+    return subprocess.Popen(
+        [sys.executable, "-m", "abstractruntime.identity.life", "--home", str(home_arg or home_dir),
+         "--provider", "stub"],
+        env={**os.environ, "PYTHONPATH": str(tmp_path / "fakemods")}, cwd=str(tmp_path),
+    )
 
 
 def _status_for(home_dir: Path, pid: int, token: Any = None, phase: str = "day") -> None:
@@ -661,53 +673,124 @@ def _status_for(home_dir: Path, pid: int, token: Any = None, phase: str = "day")
     (home_dir / "loop_status").write_text(json.dumps(rec) + "\n", encoding="utf-8")
 
 
-def test_hard_stop_kills_the_loop_and_never_records_the_caller(tmp_path: Path) -> None:
+def _settle(proc) -> None:
+    import time as _t
+
+    deadline = _t.monotonic() + 5
+    while _t.monotonic() < deadline:
+        from abstractruntime.identity.life import _pid_command
+
+        if "--home" in (_pid_command(proc.pid) or ""):
+            return
+        _t.sleep(0.05)
+
+
+def test_hard_stop_kills_this_homes_loop_and_never_records_the_caller(tmp_path: Path) -> None:
     import os
 
     from abstractruntime.identity.life import _pid_start_time, hard_stop_loop
 
     home_dir = _make_home(tmp_path)
-    proc = _stand_in_loop()
+    proc = _fake_loop(tmp_path, home_dir)
     try:
+        _settle(proc)
         _status_for(home_dir, proc.pid, _pid_start_time(proc.pid))
         first = hard_stop_loop(home_dir, reason="drill", requested_by="admin")
-        assert first["killed"] is True and first["pid"] == proc.pid and first["signal"] == "SIGTERM"
+        assert first["killed"] is True and first["pid"] == proc.pid and first["signal"] == "SIGTERM", first
         assert first["reason"] == "killed" and first["requested_reason"] == "drill"
         assert proc.poll() is not None
         raw = json.loads((home_dir / "loop_status").read_text(encoding="utf-8"))
         assert raw.get("pid") != os.getpid(), "the status never names the calling process"
         assert raw["phase"] == "stopped" and raw["stopped_by"] == "kill_switch"
-        # A second stop finds nothing to signal - and never signals the caller.
         second = hard_stop_loop(home_dir, reason="again")
         assert second["killed"] is False and second["signal"] is None
-        assert second["reason"] in ("no live process at the recorded pid", "no loop pid recorded")
     finally:
         if proc.poll() is None:
             proc.kill()
 
 
-def test_hard_stop_refuses_the_callers_own_pid_a_recycled_pid_and_a_foreign_process(tmp_path: Path) -> None:
+def test_hard_stop_fails_closed_on_anything_but_this_homes_verified_loop(tmp_path: Path) -> None:
     import os
+    import subprocess
 
     from abstractruntime.identity.life import _pid_start_time, hard_stop_loop, read_loop_status
 
     home_dir = _make_home(tmp_path)
-    # The 2026-11-09 shape: a status that names the caller (written by an earlier hard stop from this process).
+    # The 2026-11-09 shape: a status naming the caller.
     _status_for(home_dir, os.getpid(), _pid_start_time(os.getpid()), phase="between")
     own = hard_stop_loop(home_dir)
     assert own["killed"] is False and own["signal"] is None and "calling process" in own["reason"]
     assert read_loop_status(home_dir).get("pid") is None, "the bogus pid is cleared, never kept"
-    foreign = _stand_in_loop(argv_mark="--not-the-loop")
+    # Codex #4's probe: the module name as a LATER argument is not a loop invocation.
+    probe = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(300)", "-m abstractruntime.identity.life"])
+    other_home = _fake_loop(tmp_path, home_dir, home_arg=tmp_path / "another-home")
+    (tmp_path / "x").mkdir()
+    mine = _fake_loop(tmp_path / "x", home_dir)
     try:
-        _status_for(home_dir, foreign.pid, _pid_start_time(foreign.pid))
+        import time as _t
+
+        _settle(other_home)
+        _settle(mine)
+        _t.sleep(0.3)  # the probe's interpreter is up
+        for p, why in ((probe, "not this home's own-time loop"), (other_home, "not this home's own-time loop")):
+            _status_for(home_dir, p.pid, _pid_start_time(p.pid))
+            out = hard_stop_loop(home_dir)
+            assert out["killed"] is False and out["signal"] is None and why in out["reason"], out
+            assert p.poll() is None, "never signalled"
+        # This home's loop with NO start-time token: the incarnation is unknown - fail closed.
+        _status_for(home_dir, mine.pid, None)
         out = hard_stop_loop(home_dir)
-        assert out["killed"] is False and "not an own-time loop" in out["reason"]
-        assert foreign.poll() is None, "a process that is not the loop is never signalled"
-        _status_for(home_dir, foreign.pid, "Mon Jan  1 00:00:00 2001")
+        assert out["killed"] is False and "no start-time token" in out["reason"] and mine.poll() is None
+        # A recycled pid (the token does not match).
+        _status_for(home_dir, mine.pid, "Mon Jan  1 00:00:00 2001")
         out = hard_stop_loop(home_dir)
-        assert out["killed"] is False and "recycled" in out["reason"] and foreign.poll() is None
+        assert out["killed"] is False and "recycled" in out["reason"] and mine.poll() is None
     finally:
-        foreign.kill()
+        for p in (probe, other_home, mine):
+            if p is not None and p.poll() is None:
+                p.kill()
+
+
+def test_killed_only_on_a_confirmed_exit_never_on_a_denied_permission(tmp_path: Path, monkeypatch) -> None:
+    """Codex #7: after SIGTERM the process stops answering signal 0 with EPERM (a permission change); that is not a
+    death - killed stays False and no SIGKILL goes to an incarnation that cannot be re-verified."""
+    import os
+    import signal as _signal
+
+    from abstractruntime.identity import life as life_mod
+    from abstractruntime.identity.life import _pid_start_time, hard_stop_loop
+
+    home_dir = _make_home(tmp_path)
+    proc = _fake_loop(tmp_path, home_dir)
+    real_kill = os.kill
+    sent: List[int] = []
+    state = {"term": False}
+
+    def fake_kill(pid, sig):
+        if pid != proc.pid:
+            return real_kill(pid, sig)
+        if sig == _signal.SIGTERM:
+            sent.append(sig)
+            state["term"] = True
+            return None  # delivered, but the process carries on
+        if sig == 0 and state["term"]:
+            raise PermissionError(1, "Operation not permitted")
+        if sig == _signal.SIGKILL:
+            sent.append(sig)
+            return None
+        return real_kill(pid, sig)
+
+    try:
+        _settle(proc)
+        _status_for(home_dir, proc.pid, _pid_start_time(proc.pid))
+        monkeypatch.setattr(os, "kill", fake_kill)
+        out = hard_stop_loop(home_dir)
+        assert out["killed"] is False, out
+        assert sent == [_signal.SIGTERM], "no SIGKILL to an incarnation that cannot be re-verified"
+        assert "exit not confirmed" in out["reason"]
+    finally:
+        monkeypatch.undo()
+        proc.kill()
 
 
 def test_the_operators_start_reaches_the_spawned_loop(tmp_path: Path, monkeypatch) -> None:

@@ -351,14 +351,20 @@ def test_hard_stop_freezes_now_without_ceremony(tmp_path: Path) -> None:
     # old timestamp now reads as a corpse by design.
     from datetime import datetime, timezone as _tz
 
-    # (Its command line carries the loop module's argv: the hard stop signals only an own-time loop process,
-    # gateway slice 2026-11-09.)
-    proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(300)", "-m abstractruntime.identity.life"])
+    # (Launched like spawn_loop_process's child - `<python> -m abstractruntime.identity.life --home <home>` - and
+    # stamped with its start time: the hard stop signals only this home's verified loop, Codex review 2026-11-09.)
+    from test_entity_phases_runtime import _fake_loop, _settle
+
+    from abstractruntime.identity.life import _pid_start_time
+
+    proc = _fake_loop(tmp_path, home_dir)
+    _settle(proc)
     (home_dir / "loop_status").write_text(
         _json.dumps({
             "phase": "day",
             "updated_at": datetime.now(_tz.utc).isoformat(),
             "pid": proc.pid,
+            "pid_started_at": _pid_start_time(proc.pid),
         }) + "\n",
         encoding="utf-8",
     )

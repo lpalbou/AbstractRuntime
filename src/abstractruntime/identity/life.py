@@ -2161,68 +2161,65 @@ def hard_stop_loop(home_dir: Path, *, reason: str = "", requested_by: str = "adm
         pid = 0
     stamped_token = str(status.get("pid_started_at") or "")
 
-    # SIGNAL ONLY A LIVE OWN-TIME LOOP INCARNATION (whole-package adversary P0-class 2026-07-13; gateway slice
-    # 2026-11-09: a status written by the CALLER named the caller's pid, and a second hard stop SIGTERMed the
-    # gateway's own process). Before any signal: the pid is not the caller's own; it is alive; its start-time
-    # token matches the stamp (an unstamped file keeps the legacy phase gate); and its command line runs the loop
-    # module (LOOP_MODULE_ARGV, the argv spawn_loop_process and the CLI use).
-    outcome = ""
-    target = False
-    if pid <= 0:
-        outcome = "no loop pid recorded"
-    elif pid == os.getpid():
-        outcome = "refused: the recorded pid is the calling process itself"
-    elif not _pid_alive(pid):
-        outcome = "no live process at the recorded pid"
-    elif stamped_token and _pid_start_time(pid) not in (None, stamped_token):
-        outcome = "refused: the pid now belongs to another process (recycled)"
-    elif not stamped_token and status.get("phase") not in ("day", "between"):
-        outcome = "refused: an unstamped status that does not say a loop is up"
-    elif LOOP_MODULE_ARGV not in (_pid_command(pid) or ""):
-        outcome = "refused: the process at the recorded pid is not an own-time loop"
-    else:
-        target = True
+    # SIGNAL ONLY A VERIFIED OWN-TIME LOOP OF THIS HOME (gateway slice 2026-11-09; Codex review 2026-11-09 #4/#7):
+    # the incarnation is verified (alive, not the caller, the recorded start-time token equal to the OS's) AND the
+    # process is this home's loop invocation (`<python> -m abstractruntime.identity.life --home <this home>`).
+    # Anything unknown fails closed: no token, an unreadable start time or command line, a denied permission.
+    verified, outcome = _verified_loop_incarnation(pid, stamped_token, home_dir)
 
     killed = False
     escalated = False
     signal_name: Optional[str] = None
-    if target:
+    if verified:
         try:
             os.kill(pid, signal.SIGTERM)
             signal_name = "SIGTERM"
-        except (OSError, ProcessLookupError):
+        except ProcessLookupError:
             pass
-        # Short grace for the interpreter to die — NOT for ceremony (there is
-        # none in a freeze); then escalate.
+        except OSError as e:
+            outcome = f"refused: SIGTERM was not delivered ({e})"
+        # Short grace for the interpreter to die - NOT for ceremony (there is none in a freeze); then escalate,
+        # but only over the SAME verified incarnation (it may have died, or the pid been reused, meanwhile).
         deadline = _time.monotonic() + 3.0
         while _time.monotonic() < deadline:
-            if _pid_gone(pid):
+            if _pid_state(pid) == "gone":
                 killed = True
                 break
             _time.sleep(0.1)
-        if not killed and not _pid_gone(pid):
-            try:
-                os.kill(pid, signal.SIGKILL)
-                escalated = True
-                signal_name = "SIGKILL"
-            except (OSError, ProcessLookupError):
-                pass
-            _time.sleep(0.2)
-            killed = _pid_gone(pid)
-        outcome = "killed" if killed else "the loop is still alive after SIGKILL"
+        if not killed:
+            still, why = _verified_loop_incarnation(pid, stamped_token, home_dir)
+            if still:
+                try:
+                    os.kill(pid, signal.SIGKILL)
+                    escalated = True
+                    signal_name = "SIGKILL"
+                except OSError:
+                    pass
+                deadline = _time.monotonic() + 1.0
+                while _time.monotonic() < deadline and _pid_state(pid) != "gone":
+                    _time.sleep(0.05)
+            killed = _pid_state(pid) == "gone"
+            if not killed:
+                outcome = (
+                    "the loop is still alive after SIGKILL" if escalated
+                    else f"exit not confirmed: {why}"
+                )
+        if killed:
+            outcome = "killed"
 
     # The status file must read stopped immediately (the dead process can no longer write its own transition) -
-    # naming the loop it is about (its pid and token when it was one), never this caller.
+    # naming the loop it is about (its pid and token when it was verified), never this caller.
     try:
         write_loop_status(
             home_dir, "stopped", stopped_by="kill_switch",
-            owner=((pid, stamped_token or None) if target else (None, None)),
+            owner=((pid, stamped_token or None) if verified else (None, None)),
         )
     except Exception:  # noqa: BLE001
         pass
 
     return {
-        # The explicit result (gateway contract, 2026-11-09): killed only once the process is confirmed gone.
+        # The explicit result (gateway contract, 2026-11-09): killed only once the exit is CONFIRMED (reaped, gone
+        # from the process table, or a zombie) - never inferred from a denied permission or an unreadable status.
         "killed": bool(killed),
         "pid": pid or None,
         "signal": signal_name,
@@ -2230,35 +2227,95 @@ def hard_stop_loop(home_dir: Path, *, reason: str = "", requested_by: str = "adm
         "requested_reason": str(reason or ""),
         # Legacy keys (kept for existing callers).
         "frozen": True,
-        "was_running": bool(target and signal_name),
+        "was_running": bool(verified and signal_name),
         "escalated_to_sigkill": escalated,
         "requested_by": str(requested_by or "admin"),
         "status": loop_process_status(home_dir),
     }
 
 
-def _pid_gone(pid: Any) -> bool:
-    """True once `pid` is gone: reaped (our own child is reaped here), not signalable, or a zombie (exited, its
-    parent has not reaped it yet - os.kill(pid, 0) still succeeds on one)."""
+def _verified_loop_incarnation(pid: int, token: str, home_dir: Path) -> Tuple[bool, str]:
+    """(True, "") when `pid` is a live own-time loop of `home_dir` whose start time equals `token`; else (False,
+    the plain reason). Fails closed whenever anything is unknown."""
+    import os
+
+    if pid <= 0:
+        return False, "no loop pid recorded"
+    if pid == os.getpid():
+        return False, "refused: the recorded pid is the calling process itself"
+    state = _pid_state(pid)
+    if state == "gone":
+        return False, "no live process at the recorded pid"
+    if state != "alive":
+        return False, "refused: the process at the recorded pid cannot be checked (permission or status unknown)"
+    if not token:
+        return False, "refused: no start-time token recorded - the incarnation is unknown"
+    current = _pid_start_time(pid)
+    if current is None:
+        return False, "refused: the start time of the process cannot be read"
+    if current != token:
+        return False, "refused: the pid now belongs to another process (recycled)"
+    if not _is_loop_invocation(_pid_command(pid), home_dir):
+        return False, "refused: the process at the recorded pid is not this home's own-time loop"
+    return True, ""
+
+
+def _is_loop_invocation(command: Optional[str], home_dir: Path) -> bool:
+    """True when `command` (ps's command line) runs the loop module for this home: `<python> -m
+    abstractruntime.identity.life --home <home>` with the module directly after the interpreter (the argv
+    spawn_loop_process uses) - never the module name appearing later as an argument."""
+    if not command:
+        return False
+    _head, sep, rest = command.partition(" ")
+    if not sep:
+        return False
+    prefix = LOOP_MODULE_ARGV + " --home "
+    if not rest.startswith(prefix):
+        return False
+    tail = rest[len(prefix):]
+    homes = {str(Path(home_dir))}
+    try:
+        homes.add(str(Path(home_dir).resolve()))
+    except (OSError, RuntimeError):
+        pass
+    return any(tail == h or tail.startswith(h + " ") for h in homes)
+
+
+def _pid_state(pid: Any) -> str:
+    """"gone" (reaped here, ESRCH, or a zombie), "alive", or "unknown" (permission denied or no answer). Only
+    "gone" confirms an exit (Codex review 2026-11-09 #7: a denied permission is not a death)."""
     import os
     import subprocess
 
     try:
-        done, _status = os.waitpid(int(pid), os.WNOHANG)
-        if done == int(pid):
-            return True
-    except (ChildProcessError, OSError, ValueError):
+        pid = int(pid)
+    except (TypeError, ValueError):
+        return "unknown"
+    try:
+        done, _status = os.waitpid(pid, os.WNOHANG)
+        if done == pid:
+            return "gone"
+    except ChildProcessError:
         pass
-    if not _pid_alive(pid):
-        return True
+    except OSError:
+        pass
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return "gone"
+    except PermissionError:
+        return "unknown"
+    except OSError:
+        return "unknown"
     try:
         out = subprocess.run(
-            ["ps", "-p", str(int(pid)), "-o", "stat="], capture_output=True, text=True, timeout=5,
+            ["ps", "-p", str(pid), "-o", "stat="], capture_output=True, text=True, timeout=5,
             env={**os.environ, "LC_ALL": "C", "TZ": "UTC"},
         )
-        return (out.stdout or "").strip().upper().startswith("Z")
+        stat = (out.stdout or "").strip().upper()
     except Exception:  # noqa: BLE001
-        return False
+        return "alive"  # it answered signal 0: it exists
+    return "gone" if stat.startswith("Z") else "alive"
 
 
 # The loop's own command-line mark: spawn_loop_process and the CLI run `python -m abstractruntime.identity.life`.

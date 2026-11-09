@@ -3052,6 +3052,10 @@ def spawn_loop_process(
                 f"his own time failed to start (the loop process exited immediately, code {exit_code}). "
                 f"Log tail: {tail.strip()[-300:]}"
             )
+        if fence.moved():
+            # THE OPERATOR'S STOP overtook the start (Fable F6): the child is alive but refuses itself at its boot (or
+            # the Stop kills it) - never report own time started over the Stop's own record.
+            raise StoppedByOperator("while his own time was starting")
 
         return {
             "pid": proc.pid,

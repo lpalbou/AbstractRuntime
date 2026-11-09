@@ -1446,3 +1446,30 @@ def test_a_reservation_whose_pid_was_reused_reads_not_running(tmp_path: Path, wh
     raw["pid_started_at" if who == "child" else "spawner_started_at"] = "Mon Jan  1 00:00:00 2001"  # another process
     (home_dir / "loop_status").write_text(json.dumps(raw) + "\n", encoding="utf-8")
     assert read_loop_status(home_dir)["running"] is False, "a reused pid kept the reservation alive"
+
+
+def test_a_start_the_stop_overtook_is_never_reported_started(tmp_path: Path, monkeypatch) -> None:
+    """Fable F6 (P3): a Stop landing between the reservation and Popen's return, with the child still alive at the
+    0.6 s check, let spawn return {pid, generation} while loop_status already said stopped/kill_switch - the host
+    believed own time had started. The start now reports the operator's Stop."""
+    from abstractruntime.identity.life import spawn_loop_process
+
+    home_dir = _make_home(tmp_path)
+    sleeper = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(120)"])
+    real_popen = subprocess.Popen
+
+    def popen(argv, *a, **k):
+        if life.LOOP_MODULE_ARGV.split()[-1] in list(argv):
+            _stop_here(home_dir)  # the operator's Stop while the child is being created
+            return _FakeChild(sleeper.pid)
+        return real_popen(argv, *a, **k)
+
+    monkeypatch.setattr(subprocess, "Popen", popen)
+    try:
+        with pytest.raises(StoppedByOperator):
+            spawn_loop_process(home_dir, provider="lmstudio", model="m", first_day_unconditional=True)
+    finally:
+        sleeper.kill()
+        sleeper.wait()
+    status = json.loads((home_dir / "loop_status").read_text(encoding="utf-8"))
+    assert status["phase"] == "stopped" and status["stopped_by"] == "kill_switch", status

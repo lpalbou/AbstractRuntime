@@ -829,40 +829,92 @@ def test_a_task_with_no_words_to_author_from_leaves_its_failure_line(tmp_path: P
     assert all(f["outcome"] == "retry" and "no words" in f["error_message"] for f in lines), lines
 
 
-def test_the_sleep_repairs_a_legacy_public_diary_records_title_and_asks_for_its_summary(tmp_path: Path,
-                                                                                       monkeypatch) -> None:
-    """Codex review 3 #9: a public diary record formed before today carries the act-frame template title and his
-    first line as summary. The sleep's repair declares its title pending (authored by the drainer) and its summary
-    on its own; memory 71de051 still refuses that declaration (protected_kind), which the repair says once per pass
-    instead of writing around it - the title is repaired either way."""
+def test_the_sleep_repairs_a_legacy_public_diary_records_title_and_summary(tmp_path: Path, monkeypatch) -> None:
+    """Codex review 3 #9 + the operator rule (title + summary always exist, authored): a public diary record formed
+    before today carries the act-frame template title and his first line as summary. The sleep's repair declares
+    both pending (AbstractMemory 8235daf takes a legacy public projection's summary under formation's rule) and the
+    drainer authors them in the same step; the next night finds nothing left to declare. A private projection and an
+    owner-direct entry are never declared (their summaries are his words or content-free); a projection claiming a
+    chain position is refused by memory, said ONCE per night with the rule memory names, nothing written around it.
+    Fable review R2: this pinned memory 71de051's protected_kind refusal of the legacy public summary until 8235daf."""
     import abstractmemory
     from abstractmemory import MemoryRecordInput
 
     from abstractruntime.identity.chat import open_home
+    from abstractruntime.identity.diary import DiaryEntry
     from abstractruntime.identity.life import build_consolidator, write_entity_state
 
-    from abstractruntime.identity.diary import DiaryEntry
-
+    first_line = "The tide leaves a readable line on the sand."
     home_dir = _workspace_home(tmp_path)
     home = open_home(home_dir)
     home.diary.append_entry(DiaryEntry(  # the book's entry the legacy record projects
         entry_id="diary_legacy01", author=home.entity_id, kind="note", gist="the tide line",
-        text="The tide leaves a readable line on the sand.", visibility="self",
+        text=f"{first_line}\nIt stays until the next wave.", visibility="self",
         written_at="2026-11-08T10:00:00+00:00"))
-    (rid,) = home.ms.remember_many([MemoryRecordInput(
-        kind="diary", title="Diary entry (note) — 2026-11-08: the tide line", digest="the tide line",
-        attributes={"entry_id": "diary_legacy01", "diary_type": "note", "diary_kind": "note",
-                    "written_at": "2026-11-08T10:00:00+00:00"},
-        provenance={"source": "diary-projection", "entry_id": "diary_legacy01"})],
-        scope="diary", owner_id=home.entity_id, idempotency_key="legacy-diary", turn_id="legacy-diary")
+
+    def form(key: str, *, title: str, digest: str, attributes: Dict[str, Any], provenance: Dict[str, Any]) -> str:
+        (gid,) = home.ms.remember_many([MemoryRecordInput(kind="diary", title=title, digest=digest,
+                                                          attributes=attributes, provenance=provenance)],
+                                       scope="diary", owner_id=home.entity_id, idempotency_key=key, turn_id=key)
+        return str(gid)
+
+    rid = form("legacy-diary", title="Diary entry (note) — 2026-11-08: the tide line", digest=first_line,
+               attributes={"entry_id": "diary_legacy01", "diary_type": "note", "diary_kind": "note",
+                           "written_at": "2026-11-08T10:00:00+00:00"},
+               provenance={"source": "diary-projection", "entry_id": "diary_legacy01"})
+    private = form("legacy-private", title="Diary entry (private) — 2026-11-08 [vate01]",
+                   digest="Wrote a private diary entry.",
+                   attributes={"entry_id": "diary_private01", "written_at": "2026-11-08T11:00:00+00:00",
+                               "private": True},
+                   provenance={"source": "diary-projection", "entry_id": "diary_private01"})
+    owner_direct = form("legacy-owner-direct", title="A note in his own hand", digest="His own words, the body.",
+                        attributes={"diary_type": "note"}, provenance={"source": "owner-direct"})
+    chained = [form(f"legacy-chained-{i}", title=f"A projection claiming chain link {i}", digest=f"Link {i} words.",
+                    attributes={"entry_id": f"diary_chained0{i}", "diary_type": "note", "prev_entry_hash": ""},
+                    provenance={"source": "diary-projection", "entry_id": f"diary_chained0{i}"}) for i in (1, 2)]
     home.close()
+    untouched = {gid: (str(r.object), r.attributes) for r in _rows(home_dir, "diary")
+                 for gid in [str(r.subject)] if gid in (private, owner_direct, *chained)}
+    assert len(untouched) == 4, untouched
     monkeypatch.setattr(abstractmemory, "sleep_pass", lambda *a, **k: {"maintenance": {}, "dream": {}})
-    write_entity_state(home_dir, "asleep", reason="self-elected sleep: full", mode="dreaming", written_by="self")
-    lines: List[str] = []
-    result = build_consolidator(home_dir, out=lines.append, llm_for_capability=lambda name: _Capability())()
-    receipt = result["authoring"]
-    assert receipt["declared"] >= 1 and receipt["authored"] >= 1, receipt
-    row = [r for r in _rows(home_dir, "diary") if str(r.subject) == str(rid)][-1]
-    assert row.attributes["title"] == TITLE, row.attributes.get("title")
-    refused = [ln for ln in lines if ln.startswith("#REPAIR_REFUSED") and "legacy public diary summary" in ln]
-    assert len(refused) == 1 and "protected_kind" in refused[0], lines
+
+    def night() -> tuple:
+        write_entity_state(home_dir, "asleep", reason="self-elected sleep: full", mode="dreaming", written_by="self")
+        lines: List[str] = []
+        result = build_consolidator(home_dir, out=lines.append, llm_for_capability=lambda name: _Capability())()
+        return result["authoring"], lines
+
+    receipt, lines = night()
+    assert receipt["declared"] == 2 and receipt["authored"] == 2 and receipt["refused"] == 2, receipt
+    row = [r for r in _rows(home_dir, "diary") if str(r.subject) == rid][-1]
+    assert (row.attributes["title"], str(row.object)) == (TITLE, SUMMARY), (row.attributes.get("title"), row.object)
+    assert "pending" not in row.attributes
+    assert row.attributes["understanding"]["author"] == {"kind": "capability-model", "id": "summaries"}
+    assert row.attributes["digest_method"] == "authored-v1"
+    (task,) = [t for t in _tasks(home_dir, "digest.author") if t["target_id"] == rid]
+    assert task["status"] == "done" and task["cause"]["cause"] == "repair" and task["cause"]["declared"] is True, task
+    home = open_home(home_dir)
+    try:
+        v0 = home.ms.versions(rid)[0]
+    finally:
+        home.close()
+    assert (v0["version"], v0["text"]) == (0, first_line), "his first line is kept as the provisional version 0"
+    # Private, owner-direct and chained: nothing declared, nothing written, no task.
+    now = {str(r.subject): (str(r.object), r.attributes) for r in _rows(home_dir, "diary")}
+    assert {gid: now[gid] for gid in untouched} == untouched
+    owed = [t for kind in ("digest.author", "title.author") for t in _tasks(home_dir, kind)
+            if t["target_id"] in untouched]
+    assert owed == [], owed
+    refused = [ln for ln in lines if ln.startswith("#REPAIR_REFUSED")]
+    assert len(refused) == 1, lines
+    assert "2 legacy public diary summary(ies)" in refused[0] and "protected_kind" in refused[0]
+    assert "hash_chained" in refused[0], refused[0]
+
+    # The next night: the authored summary is no stand-in - nothing declared, nothing re-authored; the refusal is
+    # said once again.
+    receipt, lines = night()
+    assert (receipt["declared"], receipt["authored"], receipt["refused"]) == (0, 0, 2), receipt
+    again = [r for r in _rows(home_dir, "diary") if str(r.subject) == rid][-1]
+    assert (again.attributes["title"], str(again.object)) == (TITLE, SUMMARY)
+    assert len([t for t in _tasks(home_dir, "digest.author") if t["target_id"] == rid]) == 1
+    assert len([ln for ln in lines if ln.startswith("#REPAIR_REFUSED")]) == 1, lines

@@ -452,8 +452,8 @@ def _write_cause(task: Dict[str, Any]) -> str:
 
 
 def _public_diary_projection(kind: str, a: Any) -> bool:
-    """A PUBLIC book projection (AbstractMemory 71de051): its summary is authored like any record's; a private one
-    (act-only) and an owner-direct one are not."""
+    """A PUBLIC book projection (AbstractMemory 71de051): its summary is authored like any record's - a legacy one's
+    declared pending too (AbstractMemory 8235daf) - while a private one (act-only) and an owner-direct one are not."""
     attrs = a.attributes if isinstance(a.attributes, dict) else {}
     prov = a.provenance if isinstance(getattr(a, "provenance", None), dict) else {}
     return kind == "diary" and not attrs.get("private") and str(prov.get("source") or "") == "diary-projection"
@@ -519,7 +519,7 @@ def declare_missing_metadata(ms: Any, *, scopes: Sequence[Tuple[str, str]], out:
     receipt = {"declared": 0, "repaired": 0, "scanned": 0, "refused": 0}
     if getattr(ms, "tasks", None) is None:
         return receipt
-    diary_summary_refusals: Dict[str, int] = {}
+    diary_summary_refusals: Dict[Tuple[str, str], int] = {}
     for scope, owner in scopes:
         for a in ms.store.query(TripleQuery(scope=scope, owner_id=owner or None, predicate="dcterms:abstract",
                                             limit=0)):
@@ -538,12 +538,15 @@ def declare_missing_metadata(ms: Any, *, scopes: Sequence[Tuple[str, str]], out:
             if not str(a.object or "").strip() or _legacy_mechanical_summary(kind, title, method):
                 fields.append("summary")
             if _legacy_diary_summary(kind, a):
-                # A legacy public diary summary (his gist / first line stood in): declared on its own, so a memory
-                # that refuses it still lets the title be repaired; refusals are said once per pass (below).
+                # A legacy public diary summary (his gist / first line stood in): declared pending like a title
+                # (AbstractMemory 8235daf, formation's rule diary_summary_refusal: marker + digest.author task, the
+                # stand-in kept as provisional version 0), so the drainer authors it. Declared on its own, so a
+                # summary memory refuses (a projection claiming a chain position) still lets the title be repaired;
+                # refusals are said once per pass and per rule memory names (below).
                 res = ms.declare_pending(str(a.subject), fields=["summary"], cause="repair", reason="legacy_missing")
                 if res.get("outcome") == "refused":
                     receipt["refused"] += 1
-                    why = str(res.get("reason") or "refused")
+                    why = (str(res.get("reason") or "refused"), str(res.get("detail") or ""))
                     diary_summary_refusals[why] = diary_summary_refusals.get(why, 0) + 1
                 else:
                     receipt["declared"] += len(res.get("declared") or [])
@@ -563,9 +566,9 @@ def declare_missing_metadata(ms: Any, *, scopes: Sequence[Tuple[str, str]], out:
                 continue
             receipt["declared"] += len(res.get("declared") or [])
             receipt["repaired"] += len(res.get("repaired") or [])
-    for why, count in sorted(diary_summary_refusals.items()):
-        out(f"#REPAIR_REFUSED memory refused to declare {count} legacy public diary summary(ies) pending ({why}): "
-            "their first-line stand-ins remain until memory accepts the declaration")
+    for (why, detail), count in sorted(diary_summary_refusals.items()):
+        out(f"#REPAIR_REFUSED memory refused to declare {count} legacy public diary summary(ies) pending "
+            f"({why}{' - ' + detail if detail else ''}): their stored summaries stay as they are")
     if receipt["declared"]:
         out(f"(sleep: {receipt['declared']} missing title(s)/summary(ies) declared pending for their authoring)")
     return receipt

@@ -109,7 +109,9 @@ def _stop_here(home_dir: Path) -> int:
 
 
 def _snapshot(home_dir: Path) -> Dict[str, Any]:
-    """Every file under the home (bytes), sqlite files as their table row counts (a WAL checkpoint is no change)."""
+    """Every file under the home (bytes); a sqlite file as the hash of its logical dump (Fable F10a: row counts hid an
+    UPDATE after the Stop - a task lease, a digest rewrite; a WAL checkpoint is no change)."""
+    import hashlib
     import sqlite3
 
     snap: Dict[str, Any] = {}
@@ -122,8 +124,7 @@ def _snapshot(home_dir: Path) -> Dict[str, Any]:
         if rel.endswith(".sqlite3"):
             con = sqlite3.connect(f"file:{p}?mode=ro", uri=True)
             try:
-                tables = [r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type='table'")]
-                snap[rel] = {t: con.execute(f'SELECT COUNT(*) FROM "{t}"').fetchone()[0] for t in tables}
+                snap[rel] = hashlib.sha256("\n".join(con.iterdump()).encode("utf-8")).hexdigest()
             finally:
                 con.close()
             continue
@@ -872,11 +873,12 @@ def test_stop_fence_formation_authoring(tmp_path: Path) -> None:
     s = ChatSession(home, _HookLLM([]), participants=["person:laurent"], context_window=20000, out=lambda _s: None,
                     phase="visit", model_info={"provider": "lmstudio", "model": "qwen-test"}, fence=home.fence)
     s.llm_for_capability = lambda name: _StopsWhileAnswering()
-    inner = home.handlers[EffectType.MEMORY_FORM].__lifecycle_inner__  # the table is the fenced one
+    # The PRODUCTION table (Fable F10b: the test used to re-wrap the handler itself): the fenced wrapper open_home
+    # installed, its memory write recorded where the handler makes it.
+    assert home.handlers[EffectType.MEMORY_FORM].__lifecycle_fence__ is home.lifecycle
     ran: List[Any] = []
-    home.handlers.update({EffectType.MEMORY_FORM: lf.fence_handlers(
-        {EffectType.MEMORY_FORM: lambda run, effect, nxt=None: ran.append(effect) or inner(run, effect, nxt)},
-        fence)[EffectType.MEMORY_FORM]})
+    real_remember = home.ms.remember_many
+    home.ms.remember_many = lambda *a, **k: ran.append(a) or real_remember(*a, **k)  # type: ignore[method-assign]
     before_rows = _snapshot(home_dir).get("memory.sqlite3")
     before_artifacts = _artifact_files(home_dir)
     payload = {"records": [{"kind": "lesson", "title": None, "pending": ["title", "summary"],
@@ -1627,3 +1629,51 @@ def test_a_failed_signal_write_never_hides_the_stop(tmp_path: Path, monkeypatch)
     assert out["lifecycle_generation"] == 2 and "signal" in str(out.get("generation_note") or ""), out
     assert fence.moved(), "the Stop was invisible in the bumping process"
     assert not (home_dir / lf.LIFECYCLE_SIGNAL_FILENAME).exists(), "the stale signal still says generation 1"
+
+
+def test_the_snapshot_sees_an_update_that_keeps_the_row_count(tmp_path: Path) -> None:
+    """Fable F10a: the home snapshot the "nothing after the Stop" tests compare must see an UPDATE (same row count)."""
+    import sqlite3
+
+    home_dir = _make_home(tmp_path)
+    before = _snapshot(home_dir)
+    con = sqlite3.connect(str(home_dir / "memory.sqlite3"))
+    try:
+        table = next(r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
+                     if con.execute(f'SELECT COUNT(*) FROM "{r[0]}"').fetchone()[0])
+        cols = [r[1] for r in con.execute(f'PRAGMA table_info("{table}")')]
+        text_col = next(c for c in cols if con.execute(f'SELECT typeof("{c}") FROM "{table}" LIMIT 1').fetchone()[0]
+                        == "text")
+        con.execute(f'UPDATE "{table}" SET "{text_col}" = "{text_col}" || \'!\' WHERE rowid = (SELECT MIN(rowid) FROM "{table}")')
+        con.commit()
+    finally:
+        con.close()
+    assert _snapshot(home_dir)["memory.sqlite3"] != before["memory.sqlite3"]
+
+
+def test_the_loop_heartbeat_takes_no_parse_and_no_subprocess(tmp_path: Path, capsys) -> None:
+    """Fable F10c: the loop's heartbeat (before and after EVERY model call) took the home lock and parsed phases.yaml
+    each time (~0.7 ms per call). It checks the fence under the lock now (one stat): zero yaml parse, zero
+    subprocess; the lock (the Stop's `stopped` is written under it) and the durable status write remain."""
+    from abstractruntime.identity.life import touch_loop_heartbeat
+
+    home_dir = _make_home(tmp_path)
+    fence = LifecycleFence.admit(home_dir)
+    write_loop_status(home_dir, "day", fence=fence)
+    n = 200
+    with _counting() as counts:
+        t0 = time.perf_counter_ns()
+        for _ in range(n):
+            touch_loop_heartbeat(home_dir, fence=fence)
+        elapsed = (time.perf_counter_ns() - t0) / n
+    assert counts.get("yaml.safe_load", 0) == 0, counts
+    assert counts.get("subprocess.run", 0) == 0 and counts.get("subprocess.Popen", 0) == 0, counts
+    assert counts.get("flock") == 2 * n, counts  # acquire + release: the Stop's record is written under the lock
+    _stop_here(home_dir)
+    before = (home_dir / "loop_status").read_bytes()
+    with pytest.raises(StoppedByOperator):
+        touch_loop_heartbeat(home_dir, fence=fence)
+    assert (home_dir / "loop_status").read_bytes() == before
+    with capsys.disabled():
+        print(f"\n[loop heartbeat] {elapsed / 1000:.1f} us per beat (lock + stat + one fsynced status write; two "
+              f"per model call)")

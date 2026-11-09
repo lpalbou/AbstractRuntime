@@ -1830,9 +1830,13 @@ def touch_loop_heartbeat(home_dir: Path, *, fence: Any) -> None:
     from ..utils.atomic_files import atomic_write_text
 
     path = Path(home_dir) / "loop_status"
+    if not isinstance(fence, LifecycleFence):
+        raise TypeError(f"touching the loop heartbeat: fence must be the loop's LifecycleFence, not {fence!r}")
     with home_state_lock(home_dir):
-        _verify_fence(fence, home_dir, "touching the loop heartbeat", read_lifecycle_generation(home_dir),
-                      sentinel_ok=False)
+        # Before and after EVERY model call (Fable F10c): the fence's own check (one stat), not a phases.yaml parse.
+        # Under this lock a new-code bump has written its signal; and the Stop's `stopped` is written under it too, so
+        # the phase check below never revives a `day` over it.
+        fence.check("touching the loop heartbeat")
         current = _read_loop_status_raw(home_dir)
         if current.get("phase") != "day" or current.get("pid") != os.getpid():
             return

@@ -67,12 +67,14 @@ from .chat import (
     sheet_prompt_line,
 )
 from .digest import mechanical_digest_v2
+from .title_failures import untitled_label
 from .prelude import render_summon_prelude
 from .prompt_overlay import overlay_note, read_prompt_overlay
 from .reflection import (
     FeelingElection,
     build_reflection_prompt,
     elected_title_and_words,
+    parse_elected_title,
     parse_feel_blocks,
     parse_interest_blocks,
     parse_lesson_blocks,
@@ -257,6 +259,28 @@ def _attachment_lines(facts: List[Dict[str, Any]]) -> List[str]:
 
 def _deadline_iso(idle_seconds: float) -> str:
     return (datetime.now(timezone.utc) + timedelta(seconds=float(idle_seconds))).isoformat()
+
+
+def _visit_title_failure(
+    home: Any, visit: Dict[str, Any], kind: str, raw_block: str, reason: str, *, turn_id: str
+) -> None:
+    """A visit election formed without a title (operator 2026-11-09: no fallback; see `title_failures`). Recorded
+    when the formation is planned: the record id is not known yet, the formation's turn id names it."""
+    from .title_failures import record_title_failure
+
+    info = visit.get("model_info") if isinstance(visit.get("model_info"), dict) else {}
+    record_title_failure(
+        getattr(home, "home_dir", None),
+        entity=getattr(home, "entity_id", None),
+        record_id=None,
+        kind=kind,
+        raw_block=raw_block,
+        template_id="visit_workflow.elections",
+        provider=info.get("provider"),
+        model=info.get("model"),
+        reason=reason,
+        extra={"turn_id": turn_id, "stored_title": untitled_label(kind, raw_block)},
+    )
 
 
 def build_visit_workflow(
@@ -740,7 +764,7 @@ def build_visit_workflow(
                             gids.append(tails[0])
                     if gids:
                         pending["realizations"].append(
-                            {"text": _re.text, "touches": _re.touches, "title": _re.title, "gids": gids}
+                            {"text": _re.text, "touches": _re.touches, "title": _re.title, "gids": gids, "title_reason": _re.title_reason, "raw": _re.raw}
                         )
                     else:
                         notices.append(
@@ -1024,7 +1048,7 @@ def build_visit_workflow(
                         _gids.append(_tails[0])
                 if _gids:
                     _realizations.append(
-                        {"text": _re.text, "touches": _re.touches, "title": _re.title, "gids": _gids}
+                        {"text": _re.text, "touches": _re.touches, "title": _re.title, "gids": _gids, "title_reason": _re.title_reason, "raw": _re.raw}
                     )
                 else:
                     r_notes.append(
@@ -1131,9 +1155,12 @@ def build_visit_workflow(
             session_record_id = next(
                 iter((refl.get("summary_out") or {}).get("record_ids") or []), None
             )
-            # Title and words WHOLE (operator 2026-11-08; root ADR 0054): his `title:` line, else his whole first
-            # line - never a word cut. A plain pending string (a run older than this) reads too.
-            _t, _w = elected_title_and_words(str(interests[i]))
+            # Title and words WHOLE (operator 2026-11-08; root ADR 0054): his `title:` first line; without one, no
+            # title and a recorded failure (operator 2026-11-09: no fallback). A plain pending string reads too.
+            _t, _w, _why = parse_elected_title(str(interests[i]))
+            if _why:
+                _visit_title_failure(home, visit, "interest", str(interests[i]), _why,
+                                     turn_id=f"t-reflect-interest-{rid_scope}-{i}")
             return StepPlan(
                 node_id="APPLY",
                 effect=Effect(
@@ -1141,7 +1168,7 @@ def build_visit_workflow(
                     payload={
                         "records": [{
                             "kind": "interest",
-                            "title": _t,
+                            "title": _t or untitled_label("interest", str(interests[i])),
                             "digest": _w,
                             "keywords": [],
                             "edges": (
@@ -1177,7 +1204,10 @@ def build_visit_workflow(
             session_record_id = next(
                 iter((refl.get("summary_out") or {}).get("record_ids") or []), None
             )
-            _t, _w = elected_title_and_words(str(lessons[i]))
+            _t, _w, _why = parse_elected_title(str(lessons[i]))
+            if _why:
+                _visit_title_failure(home, visit, "lesson", str(lessons[i]), _why,
+                                     turn_id=f"t-reflect-lesson-{rid_scope}-{i}")
             return StepPlan(
                 node_id="APPLY",
                 effect=Effect(
@@ -1185,7 +1215,7 @@ def build_visit_workflow(
                     payload={
                         "records": [{
                             "kind": "lesson",
-                            "title": _t,
+                            "title": _t or untitled_label("lesson", str(lessons[i])),
                             "digest": _w,
                             "keywords": [],
                             "edges": (
@@ -1227,6 +1257,15 @@ def build_visit_workflow(
             refl["i"] = i + 1
             r = realizations[i] if isinstance(realizations[i], dict) else {}
             r_text = str(r.get("text") or "")
+            # His `title:` first line (parsed at election); without one, no title and a recorded failure (operator
+            # 2026-11-09: no fallback). A pending election of an older run carries no reason: it is re-read here.
+            _r_title = str(r.get("title") or "").strip() or None
+            _r_why = r.get("title_reason")
+            if _r_title is None and not _r_why and "title_reason" not in r:
+                _r_title, _unused, _r_why = parse_elected_title(r_text)
+            if _r_why:
+                _visit_title_failure(home, visit, "realization", str(r.get("raw") or r_text), str(_r_why),
+                                     turn_id=f"t-reflect-realize-{rid_scope}-{i}")
             r_attrs: Dict[str, Any] = {
                 "session_id": str(run.session_id or ""),
                 "phase": "visit",
@@ -1240,7 +1279,7 @@ def build_visit_workflow(
                     payload={
                         "records": [{
                             "kind": "realization",
-                            "title": str(r.get("title") or "") or elected_title_and_words(r_text)[0],
+                            "title": _r_title or untitled_label("realization", str(r.get("raw") or r_text)),
                             "digest": r_text,
                             "keywords": [],
                             "edges": [["derived_from", str(g)] for g in (r.get("gids") or [])],

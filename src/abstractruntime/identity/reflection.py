@@ -314,37 +314,58 @@ _TITLE_LINE_RE = re.compile(r"^title\s*:\s*(?P<title>.*)$", re.IGNORECASE)
 
 
 def _block_lines(raw: str) -> str:
-    """A block body as the parsers keep it: whitespace folded within each line, the FIRST line kept on its own (the
-    explicit title, or the line a fallback title is read from), the rest folded into one line. A one-line body comes
-    back as that line, the shape every caller and test already holds."""
-    lines = [" ".join(ln.split()) for ln in str(raw or "").splitlines() if ln.strip()]
-    if len(lines) <= 1:
-        return lines[0] if lines else ""
-    return lines[0] + "\n" + " ".join(lines[1:])
+    """A block body as the parsers keep it: whitespace folded within each line, blank lines dropped, his line breaks
+    kept (the title checks read lines: a second `title:` line or a late one is a failure, never a guess). A one-line
+    body comes back as that line."""
+    return "\n".join(" ".join(ln.split()) for ln in str(raw or "").splitlines() if ln.strip())
 
 
-def elected_title_and_words(elected: str) -> Tuple[str, str]:
-    """(title, words) of one elected interest, lesson or realization, both WHOLE (root ADR 0054).
+def parse_elected_title(elected: str) -> Tuple[Optional[str], str, Optional[str]]:
+    """(title, words, reason) of one elected interest, lesson or realization (operator ruling 2026-11-09: no
+    fallback; a failure is recorded, see `title_failures`).
 
-    The title is the block's explicit `title:` first line when he wrote one; otherwise his WHOLE first line - his own
-    line break, never a punctuation guess (a sentence split cut "Dr. Smith taught me patience." to "Dr." and stored
-    that for good; review 2026-11-09). Stored whole; a display folds it. `words` is everything else, whitespace folded:
-    the record's digest. Also reads a plain string (a pending election of a visit run that started before this
-    change)."""
-    lines = [ln for ln in str(elected or "").splitlines() if ln.strip()]
+    The title is the block's explicit `title:` FIRST line, verbatim. Anything else gives title None and a reason:
+    `missing` (no `title:` line), `empty` (the label names nothing), `multi_line` (more than one `title:` line),
+    `malformed` (the `title:` line is not the first line), `too_long` (past TITLE_MAX_CHARS). No text heuristic
+    stands in for it: his first line or first sentence is never read as a title. `words` is the body, whitespace
+    folded, WHOLE (root ADR 0054): everything but a good title line; with no usable title, every line (a `title:`
+    label dropped, its words kept). A plain one-line string (a pending election of an older visit run) reads too."""
+    from .title_failures import TITLE_MAX_CHARS
+
+    lines = [" ".join(ln.split()) for ln in str(elected or "").splitlines() if ln.strip()]
     if not lines:
-        return "", ""
-    first = " ".join(lines[0].split())
-    m = _TITLE_LINE_RE.match(first)
-    if m:
-        title = m.group("title").strip()
-        if title:
-            return title, (" ".join(" ".join(lines[1:]).split()) or title)
-        lines = lines[1:]  # an empty `title:` line names nothing: the title comes from his words
-        if not lines:
-            return "", ""
-        first = " ".join(lines[0].split())
-    return first, " ".join(" ".join(lines).split())
+        return None, "", None
+    matches = [_TITLE_LINE_RE.match(ln) for ln in lines]
+    titled = [i for i, m in enumerate(matches) if m]
+
+    def _all_words(skip_first: bool = False) -> str:
+        kept = []
+        for i, ln in enumerate(lines):
+            if skip_first and i == 0:
+                continue
+            m = matches[i]
+            kept.append(m.group("title").strip() if m else ln)
+        return " ".join(" ".join(kept).split())
+
+    if not titled:
+        return None, _all_words(), "missing"
+    if len(titled) > 1:
+        return None, _all_words(), "multi_line"
+    if titled[0] != 0:
+        return None, _all_words(), "malformed"
+    title = matches[0].group("title").strip()
+    if not title:
+        return None, _all_words(skip_first=True), "empty"
+    if len(title) > TITLE_MAX_CHARS:
+        return None, _all_words(), "too_long"
+    return title, (_all_words(skip_first=True) or title), None
+
+
+def elected_title_and_words(elected: str) -> Tuple[Optional[str], str]:
+    """(title, words) of one elected block: `parse_elected_title` without the reason. The title is None when the
+    block carries no usable `title:` first line (never a guess from his words)."""
+    title, words, _reason = parse_elected_title(elected)
+    return title, words
 
 
 def parse_interest_blocks(
@@ -401,7 +422,9 @@ class RealizeElection:
     text: str
     evidence: List[str]
     touches: str = ""
-    title: str = ""  # his explicit `title:` line, else his whole first line
+    title: Optional[str] = None  # his explicit `title:` first line; None when he wrote none usable
+    title_reason: Optional[str] = None  # why there is no title (title_failures reasons); None when titled
+    raw: str = ""  # the block as he wrote it (whole), for the failure record
 
 
 _REALIZE_EVIDENCE_RE = re.compile(r"^\s*evidence\s*=\s*(?P<val>.+)$", re.IGNORECASE)
@@ -466,7 +489,7 @@ def parse_realize_blocks(reply: str) -> Tuple[str, List[RealizeElection], List[s
                 continue
             if ln.strip():
                 text_lines.append(ln.strip())
-        title, body = elected_title_and_words("\n".join(text_lines))
+        title, body, title_reason = parse_elected_title("\n".join(text_lines))
         if not body:
             notices.append("#FALLBACK realize block skipped (no words)")
             return "[realize block skipped - empty]"
@@ -486,7 +509,10 @@ def parse_realize_blocks(reply: str) -> Tuple[str, List[RealizeElection], List[s
                 f"#FALLBACK realize block refused (cap {MAX_REALIZATIONS_PER_SESSION}/session)"
             )
             return f"[realization refused - at most {MAX_REALIZATIONS_PER_SESSION} per session]"
-        realizations.append(RealizeElection(text=body, evidence=evidence, touches=touches, title=title))
+        realizations.append(RealizeElection(
+            text=body, evidence=evidence, touches=touches, title=title, title_reason=title_reason,
+            raw="\n".join(ln.rstrip() for ln in raw_lines).strip("\n"),
+        ))
         # The marker carries the realization WHOLE (root ADR 0026/0054,
         # 2026-11-08): the marked reply is stored as the turn's verbatim, and
         # a marked 80-character cut there was still a stored cut.

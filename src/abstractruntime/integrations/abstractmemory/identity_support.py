@@ -94,6 +94,7 @@ def project_diary_entry(
     explores: Optional[str] = None,
     digest_method: Optional[str] = None,
     entry_record_hash: Optional[str] = None,
+    home_dir: Optional[Any] = None,
 ) -> Tuple[Optional[str], List[str]]:
     """Project the MEMORY OF THE ACT of a diary write into the graph.
 
@@ -122,6 +123,7 @@ def project_diary_entry(
         return None, warnings
 
     private = visibility == "private"
+    title_missing = False  # a public entry with no gist (see below)
     # Memory's closed diary_type vocabulary; the open kind stays in diary_kind.
     # "question" and "problem" are first-class (maintainer rounds 4+6: open
     # questions, problems, and ideas are autonomy drivers — curiosity,
@@ -196,11 +198,13 @@ def project_diary_entry(
         # folding machine words into titles would re-create the exact
         # clustering-on-form the slug fix killed.
         _slug = ""
-        if ((gist or "").strip() or fallback) and not digest_method:
-            # WHOLE (root ADR 0054; operator 2026-11-08: a title is explicit and readable): his elected gist, else
-            # his whole first line - his own line break, never a punctuation guess (a sentence split cut
-            # "Dr. Smith..." to "Dr."; review 2026-11-09) and never a 60-character cut.
-            _slug = (gist or "").strip() or fallback
+        if not digest_method:
+            # WHOLE (root ADR 0054; operator 2026-11-08: a title is explicit and readable): his elected gist, never
+            # a guess from his words (operator 2026-11-09: no fallback - his first line used to stand in, and a
+            # sentence split once cut "Dr. Smith..." to "Dr."). No gist: the title carries no words and the
+            # failure is recorded (title_failures).
+            _slug = (gist or "").strip()
+            title_missing = not _slug
         if _slug:
             title = f"Diary entry ({kind}) — {written_date}: {_slug}"
         else:
@@ -275,7 +279,25 @@ def project_diary_entry(
             idempotency_key=f"diary:{entry_id}",
             turn_id=turn_id,
         )
-        return (str(record_ids[0]) if record_ids else None), warnings
+        record_id = str(record_ids[0]) if record_ids else None
+        if not private and title_missing:
+            from ...identity.title_failures import record_title_failure
+
+            failure = record_title_failure(
+                home_dir,
+                entity=entity_id,
+                record_id=record_id,
+                kind="diary",
+                raw_block=str(text or ""),
+                template_id="diary.gist",
+                provider=origin.get("provider"),
+                model=origin.get("model"),
+                reason="missing",
+                extra={"entry_id": entry_id, "stored_title": title},
+            )
+            if failure.get("logged"):
+                warnings.append(str(failure["logged"]))
+        return record_id, warnings
     except Exception as e:
         warnings.append(f"#FALLBACK diary projection failed (chain entry preserved): {e}")
         return None, warnings

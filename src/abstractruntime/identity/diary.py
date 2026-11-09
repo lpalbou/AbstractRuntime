@@ -304,6 +304,7 @@ def build_diary_effect_handlers(
     diary_store: DiaryStore,
     memory_system: Any = None,
     now_iso: Callable[[], str] = utc_now_iso,
+    home_dir: Any = None,
 ) -> Dict[EffectType, EffectHandler]:
     """Handlers for the entity diary. Register ONLY on the entity's home runtime.
 
@@ -314,6 +315,10 @@ def build_diary_effect_handlers(
 
     `memory_system` (optional, duck-typed `remember_many`) enables the graph
     projection plane; entries with `visibility="private"` never project.
+
+    `home_dir` (the home these handlers serve) locates the title-failure file
+    (`title_failures`): a public entry projected without a gist is recorded
+    there. Without it the failure rides the projection's warnings, marked.
     """
     eid = str(entity_id or "").strip()
     if not eid:
@@ -357,6 +362,7 @@ def build_diary_effect_handlers(
             explores=entry.explores,
             digest_method=str(entry.origin.get("digest_method") or "") or None,
             entry_record_hash=record_hash,
+            home_dir=home_dir,
         )
 
     def _handle_diary_write(run: RunState, effect: Effect, default_next_node: Optional[str]) -> EffectOutcome:

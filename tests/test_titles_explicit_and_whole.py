@@ -2,10 +2,10 @@
 be explicit and easy to read, for a human and for an agent"; root ADR 0054: a stored title is never cut).
 
 Before: interest/lesson/realization titles were the body's first 8 WORDS and diary titles a 60-character slug + "…".
-Now: the block's `title:` first line, verbatim; without one, the body's WHOLE first line (his own line break, never a
-punctuation guess: a sentence split cut "Dr. Smith taught me patience." to "Dr." and stored it; review 2026-11-09); a
-diary title carries his gist or his whole first line. The title is the title: no "interest: ", "lesson: " or
-"realization: " prefix on a new record.
+Now: the block's `title:` first line, verbatim; a diary title carries his gist. Without one there is NO title from his
+words (operator ruling 2026-11-09: no fallback - his first line or first sentence used to stand in, and a sentence
+split cut "Dr. Smith taught me patience." to "Dr."): the record carries the visibly-untitled label and the failure is
+recorded (test_title_failures.py). The title is the title: no "interest: ", "lesson: " or "realization: " prefix.
 """
 
 from __future__ import annotations
@@ -17,6 +17,7 @@ from typing import Any, Dict, List
 
 import pytest
 
+from abstractruntime.identity.title_failures import untitled_label
 from abstractruntime.identity.reflection import (
     build_reflection_prompt,
     elected_title_and_words,
@@ -42,25 +43,23 @@ US_LINE = "I learned that U.S. Courts are slow."
 # ------------------------------------------------------------------ the helper and the parsers
 
 
-def test_untitled_body_takes_its_whole_first_line() -> None:
+def test_an_untitled_body_has_no_title_and_its_words_whole() -> None:
     assert len(LONG_FIRST.split()) == 30
-    # A long first line stays whole, both of its sentences.
+    # No title line: no title (never his first line as a guess); the words whole, both sentences.
     title, words = elected_title_and_words(LONG_BODY)
-    assert title == LONG_BODY, title
+    assert title is None, title
     assert words == LONG_BODY
     title, words = elected_title_and_words(LONG_BODY + "\nA second line.")
-    assert title == LONG_BODY and words == LONG_BODY + " A second line."
+    assert title is None and words == LONG_BODY + " A second line."
 
 
-def test_abbreviations_never_cut_the_title() -> None:
-    assert elected_title_and_words(DR_LINE) == (DR_LINE, DR_LINE)
-    assert elected_title_and_words("Dr. Smith taught me patience. It matters.")[0] == (
-        "Dr. Smith taught me patience. It matters."
-    )
-    assert elected_title_and_words(DR_BODY) == (DR_LINE, "Dr. Smith taught me patience. It matters to how I teach.")
-    assert elected_title_and_words(US_LINE)[0] == US_LINE
+def test_abbreviations_never_make_a_title() -> None:
+    assert elected_title_and_words(DR_LINE) == (None, DR_LINE)
+    assert elected_title_and_words("Dr. Smith taught me patience. It matters.")[0] is None
+    assert elected_title_and_words(DR_BODY) == (None, "Dr. Smith taught me patience. It matters to how I teach.")
+    assert elected_title_and_words(US_LINE)[0] is None
     _, realizations, _ = parse_realize_blocks(f"```realize\n{DR_BODY}\nevidence=#a1b2c3\n```")
-    assert realizations[0].title == DR_LINE
+    assert realizations[0].title is None and realizations[0].title_reason == "missing"
     # A `title:` line still wins over the first line.
     assert elected_title_and_words(f"title: Patience\n{DR_BODY}")[0] == "Patience"
 
@@ -72,9 +71,9 @@ def test_title_line_is_kept_verbatim_and_out_of_the_words() -> None:
 
 
 def test_empty_title_line_and_title_only_block() -> None:
-    assert elected_title_and_words(f"title:\n{LONG_BODY}") == (LONG_BODY, LONG_BODY)
+    assert elected_title_and_words(f"title:\n{LONG_BODY}") == (None, LONG_BODY)
     assert elected_title_and_words(f"title: {EXPLICIT}") == (EXPLICIT, EXPLICIT)
-    assert elected_title_and_words("title:") == ("", "")
+    assert elected_title_and_words("title:") == (None, "")
 
 
 def test_parsers_keep_the_title_line_and_markers_quote_the_words() -> None:
@@ -127,14 +126,14 @@ def _project(gist: Any, text: str) -> str:
     return str(captured["records"][0].title)
 
 
-def test_diary_title_is_whole() -> None:
+def test_diary_title_is_his_gist_whole_and_never_his_first_line() -> None:
     long_q = LONG_FIRST.rstrip(".") + "? And another sentence follows it."
     title = _project(None, long_q + "\nMore prose below.")
-    assert title == f"Diary entry (question) — 2026-11-08: {long_q}", title
-    assert "…" not in title
-    assert _project(None, DR_BODY).endswith(": " + DR_LINE)
+    assert title == "Diary entry (question) — 2026-11-08 [ary_q1]", title  # no words of his without a gist
+    assert _project(None, DR_BODY) == "Diary entry (question) — 2026-11-08 [ary_q1]"
     gist = "Why does a research nation hollow out the institutions that produce its own breakthroughs?"
     assert _project(gist, "prose").endswith(": " + gist)
+    assert "…" not in _project(gist, "prose")
 
 
 # ------------------------------------------------------------------ the stored records, end to end
@@ -169,9 +168,10 @@ def _assert_titles(t: Dict[str, List[tuple]]) -> None:
     # The title is the title (operator 2026-11-08): no "interest:" prefix on a new interest.
     assert (EXPLICIT, LONG_BODY) in t.get("interest", []), t.get("interest")
     assert not any(title.lower().startswith("interest:") for title, _w in t.get("interest", []))
-    # No "lesson: " prefix; an untitled lesson's title is its whole first line (never cut at "Dr.").
-    assert (LONG_BODY, LONG_BODY) in t.get("lesson", []), t.get("lesson")
-    assert (DR_LINE, "Dr. Smith taught me patience. It matters to how I teach.") in t.get("lesson", []), t.get("lesson")
+    # No "lesson: " prefix; an untitled lesson takes no title from his words (the untitled label, never "Dr.").
+    assert (untitled_label("lesson", LONG_BODY), LONG_BODY) in t.get("lesson", []), t.get("lesson")
+    assert (untitled_label("lesson", DR_BODY), "Dr. Smith taught me patience. It matters to how I teach.") in t.get(
+        "lesson", []), t.get("lesson")
     assert not any(title.lower().startswith("lesson:") for title, _w in t.get("lesson", []))
 
 
@@ -229,12 +229,17 @@ def test_visit_lane_stores_whole_titles(tmp_path: Path) -> None:
         # The `title:` line wins, with no "realization: " prefix.
         assert (EXPLICIT, LONG_BODY) in t.get("realization", []), t.get("realization")
         assert not any(title.lower().startswith("realization:") for title, _w in t.get("realization", []))
+        # The two untitled lessons are recorded (no untracked/ beside this test home: the own-time log, marked).
+        log = (home_dir / "own_time.log").read_text(encoding="utf-8")
+        failures = [json.loads(ln.split(" ", 1)[1]) for ln in log.splitlines() if ln.startswith("#TITLE_FAILURE ")]
+        assert sorted((f["kind"], f["reason"], f["raw_block"]) for f in failures) == sorted(
+            [("lesson", "missing", LONG_BODY), ("lesson", "missing", DR_BODY)]), failures
     finally:
         ert.close()
 
 
 def test_chat_realization_title_has_no_prefix() -> None:
-    # The chat apply path (mid-turn and look-back share it): his `title:` line, else his whole first line, bare.
+    # The chat apply path (mid-turn and look-back share it): his `title:` line, bare; else the untitled label.
     sys.path.insert(0, str(Path(__file__).parent))
     from test_realize_election import _ApplyStub
 
@@ -245,10 +250,11 @@ def test_chat_realization_title_has_no_prefix() -> None:
     stub = _ApplyStub()
     stub._apply_realizations(elected, turn_id="t1", notices=[])
     titles = [payload["records"][0]["title"] for _etype, payload in stub.effect_calls]
-    assert titles == [EXPLICIT, DR_LINE], titles
+    assert titles == [EXPLICIT, untitled_label("realization", elected[1].raw)], titles
+    assert "Smith" not in titles[1]
 
 
-def test_pending_plain_string_still_forms_with_its_whole_line_as_title() -> None:
-    # A visit run that started before this change holds the election as a plain one-line string.
-    assert elected_title_and_words(LONG_BODY) == (LONG_BODY, LONG_BODY)
+def test_pending_plain_string_still_forms_with_its_words_whole() -> None:
+    # A visit run that started before this change holds the election as a plain one-line string: no title line.
+    assert elected_title_and_words(LONG_BODY) == (None, LONG_BODY)
     assert json.loads(json.dumps(f"title: {EXPLICIT}\n{LONG_BODY}")).startswith("title: ")

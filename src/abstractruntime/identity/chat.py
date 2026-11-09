@@ -54,11 +54,13 @@ from ..core.runtime import utc_now_iso
 from ..session_history import window_transcript
 from .diary import DiaryStore, build_diary_effect_handlers
 from .digest import mechanical_digest_v2
+from .title_failures import untitled_label
 from .prelude import render_summon_prelude
 from .prompt_overlay import overlay_note, read_prompt_overlay
 from .reflection import (
     build_reflection_prompt,
     elected_title_and_words,
+    parse_elected_title,
     parse_feel_blocks,
     parse_interest_blocks,
     parse_lesson_blocks,
@@ -673,7 +675,8 @@ def open_home(home_dir: Path, *, embedder: Any = None, attention_window: Optiona
             entity_scope_owner=entity_id,
         ),
         **build_diary_effect_handlers(
-            entity_id=entity_id, diary_store=diary, memory_system=ms, now_iso=utc_now_iso
+            entity_id=entity_id, diary_store=diary, memory_system=ms, now_iso=utc_now_iso,
+            home_dir=home_dir,
         ),
     }
     # Entity-brain effects (flow's build-split, c5169): consolidate/probe/
@@ -1592,16 +1595,17 @@ class ChatSession:
                 except RuntimeError as exc:
                     report.notices.append(f"#FALLBACK feeling on {record_id} refused: {exc}")
         for i, lesson_text in enumerate(lessons):
-            # Title and words WHOLE (operator 2026-11-08; root ADR 0054): his `title:` line, else his whole first
-            # line - never a word cut. The title is the title: no "lesson: " prefix (review 2026-11-09).
-            lesson_title, lesson_words = elected_title_and_words(lesson_text)
+            # Title and words WHOLE (operator 2026-11-08; root ADR 0054): his `title:` first line, verbatim, no
+            # "lesson: " prefix. Without one the record has no title and the failure is recorded (operator
+            # 2026-11-09: no fallback, never a guess from his words).
+            lesson_title, lesson_words, lesson_reason = parse_elected_title(lesson_text)
             try:
                 out = self._effect(
                     EffectType.MEMORY_FORM,
                     {
                         "records": [{
                             "kind": "lesson",
-                            "title": lesson_title,
+                            "title": lesson_title or untitled_label("lesson", lesson_text),
                             "digest": lesson_words,
                             "keywords": [],
                             "edges": [],
@@ -1613,18 +1617,20 @@ class ChatSession:
                     },
                 )
                 report.notices.extend(out.get("warnings", []))
-                self.out(f'(lesson kept: "{lesson_title}")')
+                if lesson_reason:
+                    self._title_failure("lesson", lesson_text, lesson_reason, out, template_id="chat.turn")
+                self.out(f'(lesson kept: "{lesson_title or lesson_words}")')
             except RuntimeError as exc:
                 report.notices.append(f"#FALLBACK mid-turn lesson refused: {exc}")
         for i, interest_text in enumerate(interests):
-            interest_title, interest_words = elected_title_and_words(interest_text)
+            interest_title, interest_words, interest_reason = parse_elected_title(interest_text)
             try:
                 out = self._effect(
                     EffectType.MEMORY_FORM,
                     {
                         "records": [{
                             "kind": "interest",
-                            "title": interest_title,
+                            "title": interest_title or untitled_label("interest", interest_text),
                             "digest": interest_words,
                             "keywords": [],
                             "edges": [],
@@ -1636,7 +1642,9 @@ class ChatSession:
                     },
                 )
                 report.notices.extend(out.get("warnings", []))
-                self.out(f'(interest kept: "{interest_title}")')
+                if interest_reason:
+                    self._title_failure("interest", interest_text, interest_reason, out, template_id="chat.turn")
+                self.out(f'(interest kept: "{interest_title or interest_words}")')
             except RuntimeError as exc:
                 report.notices.append(f"#FALLBACK mid-turn interest refused: {exc}")
 
@@ -1715,7 +1723,9 @@ class ChatSession:
                     {
                         "records": [{
                             "kind": "realization",
-                            "title": getattr(r, "title", "") or elected_title_and_words(r.text)[0],
+                            "title": getattr(r, "title", None) or untitled_label(
+                                "realization", getattr(r, "raw", "") or r.text
+                            ),
                             "digest": r.text,
                             "keywords": [],
                             "edges": [["derived_from", gid] for gid in gids],
@@ -1728,9 +1738,12 @@ class ChatSession:
                     },
                 )
                 notices.extend(out.get("warnings", []))
-                self.out(
-                    f'(realization held for sleep: "{getattr(r, "title", "") or elected_title_and_words(r.text)[0]}")'
-                )
+                if getattr(r, "title_reason", None):
+                    self._title_failure(
+                        "realization", getattr(r, "raw", "") or r.text, r.title_reason, out,
+                        template_id="chat.turn",
+                    )
+                self.out(f'(realization held for sleep: "{getattr(r, "title", None) or r.text}")')
             except (RuntimeError, ValueError) as exc:
                 # Version-skew half: the kind vocabulary is MEMORY's to grow
                 # and their engine half lands in the same wave (c4779 orders
@@ -3187,6 +3200,28 @@ class ChatSession:
         )
         return next(iter(formed.get("record_ids", [])), None)
 
+    def _title_failure(
+        self, kind: str, raw_block: str, reason: str, formed: Any, *, template_id: str
+    ) -> None:
+        """Record one title failure (operator 2026-11-09: no fallback; see `title_failures`): the record was formed
+        without a title; the line names it, the block he wrote, the prompt and the mind that answered."""
+        from .title_failures import record_title_failure
+
+        ids = list((formed or {}).get("record_ids") or []) if isinstance(formed, dict) else []
+        record_title_failure(
+            getattr(self.home, "home_dir", None),
+            entity=self.home.entity_id,
+            record_id=str(ids[0]) if ids else None,
+            kind=kind,
+            raw_block=raw_block,
+            template_id=template_id,
+            provider=self.model_info.get("provider"),
+            model=self.model_info.get("model"),
+            reason=reason,
+            extra={"session_id": self.session_id, "stored_title": untitled_label(kind, raw_block)},
+            out=self.out,
+        )
+
     def _session_room(self, kind: str) -> int:
         """How many more of `kind` ("interest" | "lesson") this session may
         keep: the cap counts the whole session - an own-time day or a visit
@@ -3331,16 +3366,16 @@ class ChatSession:
         # digest carry the WHY. Values/purposes/traits/limits stay untouchable.
         interest_record_ids: List[str] = []
         for i, interest_text in enumerate(interests):
-            # Title and words WHOLE (operator 2026-11-08; root ADR 0054): his `title:` line, else his whole first
-            # line - never the 8-word cut that read as broken-off sentences.
-            interest_title, interest_words = elected_title_and_words(interest_text)
+            # Title and words WHOLE (operator 2026-11-08; root ADR 0054): his `title:` first line; without one, no
+            # title and a recorded failure (operator 2026-11-09: no fallback).
+            interest_title, interest_words, interest_reason = parse_elected_title(interest_text)
             interest_out = self._effect(
                 EffectType.MEMORY_FORM,
                 {
                     "records": [
                         {
                             "kind": "interest",
-                            "title": interest_title,
+                            "title": interest_title or untitled_label("interest", interest_text),
                             "digest": interest_words,  # his words verbatim (embedded)
                             "keywords": [],
                             "edges": (
@@ -3362,6 +3397,10 @@ class ChatSession:
             )
             interest_record_ids.extend(interest_out.get("record_ids", []))
             notices.extend(interest_out.get("warnings", []))
+            if interest_reason:
+                self._title_failure(
+                    "interest", interest_text, interest_reason, interest_out, template_id="reflection.lookback"
+                )
 
         # LESSONS — semantic knowledge (laurent's directive 2026-07-18: the
         # entity "still hasn't learned anything"; root issue = nothing ever
@@ -3387,14 +3426,14 @@ class ChatSession:
             except Exception:  # noqa: BLE001 - the edge is enrichment, never a gate
                 derived_from_id = None
         for i, lesson_text in enumerate(lessons):
-            lesson_title, lesson_words = elected_title_and_words(lesson_text)
+            lesson_title, lesson_words, lesson_reason = parse_elected_title(lesson_text)
             lesson_out = self._effect(
                 EffectType.MEMORY_FORM,
                 {
                     "records": [
                         {
                             "kind": "lesson",
-                            "title": lesson_title,
+                            "title": lesson_title or untitled_label("lesson", lesson_text),
                             "digest": lesson_words,  # his words verbatim (embedded)
                             "keywords": [],
                             "edges": (
@@ -3414,8 +3453,10 @@ class ChatSession:
                 },
             )
             notices.extend(lesson_out.get("warnings", []))
+            if lesson_reason:
+                self._title_failure("lesson", lesson_text, lesson_reason, lesson_out, template_id="reflection.lookback")
             if lesson_out.get("record_ids"):
-                self.out(f'(lesson kept: "{lesson_title}")')
+                self.out(f'(lesson kept: "{lesson_title or lesson_words}")')
 
         # REALIZATIONS — the identity-pass spine's second waking surface
         # (the look-back often names what the moment could not). Same apply

@@ -85,7 +85,7 @@ def test_feelings_block_renders_first_person_dated_lines() -> None:
 def test_turn_carries_the_lens_and_the_why_walk_answers() -> None:
     tmp = Path(tempfile.mkdtemp())
     home_dir, entity_id = _mk_home(tmp, "lens", "Lens")
-    home = open_home(home_dir)
+    home = open_home(home_dir, fence=None)
 
     # A standing feeling toward the visitor, deposited before the visit.
     home.ms.appraise(
@@ -101,7 +101,7 @@ def test_turn_carries_the_lens_and_the_why_walk_answers() -> None:
 
     s = ChatSession(
         home, _SpyLLM(["Good to see you."]),
-        participants=["person:shore"], context_window=20000, out=lambda s: None,
+        participants=["person:shore"], context_window=20000, out=lambda s: None, fence=None,
     )
     # Force the lens visible even if the prelude rendered the same target:
     # the dedup must key on the PRELUDE's actual standing_targets.
@@ -123,11 +123,11 @@ def test_turn_carries_the_lens_and_the_why_walk_answers() -> None:
 def test_touches_stamps_value_refs_on_the_event() -> None:
     tmp = Path(tempfile.mkdtemp())
     home_dir, entity_id = _mk_home(tmp, "grounder", "Grounder")
-    home = open_home(home_dir)
+    home = open_home(home_dir, fence=None)
     s = ChatSession(
         home,
         _LLM(['Moved.\n```feel\ntarget=person:shore feeling=+2 reason="held the line" touches="honesty"\n```\nk.']),
-        participants=["person:shore"], context_window=20000, out=lambda s: None,
+        participants=["person:shore"], context_window=20000, out=lambda s: None, fence=None,
     )
     _r, rep = s.turn("something honest happened")
     assert s.feelings_applied == 1, rep.notices

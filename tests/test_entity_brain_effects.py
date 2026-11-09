@@ -77,7 +77,7 @@ def test_brain_effects_register_on_home_only(tmp_path: Path) -> None:
     from abstractruntime.identity.chat import open_home
     from abstractruntime.integrations.abstractmemory import build_memory_seam_effect_handlers
 
-    home = open_home(_make_home(tmp_path))
+    home = open_home(_make_home(tmp_path), fence=None)
     try:
         for et in (EffectType.MEMORY_CONSOLIDATE, EffectType.MEMORY_PROBE, EffectType.LIFE_QUERY):
             assert et in home.handlers, f"{et} missing from home handlers"
@@ -111,7 +111,7 @@ def test_entity_runtime_inherits_brain_handlers(tmp_path: Path) -> None:
 def test_life_query_ops_serve_the_folds(tmp_path: Path) -> None:
     from abstractruntime.identity.chat import open_home
 
-    home = open_home(_make_home(tmp_path))
+    home = open_home(_make_home(tmp_path), fence=None)
     try:
         out = _result(_dispatch(home.handlers, EffectType.LIFE_QUERY, {"op": "alive_drives"}))
         assert out["op"] == "alive_drives"
@@ -135,7 +135,7 @@ def test_life_query_ops_serve_the_folds(tmp_path: Path) -> None:
 def test_probe_requires_reason_and_serves_hits(tmp_path: Path) -> None:
     from abstractruntime.identity.chat import open_home
 
-    home = open_home(_make_home(tmp_path))
+    home = open_home(_make_home(tmp_path), fence=None)
     try:
         # The deliberate-reach law: no reason, no probe.
         refused = _dispatch(home.handlers, EffectType.MEMORY_PROBE, {"op": "probe", "cue": "values"})
@@ -160,7 +160,7 @@ def test_probe_requires_reason_and_serves_hits(tmp_path: Path) -> None:
 def test_consolidate_report_only_is_a_pure_read(tmp_path: Path) -> None:
     from abstractruntime.identity.chat import open_home
 
-    home = open_home(_make_home(tmp_path))
+    home = open_home(_make_home(tmp_path), fence=None)
     try:
         out = _result(_dispatch(home.handlers, EffectType.MEMORY_CONSOLIDATE, {"report_only": True}))
         assert out["ran"] is True
@@ -173,7 +173,7 @@ def test_consolidate_report_only_is_a_pure_read(tmp_path: Path) -> None:
 def test_consolidate_write_pass_runs_and_translates(tmp_path: Path) -> None:
     from abstractruntime.identity.chat import open_home
 
-    home = open_home(_make_home(tmp_path))
+    home = open_home(_make_home(tmp_path), fence=None)
     try:
         out = _result(_dispatch(home.handlers, EffectType.MEMORY_CONSOLIDATE, {
             "include_dream": True, "include_identity": False,
@@ -194,7 +194,7 @@ def test_consolidate_fold_reads_the_real_engine_keys(tmp_path: Path) -> None:
     (never a hand-written double: the 2026-07-09 formed/created lesson)."""
     from abstractruntime.identity.chat import open_home
 
-    home = open_home(_make_home(tmp_path))
+    home = open_home(_make_home(tmp_path), fence=None)
     try:
         # A small lived life: episodes sharing lexical facets across groups,
         # plus elected diary entries (the bridge-richest records in every
@@ -249,7 +249,7 @@ def test_consolidate_refuses_honestly_when_lease_held(tmp_path: Path) -> None:
     from abstractruntime.storage.lease import DirectoryLease
 
     home_dir = _make_home(tmp_path)
-    home = open_home(home_dir)
+    home = open_home(home_dir, fence=None)
     try:
         holder = DirectoryLease(home_dir, holder="visit-host")
         holder.acquire()
@@ -276,7 +276,7 @@ def test_memory_tend_routes_the_shared_election_grammar(tmp_path: Path) -> None:
     except ImportError:
         pytest.skip("engine lacks tending")
 
-    home = open_home(_make_home(tmp_path))
+    home = open_home(_make_home(tmp_path), fence=None)
     try:
         # Empty body refuses loudly (a malformed dispatch is a flow bug).
         refused = _dispatch(home.handlers, EffectType.MEMORY_TEND, {})
@@ -306,7 +306,7 @@ def test_entity_home_effect_set_matches_the_real_composition(tmp_path: Path) -> 
     from abstractruntime.identity.chat import open_home
     from abstractruntime.integrations.abstractmemory import ENTITY_HOME_EFFECT_TYPES
 
-    home = open_home(_make_home(tmp_path))
+    home = open_home(_make_home(tmp_path), fence=None)
     try:
         composed = set(home.handlers.keys())
         assert composed == set(ENTITY_HOME_EFFECT_TYPES), (
@@ -326,7 +326,7 @@ def test_tool_effects_serve_grant_and_execute_one_batch(tmp_path: Path) -> None:
     line — information for the model, never a crashed effect."""
     from abstractruntime.identity.chat import open_home
 
-    home = open_home(_make_home(tmp_path))
+    home = open_home(_make_home(tmp_path), fence=None)
     try:
         q = _result(_dispatch(home.handlers, EffectType.ENTITY_TOOLS_QUERY, {"phase": "visit"}))
         assert q["phase"] == "visit"
@@ -400,7 +400,7 @@ def test_execute_never_rests_private_diary_verbatim(tmp_path: Path) -> None:
     from abstractruntime.core.models import Effect
     from abstractruntime.identity.chat import open_home
 
-    home = open_home(_make_home(tmp_path))
+    home = open_home(_make_home(tmp_path), fence=None)
     secret = "the private words that must never rest in a shared ledger"
     try:
         # Write a private entry through the home's own DIARY_WRITE.
@@ -434,7 +434,7 @@ def test_execute_max_calls_threads_the_budget_up_to_the_ruled_ceiling(tmp_path: 
     from abstractruntime.identity.chat import open_home
     from abstractruntime.identity.tools import MAX_TOOL_BLOCKS_PER_TURN
 
-    home = open_home(_make_home(tmp_path))
+    home = open_home(_make_home(tmp_path), fence=None)
     try:
         eight = [{"name": "search_memory", "arguments": {"query": f"q{i}"}} for i in range(8)]
         out = _result(_dispatch(home.handlers, EffectType.ENTITY_TOOLS_EXECUTE, {
@@ -462,7 +462,7 @@ def test_visit_stamped_run_forces_the_visit_grant(tmp_path: Path) -> None:
     this is the belt the runtime can hold structurally."""
     from abstractruntime.identity.chat import open_home
 
-    home = open_home(_make_home(tmp_path))
+    home = open_home(_make_home(tmp_path), fence=None)
     try:
         class _VisitRun(_FakeRun):
             vars = {"_visit": {"visit_id": "v-1"}}
@@ -482,7 +482,7 @@ def test_tool_effects_are_home_only(tmp_path: Path) -> None:
     from abstractruntime.identity.chat import open_home
     from abstractruntime.integrations.abstractmemory import build_memory_seam_effect_handlers
 
-    home = open_home(_make_home(tmp_path))
+    home = open_home(_make_home(tmp_path), fence=None)
     try:
         assert EffectType.ENTITY_TOOLS_QUERY in home.handlers
         assert EffectType.ENTITY_TOOLS_EXECUTE in home.handlers
@@ -509,7 +509,7 @@ def test_memory_tend_forwards_channel_never_defaults_a_privilege(tmp_path: Path)
     except ImportError:
         pytest.skip("engine lacks tending")
 
-    home = open_home(_make_home(tmp_path))
+    home = open_home(_make_home(tmp_path), fence=None)
     try:
         # A well-formed tend body with NO channel: the engine refuses all
         # elections (the handler passed None, never a privileged constant).
@@ -531,7 +531,7 @@ def test_memory_tend_registers_home_only(tmp_path: Path) -> None:
     from abstractruntime.identity.chat import open_home
     from abstractruntime.integrations.abstractmemory import build_memory_seam_effect_handlers
 
-    home = open_home(_make_home(tmp_path))
+    home = open_home(_make_home(tmp_path), fence=None)
     try:
         assert EffectType.MEMORY_TEND in home.handlers
         workplace = build_memory_seam_effect_handlers(
@@ -561,7 +561,7 @@ def test_consolidate_report_only_never_degrades_to_a_write_on_old_engine(tmp_pat
 
     monkeypatch.setattr(abstractmemory, "sleep_pass", _old_sleep_pass, raising=False)
 
-    home = open_home(_make_home(tmp_path))
+    home = open_home(_make_home(tmp_path), fence=None)
     try:
         out = _dispatch(home.handlers, EffectType.MEMORY_CONSOLIDATE, {"report_only": True})
         assert getattr(out.status, "value", out.status) == "failed", (
@@ -580,7 +580,7 @@ def test_consolidate_refuses_honestly_when_paused(tmp_path: Path) -> None:
 
     home_dir = _make_home(tmp_path)
     write_entity_state(home_dir, "paused", reason="operator freeze", fence=LifecycleFence.admit(home_dir))
-    home = open_home(home_dir)
+    home = open_home(home_dir, fence=None)
     try:
         out = _result(_dispatch(home.handlers, EffectType.MEMORY_CONSOLIDATE, {}))
         assert out["ran"] is False

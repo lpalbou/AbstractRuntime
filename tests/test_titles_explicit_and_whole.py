@@ -187,9 +187,9 @@ def test_chat_sites_store_whole_titles(tmp_path: Path, site: str) -> None:
     home_dir = _make_home(tmp_path)
     reply = "Looking back.\n\n" + BLOCKS + "\nGoodbye."
     llm = _Recorder([reply, "A quiet close."] if site == "midturn" else ["Hello.", reply])
-    home = open_home(home_dir)
+    home = open_home(home_dir, fence=None)
     s = ChatSession(home, llm, participants=["person:laurent"], context_window=20000,
-                    out=lambda _s: None, phase="visit")
+                    out=lambda _s: None, phase="visit", fence=None)
     s.turn("hi there")
     if site == "lookback":
         s.reflect()

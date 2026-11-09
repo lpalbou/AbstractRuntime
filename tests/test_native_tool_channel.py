@@ -137,7 +137,7 @@ def test_native_tool_call_runs_instead_of_being_discarded(tmp_path: Path) -> Non
     """THE MNEMOSYNE CLASS: content pre-announces results while the REAL
     intent rides tool_calls. The lookup must run; the fabrication must not
     ship as the final word."""
-    home = open_home(_make_home(tmp_path))
+    home = open_home(_make_home(tmp_path), fence=None)
     searches: List[str] = []
 
     def fake_search(query: str) -> str:
@@ -153,7 +153,7 @@ def test_native_tool_call_runs_instead_of_being_discarded(tmp_path: Path) -> Non
     try:
         session = ChatSession(
             home, llm, participants=["agent:tester"], context_window=20000,
-            web_search_fn=fake_search, out=lambda s: None,
+            web_search_fn=fake_search, out=lambda s: None, fence=None,
         )
         reply, report = session.turn("Run that internet search again?")
 
@@ -172,7 +172,7 @@ def test_native_tool_call_runs_instead_of_being_discarded(tmp_path: Path) -> Non
 def test_native_call_with_empty_content_still_completes_the_turn(tmp_path: Path) -> None:
     """gpt-oss often sends tool_calls with EMPTY content — that must not
     abort the turn as an empty reply."""
-    home = open_home(_make_home(tmp_path))
+    home = open_home(_make_home(tmp_path), fence=None)
 
     def fake_search(query: str) -> str:
         return "RESULT: found it."
@@ -184,7 +184,7 @@ def test_native_call_with_empty_content_still_completes_the_turn(tmp_path: Path)
     try:
         session = ChatSession(
             home, llm, participants=["agent:tester"], context_window=20000,
-            web_search_fn=fake_search, out=lambda s: None,
+            web_search_fn=fake_search, out=lambda s: None, fence=None,
         )
         reply, report = session.turn("Look this up please.")
         assert report.tools == ["web_search"]
@@ -211,7 +211,7 @@ def test_declare_half_grants_ride_the_payload(tmp_path: Path) -> None:
     """THE ARM-N FIX: a tools-capable client gets the GRANTED tools declared
     on the turn call and post-results continuations — and ONLY the granted
     ones (the grant is the single authority)."""
-    home = open_home(_make_home(tmp_path))
+    home = open_home(_make_home(tmp_path), fence=None)
 
     def fake_search(query: str) -> str:
         return "RESULT: declared and found."
@@ -223,7 +223,7 @@ def test_declare_half_grants_ride_the_payload(tmp_path: Path) -> None:
     try:
         session = ChatSession(
             home, llm, participants=["agent:tester"], context_window=20000,
-            web_search_fn=fake_search, out=lambda s: None,
+            web_search_fn=fake_search, out=lambda s: None, fence=None,
         )
         reply, report = session.turn("Search please.")
         assert report.tools == ["web_search"]
@@ -241,12 +241,12 @@ def test_declare_half_grants_ride_the_payload(tmp_path: Path) -> None:
 def test_fence_convention_clients_are_called_unchanged(tmp_path: Path) -> None:
     """A client whose generate() takes no tools kwarg (the scripted-double /
     fence-substrate shape) is never handed the kwarg — byte-compatible."""
-    home = open_home(_make_home(tmp_path))
+    home = open_home(_make_home(tmp_path), fence=None)
     llm = _NativeLLM(["Just words, no tools."])
     try:
         session = ChatSession(
             home, llm, participants=["agent:tester"], context_window=20000,
-            out=lambda s: None,
+            out=lambda s: None, fence=None,
         )
         assert session._llm_accepts_tools is False
         reply, _report = session.turn("Say something.")
@@ -258,14 +258,14 @@ def test_fence_convention_clients_are_called_unchanged(tmp_path: Path) -> None:
 def test_native_unknown_tool_is_refused_and_turn_stays_honest(tmp_path: Path) -> None:
     """A hallucinated function name (the repo_browser.* class) refuses
     loudly; no tool runs; the delivered words carry the refusal marker."""
-    home = open_home(_make_home(tmp_path))
+    home = open_home(_make_home(tmp_path), fence=None)
     llm = _NativeLLM([
         ("I will check my memory.", [{"name": "repo_browser.search", "arguments": {"query": "x"}}]),
     ])
     try:
         session = ChatSession(
             home, llm, participants=["agent:tester"], context_window=20000,
-            out=lambda s: None,
+            out=lambda s: None, fence=None,
         )
         reply, report = session.turn("Check something?")
         assert report.tools == []

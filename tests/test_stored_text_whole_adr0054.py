@@ -237,7 +237,7 @@ def test_chat_sheet_line_and_tool_arg_are_whole(tmp_path) -> None:
 
     query = " ".join(f"topic{i}" for i in range(60))
     assert len(query) > 300
-    home = open_home(_make_home(tmp_path, "sheetling"))
+    home = open_home(_make_home(tmp_path, "sheetling"), fence=None)
     try:
         llm = _ScriptedLLM([
             "Let me look.\n```tool name=web_search\n" + query + "\n```",
@@ -246,7 +246,7 @@ def test_chat_sheet_line_and_tool_arg_are_whole(tmp_path) -> None:
         ])
         session = ChatSession(
             home, llm, participants=["agent:t"], context_window=20000,
-            web_search_fn=lambda q: "RESULT: wood", out=lambda s: None,
+            web_search_fn=lambda q: "RESULT: wood", out=lambda s: None, fence=None,
         )
         _reply, report = session.turn("Tell me about the dam.")
         assert report.tool_details[0]["arg"] == query, "the probe's tool argument is whole"

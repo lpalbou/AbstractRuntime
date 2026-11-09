@@ -5365,6 +5365,7 @@ def build_session_factory(
                 if day_thinking else {"provider": day_provider, "model": day_model}
             ),
             out=out,
+            fence=fence,
         )
         # The operator overlay may rewrite the own-time contract (loaded at
         # summon; same snapshot semantics as tools). RE-COMPOSE through the

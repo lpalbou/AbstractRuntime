@@ -127,7 +127,7 @@ def test_digest_v2_short_exchange_stays_honest() -> None:
 
 def test_formation_writes_continues_and_reflected_in_edges(tmp_path: Path) -> None:
     home_dir = _make_home(tmp_path)
-    home = open_home(home_dir)
+    home = open_home(home_dir, fence=None)
     llm = _ScriptedLLM(
         [
             "First reply, plain.",
@@ -137,7 +137,7 @@ def test_formation_writes_continues_and_reflected_in_edges(tmp_path: Path) -> No
     )
     try:
         session = ChatSession(
-            home, llm, participants=["agent:tester"], context_window=20000, out=lambda s: None
+            home, llm, participants=["agent:tester"], context_window=20000, out=lambda s: None, fence=None
         )
         _, r1 = session.turn("Turn one.")
         _, r2 = session.turn("Turn two.")
@@ -169,7 +169,7 @@ def test_formation_writes_continues_and_reflected_in_edges(tmp_path: Path) -> No
 
 def test_memories_block_carries_tags_and_read_memory_fetches_verbatim(tmp_path: Path) -> None:
     home_dir = _make_home(tmp_path)
-    home = open_home(home_dir)
+    home = open_home(home_dir, fence=None)
     llm = _ScriptedLLM(
         [
             "Noted: the dam project starts at dawn. UNIQUE-VERBATIM-PHRASE-XYZ.",
@@ -179,7 +179,7 @@ def test_memories_block_carries_tags_and_read_memory_fetches_verbatim(tmp_path: 
     )
     try:
         session = ChatSession(
-            home, llm, participants=["agent:tester"], context_window=20000, out=lambda s: None
+            home, llm, participants=["agent:tester"], context_window=20000, out=lambda s: None, fence=None
         )
         _, r1 = session.turn("Remember: the dam project starts at dawn.")
         episode_id = r1.formed[0]
@@ -229,7 +229,7 @@ def test_entity_feelings_target_world_entities(tmp_path: Path) -> None:
     land as valence on the identity string in SELF scope; malformed and
     reserved targets refuse loudly; bond/scar on entities is dropped."""
     home_dir = _make_home(tmp_path)
-    home = open_home(home_dir)
+    home = open_home(home_dir, fence=None)
     llm = _ScriptedLLM(
         [
             "A talk with Laurent about solitude.",
@@ -246,7 +246,7 @@ def test_entity_feelings_target_world_entities(tmp_path: Path) -> None:
     )
     try:
         session = ChatSession(
-            home, llm, participants=["person:laurent"], context_window=20000, out=lambda s: None
+            home, llm, participants=["person:laurent"], context_window=20000, out=lambda s: None, fence=None
         )
         session.turn("Let us talk about solitude.")
         refl = session.reflect()
@@ -276,7 +276,7 @@ def test_diary_projection_carries_written_amid_edges(tmp_path: Path) -> None:
     not ok'): projections carry written_amid edges to the graph ids the
     entity was attending to — private entries included (act-frame only)."""
     home_dir = _make_home(tmp_path)
-    home = open_home(home_dir)
+    home = open_home(home_dir, fence=None)
     llm = _ScriptedLLM(
         [
             "Registered: the dam project starts at dawn.",
@@ -286,7 +286,7 @@ def test_diary_projection_carries_written_amid_edges(tmp_path: Path) -> None:
     )
     try:
         session = ChatSession(
-            home, llm, participants=["agent:tester"], context_window=20000, out=lambda s: None
+            home, llm, participants=["agent:tester"], context_window=20000, out=lambda s: None, fence=None
         )
         session.turn("Remember: the dam project starts at dawn.")
         _, r2 = session.turn("Keep a note about it.")   # recall shows turn-1 episode
@@ -316,7 +316,7 @@ def test_diary_resolves_convention_flows_to_projection(tmp_path: Path) -> None:
     question entry answered by a later entry carrying resolves=<entry_id>;
     the projection's attributes carry the join key."""
     home_dir = _make_home(tmp_path)
-    home = open_home(home_dir)
+    home = open_home(home_dir, fence=None)
     llm = _ScriptedLLM(
         [
             "```diary kind=question\ngist: what is home\nWhat does home mean for me?\n```\nAsked.",
@@ -325,7 +325,7 @@ def test_diary_resolves_convention_flows_to_projection(tmp_path: Path) -> None:
     )
     try:
         session = ChatSession(
-            home, llm, participants=["agent:tester"], context_window=20000, out=lambda s: None
+            home, llm, participants=["agent:tester"], context_window=20000, out=lambda s: None, fence=None
         )
         _, r1 = session.turn("Keep your question.")
         question_entry = r1.diary[0]
@@ -356,11 +356,11 @@ def test_turn_report_memories_are_addressable(tmp_path: Path) -> None:
     """'6 memories: great, which ones?' — the report now carries tag/kind/
     title/why per displayed handle so UIs can render and focus them."""
     home_dir = _make_home(tmp_path)
-    home = open_home(home_dir)
+    home = open_home(home_dir, fence=None)
     llm = _ScriptedLLM(["Noted.", "Recalling that."])
     try:
         s = ChatSession(home, llm, participants=["person:laurent"],
-                        context_window=20000, out=lambda s: None)
+                        context_window=20000, out=lambda s: None, fence=None)
         s.turn("Remember the dam project starts at dawn.")
         _, r2 = s.turn("What about the dam project?")
         assert r2.displayed >= 1
@@ -377,11 +377,11 @@ def test_presence_line_names_the_visitor_every_turn(tmp_path: Path) -> None:
     he split the remembered Laurent from the present visitor. The prompt
     now carries a presence line every turn."""
     home_dir = _make_home(tmp_path)
-    home = open_home(home_dir)
+    home = open_home(home_dir, fence=None)
     llm = _ScriptedLLM(["Hello Laurent."])
     try:
         s = ChatSession(home, llm, participants=["person:laurent"],
-                        context_window=20000, out=lambda s: None)
+                        context_window=20000, out=lambda s: None, fence=None)
         s.turn("Hi.")
         sysp = llm.calls[0]["system_prompt"]
         assert "(present with you: person:laurent)" in sysp
@@ -397,18 +397,18 @@ def test_open_greeting_he_speaks_first_from_recall(tmp_path: Path) -> None:
     home_dir = _make_home(tmp_path)
 
     # A prior session gives him something to remember about the visitor.
-    home1 = open_home(home_dir)
+    home1 = open_home(home_dir, fence=None)
     llm1 = _ScriptedLLM(["Noted: Laurent loves dams and rivers."])
     s1 = ChatSession(home1, llm1, participants=["person:laurent"],
-                     session_id="past-1", context_window=20000, out=lambda s: None)
+                     session_id="past-1", context_window=20000, out=lambda s: None, fence=None)
     s1.turn("Remember that I love dams and rivers.")
     s1._clear_pending_marker()  # noqa: SLF001 - simulate a clean past session
     home1.close()
 
-    home2 = open_home(home_dir)
+    home2 = open_home(home_dir, fence=None)
     llm2 = _ScriptedLLM(["Laurent! Welcome back - still thinking about dams?"])
     s2 = ChatSession(home2, llm2, participants=["person:laurent"],
-                     session_id="visit-2", context_window=20000, out=lambda s: None)
+                     session_id="visit-2", context_window=20000, out=lambda s: None, fence=None)
     greeting, report = s2.open_greeting()
     assert "Welcome back" in greeting
     # The announcement reached the model as the turn's user message...
@@ -438,10 +438,10 @@ def test_reflection_loss_guard_write_ahead_and_salvage(tmp_path: Path) -> None:
     home_dir = _make_home(tmp_path)
 
     # Session 1: two turns, then the process "dies" (no reflect, no close).
-    home1 = open_home(home_dir)
+    home1 = open_home(home_dir, fence=None)
     llm1 = _ScriptedLLM(["First thought.", "Second thought."])
     s1 = ChatSession(home1, llm1, participants=["person:laurent"],
-                     session_id="died-1", context_window=20000, out=lambda s: None)
+                     session_id="died-1", context_window=20000, out=lambda s: None, fence=None)
     _, r1 = s1.turn("Tell me about dams.")
     s1.turn("And rivers.")
     marker = home_dir / "pending_reflection.json"
@@ -449,12 +449,12 @@ def test_reflection_loss_guard_write_ahead_and_salvage(tmp_path: Path) -> None:
     home1.close()  # simulated death: no reflect() ran
 
     # Session 2: the salvage runs first, over session 1's own sheet.
-    home2 = open_home(home_dir)
+    home2 = open_home(home_dir, fence=None)
     llm2 = _ScriptedLLM(
         ['Looking back at the ended visit...\n```feel\ntarget=1 feeling=+2 reason="the dam talk fed me"\n```\nDone.']
     )
     s2 = ChatSession(home2, llm2, participants=["person:laurent"],
-                     session_id="alive-2", context_window=20000, out=lambda s: None)
+                     session_id="alive-2", context_window=20000, out=lambda s: None, fence=None)
     salvage = s2.run_pending_lookback()
     assert salvage is not None
     assert not marker.exists(), "salvage must clear the marker"
@@ -486,7 +486,7 @@ def test_private_diary_words_never_rest_in_the_pending_sheet(tmp_path: Path) -> 
     text when no gist was elected) must not appear there; the sheet line is
     the act-frame only. Non-private entries keep their gist lines."""
     home_dir = _make_home(tmp_path)
-    home = open_home(home_dir)
+    home = open_home(home_dir, fence=None)
     secret = "heliotrope-cipher-9x4"
     llm = _ScriptedLLM([
         "Noted.\n```diary visibility=private\n"
@@ -494,7 +494,7 @@ def test_private_diary_words_never_rest_in_the_pending_sheet(tmp_path: Path) -> 
         "Kept.\n```diary visibility=self\ngist: a shareable thought about rivers\nRivers connect.\n```\nOk.",
     ])
     session = ChatSession(home, llm, participants=["person:laurent"],
-                          session_id="sheet-privacy", context_window=20000, out=lambda s: None)
+                          session_id="sheet-privacy", context_window=20000, out=lambda s: None, fence=None)
     session.turn("Keep something private.")
     marker = home_dir / "pending_reflection.json"
     assert marker.exists()
@@ -521,12 +521,12 @@ def test_prefix_marker_private_gists_are_scrubbed_at_salvage(tmp_path: Path) -> 
     # Session 1 writes one private entry (post-fix code: the DISK marker is
     # already clean), then dies. To simulate a PRE-FIX marker, rewrite the
     # marker file with the leaky description shape before session 2 opens.
-    home1 = open_home(home_dir)
+    home1 = open_home(home_dir, fence=None)
     llm1 = _ScriptedLLM([
         f"Noted.\n```diary visibility=private\ngist: {secret} stays mine\nLong {secret} thought.\n```\nOk.",
     ])
     s1 = ChatSession(home1, llm1, participants=["person:laurent"],
-                     session_id="prefix-1", context_window=20000, out=lambda s: None)
+                     session_id="prefix-1", context_window=20000, out=lambda s: None, fence=None)
     s1.turn("Keep something private.")
     marker = home_dir / "pending_reflection.json"
     stale = json.loads(marker.read_text(encoding="utf-8"))
@@ -538,7 +538,7 @@ def test_prefix_marker_private_gists_are_scrubbed_at_salvage(tmp_path: Path) -> 
 
     # Session 2's salvage must scrub the description before it reaches the
     # reflection prompt (and through it, the graph-bound summary record).
-    home2 = open_home(home_dir)
+    home2 = open_home(home_dir, fence=None)
     seen_prompts: List[str] = []
 
     class _SpyLLM(_ScriptedLLM):
@@ -549,7 +549,7 @@ def test_prefix_marker_private_gists_are_scrubbed_at_salvage(tmp_path: Path) -> 
 
     llm2 = _SpyLLM(["Looking back: a quiet session. Done."])
     s2 = ChatSession(home2, llm2, participants=["person:laurent"],
-                     session_id="prefix-2", context_window=20000, out=lambda s: None)
+                     session_id="prefix-2", context_window=20000, out=lambda s: None, fence=None)
     salvage = s2.run_pending_lookback()
     assert salvage is not None
     joined = "\n".join(seen_prompts)
@@ -564,7 +564,7 @@ def test_marker_imitation_is_called_out(tmp_path: Path) -> None:
     literal text '[used tool: diary_list]' while actually electing read_file
     — 'neither he nor I can tell'. The driver now names the imitation."""
     home_dir = _make_home(tmp_path)
-    home = open_home(home_dir)
+    home = open_home(home_dir, fence=None)
     llm = _ScriptedLLM(
         [
             "```diary kind=note\ngist: n\nA note.\n```\nKept.",
@@ -579,7 +579,7 @@ def test_marker_imitation_is_called_out(tmp_path: Path) -> None:
     )
     try:
         session = ChatSession(
-            home, llm, participants=["person:laurent"], context_window=20000, out=lambda s: None
+            home, llm, participants=["person:laurent"], context_window=20000, out=lambda s: None, fence=None
         )
         session.turn("Keep a note.")
         reply2, r2 = session.turn("With whom did you discuss?")
@@ -598,11 +598,11 @@ def test_marker_imitation_is_called_out(tmp_path: Path) -> None:
 
 def test_read_memory_redirects_diary_tags_to_the_book(tmp_path: Path) -> None:
     home_dir = _make_home(tmp_path)
-    home = open_home(home_dir)
+    home = open_home(home_dir, fence=None)
     llm = _ScriptedLLM(["```diary kind=note\ngist: g\nBook words.\n```\nKept."])
     try:
         session = ChatSession(
-            home, llm, participants=["agent:tester"], context_window=20000, out=lambda s: None
+            home, llm, participants=["agent:tester"], context_window=20000, out=lambda s: None, fence=None
         )
         _, r1 = session.turn("Keep a note.")
         # The projection landed on the session sheet; its tag is addressable.
@@ -759,7 +759,7 @@ def test_w5_verbatim_carries_inner_speech_and_tool_results(tmp_path) -> None:
             r.content = self.replies.pop(0) if self.replies else "…"
             return r
 
-    home = open_home(home_dir)
+    home = open_home(home_dir, fence=None)
     s = ChatSession(
         home,
         _LLM([
@@ -767,7 +767,7 @@ def test_w5_verbatim_carries_inner_speech_and_tool_results(tmp_path) -> None:
             "The tide turns twice a day.",
         ]),
         participants=["person:asker"], context_window=20000, out=lambda s: None,
-        web_search_fn=lambda q: "MOON-PULL-RESULT: gravity does it",
+        web_search_fn=lambda q: "MOON-PULL-RESULT: gravity does it", fence=None,
     )
     s.turn("Why does the tide turn?")
     rows = home.store.query(TripleQuery(predicate="dcterms:abstract", scope="life",

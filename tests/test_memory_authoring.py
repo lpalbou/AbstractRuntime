@@ -63,7 +63,7 @@ def _failures(tmp_path: Path) -> List[Dict[str, Any]]:
 def _tasks(home_dir: Path, kind: str) -> List[Dict[str, Any]]:
     from abstractruntime.identity.chat import open_home
 
-    home = open_home(home_dir)
+    home = open_home(home_dir, fence=None)
     try:
         return list(home.ms.tasks.tasks(kind=(kind,)))
     finally:
@@ -191,7 +191,7 @@ def test_the_sleep_repairs_a_legacy_record_without_a_title(tmp_path: Path, monke
     from abstractruntime.identity.life import build_consolidator
 
     home_dir = _workspace_home(tmp_path)
-    home = open_home(home_dir)
+    home = open_home(home_dir, fence=None)
     rid = home.ms.remember_many([MemoryRecordInput(
         kind="lesson", title="untitled lesson [3fa2c1]", digest="Waiting lets the other finish.",
         attributes={"title_missing": True, "title_failure_reason": "missing"},
@@ -412,7 +412,7 @@ def test_the_sleep_repairs_legacy_mechanical_cards_and_dreams(tmp_path: Path, mo
     from abstractruntime.identity.life import build_consolidator, write_entity_state
 
     home_dir = _workspace_home(tmp_path)
-    home = open_home(home_dir)
+    home = open_home(home_dir, fence=None)
     ids = {}
     for kind, title, attrs in (
             ("world_model", "World model: person:sol",
@@ -679,7 +679,7 @@ def test_the_runtime_author_satisfies_memorys_formation_contract_for_every_pass_
     from abstractruntime.identity.authoring import capability_formation_author
     from abstractruntime.identity.chat import open_home
 
-    home = open_home(_workspace_home(tmp_path))
+    home = open_home(_workspace_home(tmp_path), fence=None)
     try:
         author = capability_formation_author(lambda name: _Capability(), home.artifacts)
         got = author_formation(author, kind=kind, body="what the pass composed",
@@ -756,9 +756,9 @@ def test_a_tick_lookback_summary_has_an_authored_title_never_the_tick_template(t
     from abstractruntime.identity.chat import ChatSession, open_home
 
     home_dir = _workspace_home(tmp_path)
-    home = open_home(home_dir)
+    home = open_home(home_dir, fence=None)
     s = ChatSession(home, _Recorder(["A tick.", LOOKBACK_REPLY]), participants=[home.entity_id],
-                    context_window=20000, out=lambda _s: None, phase="personal")
+                    context_window=20000, out=lambda _s: None, phase="personal", fence=None)
     s.llm_for_capability = lambda name: _Capability()
     s.turn("(cue) one")
     result = s.tick_lookback()
@@ -847,7 +847,7 @@ def test_the_sleep_repairs_a_legacy_public_diary_records_title_and_summary(tmp_p
 
     first_line = "The tide leaves a readable line on the sand."
     home_dir = _workspace_home(tmp_path)
-    home = open_home(home_dir)
+    home = open_home(home_dir, fence=None)
     home.diary.append_entry(DiaryEntry(  # the book's entry the legacy record projects
         entry_id="diary_legacy01", author=home.entity_id, kind="note", gist="the tide line",
         text=f"{first_line}\nIt stays until the next wave.", visibility="self",
@@ -894,7 +894,7 @@ def test_the_sleep_repairs_a_legacy_public_diary_records_title_and_summary(tmp_p
     assert row.attributes["digest_method"] == "authored-v1"
     (task,) = [t for t in _tasks(home_dir, "digest.author") if t["target_id"] == rid]
     assert task["status"] == "done" and task["cause"]["cause"] == "repair" and task["cause"]["declared"] is True, task
-    home = open_home(home_dir)
+    home = open_home(home_dir, fence=None)
     try:
         v0 = home.ms.versions(rid)[0]
     finally:

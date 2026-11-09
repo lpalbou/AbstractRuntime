@@ -118,10 +118,10 @@ class _ScriptedLLM:
 
 def _factory_for(home_dir: Path, llm: _ScriptedLLM):
     def _open() -> ChatSession:
-        home = open_home(home_dir)
+        home = open_home(home_dir, fence=None)
         session = ChatSession(
             home, llm, participants=[home.entity_id], context_window=20000,
-            enable_workspace=True, out=lambda s: None,
+            enable_workspace=True, out=lambda s: None, fence=None,
         )
         session.system_base += "\n\n" + OWN_TIME_CONTRACT
         return session
@@ -1457,10 +1457,10 @@ def test_work_verdict_through_the_run_loop_archives_and_survives(tmp_path: Path)
     )
 
     def _open() -> ChatSession:
-        home = open_home(home_dir)
+        home = open_home(home_dir, fence=None)
         session = ChatSession(
             home, llm, participants=[home.entity_id], context_window=20000,
-            enable_workspace=True, out=lambda s: None, phase="work",
+            enable_workspace=True, out=lambda s: None, phase="work", fence=None,
         )
         return session
 
@@ -1769,14 +1769,14 @@ def test_first_turn_commit_excludes_cue_offered_drives(tmp_path: Path) -> None:
     home_dir = _make_home(tmp_path)
     _note, ids = drives_cue_note(home_dir)
     assert len(ids) == 1, ids
-    home = open_home(home_dir)
+    home = open_home(home_dir, fence=None)
     rows = home.store.query(TripleQuery(subject=ids[0], predicate="dcterms:abstract", limit=1))
     drive_handle = rows[0].assertion_id
     committed: list = []
     s = ChatSession(
         home, _ScriptedLLM(["Morning thought.", "Second thought."]),
         participants=[home.entity_id], context_window=20000, out=lambda s: None,
-        phase="personal",
+        phase="personal", fence=None,
     )
     orig = s._effect
 

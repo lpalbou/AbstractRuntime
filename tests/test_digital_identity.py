@@ -633,7 +633,7 @@ def test_prelude_carries_the_cue_in_place(tmp_path: Path) -> None:
 
     home_dir = _engrammed_home(tmp_path / "entities" / "castor")
     record_default_identity(home_dir, entity_id="entity:castor@home-test", gateway_default_voice=QWEN, provenance="birth")
-    home = open_home(home_dir)
+    home = open_home(home_dir, fence=None)
     try:
         seq = home.ms.current_seq()
         plain = render_summon_prelude(home.ms, home.diary, entity_id=home.entity_id, budget=1600, spark=home.spark)
@@ -665,7 +665,7 @@ def test_prelude_names_an_unreadable_identity_and_still_summons(tmp_path: Path) 
 
     home_dir = _engrammed_home(tmp_path / "entities" / "castor")
     (home_dir / "identity.json").write_text("{", encoding="utf-8")
-    home = open_home(home_dir)
+    home = open_home(home_dir, fence=None)
     try:
         out = render_summon_prelude(
             home.ms, home.diary, entity_id=home.entity_id, budget=1600, spark=home.spark, home_dir=home_dir
@@ -687,11 +687,11 @@ def test_chat_session_summon_carries_the_cue(tmp_path: Path) -> None:
     home_dir = _engrammed_home(tmp_path / "entities" / "castor")
     record_default_identity(home_dir, entity_id="entity:castor@home-test", gateway_default_voice=QWEN, provenance="birth")
     for since, expected in ((None, True), ("2999-01-01T00:00:00+00:00", False)):
-        home = open_home(home_dir)
+        home = open_home(home_dir, fence=None)
         try:
             session = ChatSession(
                 home, _LLM(), participants=["person:albou"], session_id="s1", context_window=32768,
-                out=lambda _s: None, identity_since=since,
+                out=lambda _s: None, identity_since=since, fence=None,
             )
             assert ("You were given your look and voice today." in session.system_base) is expected
         finally:

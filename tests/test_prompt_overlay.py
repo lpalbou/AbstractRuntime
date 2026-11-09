@@ -97,13 +97,14 @@ def castor_home(tmp_path: Path) -> Path:
 
 
 def _session(home_dir: Path, **over: Any) -> ChatSession:
-    home = open_home(home_dir)
+    home = open_home(home_dir, fence=None)
     kwargs: Dict[str, Any] = dict(
         participants=["person:albou"],
         session_id="s1",
         context_window=32768,
         out=lambda s: None,
     )
+    kwargs.setdefault("fence", None)  # an unfenced harness home (Fable F4: explicit)
     kwargs.update(over)
     return ChatSession(home, _ScriptedLLM([]), **kwargs)
 

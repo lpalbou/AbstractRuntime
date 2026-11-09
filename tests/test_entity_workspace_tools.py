@@ -126,7 +126,7 @@ def test_session_workspace_tools_elected_end_to_end(tmp_path: Path) -> None:
     """He writes a file, lists, reads it back — through elected blocks; and
     an escape attempt comes back as an honest failure, not a crash."""
     home_dir = _make_home(tmp_path)
-    home = open_home(home_dir)
+    home = open_home(home_dir, fence=None)
     llm = _ScriptedLLM(
         [
             "```tool name=write_file path=hello.py\nprint('I built this')\n```",
@@ -140,7 +140,7 @@ def test_session_workspace_tools_elected_end_to_end(tmp_path: Path) -> None:
     try:
         session = ChatSession(
             home, llm, participants=["agent:tester"], context_window=20000,
-            enable_workspace=True, out=lambda s: None,
+            enable_workspace=True, out=lambda s: None, fence=None,
         )
         assert "workspace" in session.system_base  # the contract paragraph is taught
 
@@ -167,14 +167,14 @@ def test_default_session_has_workspace_hands(tmp_path: Path) -> None:
     workspace tools — an entity has its hands without a per-session flag.
     (The old default refused write_file unless --workspace was passed.)"""
     home_dir = _make_home(tmp_path)
-    home = open_home(home_dir)
+    home = open_home(home_dir, fence=None)
     llm = _ScriptedLLM([
         "```tool name=write_file path=a.txt\nhi\n```\nDone.",
         "The file is saved.",  # continuation after the tool round's results
     ])
     try:
         session = ChatSession(
-            home, llm, participants=["agent:tester"], context_window=20000, out=lambda s: None
+            home, llm, participants=["agent:tester"], context_window=20000, out=lambda s: None, fence=None
         )
         reply, r = session.turn("Write a file.")
         assert r.tools == ["write_file"]
@@ -192,14 +192,14 @@ def test_operator_narrowed_policy_refuses_workspace_tools(tmp_path: Path) -> Non
 
     home_dir = _make_home(tmp_path)
     write_policy_file(home_dir, {"visit": list(TIER1_TOOL_NAMES)})
-    home = open_home(home_dir)
+    home = open_home(home_dir, fence=None)
     llm = _ScriptedLLM([
         "```tool name=write_file path=a.txt\nhi\n```\nDone.",
         "I cannot write files in this phase of my life.",
     ])
     try:
         session = ChatSession(
-            home, llm, participants=["agent:tester"], context_window=20000, out=lambda s: None
+            home, llm, participants=["agent:tester"], context_window=20000, out=lambda s: None, fence=None
         )
         reply, r = session.turn("Write a file.")
         assert r.tools == []  # refused at parse: not in the allowed set

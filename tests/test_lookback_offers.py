@@ -129,9 +129,9 @@ def test_tick_prompt_is_framed_for_the_tick() -> None:
 def test_visit_close_lookback_forms_the_offered_records(tmp_path: Path) -> None:
     home_dir = _make_home(tmp_path)
     llm = _Recorder(["Hello, good to see you.", LOOKBACK_REPLY])
-    home = open_home(home_dir)
+    home = open_home(home_dir, fence=None)
     s = ChatSession(home, llm, participants=["person:laurent"], context_window=20000,
-                    out=lambda _s: None, phase="visit")
+                    out=lambda _s: None, phase="visit", fence=None)
     s.turn("hi there")
     result = s.reflect()
     home.close()
@@ -149,9 +149,9 @@ def test_own_time_day_close_runs_one_model_lookback(tmp_path: Path) -> None:
     model call, and its blocks reach the parsers."""
     home_dir = _make_home(tmp_path)
     llm = _Recorder(["A morning thought.", LOOKBACK_REPLY])
-    home = open_home(home_dir)
+    home = open_home(home_dir, fence=None)
     s = ChatSession(home, llm, participants=[home.entity_id], context_window=20000,
-                    out=lambda _s: None, phase="personal")
+                    out=lambda _s: None, phase="personal", fence=None)
     s.turn("(cue) morning")
     before = len(llm.prompts)
     result = s.reflect()
@@ -168,9 +168,9 @@ def test_own_time_day_close_runs_one_model_lookback(tmp_path: Path) -> None:
 
 def _personal_factory(home_dir: Path, llm: Any):
     def _open() -> ChatSession:
-        home = open_home(home_dir)
+        home = open_home(home_dir, fence=None)
         return ChatSession(home, llm, participants=[home.entity_id], context_window=20000,
-                           enable_workspace=True, out=lambda _s: None, phase="personal")
+                           enable_workspace=True, out=lambda _s: None, phase="personal", fence=None)
 
     return _open
 
@@ -220,9 +220,9 @@ def test_work_ticks_have_no_tick_lookback(tmp_path: Path) -> None:
     llm = _Recorder(["Working.", "Still working.", "Close."])
 
     def _open() -> ChatSession:
-        home = open_home(home_dir)
+        home = open_home(home_dir, fence=None)
         return ChatSession(home, llm, participants=[home.entity_id], context_window=20000,
-                           out=lambda _s: None, phase="work")
+                           out=lambda _s: None, phase="work", fence=None)
 
     loop = LifeLoop(_open, tick_seconds=0, ticks_per_day=2, max_ticks=2,
                     sleep_fn=lambda _s: None, out=lambda _s: None)
@@ -252,9 +252,9 @@ def _summaries(home_dir: Path) -> List[Dict[str, Any]]:
 
 
 def _personal_session(home_dir: Path, llm: Any) -> ChatSession:
-    home = open_home(home_dir)
+    home = open_home(home_dir, fence=None)
     return ChatSession(home, llm, participants=[home.entity_id], context_window=20000,
-                       out=lambda _s: None, phase="personal")
+                       out=lambda _s: None, phase="personal", fence=None)
 
 
 def test_tick_lookback_that_keeps_nothing_stores_no_summary(tmp_path: Path) -> None:

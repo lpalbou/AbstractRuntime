@@ -158,13 +158,13 @@ def test_diary_resolve_marker_names_the_resolved_question() -> None:
             r.content = self.replies.pop(0) if self.replies else "…"
             return r
 
-    home = open_home(home_dir)
+    home = open_home(home_dir, fence=None)
     s = ChatSession(
         home,
         _LLM([
             "```diary kind=question\ngist: what makes a trail useful\nWhat makes a trail useful?\n```\nHolding that.",
         ]),
-        participants=["agent:t"], context_window=20000, out=lambda s: None,
+        participants=["agent:t"], context_window=20000, out=lambda s: None, fence=None,
     )
     _reply, report = s.turn("Think about trails.")
     qid = report.diary[0]
@@ -235,7 +235,7 @@ def test_lesson_election_forms_a_life_scope_lesson_record() -> None:
             r.content = self.replies.pop(0) if self.replies else "…"
             return r
 
-    home = open_home(home_dir)
+    home = open_home(home_dir, fence=None)
     s = ChatSession(
         home,
         _LLM([
@@ -243,7 +243,7 @@ def test_lesson_election_forms_a_life_scope_lesson_record() -> None:
             # The reflection elects one lesson.
             "```lesson\nTime-order, not word-match, makes a trail useful.\n```\nA good day.",
         ]),
-        participants=["agent:t"], context_window=20000, out=lambda s: None,
+        participants=["agent:t"], context_window=20000, out=lambda s: None, fence=None,
     )
     s.turn("Tell me about trails.")
     s.reflect()
@@ -311,14 +311,14 @@ def test_invalid_resolves_keeps_entry_but_never_the_claim() -> None:
             r.content = self.replies.pop(0) if self.replies else "…"
             return r
 
-    home = open_home(home_dir)
+    home = open_home(home_dir, fence=None)
     s = ChatSession(
         home,
         _LLM([
             # A NOTE (not a question) to target later.
             "```diary kind=note\ngist: just a note\nA note.\n```\nKept.",
         ]),
-        participants=["agent:t"], context_window=20000, out=lambda s: None,
+        participants=["agent:t"], context_window=20000, out=lambda s: None, fence=None,
     )
     _r, rep = s.turn("Keep a note.")
     note_id = rep.diary[0]
@@ -452,11 +452,11 @@ def test_midturn_lesson_fence_forms_the_record() -> None:
             r.content = self.replies.pop(0) if self.replies else "…"
             return r
 
-    home = open_home(home_dir)
+    home = open_home(home_dir, fence=None)
     s = ChatSession(
         home,
         _LLM(["I learned something!\n\n```lesson\nTrails need time-order.\n```\nGood day."]),
-        participants=["agent:t"], context_window=20000, out=lambda s: None,
+        participants=["agent:t"], context_window=20000, out=lambda s: None, fence=None,
     )
     reply, report = s.turn("What did you learn?")
     assert '[learned: "Trails need time-order."]' in report.marked_reply, (
@@ -535,14 +535,14 @@ def test_reflection_authors_participant_world_model_cards() -> None:
             r.content = self.replies.pop(0) if self.replies else "…"
             return r
 
-    home = open_home(home_dir)
+    home = open_home(home_dir, fence=None)
     s = ChatSession(
         home,
         _LLM([
             "Good to see you again, admin. We spoke of trails.",
             "Another fine exchange about breadcrumbs and time.",
         ]),
-        participants=["person:admin"], context_window=20000, out=lambda s: None,
+        participants=["person:admin"], context_window=20000, out=lambda s: None, fence=None,
     )
     s.llm.replies.append("A third exchange, noted.")
     s.turn("Hello again - it's admin. Let's talk trails.")
@@ -638,11 +638,11 @@ def test_per_turn_card_update_forms_floor_cards_from_turns() -> None:
             r.content = self.replies.pop(0) if self.replies else "…"
             return r
 
-    home = open_home(home_dir)
+    home = open_home(home_dir, fence=None)
     s = ChatSession(
         home,
         _LLM(["One.", "Two.", "Three.", "Four."]),
-        participants=["person:visitor"], context_window=20000, out=lambda s: None,
+        participants=["person:visitor"], context_window=20000, out=lambda s: None, fence=None,
     )
     s.turn("First exchange.")
     s.turn("Second exchange.")
@@ -712,7 +712,7 @@ def test_explores_election_rides_to_the_drive_fold() -> None:
             r.content = self.replies.pop(0) if self.replies else "…"
             return r
 
-    home = open_home(home_dir)
+    home = open_home(home_dir, fence=None)
     s = ChatSession(
         home,
         _LLM([
@@ -720,7 +720,7 @@ def test_explores_election_rides_to_the_drive_fold() -> None:
             # Reflection: keep one interest.
             "```interest\nHow trails shape what minds can find again.\n```\nGood day.",
         ]),
-        participants=["agent:t"], context_window=20000, out=lambda s: None,
+        participants=["agent:t"], context_window=20000, out=lambda s: None, fence=None,
     )
     s.turn("Let's talk about trails.")
     result = s.reflect()
@@ -739,7 +739,7 @@ def test_explores_election_rides_to_the_drive_fold() -> None:
         _LLM([
             f"```diary kind=note explores=#{tag}\ngist: followed the trail interest\nI spent the day following it.\n```\nDone.",
         ]),
-        participants=["agent:t"], context_window=20000, out=lambda s: None,
+        participants=["agent:t"], context_window=20000, out=lambda s: None, fence=None,
     )
     s2.turn("What did you do today?")
 
@@ -802,11 +802,11 @@ def test_problems_are_resolvable_too() -> None:
             r.content = self.replies.pop(0) if self.replies else "…"
             return r
 
-    home = open_home(home_dir)
+    home = open_home(home_dir, fence=None)
     s = ChatSession(
         home,
         _LLM(["```diary kind=problem\ngist: the tag resolver misfires\nThe tag resolver misfires on short tags.\n```\nNoted."]),
-        participants=["agent:t"], context_window=20000, out=lambda s: None,
+        participants=["agent:t"], context_window=20000, out=lambda s: None, fence=None,
     )
     _r, rep = s.turn("Anything broken?")
     pid = rep.diary[0]
@@ -980,14 +980,14 @@ def test_tend_fence_wired_dispose_reaches_engine() -> None:
             r.content = self.replies.pop(0) if self.replies else "…"
             return r
 
-    home = open_home(home_dir)
+    home = open_home(home_dir, fence=None)
     s = ChatSession(
         home,
         _LLM([
             # refocus applies (no target needed); a reasonless line refuses.
             "```tend\nrefocus: -- reason: the topic has shifted\npin: ex:nope -- reason: keep it near\n```\nTending.",
         ]),
-        participants=["person:t"], context_window=20000, out=lambda s: None,
+        participants=["person:t"], context_window=20000, out=lambda s: None, fence=None,
     )
     reply, rep = s.turn("Tend your attention if you need to.")
     assert "[tended: refocus]" in reply, reply
@@ -1071,11 +1071,11 @@ def test_tend_fence_resolves_hash_tags_and_refuses_honestly() -> None:
             r.content = self.replies.pop(0) if self.replies else "…"
             return r
 
-    home = open_home(home_dir)
+    home = open_home(home_dir, fence=None)
     s = ChatSession(
         home,
         _LLM(["A first note about tides, worth keeping.\n```diary kind=note\ngist: tides\nThe tide leaves a line.\n```\nKept."]),
-        participants=["person:t"], context_window=20000, out=lambda s: None,
+        participants=["person:t"], context_window=20000, out=lambda s: None, fence=None,
     )
     _r1, rep1 = s.turn("Tell me about tides.")
     # The projection graph id -> its 8-hex tag (the only key he ever sees).
@@ -1162,11 +1162,11 @@ def test_tend_dispose_confirm_extras_resolve_tags_too() -> None:
             r.content = self.replies.pop(0) if self.replies else "…"
             return r
 
-    home = open_home(home_dir)
+    home = open_home(home_dir, fence=None)
     s = ChatSession(
         home,
         _LLM(["```tend\ndispose: ex:dream-nope confirm source=#dead0001 target=#dead0002 -- reason: holds\n```\nDone."]),
-        participants=["person:t"], context_window=20000, out=lambda s: None,
+        participants=["person:t"], context_window=20000, out=lambda s: None, fence=None,
     )
     reply, _rep = s.turn("Settle the dream if the evidence holds.")
     assert "[tend refused:" in reply
@@ -1255,11 +1255,11 @@ def test_w1_midturn_feel_applies_with_session_cap() -> None:
             r.content = self.replies.pop(0) if self.replies else "…"
             return r
 
-    home = open_home(home_dir)
+    home = open_home(home_dir, fence=None)
     s = ChatSession(
         home,
         _LLM(['That moved me.\n```feel\ntarget=person:shore feeling=+2 reason="warm"\n```\nThanks.']),
-        participants=["person:shore"], context_window=20000, out=lambda s: None,
+        participants=["person:shore"], context_window=20000, out=lambda s: None, fence=None,
     )
     _r, rep = s.turn("Here is something kind.")
     assert s.feelings_applied == 1, rep.notices
@@ -1326,10 +1326,10 @@ def test_own_time_close_runs_one_model_lookback() -> None:
             r.content = "A thought."
             return r
 
-    home = open_home(home_dir)
+    home = open_home(home_dir, fence=None)
     s = ChatSession(
         home, _LLM(), participants=[entity_id], context_window=20000,
-        out=lambda s: None, phase="personal",
+        out=lambda s: None, phase="personal", fence=None,
     )
     s.turn("(cue) morning")
     turns = calls["n"]

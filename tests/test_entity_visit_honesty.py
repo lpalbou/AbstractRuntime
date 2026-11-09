@@ -81,14 +81,14 @@ class _ScriptedLLM:
 
 
 def _session(home_dir: Path, replies: List[str], **kw: Any) -> ChatSession:
-    home = open_home(home_dir)
+    home = open_home(home_dir, fence=None)
     return ChatSession(
         home,
         _ScriptedLLM(replies),
         participants=["person:tester"],
         context_window=20000,
         out=lambda s: None,
-        **kw,
+        **{"fence": None, **kw},
     )
 
 

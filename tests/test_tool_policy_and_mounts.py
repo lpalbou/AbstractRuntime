@@ -222,14 +222,14 @@ def test_explicit_empty_grant_denies_all_never_falls_open(tmp_path: Path) -> Non
     # Session truth: a zero-grant policy file reaches the driver as deny-all.
     home_dir = _make_home(tmp_path)
     write_policy_file(home_dir, {"visit": []})
-    home = open_home(home_dir)
+    home = open_home(home_dir, fence=None)
     llm = _ScriptedLLM([
         "```tool name=diary_read\ndiary_ab12cd34\n```",
         "I hold no tools in this phase of my life.",
     ])
     try:
         session = ChatSession(
-            home, llm, participants=["agent:tester"], context_window=20000, out=lambda s: None
+            home, llm, participants=["agent:tester"], context_window=20000, out=lambda s: None, fence=None
         )
         assert session.allowed_tools == ()
         reply, r = session.turn("Read your diary for me.")
@@ -243,7 +243,7 @@ def test_explicit_empty_grant_denies_all_never_falls_open(tmp_path: Path) -> Non
 def test_session_honors_policy_and_states_the_grant(tmp_path: Path) -> None:
     home_dir = _make_home(tmp_path)
     write_policy_file(home_dir, {"visit": ["diary_list"]})
-    home = open_home(home_dir)
+    home = open_home(home_dir, fence=None)
     # Reply 1 is ONLY a (refused) tool block, so the speak-now guard asks
     # for words; reply 2 is the spoken follow-up the person actually hears.
     llm = _ScriptedLLM([
@@ -252,7 +252,7 @@ def test_session_honors_policy_and_states_the_grant(tmp_path: Path) -> None:
     ])
     try:
         session = ChatSession(
-            home, llm, participants=["agent:tester"], context_window=20000, out=lambda s: None
+            home, llm, participants=["agent:tester"], context_window=20000, out=lambda s: None, fence=None
         )
         assert session.allowed_tools == ("diary_list",)
         assert "this phase of your life grants: diary_list" in session.system_base
@@ -332,7 +332,7 @@ def test_mounts_file_validation_is_loud(tmp_path: Path) -> None:
 
 def test_turn_report_carries_tool_details_and_files(tmp_path: Path) -> None:
     home_dir = _make_home(tmp_path)
-    home = open_home(home_dir)
+    home = open_home(home_dir, fence=None)
     llm = _ScriptedLLM([
         "```tool name=write_file path=notes/day1.md\nfirst note\n```",
         "Saved my note.",
@@ -340,7 +340,7 @@ def test_turn_report_carries_tool_details_and_files(tmp_path: Path) -> None:
     try:
         session = ChatSession(
             home, llm, participants=["agent:tester"], context_window=20000,
-            enable_workspace=True, out=lambda s: None,
+            enable_workspace=True, out=lambda s: None, fence=None,
         )
         _, r = session.turn("Keep a file about today.")
         assert r.tools == ["write_file"]

@@ -140,9 +140,9 @@ def _phase_factory(home_dir: Path, llm: Any):
     from abstractruntime.identity.life import OWN_TIME_CONTRACT
 
     def _open(phase: str = "personal") -> ChatSession:
-        home = open_home(home_dir)
+        home = open_home(home_dir, fence=None)
         session = ChatSession(home, llm, participants=[home.entity_id], context_window=20000,
-                              enable_workspace=True, out=lambda s: None, phase=phase)
+                              enable_workspace=True, out=lambda s: None, phase=phase, fence=None)
         session.system_base += "\n\n" + OWN_TIME_CONTRACT
         return session
 
@@ -890,9 +890,9 @@ def _job_factory(home_dir: Path, llm: Any, seen: List[tuple]):
 
     def _open(phase: str = "personal", job: Any = None) -> ChatSession:
         seen.append((phase, (job or {}).get("id")))
-        home = open_home(home_dir)
+        home = open_home(home_dir, fence=None)
         session = ChatSession(home, llm, participants=[home.entity_id], context_window=20000,
-                              enable_workspace=True, out=lambda s: None, phase=phase)
+                              enable_workspace=True, out=lambda s: None, phase=phase, fence=None)
         session.system_base += "\n\n" + (work_day_text(job) if phase == "work" and job else OWN_TIME_CONTRACT)
         return session
 

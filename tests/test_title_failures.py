@@ -85,9 +85,9 @@ def _session(home_dir: Path, replies: List[str]):
 
     from abstractruntime.identity.chat import ChatSession, open_home
 
-    home = open_home(home_dir)
+    home = open_home(home_dir, fence=None)
     s = ChatSession(home, _Recorder(replies), participants=["person:laurent"], context_window=20000,
-                    out=lambda _s: None, phase="visit", model_info={"provider": "lmstudio", "model": "qwen-test"})
+                    out=lambda _s: None, phase="visit", model_info={"provider": "lmstudio", "model": "qwen-test"}, fence=None)
     return home, s
 
 

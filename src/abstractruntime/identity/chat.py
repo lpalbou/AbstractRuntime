@@ -678,14 +678,15 @@ class ChatHome:
 
 
 def open_home(home_dir: Path, *, embedder: Any = None, attention_window: Optional[int] = None,
-              fence: Any = None) -> ChatHome:
+              fence: Any) -> ChatHome:
     """Open an EXISTING entity home (the keystone/gateway composition).
 
     `fence` (a LifecycleFence, STOP-LANE-DESIGN §2.2): every lane that ACTS passes the fence its work was admitted
     with. The home then refuses everything after the operator's Stop: memory's commit guard (`fence.check` inside every
     write transaction, before COMMIT: rolled back, nothing lands), the diary book and the artifact store (checked before
     each write), and the effect handler table, wrapped once (lifecycle_fence.fence_handlers: refused before an effect,
-    a model reply that returned after the Stop abandoned - cancelled, never failed). None: an unfenced opener.
+    a model reply that returned after the Stop abandoned - cancelled, never failed). REQUIRED by signature (Fable
+    F4): a reader that acts on nothing passes `fence=None` itself - explicit and grep-able, never a default.
 
     The driver is a summon, never a create: no engram, no lint — a virgin
     home refuses at the prelude ("the seed is planted by the operator").
@@ -1211,6 +1212,7 @@ class ChatSession:
         thinking: Optional[str] = None,
         out: Callable[[str], None] = print,
         identity_since: Optional[str] = None,
+        fence: Any,
     ) -> None:
         from abstractmemory import ENTITY_CONTEXT_FLOOR, entity_recall_budget
 
@@ -1237,8 +1239,11 @@ class ChatSession:
         # before EVERY model attempt (retries included) and after each reply returns (a late reply is abandoned,
         # never counted), before each tool, before each effect and its authoring and after the authoring reply,
         # before the turn forms anything and inside the authoring drainer; the turn raises StoppedByOperator (a
-        # TurnCancelled) and forms nothing.
-        self.fence: Any = getattr(home, "fence", None)
+        # TurnCancelled) and forms nothing. REQUIRED by signature (Fable F4): `fence=None` only for a session that
+        # must not be fenced (a test harness over an unfenced home) - a session over a fenced home carries one.
+        if fence is None and getattr(home, "fence", None) is not None:
+            raise TypeError("a ChatSession over a fenced home carries a fence: pass fence=home.fence (or the host's)")
+        self.fence: Any = fence
         self._turn_report: Optional[Any] = None
         # `capability -> client` for the models other than the mind (the summaries capability authors titles and
         # summaries, identity/authoring.py). Set by the host; None = records stay pending for the drainer.
@@ -4068,6 +4073,7 @@ def salvage_pending_lookback(
             participants=[home.entity_id],
             session_id=f"salvage-{datetime.now(timezone.utc):%Y%m%dT%H%M%S%f}",
             out=out,
+            fence=home.fence,
         )
         return session.run_pending_lookback()
     finally:
@@ -4354,6 +4360,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                 {"provider": provider, "model": model, "thinking": thinking}
                 if thinking else {"provider": provider, "model": model}
             ),
+            fence=visit_fence,
         )
     except BaseException:
         if home is not None:

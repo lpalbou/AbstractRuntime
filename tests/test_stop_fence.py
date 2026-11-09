@@ -68,7 +68,7 @@ COMMIT_POINTS = (
     "build_consolidator", "build_session_factory", "build_capability_llm_factory",
 )
 # The lane openers a fence enters through (open_home's fence is optional for readers; every runtime call passes it).
-OPENERS = ("open_home", "open_entity_runtime")
+OPENERS = ("open_home", "open_entity_runtime", "ChatSession")  # each requires fence= (Fable F4)
 # Modules whose unfenced calls are still to be fenced in a later step of this lane (chat.py is another worker's file
 # until the lead frees it). The scan below fails when such a module is clean, so the exemption cannot outlive its fix.
 PENDING_FENCE: set = set()  # chat.py was fenced in step 4 (its CLI visit and salvage pass the fence)
@@ -623,7 +623,7 @@ def test_sleep_completion_fenced(tmp_path: Path) -> None:
     from abstractruntime.identity.life import build_consolidator
 
     home_dir = _make_home(tmp_path)
-    home = open_home(home_dir)
+    home = open_home(home_dir, fence=None)
     eid = home.entity_id
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", RuntimeWarning)
@@ -654,7 +654,7 @@ def test_sleep_completion_fenced(tmp_path: Path) -> None:
                                 fence=fence)()
     assert len(calls) == 1, f"a capability call ran after the Stop: {len(calls)}"
     assert result["stopped_by"] == "kill_switch" and result["engine"].get("cancelled_after"), result
-    home = open_home(home_dir)
+    home = open_home(home_dir, fence=None)
     try:
         assert home.ms.tasks.last_maintenance([("self", eid), ("diary", eid), ("life", eid)]) is None, \
             "a stopped night recorded a completed maintenance"
@@ -774,7 +774,7 @@ def test_the_sleeps_repair_step_does_nothing_after_stop(tmp_path: Path) -> None:
     from abstractruntime.identity.chat import open_home
 
     home_dir = _make_home(tmp_path)
-    home = open_home(home_dir)
+    home = open_home(home_dir, fence=None)
     try:
         home.ms.remember_many([MemoryRecordInput(
             kind="lesson", title="untitled lesson [3fa2c1]", digest="Waiting lets the other finish.",
@@ -867,7 +867,7 @@ def test_stop_fence_formation_authoring(tmp_path: Path) -> None:
             return response_model(title="An authored title", summary="An authored summary.")
 
     s = ChatSession(home, _HookLLM([]), participants=["person:laurent"], context_window=20000, out=lambda _s: None,
-                    phase="visit", model_info={"provider": "lmstudio", "model": "qwen-test"})
+                    phase="visit", model_info={"provider": "lmstudio", "model": "qwen-test"}, fence=home.fence)
     s.llm_for_capability = lambda name: _StopsWhileAnswering()
     inner = home.handlers[EffectType.MEMORY_FORM].__lifecycle_inner__  # the table is the fenced one
     ran: List[Any] = []
@@ -1008,7 +1008,7 @@ def test_a_stop_inside_chat_effects_is_the_operators_stop_never_a_failure(tmp_pa
     home_dir = _make_home(tmp_path)
     home, fence = _fenced_home(home_dir)
     s = ChatSession(home, _HookLLM([]), participants=["person:laurent"], context_window=20000, out=lambda _s: None,
-                    phase="visit", model_info={"provider": "lmstudio", "model": "qwen-test"})
+                    phase="visit", model_info={"provider": "lmstudio", "model": "qwen-test"}, fence=home.fence)
 
     class _RefusedMidCall:
         model_info = {"provider": "fake", "model": "summarizer"}
@@ -1039,7 +1039,7 @@ def _session_over(home_dir: Path, llm: Any):
 
     home, fence = _fenced_home(home_dir)
     s = ChatSession(home, llm, participants=["person:laurent"], context_window=20000, out=lambda _s: None,
-                    phase="visit", model_info={"provider": "lmstudio", "model": "qwen-test"})
+                    phase="visit", model_info={"provider": "lmstudio", "model": "qwen-test"}, fence=home.fence)
     assert s.fence is fence  # the session takes the home's fence
     return home, s, fence
 
@@ -1273,9 +1273,9 @@ def test_a_late_authoring_reply_is_abandoned_even_over_an_unguarded_home(tmp_pat
     from abstractruntime.identity.chat import ChatSession, open_home
 
     home_dir = _make_home(tmp_path)
-    home = open_home(home_dir)  # unguarded stores
+    home = open_home(home_dir, fence=None)  # unguarded stores
     s = ChatSession(home, _HookLLM([]), participants=["person:laurent"], context_window=20000, out=lambda _s: None,
-                    phase="visit", model_info={"provider": "lmstudio", "model": "qwen-test"})
+                    phase="visit", model_info={"provider": "lmstudio", "model": "qwen-test"}, fence=home.fence)
     s.fence = LifecycleFence.admit(home_dir)
 
     class _StopsWhileAnswering:
@@ -1405,3 +1405,25 @@ def test_a_cached_entity_runtime_is_readmitted_after_resume(tmp_path: Path) -> N
                                       scope="life", owner_id=ert.home.entity_id, idempotency_key="late-2")
     finally:
         ert.home.close()
+
+
+def test_open_home_and_chat_session_take_their_fence_by_signature(tmp_path: Path) -> None:
+    """Fable F4 (P2): `open_home(fence=None)` and a ChatSession without a fence were SILENT unfenced paths (the
+    gateway's hosted chat is exactly that path). Both now take `fence` keyword-only with no default - an unfenced
+    reader writes `fence=None` itself, grep-able - and a session over a fenced home must carry a fence."""
+    from abstractruntime.identity.chat import ChatSession, open_home
+
+    for fn in (open_home, ChatSession.__init__):
+        param = inspect.signature(fn).parameters["fence"]
+        assert param.kind is inspect.Parameter.KEYWORD_ONLY and param.default is inspect.Parameter.empty, fn
+    home_dir = _make_home(tmp_path)
+    with pytest.raises(TypeError):
+        open_home(home_dir)  # type: ignore[call-arg]
+    home, fence = _fenced_home(home_dir)
+    try:
+        with pytest.raises(TypeError):
+            ChatSession(home, _HookLLM([]), participants=["person:x"], context_window=20000)  # type: ignore[call-arg]
+        with pytest.raises(TypeError, match="fenced home"):
+            ChatSession(home, _HookLLM([]), participants=["person:x"], context_window=20000, fence=None)
+    finally:
+        home.close()

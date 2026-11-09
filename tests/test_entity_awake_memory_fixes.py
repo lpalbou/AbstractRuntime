@@ -91,11 +91,11 @@ def test_sheet_line_is_stored_whole(tmp_path) -> None:
         f"Thought {i}: the beavers choose willow over alder because it bends without breaking in the current."
         for i in range(12)
     )
-    home = open_home(_make_home(tmp_path, "sheetwhole"))
+    home = open_home(_make_home(tmp_path, "sheetwhole"), fence=None)
     try:
         session = ChatSession(
             home, _ScriptedLLM([reply, "(unused)"]), participants=["agent:t"], context_window=20000,
-            out=lambda s: None,
+            out=lambda s: None, fence=None,
         )
         session.turn(user_text)
         rid, line = session.session_sheet[-1]
@@ -132,12 +132,12 @@ def test_authored_card_text_is_stored_whole(tmp_path) -> None:
             r.content = self.replies.pop(0) if self.replies else "…"
             return r
 
-    home = open_home(_make_home(tmp_path, "cardwhole"))
+    home = open_home(_make_home(tmp_path, "cardwhole"), fence=None)
     try:
         s = ChatSession(
             home, _LLM(["Good to see you, admin. We spoke of trails.", "Another exchange about breadcrumbs.",
                         "A third exchange, noted."]),
-            participants=["person:admin"], context_window=20000, out=lambda s: None,
+            participants=["person:admin"], context_window=20000, out=lambda s: None, fence=None,
         )
         s.turn("Hello again - it's admin. Let's talk trails.")
         s.turn("Breadcrumbs beat search sometimes, no?")
@@ -240,7 +240,7 @@ def test_bridge_sets_suppress_loop_tail(tmp_path) -> None:
     store.close()
     journal.close()
 
-    home = open_home(home_dir)
+    home = open_home(home_dir, fence=None)
     try:
         resets = {"n": 0}
 
@@ -836,21 +836,21 @@ def test_salvaged_lookback_stamps_the_ended_sessions_phase(tmp_path) -> None:
 
     # Session 1: OWN TIME (phase=personal), dies unreflected (write-ahead
     # marker left behind by a turn; no close()).
-    home1 = open_home(home_dir)
+    home1 = open_home(home_dir, fence=None)
     s1 = ChatSession(home1, _LLM(["I walked my thoughts today."]),
                      participants=["agent:t"], context_window=20000,
                      out=lambda s: None, phase="personal",
-                     session_id="owntime-test-1")
+                     session_id="owntime-test-1", fence=None)
     s1.turn("(a fresh day begins)")
     assert (home_dir / "pending_reflection.json").exists()
     home1.close()
 
     # Session 2: a VISIT opens over the same home; the salvage runs.
-    home2 = open_home(home_dir)
+    home2 = open_home(home_dir, fence=None)
     s2 = ChatSession(home2, _LLM(["A calm reflection over that day in plain words."]),
                      participants=["person:op"], context_window=20000,
                      out=lambda s: None, phase="visit",
-                     session_id="chat-test-2")
+                     session_id="chat-test-2", fence=None)
     result = s2.run_pending_lookback()
     assert result is not None, "the salvage ran"
 
@@ -1046,7 +1046,7 @@ def test_diary_read_renders_the_birth_trail() -> None:
             r.content = self.replies.pop(0) if self.replies else "…"
             return r
 
-    home = open_home(home_dir)
+    home = open_home(home_dir, fence=None)
     s = ChatSession(
         home,
         _LLM([
@@ -1054,7 +1054,7 @@ def test_diary_read_renders_the_birth_trail() -> None:
             "```tool name=diary_read\nENTRY\n```\nReading it back.",
             "It came from our talk - I can see the trail now.",
         ]),
-        participants=["person:shore"], context_window=20000, out=lambda s: None,
+        participants=["person:shore"], context_window=20000, out=lambda s: None, fence=None,
     )
     _r1, rep1 = s.turn("Tell me about tides, and keep what stays.")
     entry_id = rep1.diary[0]
@@ -1126,10 +1126,10 @@ def test_speak_now_guard_is_silent_in_personal_phase() -> None:
             r.content = "```tool name=recent_memories\n```\n"
             return r
 
-    home = open_home(home_dir)
+    home = open_home(home_dir, fence=None)
     s = ChatSession(
         home, _LLM(), participants=[], context_window=20000,
-        out=lambda s: None, phase="personal",
+        out=lambda s: None, phase="personal", fence=None,
     )
     reply, rep = s.turn("(cue) morning")
     assert not any("Speak to them now" in p for p in prompts), "guard fired in personal"

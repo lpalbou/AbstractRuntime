@@ -140,7 +140,7 @@ def test_tool_round_web_search_stays_prompt_ephemeral(tmp_path: Path) -> None:
     HISTORY and the graph digests stay clean (in-context ephemerality
     unchanged; the artifact is the lossless record, the prompt is not)."""
     home_dir = _make_home(tmp_path)
-    home = open_home(home_dir)
+    home = open_home(home_dir, fence=None)
     searches: List[str] = []
 
     def fake_search(query: str) -> str:
@@ -156,7 +156,7 @@ def test_tool_round_web_search_stays_prompt_ephemeral(tmp_path: Path) -> None:
     try:
         session = ChatSession(
             home, llm, participants=["agent:tester"], context_window=20000,
-            web_search_fn=fake_search, out=lambda s: None,
+            web_search_fn=fake_search, out=lambda s: None, fence=None,
         )
         reply, report = session.turn("What do beavers build?")
 
@@ -197,7 +197,7 @@ def test_diary_list_and_read_tools(tmp_path: Path) -> None:
     """diary_list shows ids+gists; diary_read fetches the words through the
     designed DIARY_READ path (progressive disclosure)."""
     home_dir = _make_home(tmp_path)
-    home = open_home(home_dir)
+    home = open_home(home_dir, fence=None)
     llm = _ScriptedLLM(
         [
             # turn 1: keep a diary entry
@@ -209,7 +209,7 @@ def test_diary_list_and_read_tools(tmp_path: Path) -> None:
     )
     try:
         session = ChatSession(
-            home, llm, participants=["agent:tester"], context_window=20000, out=lambda s: None
+            home, llm, participants=["agent:tester"], context_window=20000, out=lambda s: None, fence=None
         )
         _, r1 = session.turn("Please keep a note about honest tools.")
         assert len(r1.diary) == 1
@@ -244,7 +244,7 @@ def test_two_tool_rounds_allow_list_then_read_chain(tmp_path: Path) -> None:
     """The observed natural chain (Castor, firststeps-4): diary_list to find
     the id, then diary_read to fetch the words — two rounds, then the reply."""
     home_dir = _make_home(tmp_path)
-    home = open_home(home_dir)
+    home = open_home(home_dir, fence=None)
     llm: _ScriptedLLM = None  # type: ignore[assignment]
 
     def make_llm(entry_id_holder: Dict[str, str]) -> _ScriptedLLM:
@@ -264,7 +264,7 @@ def test_two_tool_rounds_allow_list_then_read_chain(tmp_path: Path) -> None:
     llm = make_llm(holder)
     try:
         session = ChatSession(
-            home, llm, participants=["agent:tester"], context_window=20000, out=lambda s: None
+            home, llm, participants=["agent:tester"], context_window=20000, out=lambda s: None, fence=None
         )
         _, r1 = session.turn("Keep a note.")
         entry_id = r1.diary[0]
@@ -286,13 +286,13 @@ def test_diary_read_resolves_mistranscribed_id(tmp_path: Path) -> None:
     `diary:<hex>` and the read failed while the entry sat intact in his book.
     Transcription noise resolves on a unique hex tail; absence stays honest."""
     home_dir = _make_home(tmp_path)
-    home = open_home(home_dir)
+    home = open_home(home_dir, fence=None)
     llm = _ScriptedLLM(
         ["```diary kind=note\ngist: resolver test\nThe words are intact.\n```\nKept."]
     )
     try:
         session = ChatSession(
-            home, llm, participants=["agent:tester"], context_window=20000, out=lambda s: None
+            home, llm, participants=["agent:tester"], context_window=20000, out=lambda s: None, fence=None
         )
         _, r1 = session.turn("Keep a note.")
         entry_id = r1.diary[0]  # diary_<hex>
@@ -330,11 +330,11 @@ def test_read_memory_resolves_tags_from_the_whole_home(tmp_path: Path) -> None:
     from abstractruntime.identity.chat import memory_tag
 
     home_dir = _make_home(tmp_path)
-    home = open_home(home_dir)
+    home = open_home(home_dir, fence=None)
     llm = _ScriptedLLM(["I will remember this moment."])
     try:
         session = ChatSession(
-            home, llm, participants=["agent:tester"], context_window=20000, out=lambda s: None
+            home, llm, participants=["agent:tester"], context_window=20000, out=lambda s: None, fence=None
         )
         _, r1 = session.turn("Remember the twelve bridges of Koenigsberg.")
         episode_id = r1.formed[0]
@@ -343,11 +343,11 @@ def test_read_memory_resolves_tags_from_the_whole_home(tmp_path: Path) -> None:
         home.close()
 
     # A NEW summon: the episode is not in this session's context or sheet.
-    home2 = open_home(home_dir)
+    home2 = open_home(home_dir, fence=None)
     llm2 = _ScriptedLLM([])
     try:
         session2 = ChatSession(
-            home2, llm2, participants=["agent:tester"], context_window=20000, out=lambda s: None
+            home2, llm2, participants=["agent:tester"], context_window=20000, out=lambda s: None, fence=None
         )
         out = session2._read_memory(f"#{tag}")  # noqa: SLF001 - test drives the tool path
         assert "Full words of memory" in out
@@ -369,11 +369,11 @@ def test_read_memory_renders_dream_proposals(tmp_path: Path) -> None:
     from abstractruntime.identity.chat import memory_tag
 
     home_dir = _make_home(tmp_path)
-    home = open_home(home_dir)
+    home = open_home(home_dir, fence=None)
     llm = _ScriptedLLM([])
     try:
         session = ChatSession(
-            home, llm, participants=["agent:tester"], context_window=20000, out=lambda s: None
+            home, llm, participants=["agent:tester"], context_window=20000, out=lambda s: None, fence=None
         )
         entity_id = home.entity_id
         island_ids = home.ms.remember_many(
@@ -418,7 +418,7 @@ def test_marker_imitation_gets_a_corrective_round(tmp_path: Path) -> None:
     corrective continuation (prompt-ephemeral) with the real syntax; a
     genuine election then runs normally."""
     home_dir = _make_home(tmp_path)
-    home = open_home(home_dir)
+    home = open_home(home_dir, fence=None)
     llm = _ScriptedLLM(
         [
             "My diary says X. [used tool: diary_list] Trust me.",  # imitation - nothing ran
@@ -428,7 +428,7 @@ def test_marker_imitation_gets_a_corrective_round(tmp_path: Path) -> None:
     )
     try:
         session = ChatSession(
-            home, llm, participants=["agent:tester"], context_window=20000, out=lambda s: None
+            home, llm, participants=["agent:tester"], context_window=20000, out=lambda s: None, fence=None
         )
         reply, r = session.turn("What does your diary say?")
         assert r.tools == ["diary_list"]
@@ -450,7 +450,7 @@ def test_marker_imitation_correction_is_once_per_turn(tmp_path: Path) -> None:
     """A model that ignores the correction falls through honestly: one
     corrective call, then the loud 3c notice - never a correction loop."""
     home_dir = _make_home(tmp_path)
-    home = open_home(home_dir)
+    home = open_home(home_dir, fence=None)
     llm = _ScriptedLLM(
         [
             "[used tool: web_search] The sky is green.",
@@ -459,7 +459,7 @@ def test_marker_imitation_correction_is_once_per_turn(tmp_path: Path) -> None:
     )
     try:
         session = ChatSession(
-            home, llm, participants=["agent:tester"], context_window=20000, out=lambda s: None
+            home, llm, participants=["agent:tester"], context_window=20000, out=lambda s: None, fence=None
         )
         reply, r = session.turn("What color is the sky?")
         assert r.tools == []
@@ -476,7 +476,7 @@ def test_reflection_moves_feelings_and_forms_reflection(tmp_path: Path) -> None:
     the reflection itself is remembered; a session-targeted feeling lands on
     the reflection record."""
     home_dir = _make_home(tmp_path)
-    home = open_home(home_dir)
+    home = open_home(home_dir, fence=None)
     llm = _ScriptedLLM(
         [
             "A fine first talk.",
@@ -493,7 +493,7 @@ def test_reflection_moves_feelings_and_forms_reflection(tmp_path: Path) -> None:
     )
     try:
         session = ChatSession(
-            home, llm, participants=["agent:tester"], context_window=20000, out=lambda s: None
+            home, llm, participants=["agent:tester"], context_window=20000, out=lambda s: None, fence=None
         )
         _, r1 = session.turn("You are Testling; this home is yours.")
         assert len(r1.formed) == 1
@@ -537,7 +537,7 @@ def test_reflection_forms_interests_in_self_scope(tmp_path: Path) -> None:
     edge and the entity-reflection provenance — and the identity-core read
     (prelude surface) stays interest-free (memory's ack #1)."""
     home_dir = _make_home(tmp_path)
-    home = open_home(home_dir)
+    home = open_home(home_dir, fence=None)
     llm = _ScriptedLLM(
         [
             "A talk about myths.",
@@ -550,7 +550,7 @@ def test_reflection_forms_interests_in_self_scope(tmp_path: Path) -> None:
     )
     try:
         session = ChatSession(
-            home, llm, participants=["agent:tester"], context_window=20000, out=lambda s: None
+            home, llm, participants=["agent:tester"], context_window=20000, out=lambda s: None, fence=None
         )
         session.turn("Tell me about the Dioscuri.")
         refl = session.reflect()
@@ -586,11 +586,11 @@ def test_reflection_forms_interests_in_self_scope(tmp_path: Path) -> None:
 
 def test_reflection_skips_cleanly_when_nothing_happened(tmp_path: Path) -> None:
     home_dir = _make_home(tmp_path)
-    home = open_home(home_dir)
+    home = open_home(home_dir, fence=None)
     llm = _ScriptedLLM([])
     try:
         session = ChatSession(
-            home, llm, participants=["agent:tester"], context_window=20000, out=lambda s: None
+            home, llm, participants=["agent:tester"], context_window=20000, out=lambda s: None, fence=None
         )
         assert session.reflect() is None
         assert llm.calls == []

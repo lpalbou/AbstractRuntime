@@ -53,9 +53,9 @@ class _LLM:
 
 def _session(home_dir: Path, llm: _LLM) -> ChatSession:
     return ChatSession(
-        open_home(home_dir), llm, participants=["entity:liveling@home-test"],
+        open_home(home_dir, fence=None), llm, participants=["entity:liveling@home-test"],
         context_window=20000, enable_tools=True, enable_workspace=True,
-        phase="personal", out=lambda s: None,
+        phase="personal", out=lambda s: None, fence=None,
     )
 
 
@@ -223,8 +223,8 @@ def test_a_waiting_visitor_gets_no_correction_call(tmp_path: Path) -> None:
 def _waiting_session(home_dir: Path, replies: List[str], *, phase: str = "personal"):
     llm = _LLM(replies)
     s = ChatSession(
-        open_home(home_dir), llm, participants=["entity:liveling@home-test"],
-        context_window=20000, enable_tools=True, enable_workspace=True, phase=phase, out=lambda s: None,
+        open_home(home_dir, fence=None), llm, participants=["entity:liveling@home-test"],
+        context_window=20000, enable_tools=True, enable_workspace=True, phase=phase, out=lambda s: None, fence=None,
     )
     s.yield_check = lambda: True
     return s, llm

@@ -172,11 +172,11 @@ def test_midturn_topic_fence_gets_an_honest_notice() -> None:
 
     from abstractruntime.identity.chat import ChatSession, open_home
 
-    home = open_home(home_dir)
+    home = open_home(home_dir, fence=None)
     s = ChatSession(
         home,
         _LLM(["Today circles coherence.\n```topic\ncoherence\n```\nStill thinking."]),
-        participants=["agent:t"], context_window=20000, out=lambda s: None,
+        participants=["agent:t"], context_window=20000, out=lambda s: None, fence=None,
     )
     _reply, report = s.turn("What is today about?")
     assert any("no longer an election" in n for n in report.notices)
@@ -205,7 +205,7 @@ def test_topic_election_grows_and_authors_a_concept_card_end_to_end() -> None:
 
     tmp = Path(tempfile.mkdtemp())
     home_dir, entity_id = _make_home(tmp, "circler", "Circler")
-    home = open_home(home_dir)
+    home = open_home(home_dir, fence=None)
 
     subject = "presence vs performance"
     reflection = (
@@ -222,7 +222,7 @@ def test_topic_election_grows_and_authors_a_concept_card_end_to_end() -> None:
             session_id=f"owntime-day-{n}",
             phase="visit",
             context_window=20000,
-            out=lambda s: None,
+            out=lambda s: None, fence=None,
         )
         s.turn(f"Day {n} begins.")
         result = s.reflect()
@@ -278,7 +278,7 @@ def test_topic_card_below_floor_stays_unformed_and_quiet() -> None:
 
     tmp = Path(tempfile.mkdtemp())
     home_dir, entity_id = _make_home(tmp, "firstnamer", "Firstnamer")
-    home = open_home(home_dir)
+    home = open_home(home_dir, fence=None)
     s = ChatSession(
         home,
         _LLM([
@@ -286,7 +286,7 @@ def test_topic_card_below_floor_stays_unformed_and_quiet() -> None:
             "It circled something new.\n```topic\ncontinuity\n```\nGoodbye.",
         ]),
         participants=[entity_id], session_id="owntime-first", phase="visit",
-        context_window=20000, out=lambda s: None,
+        context_window=20000, out=lambda s: None, fence=None,
     )
     s.turn("Begin.")
     result = s.reflect()

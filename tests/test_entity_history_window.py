@@ -212,9 +212,9 @@ class _LLM:
 def _chat(tmp_path: Path, slug: str) -> tuple:
     llm = _LLM()
     session = ChatSession(
-        open_home(_make_home(tmp_path, slug)), llm,
+        open_home(_make_home(tmp_path, slug), fence=None), llm,
         participants=["person:albou"], session_id="s1", context_window=262144,
-        enable_tools=False, out=lambda s: None,
+        enable_tools=False, out=lambda s: None, fence=None,
     )
     return session, llm
 

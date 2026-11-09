@@ -91,7 +91,7 @@ def test_visit_tool_round_keeps_search_and_read_file_whole_as_home_artifacts(tmp
     monkeypatch.setattr(ct, "web_search", fake_search)
 
     home_dir = _make_home(tmp_path)
-    home = open_home(home_dir)
+    home = open_home(home_dir, fence=None)
     try:
         # A workspace file LONGER than the text read cap (24,000 chars): the shown result is a labeled view,
         # the artifact must be the whole file, byte for byte.
@@ -168,7 +168,7 @@ def test_personal_time_fetch_keeps_the_whole_page_as_a_home_artifact(tmp_path: P
     monkeypatch.setattr(ct, "fetch_url", fake_fetch)
 
     home_dir = _make_home(tmp_path, "wanderer")
-    home = open_home(home_dir)
+    home = open_home(home_dir, fence=None)
     try:
         llm = _ScriptedLLM([
             "I want to read that page.\n```tool name=fetch_url\nhttps://example.org/river\n```",
@@ -178,7 +178,7 @@ def test_personal_time_fetch_keeps_the_whole_page_as_a_home_artifact(tmp_path: P
         ])
         session = ChatSession(
             home, llm, participants=[home.entity_id], phase="personal", enable_tools=True,
-            context_window=20000, out=lambda s: None,
+            context_window=20000, out=lambda s: None, fence=None,
         )
         _reply, report = session.turn("Your own time begins.")
 

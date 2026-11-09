@@ -89,7 +89,7 @@ def _memory_plane(home_dir: Path, entity_id: str) -> Dict[str, Any]:
     """The comparable facts of one arm's memory plane, from a FRESH open."""
     from abstractmemory import TripleQuery
 
-    home = open_home(home_dir)
+    home = open_home(home_dir, fence=None)
     try:
         life = home.ms.query(TripleQuery(scope="life", owner_id=entity_id, limit=0))
         self_rows = home.ms.query(TripleQuery(scope="self", owner_id=entity_id, limit=0))
@@ -153,11 +153,11 @@ class _ScriptedLLMHandler:
 
 
 def _run_arm_a(home_dir: Path) -> None:
-    home = open_home(home_dir)
+    home = open_home(home_dir, fence=None)
     session = ChatSession(
         home, _ScriptedLLM(list(REPLIES)),
         participants=["person:albou"], context_window=20000,
-        enable_tools=False, out=lambda s: None,
+        enable_tools=False, out=lambda s: None, fence=None,
     )
     session.turn(TURN_1)
     session.turn(TURN_2)

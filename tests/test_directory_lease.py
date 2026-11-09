@@ -228,10 +228,10 @@ def test_loop_day_holds_the_lease_and_releases_between_days(tmp_path: Path) -> N
     def factory() -> ChatSession:
         # The summon happens INSIDE the day window: the lease must be held.
         seen_during_day.update(read_directory_lease(home_dir) or {})
-        home = open_home(home_dir)
+        home = open_home(home_dir, fence=None)
         session = ChatSession(
             home, llm, participants=[home.entity_id], context_window=20000,
-            enable_workspace=True, out=lambda s: None,
+            enable_workspace=True, out=lambda s: None, fence=None,
         )
         session.system_base += "\n\n" + OWN_TIME_CONTRACT
         return session
@@ -289,10 +289,10 @@ def _loop_session_factory(home_dir: Path, llm: Any, probes: Dict[str, Any], out:
     from abstractruntime.identity.chat import ChatSession, open_home
 
     def factory():  # noqa: ANN202
-        home = open_home(home_dir)
+        home = open_home(home_dir, fence=None)
         session = ChatSession(
             home, llm, participants=[home.entity_id], context_window=20000,
-            enable_workspace=True, out=out or (lambda s: None),
+            enable_workspace=True, out=out or (lambda s: None), fence=None,
         )
         probes.setdefault("session_ids", []).append(session.session_id)
         original_turn = session.turn
@@ -476,10 +476,10 @@ def test_salvage_helper_repays_the_deferred_look_back_for_doors(tmp_path: Path) 
     assert salvage_pending_lookback(home_dir, _ScriptedLLM([]), fence=LifecycleFence.admit(home_dir)) is None
 
     # A session turns and dies unreflected — the write-ahead marker pends.
-    home = open_home(home_dir)
+    home = open_home(home_dir, fence=None)
     session = ChatSession(
         home, _ScriptedLLM(["A thought worth keeping."]),
-        participants=[home.entity_id], context_window=20000, out=lambda s: None,
+        participants=[home.entity_id], context_window=20000, out=lambda s: None, fence=None,
     )
     session.turn("what stays with you?")
     home.close()

@@ -1112,6 +1112,11 @@ def _standing_interest_note(home_dir: Path, entity_id: str, rotation_key: int) -
 
 ENTITY_STATES = ("awake", "asleep", "paused")
 STATE_POLL_SECONDS = 5.0
+# The sleeps the LOOP writes for itself (contract-phases v2 §1.2 rule 6, §10.1): his own election ("self"), the
+# retired timed cycle ("personal-cycle") and the retired gate/exit landings ("grant-gate", "day-gate", "loop-exit").
+# None of them may outlive the loop that wrote it: a new loop wakes a leftover one, an ending loop wakes its own.
+# An operator sleep and the visit door's posture are never the loop's to touch.
+LOOP_OWN_SLEEP_WRITERS = ("self", "personal-cycle", "grant-gate", "day-gate", "loop-exit")
 
 # The loop's own liveness surface: <home>/loop_status, written at phase
 # transitions so OTHER processes can yield-and-summon programmatically
@@ -2866,6 +2871,21 @@ class LifeLoop:
         except Exception as e:  # noqa: BLE001
             self.out(f"#FALLBACK could not clear self-sleep state: {e}")
 
+    def _wake_own_leftover_sleep(self, reason: str) -> bool:
+        """Write awake over a sleep the loop wrote for itself (LOOP_OWN_SLEEP_WRITERS) and nothing else: an
+        operator sleep, a visit posture and the kill switch stand. True when it woke one."""
+        if self.state_home is None:
+            return False
+        current = read_entity_state(self.state_home)
+        if (
+            str(current.get("state") or "") == "asleep"
+            and str(current.get("mode") or "") != "visiting"
+            and str(current.get("written_by") or "") in LOOP_OWN_SLEEP_WRITERS
+        ):
+            write_entity_state(self.state_home, "awake", reason=reason, written_by="loop")
+            return True
+        return False
+
     def _interruptible_sleep(self, seconds: float) -> bool:
         """Sleep up to `seconds`, polling the stop channels between chunks
         (red-team finding: a stop during a 30-minute nap must not wait 30
@@ -2956,24 +2976,12 @@ class LifeLoop:
         if self.state_home is not None:
             self._personal_cycle_seconds = read_cycle_clock(self.state_home)
         self._status("between")
-        # SPAWN-WAKE for loop-exit landings (safe-subset pair rule): the
-        # terminal-exit landing writes asleep so a dead loop never reads
-        # awake — but a NEW loop process arriving IS the wake for that
-        # landing (supervisor respawn, next spawn after max_ticks). Only
-        # written_by=loop-exit wakes here: operator sleeps, day-gate
-        # cadence sleeps and visit yields keep their own wake rules.
+        # SPAWN-WAKE (contract-phases v2 §1.2 rule 6, §10.1): a sleep an earlier loop wrote for itself (its own
+        # election, the retired cycle, the retired gate/exit landings) has no process behind it any more; the new
+        # loop wakes it. Operator sleeps and visit postures keep their own wake rules.
         if self.state_home is not None:
             try:
-                landed = read_entity_state(self.state_home)
-                if (
-                    str(landed.get("state") or "") == "asleep"
-                    and str(landed.get("written_by") or "") == "loop-exit"
-                ):
-                    write_entity_state(
-                        self.state_home, "awake",
-                        reason="a new loop arrived - the exit landing wakes",
-                        written_by="loop-spawn",
-                    )
+                self._wake_own_leftover_sleep("a new loop arrived - the sleep an earlier loop left wakes")
             except Exception as e:  # noqa: BLE001 - never block a spawn
                 self.out(f"#FALLBACK spawn-wake check failed: {e}")
         while True:
@@ -3094,40 +3102,26 @@ class LifeLoop:
                         f"(settled desk: {decision['cause']} ({decision['detail']}) - "
                         f"the ruled landing is sleep)"
                     )
+                    if decision["cause"] == "no_grant":
+                        # PERSONAL OFF ENDS OWN TIME AWAKE (contract-phases v2 §10.1, root 1178; spec v22
+                        # PERSONAL-OFF-NEVER-SLEEPS): no sleep, no 6 h cadence, in both modes. He stays awake
+                        # and visitable (idle); only the operator's grant starts own time again (v23).
+                        report.stopped_by = "personal_off"
+                        self.out(
+                            f"(own time ends: {decision.get('grant_cause') or 'grant_revoked'} - "
+                            "he stays awake and reachable)"
+                        )
+                        break
                     # SUPERVISED mode (rest_minutes == 0, the existing mode
                     # axis): a sleep decision ENDS the run — the supervisor
                     # owns respawn, and a bounded test run must never idle
                     # 6h. 24/7 mode rests at the ruled cadence and re-gates.
-                    if decision["cause"] == "no_grant":
-                        landing_reason = (
-                            f"personal ended ({decision.get('grant_cause') or 'grant_revoked'}) "
-                            "- the ruled landing is sleep"
-                        )
-                        landing_writer = "grant-gate"
-                    else:
-                        landing_reason = f"day gate: {decision['cause']} ({decision['detail']})"
-                        landing_writer = "day-gate"
+                    landing_reason = f"day gate: {decision['cause']} ({decision['detail']})"
+                    landing_writer = "day-gate"
                     if self.rest_minutes <= 0:
-                        report.stopped_by = (
-                            "personal_disarmed" if decision["cause"] == "no_grant"
-                            else "settled_desk"
-                        )
-                        try:
-                            write_entity_state(
-                                self.state_home, "asleep",
-                                reason=landing_reason, written_by=landing_writer,
-                            )
-                            # F7e: biography parity — supervised landings
-                            # mark like 24/7 ones (same honesty condition).
-                            if _prev_phase and _prev_phase != PHASE_SLEEP:
-                                append_phase_changed(
-                                    self.state_home,
-                                    from_phase=_prev_phase, to=PHASE_SLEEP,
-                                    cause=str(decision.get("grant_cause") or decision.get("cause") or "sleep"),
-                                    written_by=landing_writer,
-                                )
-                        except Exception as e:  # noqa: BLE001
-                            self.out(f"#FALLBACK could not write the sleep landing: {e}")
+                        # Supervised: the run ends; no sleep is written (the supervisor owns what comes next,
+                        # and an ended loop leaves him awake - contract-phases v2 §10.1).
+                        report.stopped_by = "settled_desk"
                         break
                     wake_at = (
                         datetime.now(timezone.utc) + timedelta(seconds=cadence)
@@ -3915,24 +3909,14 @@ class LifeLoop:
         # culled itself on consecutive failures must not look like a clean
         # stop to /loop status readers.
         self._status("stopped", stopped_by=report.stopped_by)
-        # LIFECYCLE SAFE SUBSET (v8 "awake is not a state", the fixable
-        # hanging class): a terminal loop exit that would leave state=awake
-        # with NO process behind it lands the entity in SLEEP — idle IS
-        # sleep, never an unphased hang. Deliberately narrow: paused stays
-        # (the kill switch never auto-clears), visiting stays (the visit
-        # host owns the yield), asleep stays (already landed - the day gate
-        # or grant gate wrote its own reason).
+        # OWN TIME ENDS AWAKE (contract-phases v2 §10.1; v22 retires v8 IDLE-IS-SLEEP): an ending loop never writes
+        # a sleep and never leaves one of its own behind - he is awake and reachable (idle) after it. An operator
+        # sleep, a visit posture and the kill switch stand.
         if self.state_home is not None and report.stopped_by:
             try:
-                current = read_entity_state(self.state_home)
-                if str(current.get("state") or "") == "awake":
-                    write_entity_state(
-                        self.state_home, "asleep",
-                        reason=f"loop ended ({report.stopped_by}) - idle is sleep (v8)",
-                        written_by="loop-exit",
-                    )
+                self._wake_own_leftover_sleep(f"own time ended ({report.stopped_by}) - awake and reachable")
             except Exception as e:  # noqa: BLE001 - the exit itself must stand
-                self.out(f"#FALLBACK could not write the exit sleep landing: {e}")
+                self.out(f"#FALLBACK could not clear the loop's own sleep at exit: {e}")
         return report
 
 

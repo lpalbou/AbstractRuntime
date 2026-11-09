@@ -382,8 +382,10 @@ class TestFullLoopObedience:
         monkeypatch.setenv(PHASE_SPEC_ENV, str(p))
         # Asleep on a gate-written landing whose deadline is already past:
         # the need-check fires on the loop's first idle poll.
+        # (An operator sleep: since contract-phases v2 §10.1 a new loop wakes a gate sleep an earlier loop left,
+        # and the need-check governs operator sleeps the same way.)
         write_entity_state(
-            home_dir, "asleep", reason="settled desk", written_by="day-gate",
+            home_dir, "asleep", reason="settled desk", written_by="operator",
             wake_at=(datetime.now(timezone.utc) - timedelta(seconds=5)).isoformat(),
         )
 

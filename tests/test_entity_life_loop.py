@@ -323,12 +323,11 @@ def test_self_elected_rest_is_a_sleep_with_consolidation(tmp_path: Path) -> None
     assert sleep_states == ["asleep"]
     assert report.dreams == 1
     # The nap self-cleared DURING the loop (day 2 ran - the dream cue is
-    # the proof below). At process END the safe-subset landing applies:
-    # an ended loop never leaves awake behind (v8: idle IS sleep); the
-    # next spawn wakes a loop-exit landing (paired pin).
+    # the proof below). At process END he stays awake (contract-phases v2
+    # §10.1; v22 retires v8 IDLE-IS-SLEEP): no loop-exit sleep.
     final = read_entity_state(home_dir)
-    assert final.get("state") == "asleep"
-    assert final.get("written_by") == "loop-exit"
+    assert final.get("state") == "awake"
+    assert final.get("written_by") != "loop-exit"
     # The resume cue acknowledges the dream.
     assert any("a dream formed" in r.cue for r in report.records if r.day == 2) or report.days == 2
 
@@ -678,7 +677,7 @@ def test_personal_grant_gates_the_loop(tmp_path: Path) -> None:
     report = loop.run()
     assert report.ticks == 0
     assert report.days == 0
-    assert report.stopped_by == "personal_disarmed"
+    assert report.stopped_by == "personal_off"  # contract-phases v2 §10.1 (was personal_disarmed)
     assert any("personal time is not armed" in ln for ln in lines)
 
     # An expired timer refuses naming the expiry; a live one is a grant.
@@ -795,13 +794,13 @@ def test_grant_revoked_during_an_idle_is_seen_at_the_wake(tmp_path: Path) -> Non
     report = loop.run()
     assert report.ticks == 0
     assert report.days == 0
-    assert report.stopped_by == "personal_disarmed"
+    assert report.stopped_by == "personal_off"
 
 
 def test_mid_day_revocation_ends_the_day_at_the_next_tick(tmp_path: Path) -> None:
     """Gateway audit (c) / my G9: consent must not wait for the day
     boundary — a grant revoked between ticks closes the day at the NEXT
-    tick boundary, the top gate then writes the ruled sleep landing, and
+    tick boundary, own time then ends awake (contract-phases v2 §10.1), and
     no further tick runs. The reflection still runs (normal close, not a
     fast-yield: nobody is waiting)."""
     from abstractruntime.identity.life import read_entity_state, write_personal_grant
@@ -822,18 +821,16 @@ def test_mid_day_revocation_ends_the_day_at_the_next_tick(tmp_path: Path) -> Non
     )
     report = loop.run()
     assert report.ticks == 1  # tick 2 never ran
-    assert report.stopped_by == "personal_disarmed"
+    assert report.stopped_by == "personal_off"
     assert llm.replies == ["SURPLUS - never a tick 2"]  # reflection consumed, no tick 2
     state = read_entity_state(home_dir)
-    assert state["state"] == "asleep"
-    assert "grant_revoked" in str(state.get("reason"))
+    assert state["state"] == "awake"  # never asleep (root 1178)
 
 
-def test_grant_end_lands_the_entity_in_sleep_with_the_ruled_cause(tmp_path: Path) -> None:
-    """Phase-machine audit G2 / state machine v3: grant expiry or revocation
-    ends personal INTO SLEEP (no previous to restore) — the disarmed exit
-    writes state=asleep naming the ruled cause word, never leaves the
-    entity phase-less behind a stale awake."""
+def test_grant_end_leaves_the_entity_awake_naming_the_cause(tmp_path: Path) -> None:
+    """Contract-phases v2 §10.1 (re-based from state machine v3's 'grant end
+    lands in sleep', root 1178): grant expiry or revocation ends own time
+    AWAKE - no sleep is written - and the loop names the ruled cause word."""
     from abstractruntime.identity.life import (
         personal_grant_end_cause,
         read_entity_state,
@@ -852,12 +849,13 @@ def test_grant_end_lands_the_entity_in_sleep_with_the_ruled_cause(tmp_path: Path
         tick_seconds=0, ticks_per_day=1, max_ticks=2,
         state_home=home_dir, out=lambda s: None,
     )
+    lines: List[str] = []
+    loop.out = lines.append
     report = loop.run()
-    assert report.stopped_by == "personal_disarmed"
+    assert report.stopped_by == "personal_off"
     state = read_entity_state(home_dir)
-    assert state["state"] == "asleep"
-    assert "grant_revoked" in str(state.get("reason"))
-    assert state.get("written_by") == "grant-gate"
+    assert state["state"] == "awake" and state.get("written_by") != "grant-gate"
+    assert any("grant_revoked" in ln for ln in lines)
 
     # Expiry: a lapsed timer names grant_expired.
     write_personal_grant(
@@ -866,15 +864,15 @@ def test_grant_end_lands_the_entity_in_sleep_with_the_ruled_cause(tmp_path: Path
     )
     assert personal_grant_end_cause(read_personal_grant(home_dir)) == "grant_expired"
     write_entity_state(home_dir, "awake", reason="woken for the expiry check")
+    lines2: List[str] = []
     report2 = LifeLoop(
         lambda: (_ for _ in ()).throw(AssertionError("no session")),
         tick_seconds=0, ticks_per_day=1, max_ticks=2,
-        state_home=home_dir, out=lambda s: None,
+        state_home=home_dir, out=lines2.append,
     ).run()
-    assert report2.stopped_by == "personal_disarmed"
-    state2 = read_entity_state(home_dir)
-    assert state2["state"] == "asleep"
-    assert "grant_expired" in str(state2.get("reason"))
+    assert report2.stopped_by == "personal_off"
+    assert read_entity_state(home_dir)["state"] == "awake"
+    assert any("grant_expired" in ln for ln in lines2)
 
 
 def test_cli_grant_flags_are_distinct_operator_acts(tmp_path: Path) -> None:
@@ -1644,7 +1642,7 @@ def _make_home_no_drives(tmp_path: Path) -> Path:
 
 def test_settled_desk_supervised_run_exits_with_the_landing(tmp_path: Path) -> None:
     """Supervised mode (rest_minutes=0): a sleep gate decision ENDS the run
-    (the supervisor owns respawn) - stopped_by=settled_desk, state=asleep."""
+    (the supervisor owns respawn) - stopped_by=settled_desk, state stays awake."""
     from abstractruntime.identity.life import read_entity_state
 
     from abstractruntime.identity.life import (
@@ -1665,8 +1663,8 @@ def test_settled_desk_supervised_run_exits_with_the_landing(tmp_path: Path) -> N
     assert report.stopped_by == "settled_desk"
     assert llm.calls == [], "a settled desk spends ZERO LLM calls"
     state = read_entity_state(home_dir)
-    assert state["state"] == "asleep"
-    assert "settled_desk" in str(state.get("reason"))
+    # Re-based (contract-phases v2 §10.1): an ended loop leaves him awake, never a landing sleep.
+    assert state["state"] == "awake"
 
 
 def test_drives_cue_note_shows_each_drive_gist(tmp_path: Path) -> None:
@@ -1811,10 +1809,10 @@ def test_loop_status_carries_the_day_cause_trace(tmp_path: Path) -> None:
     assert status["day_cause"] == {"kind": "drives", "detail": "3 standing drive(s)"}
 
 
-def test_terminal_exit_lands_awake_state_in_sleep(tmp_path: Path) -> None:
-    """Lifecycle safe subset (v8: awake is not a state): a loop exit that
-    would strand state=awake with no process lands the entity in sleep;
-    paused is NEVER auto-cleared (kill switch)."""
+def test_terminal_exit_leaves_awake_and_never_clears_paused(tmp_path: Path) -> None:
+    """Re-based (contract-phases v2 §10.1; v22 retires v8 IDLE-IS-SLEEP): a
+    loop exit over state=awake leaves him awake (idle, reachable); paused is
+    NEVER auto-cleared (kill switch)."""
     from abstractruntime.identity.life import read_entity_state, write_entity_state
 
     home_dir = _make_home(tmp_path)
@@ -1829,9 +1827,8 @@ def test_terminal_exit_lands_awake_state_in_sleep(tmp_path: Path) -> None:
     report = loop.run()
     assert report.stopped_by == "max_ticks"
     state = read_entity_state(home_dir)
-    assert state["state"] == "asleep"
-    assert "idle is sleep" in str(state.get("reason"))
-    assert state.get("written_by") == "loop-exit"
+    assert state["state"] == "awake"
+    assert state.get("written_by") != "loop-exit"
 
     # The kill switch stays: a paused home is untouched by the landing.
     home2 = _make_home_no_drives(tmp_path)

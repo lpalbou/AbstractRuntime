@@ -3034,9 +3034,11 @@ class ChatSession:
         # write-ahead net exists for SIGKILL/power-loss, and a plain
         # write_text tears at exactly that crash — the next open then reads
         # an unparseable marker and drops the WHOLE session's look-back.
-        try:
-            from ..utils.atomic_files import atomic_write_text
+        # FENCED (Fable F8): with a fence, the write is one `fence.commit` step (the home state lock + the truth
+        # re-read) - never after the operator's Stop; the turn stops there (StoppedByOperator).
+        from ..utils.atomic_files import atomic_write_text
 
+        def _write() -> None:
             atomic_write_text(
                 self._pending_path(),
                 json.dumps({
@@ -3051,6 +3053,12 @@ class ChatSession:
                     "updated_at": datetime.now(timezone.utc).isoformat(),
                 }) + "\n",
             )
+
+        try:
+            if self.fence is not None:
+                self.fence.commit("writing the pending look-back marker", _write)
+            else:
+                _write()
         except OSError:
             pass  # the marker is a net, never a blocker
 

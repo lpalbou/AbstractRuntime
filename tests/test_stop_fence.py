@@ -1527,3 +1527,76 @@ def test_a_hand_start_reserves_the_home_like_a_spawn(tmp_path: Path, monkeypatch
                       sleep_fn=lambda s: None, out=lambda s: None, fence=fence).run()
     assert report.stopped_by == "max_ticks"
     assert "spawner_pid" not in json.loads((home_dir / "loop_status").read_text(encoding="utf-8"))
+
+
+@pytest.mark.parametrize("site", ["spend", "task_status", "pending_marker"])
+def test_bookkeeping_never_lands_after_a_racing_stop(tmp_path: Path, monkeypatch, site: str) -> None:
+    """Fable F8 (P3): the loop's spend, task status / work order, personal usage and the chat lane's pending
+    look-back marker checked the fence, then wrote outside any lock - a Stop in that window landed a file after the
+    paused row. Each is one `fence.commit` step now (the home state lock + the truth re-read): a Stop arriving
+    meanwhile waits for the write, so the write is always before the bump, never after it."""
+    import types
+
+    import abstractruntime.utils.atomic_files as atomic_files
+
+    home_dir = _make_home(tmp_path)
+    fence = LifecycleFence.admit(home_dir)
+    stopper = threading.Thread(target=lambda: hard_stop_loop(home_dir, reason="operator stop"))
+    fired = {"n": 0}
+
+    def race_here() -> None:  # the Stop arrives from another thread inside the write's window
+        if not fired["n"]:
+            fired["n"] += 1
+            stopper.start()
+            stopper.join(timeout=1.0)
+
+    target: Path
+    if site == "spend":
+        target = home_dir / life.LOOP_SPEND_FILENAME
+        real = atomic_files.atomic_write_text
+
+        def racing_write(path, text, *a, **k):
+            if Path(path) == target:
+                race_here()
+            return real(path, text, *a, **k)
+
+        monkeypatch.setattr(atomic_files, "atomic_write_text", racing_write)
+        loop = LifeLoop(lambda: None, state_home=home_dir, out=lambda s: None, fence=fence)
+        loop._write_loop_spend(types.SimpleNamespace(spend={"llm_calls": 1, "tool_calls": 0, "tokens_total": 9}), 1)
+    elif site == "task_status":
+        from test_entity_phases_runtime import _add_task
+
+        _add_task(home_dir, "t-1", "Label the boxes")
+        target = home_dir / life.TASK_INBOX_FILENAME
+        real_id = life._manifest_entity_id
+        monkeypatch.setattr(life, "_manifest_entity_id", lambda h: (race_here(), real_id(h))[1])
+        loop = LifeLoop(lambda: None, state_home=home_dir, out=lambda s: None, fence=fence)
+        loop._day_job = {"kind": "task", "id": "t-1", "status": "taken"}
+        loop._settle_work_job("done: the boxes are labelled")
+    else:
+        from abstractruntime.identity.chat import open_home
+
+        home = open_home(home_dir, fence=fence)
+        s = life.ChatSession(home, _HookLLM([]), participants=["person:x"], context_window=20000,
+                             out=lambda _s: None, fence=fence)
+        target = s._pending_path()
+        real = atomic_files.atomic_write_text
+
+        def racing_marker(path, text, *a, **k):
+            if Path(path) == target:
+                race_here()
+            return real(path, text, *a, **k)
+
+        monkeypatch.setattr(atomic_files, "atomic_write_text", racing_marker)
+        try:
+            try:
+                s._write_pending_marker()
+            except StoppedByOperator:
+                pass
+        finally:
+            home.close()
+    stopper.join(timeout=10)
+    assert fired["n"] == 1 and not stopper.is_alive()
+    signal = home_dir / lf.LIFECYCLE_SIGNAL_FILENAME
+    assert target.exists(), f"the {site} write never ran (the test would pass vacuously)"
+    assert target.stat().st_mtime_ns <= signal.stat().st_mtime_ns, f"{site} landed after the Stop"

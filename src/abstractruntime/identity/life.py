@@ -3603,6 +3603,23 @@ class LifeLoop:
             self.stop_cause = "kill_switch"
             self.out("(the operator's Stop moved the lifecycle generation - this loop ends here)")
 
+    def _fenced_bookkeeping(self, what: str, write: Callable[[], Any]) -> bool:
+        """One loop bookkeeping write (spend, personal usage, a task status, the work order) as ONE fenced step
+        (Fable F8): inside the home state lock, after the generation is re-read there (`fence.commit`) - a Stop that
+        arrives meanwhile waits for it, and a write decided before a Stop never lands after it. False when refused (the
+        Stop, said once) or the generation is unreadable. Once per tick or per day close, never per effect."""
+        if self.state_home is None:
+            write()
+            return True
+        try:
+            self._fence.commit(what, write)
+            return True
+        except StoppedByOperator:
+            self._stopped_by_operator()
+        except LifecycleUnreadable as e:
+            self._generation_unreadable(e)
+        return False
+
     def _generation_unreadable(self, error: BaseException) -> None:
         if self.stop_cause != "generation_unreadable":
             self.stop_cause = "generation_unreadable"
@@ -3998,8 +4015,9 @@ class LifeLoop:
         job = self._day_job or {}
         if job.get("kind") == "task" and job.get("status") == "pending":
             try:
-                append_task_status(self.state_home, str(job["id"]), "taken",
-                                   by=_manifest_entity_id(self.state_home) or "own-time-loop")
+                self._fenced_bookkeeping("marking the task taken", lambda: append_task_status(
+                    self.state_home, str(job["id"]), "taken",
+                    by=_manifest_entity_id(self.state_home) or "own-time-loop"))
             except Exception as e:  # noqa: BLE001 - the day still works its task
                 self.out(f"#FALLBACK could not mark task {job.get('id')} taken: {e}")
         if (
@@ -4025,12 +4043,14 @@ class LifeLoop:
             return
         job = self._day_job or {"kind": "work_order"}
         if job.get("kind") != "task":
-            archive_work_order(self.state_home, verdict=verdict)
+            self._fenced_bookkeeping("archiving the work order", lambda: archive_work_order(self.state_home,
+                                                                                         verdict=verdict))
             return
         status = "parked" if verdict.strip().lower().startswith("blocked:") else "done"
         try:
-            append_task_status(self.state_home, str(job["id"]), status,
-                               by=_manifest_entity_id(self.state_home) or "own-time-loop", note=verdict)
+            self._fenced_bookkeeping(f"settling the task ({status})", lambda: append_task_status(
+                self.state_home, str(job["id"]), status,
+                by=_manifest_entity_id(self.state_home) or "own-time-loop", note=verdict))
         except Exception as e:  # noqa: BLE001 - loud; the next gate re-reads the queue
             self.out(f"#FALLBACK could not settle task {job.get('id')} ({status}): {e}")
 
@@ -4116,7 +4136,8 @@ class LifeLoop:
             return
         if self._generation_moved():
             return  # nothing is counted after the operator's Stop (an abandoned call is no spend)
-        try:
+
+        def _write() -> None:
             import json as _json
             from datetime import datetime, timezone
 
@@ -4136,6 +4157,9 @@ class LifeLoop:
                 Path(self.state_home) / LOOP_SPEND_FILENAME,
                 _json.dumps(payload) + "\n",
             )
+
+        try:
+            self._fenced_bookkeeping("writing the loop spend", _write)
         except Exception:  # noqa: BLE001 - spend accounting must never kill a life
             pass
 
@@ -4827,7 +4851,8 @@ class LifeLoop:
                     # kind of day this was (a harness factory may not stamp
                     # session.phase; production stamps both).
                     _day_elapsed = time.monotonic() - _day_started_monotonic
-                    record_personal_usage(self.state_home, _day_elapsed)
+                    self._fenced_bookkeeping("recording personal usage",
+                                             lambda: record_personal_usage(self.state_home, _day_elapsed))
                 # The day closes with the look-back (feelings move on the
                 # entity's own time too) and an honest home close. A
                 # reflection failure never voids the day's formed ticks.

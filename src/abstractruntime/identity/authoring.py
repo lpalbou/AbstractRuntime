@@ -27,8 +27,13 @@ from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 __all__ = [
     "AUTHORING_CAPABILITY",
     "AUTHORING_TASK_KINDS",
+    "AUTHORING_CAPABILITY_KEY",
+    "AUTHORING_RESPONSE_SCHEMA",
     "AuthoringFailed",
     "AuthoringUnavailable",
+    "CapabilityUnrouted",
+    "authoring_llm_call_payload",
+    "parse_authored_result",
     "author_metadata",
     "authored_write",
     "declare_missing_metadata",
@@ -59,6 +64,74 @@ _SYSTEM = (
 
 def _prompt(kind: str, body: str) -> str:
     return f"The memory (kind: {kind}):\n\n{body}\n\nWrite its title and its summary."
+
+
+# THE DURABLE LANE (a visit workflow cannot call a model inside a node): the authoring call is an LLM_CALL effect
+# tagged with the capability. Payload shape (the gateway routes `payload.capability` to its capability client):
+#   {"capability": "summaries", "system_prompt": <_SYSTEM>, "messages": [{"role": "user", "content": <prompt>}],
+#    "response_schema": AUTHORING_RESPONSE_SCHEMA, "response_schema_name": "AuthoredMetadata",
+#    "params": {"thinking": "off"}, "_absorb_failure": true}
+# The handler that serves it must ECHO the tag in its result (`result.capability == "summaries"`): an answer
+# without the echo came from a handler that does not serve the capability (the mind's), and the formation treats it
+# as a wiring failure, loudly (logged error + an authoring-failure line, reason capability_unrouted), never as an
+# authored title. The fields come from `result.data` (structured output) or, strictly, from `result.content` as JSON.
+AUTHORING_CAPABILITY_KEY = "capability"
+AUTHORING_RESPONSE_SCHEMA: Dict[str, Any] = {
+    "type": "object",
+    "properties": {"title": {"type": "string"}, "summary": {"type": "string"}},
+    "required": ["title", "summary"],
+    "additionalProperties": False,
+}
+
+
+def authoring_llm_call_payload(kind: str, body: str) -> Dict[str, Any]:
+    """The LLM_CALL payload of one authoring call (see the shape above)."""
+    return {
+        AUTHORING_CAPABILITY_KEY: AUTHORING_CAPABILITY,
+        "system_prompt": _SYSTEM + " Answer with exactly one JSON object: {\"title\": \"...\", \"summary\": \"...\"}.",
+        "messages": [{"role": "user", "content": _prompt(kind, body)}],
+        "response_schema": dict(AUTHORING_RESPONSE_SCHEMA),
+        "response_schema_name": "AuthoredMetadata",
+        "params": {"thinking": "off"},
+        "_absorb_failure": True,
+    }
+
+
+class CapabilityUnrouted(AuthoringFailed):
+    """The tagged call was answered without the capability echo: no handler serves the capability."""
+
+
+def parse_authored_result(result: Any) -> Dict[str, Any]:
+    """The {title, summary} an authoring LLM_CALL returned (raises AuthoringUnavailable for a failed call,
+    CapabilityUnrouted without the echo, AuthoringFailed for missing or unusable fields)."""
+    from .title_failures import TITLE_MAX_CHARS
+
+    if not isinstance(result, dict):
+        raise AuthoringUnavailable("the authoring call returned nothing")
+    if result.get("capability_unrouted"):
+        raise CapabilityUnrouted(
+            f"no handler serves LLM_CALL {AUTHORING_CAPABILITY_KEY}={result['capability_unrouted']!r} on this host"
+        )
+    if result.get("absorbed_failure") or result.get("ok") is False:
+        raise AuthoringUnavailable(str(result.get("absorbed_failure") or "the authoring call failed"))
+    if result.get(AUTHORING_CAPABILITY_KEY) != AUTHORING_CAPABILITY:
+        raise CapabilityUnrouted(
+            f"the LLM_CALL tagged {AUTHORING_CAPABILITY_KEY}={AUTHORING_CAPABILITY!r} was answered without the "
+            "capability echo - no handler serves that capability on this host"
+        )
+    data = result.get("data")
+    if not isinstance(data, dict):
+        try:
+            data = json.loads(str(result.get("content") or ""))
+        except ValueError as e:
+            raise AuthoringFailed("the reply was not the structured title and summary") from e
+    title = data.get("title") if isinstance(data, dict) else None
+    summary = data.get("summary") if isinstance(data, dict) else None
+    if not isinstance(title, str) or not title.strip() or "\n" in title.strip() or len(title.strip()) > TITLE_MAX_CHARS:
+        raise AuthoringFailed("the reply carried no usable title")
+    if not isinstance(summary, str) or not summary.strip():
+        raise AuthoringFailed("the reply carried no summary")
+    return {"title": title.strip(), "summary": summary.strip(), "model": result.get("model")}
 
 
 def _model_class():

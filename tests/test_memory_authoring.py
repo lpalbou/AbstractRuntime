@@ -209,3 +209,78 @@ def test_the_spawn_hands_the_capability_profiles_to_the_child(tmp_path: Path, mo
         pass
     packed = json.loads(seen[0]["ABSTRACTRUNTIME_CAPABILITY_ENDPOINT_PROFILES_JSON"])
     assert packed == {"summaries": {"spec": "endpoint:theforge", "profile": {"base_url": "http://x", "api_key": "k"}}}
+
+
+# ---------------------------------------------------------------- the durable visit lane: the authoring call is an
+# LLM_CALL tagged capability=summaries, routed by open_entity_runtime(capability_handlers=...)
+
+
+def _visit(tmp_path: Path, capability_handlers: Any):
+    from test_visit_midturn_elections import _ScriptedHandler, _make_home as _visit_home
+
+    from abstractruntime.core.models import EffectType, RunStatus
+    from abstractruntime.identity.entity_runtime import open_entity_runtime
+    from abstractruntime.identity.visit_workflow import VISITOR_WAIT_KEY, build_visit_workflow
+
+    home_dir = _visit_home(tmp_path)
+    ert = open_entity_runtime(home_dir, extra_handlers={EffectType.LLM_CALL: _ScriptedHandler(["A plain reply."])},
+                              capability_handlers=capability_handlers)
+    wf = build_visit_workflow(ert.home, participants=["person:admin"], idle_seconds=3600,
+                              model_info={"provider": "test", "model": "scripted"}, visit_id="visit-authoring")
+    run_id = ert.runtime.start(workflow=wf, vars={}, session_id="visit-authoring")
+    assert ert.runtime.tick(workflow=wf, run_id=run_id, max_steps=50).status == RunStatus.WAITING
+    state = ert.runtime.resume(workflow=wf, run_id=run_id, wait_key=VISITOR_WAIT_KEY,
+                               payload={"text": "hello", "speaker": "person:admin"}, max_steps=200)
+    assert state.status == RunStatus.WAITING, state.error
+    from abstractmemory import TripleQuery
+
+    episodes = [a for a in ert.home.ms.store.query(TripleQuery(predicate="dcterms:abstract", limit=0))
+                if (a.attributes or {}).get("record_kind") == "episode"]
+    return ert, home_dir, episodes
+
+
+def test_a_visit_turn_forms_its_episode_with_the_authored_title_and_summary(tmp_path: Path) -> None:
+    from abstractruntime.core.runtime import EffectOutcome
+
+    calls: List[Dict[str, Any]] = []
+
+    def summaries(run: Any, effect: Any, dnn: Any = None) -> Any:
+        calls.append(dict(effect.payload))
+        return EffectOutcome.completed({"content": json.dumps({"title": TITLE, "summary": SUMMARY}), "model": "sum-1"})
+
+    ert, home_dir, episodes = _visit(tmp_path, {"summaries": summaries})
+    try:
+        assert len(episodes) == 1
+        ep = episodes[0]
+        assert ep.attributes["title"] == TITLE and str(ep.object) == SUMMARY, ep.attributes
+        assert "pending" not in ep.attributes
+        assert ep.attributes["metadata_authored"]["capability"] == "summaries"
+        payload = calls[0]
+        assert payload["capability"] == "summaries" and payload["params"]["thinking"] == "off"
+        assert payload["response_schema"]["required"] == ["title", "summary"]
+        assert "hello" in payload["messages"][0]["content"] and "A plain reply." in payload["messages"][0]["content"]
+    finally:
+        ert.close()
+
+
+@pytest.mark.parametrize("wiring", ["failing", "unrouted"])
+def test_a_failed_or_unrouted_authoring_call_forms_pending_with_a_failure_line(tmp_path: Path, wiring: str) -> None:
+    from abstractruntime.core.runtime import EffectOutcome
+
+    handlers = {"summaries": lambda run, effect, dnn=None: EffectOutcome.failed("endpoint refused")} \
+        if wiring == "failing" else {}
+    ert, home_dir, episodes = _visit(tmp_path, handlers)
+    try:
+        ep = episodes[0]
+        assert ep.attributes.get("title") in (None, "") and ep.attributes["pending"]["title"] is True
+        assert ep.attributes["pending"]["summary"] is True
+        tasks = {t["kind"] for t in ert.home.ms.tasks.tasks() if t["target_id"] == str(ep.subject)}
+        assert {"title.author", "digest.author"} <= tasks
+        log = (home_dir / "own_time.log").read_text(encoding="utf-8")
+        lines = [json.loads(ln[len("#AUTHORING_FAILURE "):]) for ln in log.splitlines()
+                 if ln.startswith("#AUTHORING_FAILURE ")]
+        line = [ln for ln in lines if ln["kind"] == "episode"][0]
+        assert line["record_id"] == str(ep.subject) and line["missing"] == "both"
+        assert line["reason"] == ("unavailable" if wiring == "failing" else "capability_unrouted"), line
+    finally:
+        ert.close()

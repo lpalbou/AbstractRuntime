@@ -265,6 +265,63 @@ def _deadline_iso(idle_seconds: float) -> str:
     return (datetime.now(timezone.utc) + timedelta(seconds=float(idle_seconds))).isoformat()
 
 
+AUTHOR_EPISODE_NODE = "VISIT_AUTHOR"
+
+
+def _authoring_step(node_id: str, kind: str, body: str, *, result_key: str, next_node: str) -> StepPlan:
+    """The formation's authoring call as a durable LLM_CALL effect tagged with the summaries capability
+    (identity/authoring.py: authoring_llm_call_payload; the host routes `payload.capability`)."""
+    from .authoring import authoring_llm_call_payload
+
+    return StepPlan(
+        node_id=node_id,
+        effect=Effect(type=EffectType.LLM_CALL, payload=authoring_llm_call_payload(kind, body), result_key=result_key),
+        next_node=next_node,
+    )
+
+
+def _authored_fields(result: Any, *, need: List[str], run_id: str, title: Optional[str] = None,
+                     digest: str = "") -> Tuple[Dict[str, Any], Optional[Dict[str, Any]]]:
+    """Record fields from one authoring call: (fields, failure). Authored = the title/summary set and nothing
+    pending; failed = the needed fields PENDING (memory queues the task) and the failure to log once the record
+    has an id. A call no handler served (no capability echo) is a wiring failure, logged as an error."""
+    from .authoring import AuthoringUnavailable, CapabilityUnrouted, parse_authored_result
+
+    try:
+        authored = parse_authored_result(result)
+    except Exception as e:  # noqa: BLE001
+        if isinstance(e, CapabilityUnrouted):
+            logger.error("entity visit run %s: %s", run_id, e)
+        reason = ("capability_unrouted" if isinstance(e, CapabilityUnrouted)
+                  else "unavailable" if isinstance(e, AuthoringUnavailable) else "malformed")
+        fields: Dict[str, Any] = {"title": None if "title" in need else title, "digest": digest, "pending": list(need)}
+        return fields, {"reason": reason, "error": f"{type(e).__name__}: {e}",
+                        "missing": "both" if len(need) == 2 else need[0]}
+    fields = {
+        "title": authored["title"] if "title" in need else title,
+        "digest": authored["summary"] if "summary" in need else digest,
+        "_metadata_authored": {"fields": list(need), "capability": "summaries", "model": authored.get("model"),
+                               "run_id": run_id},
+    }
+    return fields, None
+
+
+def _log_visit_authoring_failure(home: Any, visit: Dict[str, Any], failure: Dict[str, Any],
+                                 formed: Any) -> None:
+    from .title_failures import record_authoring_failure
+
+    ids = list((formed or {}).get("record_ids") or []) if isinstance(formed, dict) else []
+    info = visit.get("model_info") if isinstance(visit.get("model_info"), dict) else {}
+    record_authoring_failure(
+        getattr(home, "home_dir", None), entity=getattr(home, "entity_id", None),
+        record_id=str(ids[0]) if ids else None, kind=str(failure.get("kind")),
+        raw_block=str(failure.get("raw_block") or ""), template_id=str(failure.get("template_id") or ""),
+        provider=info.get("provider"), model=info.get("model"), reason=str(failure.get("reason")),
+        missing=str(failure.get("missing") or "title"),
+        extra={k: failure[k] for k in ("error", "turn_id", "block_reason") if failure.get(k)},
+    )
+
+
 def _get_path(obj: Any, dotted: str) -> Any:
     cur = obj
     for part in [p for p in str(dotted or "").split(".") if p]:
@@ -805,7 +862,7 @@ def build_visit_workflow(
         displayed = list(turn.get("displayed") or [])
         recall = turn.get("recall") or {}
         if not displayed or not recall.get("trace_id"):
-            return StepPlan(node_id="COMMIT", next_node="FORM")
+            return StepPlan(node_id="COMMIT", next_node=AUTHOR_EPISODE_NODE)
         return StepPlan(
             node_id="COMMIT",
             effect=Effect(
@@ -820,8 +877,16 @@ def build_visit_workflow(
                 },
                 result_key="_turn.committed",
             ),
-            next_node="FORM",
+            next_node=AUTHOR_EPISODE_NODE,
         )
+
+    def author_episode_node(run: RunState, ctx: Any) -> StepPlan:
+        """The episode's title and summary are AUTHORED in its formation (operator 2026-11-09): one LLM_CALL
+        tagged capability=summaries over the exchange; FORM reads `_turn.authored`."""
+        turn = _ns(run, "_turn")
+        said = str(turn.get("text") or "") or "\n".join(turn.get("attachment_lines") or [])
+        body = f"{turn.get('speaker') or 'visitor'}: {said}\n\n{home.name}: {turn.get('marked_reply') or ''}"
+        return _authoring_step(AUTHOR_EPISODE_NODE, "episode", body, result_key="_turn.authored", next_node="FORM")
 
     def form_node(run: RunState, ctx: Any) -> StepPlan:
         visit = _ns(run, "_visit")
@@ -873,6 +938,17 @@ def build_visit_workflow(
             attributes["visit_id"] = str(visit_id)  # item-14 correlation key
         if visit.get("model_info"):
             attributes["mind_substrate"] = dict(visit["model_info"])
+        # The authoring call's result (VISIT_AUTHOR): authored = no pending; failed = pending + a failure line
+        # (written by ANSWER, once the record has its id).
+        fields, failure = _authored_fields(turn.get("authored"), need=["title", "summary"], run_id=str(run.run_id),
+                                           digest=digest)
+        if fields.get("_metadata_authored"):
+            attributes["metadata_authored"] = fields.pop("_metadata_authored")
+            digest = str(fields["digest"])
+            turn["digest"] = digest
+        if failure:
+            turn["authoring_failure"] = {**failure, "kind": "episode", "raw_block": turn["marked_reply"],
+                                         "template_id": "visit_workflow.episode", "turn_id": turn["turn_id"]}
         edges: List[List[str]] = []
         if visit.get("last_episode_id"):
             edges.append(["continues", str(visit["last_episode_id"])])
@@ -889,10 +965,10 @@ def build_visit_workflow(
                 payload={
                     "records": [{
                         "kind": "episode",
-                        # Authored metadata (operator 2026-11-09): formed pending - the mechanical digest is the
-                        # provisional summary, never the title; the authoring drainer writes both.
-                        "title": None,
-                        "pending": ["title", "summary"],
+                        # Authored metadata (operator 2026-11-09): the title and summary VISIT_AUTHOR wrote; only
+                        # a failed call leaves them pending (the mechanical digest the provisional summary).
+                        "title": fields.get("title"),
+                        **({"pending": fields["pending"]} if fields.get("pending") else {}),
                         "digest": digest,
                         "keywords": keywords,
                         "verbatim": verbatim,
@@ -912,6 +988,9 @@ def build_visit_workflow(
     def answer_node(run: RunState, ctx: Any) -> StepPlan:
         visit = _ns(run, "_visit")
         turn = _ns(run, "_turn")
+        failure = turn.pop("authoring_failure", None)
+        if isinstance(failure, dict):
+            _log_visit_authoring_failure(home, visit, failure, turn.get("formed"))
         # Fold the turn into the visit ONCE (replay guard: a crash between
         # ANSWER and the next park re-runs this node; the fold must not
         # double history).
@@ -1501,6 +1580,7 @@ def build_visit_workflow(
         "REFLECT": reflect_node,
         "APPLY": apply_node,
         "DONE": done_node,
+        AUTHOR_EPISODE_NODE: author_episode_node,
         MODEL_GATE_NODE: model_gate_node,
         TURN_FAILED_NODE: turn_failed_node,
     }

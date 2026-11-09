@@ -112,6 +112,36 @@ class EntityRuntime:
         self.db.close()
 
 
+def _route_capability_calls(mind_handler: Any, capability_handlers: dict) -> Any:
+    """LLM_CALL routing by `payload.capability` (identity/authoring.py AUTHORING_CAPABILITY_KEY): a tagged call goes
+    to its capability handler and its completed result is stamped with the echo; an unserved capability is answered
+    without the echo (loud in the log), never by the mind."""
+    import logging
+
+    from ..core.runtime import EffectOutcome
+    from .authoring import AUTHORING_CAPABILITY_KEY
+
+    log = logging.getLogger(__name__)
+
+    def handler(run: Any, effect: Any, default_next_node: Any = None) -> Any:
+        cap = (effect.payload or {}).get(AUTHORING_CAPABILITY_KEY) if isinstance(effect.payload, dict) else None
+        if not cap:
+            if mind_handler is None:
+                return EffectOutcome.failed("no LLM_CALL handler on this entity runtime")
+            return mind_handler(run, effect, default_next_node)
+        target = capability_handlers.get(str(cap))
+        if target is None:
+            log.error("entity run %s: no handler serves LLM_CALL capability %r (formation stays pending)",
+                      getattr(run, "run_id", "?"), cap)
+            return EffectOutcome.completed({"ok": False, "capability_unrouted": str(cap)})
+        out = target(run, effect, default_next_node)
+        if getattr(out, "status", None) == "completed" and isinstance(getattr(out, "result", None), dict):
+            out.result[AUTHORING_CAPABILITY_KEY] = str(cap)
+        return out
+
+    return handler
+
+
 def open_entity_runtime(
     home_dir: Path,
     *,
@@ -119,6 +149,7 @@ def open_entity_runtime(
     attention_window: Optional[int] = None,
     extra_handlers: Optional[dict] = None,
     workflow_registry: Any = None,
+    capability_handlers: Optional[dict] = None,
 ) -> EntityRuntime:
     """Open an existing home and bind its own Runtime to it.
 
@@ -132,6 +163,12 @@ def open_entity_runtime(
       writes, so it raises instead (the routing-refuses-to-shadow rule).
     - Artifacts: the home's own store — visit-run verbatims/artifacts live
       IN the home like every other part of the life.
+    - `capability_handlers` ({capability: LLM_CALL handler}, e.g. the host's
+      summaries client): an LLM_CALL whose payload names `capability` goes to
+      that handler and its result carries the echo `capability`; a capability
+      no handler serves is answered `{ok: False, capability_unrouted: <name>}`
+      with no echo and an error in the log - never the mind's answer (the
+      formation then forms pending and logs the failure; identity/authoring.py).
     """
     _refuse_moved_home(Path(home_dir))
     home = open_home(home_dir, embedder=embedder, attention_window=attention_window)
@@ -179,6 +216,9 @@ def open_entity_runtime(
             # in the life even when the store misbehaves.
             rescue_dir=home_dir,
         )
+
+    if _ET.LLM_CALL in handlers or capability_handlers:
+        handlers[_ET.LLM_CALL] = _route_capability_calls(handlers.get(_ET.LLM_CALL), dict(capability_handlers or {}))
 
     # Durable-write discipline (0067-M): oversized effect/result leaves in
     # the visit ledger offload into the HOME's artifact store (refs on disk,

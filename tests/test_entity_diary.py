@@ -265,7 +265,8 @@ class TestProjectionPlane:
         # absent: the book's hash chain is the one attestation plane.)
         assert projected.provenance["source"] == "diary-projection"
         assert projected.attributes["entry_id"] == out.result["entry_id"]
-        assert projected.title.startswith("Diary entry (note)")
+        # Codex review 2 #10 / operator 2026-11-09: no template - his elected gist is his title, whole.
+        assert projected.title == "short elected gist"
         assert "long prose here" not in projected.digest
 
     def test_public_titles_carry_a_content_slug_and_differ_same_day(self):
@@ -288,9 +289,8 @@ class TestProjectionPlane:
             assert out.status == "completed"
         titles = [call["inputs"][0].title for call in mem.calls]
         assert titles[0] != titles[1], "same-day public titles must differ on content"
-        assert "the river changed course" in titles[0]
-        assert "a name I misremembered" in titles[1]
-        assert titles[0].startswith("Diary entry (note)"), "the act-frame prefix survives"
+        # Codex review 2 #10: his gist is the title, whole - no act-frame template around it.
+        assert titles == ["the river changed course", "a name I misremembered"]
 
     def test_no_gist_public_title_stays_bare_template(self):
         """The mechanical no-gist fallback digest is machine words — folding
@@ -312,12 +312,11 @@ class TestProjectionPlane:
             turn_id="t1",
             origin={},
         )
-        assert rid == "rec_1"
-        record = mem.calls[0]["inputs"][0]
-        # Re-based (operator 2026-11-09: title and summary are mandatory, authored, never a template standing in
-        # for his words): a public entry with no gist forms with its title PENDING (memory queues title.author;
-        # the authoring drainer writes it from the book).
-        assert record.title in (None, "") and tuple(record.pending) == ("title",), record
+        # Re-based (Codex review 2 #10; operator 2026-11-09: no template stands in for his words): an entry with no
+        # words at all has no summary to form - the projection is refused loudly instead of the old
+        # "Wrote a diary entry ...; no gist elected" template (DIARY_WRITE itself refuses empty text).
+        assert rid is None and not mem.calls, (rid, mem.calls)
+        assert any("diary projection failed" in w for w in warnings), warnings
 
     def test_writer_declared_digest_method_stamps_projection_and_bares_title(self):
         """c5270 P2-2 (jointly ruled with memory): machine-worded entries
@@ -345,15 +344,9 @@ class TestProjectionPlane:
         assert out.status == "completed"
         projected = mem.calls[0]["inputs"][0]
         assert projected.attributes["digest_method"] == "mechanical-flow-v1"
-        assert "Session closed" not in projected.title.split("—")[-1], (
-            f"mechanical entry title carries no content slug (machine words would cluster): {projected.title}"
-        )
-        # But it DOES carry the entry-id tail (adversary C4): mechanical
-        # close notes are the most frequent same-day multiples — a bare
-        # shared title re-amplified duplicate-group maintenance.
-        assert projected.attributes["entry_id"][-6:] in projected.title, (
-            "mechanical titles disambiguate same-day multiples by entry-id tail"
-        )
+        # Codex review 2 #10: a mechanical note's gist is machine words, never his title, and no template or id tail
+        # stands in: its title is authored - here none was passed, so it forms PENDING (with its failure line).
+        assert projected.title is None and tuple(projected.pending) == ("title",), projected
 
         # Undeclared entry: no attribute, slugged title (the entity's words).
         out2 = handler(
@@ -366,7 +359,7 @@ class TestProjectionPlane:
         assert out2.status == "completed"
         p2 = mem.calls[1]["inputs"][0]
         assert "digest_method" not in p2.attributes
-        assert "the tide finally turned" in p2.title
+        assert p2.title == "the tide finally turned"
 
         # Malformed declaration refuses loudly (a mangled label would poison
         # the consent vocabulary silently).

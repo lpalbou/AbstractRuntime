@@ -207,6 +207,24 @@ def open_entity_runtime(
     # wrapper now carries only the WRITE-boundary diary capture (words fly
     # to the book before the result rests). Diary tool results rest AS
     # SERVED in the durable transcript (the home is the privacy boundary).
+    def _author_diary_title(run: Any, text: str) -> dict:
+        """A public gistless diary entry's title, authored through the host's summaries capability handler BEFORE the
+        entry is written (Codex review 2 #10). No handler = the authoring failure (capability_unrouted), said."""
+        from ..core.models import Effect as _Effect
+        from .authoring import AUTHORING_CAPABILITY, AUTHORING_CAPABILITY_KEY, authoring_llm_call_payload
+        from .authoring import diary_title_payload
+
+        target = dict(capability_handlers or {}).get(AUTHORING_CAPABILITY)
+        if target is None:
+            return diary_title_payload({"ok": False, "capability_unrouted": AUTHORING_CAPABILITY})
+        try:
+            out = target(run, _Effect(type=_ET.LLM_CALL, payload=authoring_llm_call_payload("diary", text)), None)
+        except Exception as e:  # noqa: BLE001 - the entry is still written; its title forms pending, said
+            return diary_title_payload({"ok": False, "absorbed_failure": f"{type(e).__name__}: {e}"})
+        if getattr(out, "status", None) == "completed" and isinstance(getattr(out, "result", None), dict):
+            return diary_title_payload({**out.result, AUTHORING_CAPABILITY_KEY: AUTHORING_CAPABILITY})
+        return diary_title_payload({"ok": False, "absorbed_failure": str(getattr(out, "error", "") or "failed")})
+
     if _ET.LLM_CALL in handlers:
         handlers[_ET.LLM_CALL] = wrap_llm_handler_with_act_only(
             handlers[_ET.LLM_CALL],
@@ -215,6 +233,7 @@ def open_entity_runtime(
             # turn (record-everything ruling, 2026-07-26) — the words stay
             # in the life even when the store misbehaves.
             rescue_dir=home_dir,
+            author_diary_title=_author_diary_title,
         )
 
     if _ET.LLM_CALL in handlers or capability_handlers:

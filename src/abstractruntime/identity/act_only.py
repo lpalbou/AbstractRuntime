@@ -56,6 +56,7 @@ def capture_diary_elections(
     anchor_record_ids: Optional[List[str]] = None,
     anchor_graph_ids: Optional[List[str]] = None,
     rescue_dir: Any = None,
+    author_diary_title: Optional[Callable[[Any, str], Dict[str, Any]]] = None,
 ) -> Tuple[str, List[Dict[str, Any]], List[str]]:
     """G1 WRITE DIRECTION at the result boundary: elections fly to the book
     the moment the reply arrives; only MARKS + word-free metadata rest.
@@ -102,9 +103,17 @@ def capture_diary_elections(
         )
     entries: List[Dict[str, Any]] = []
     for e in elections:
+        # A PUBLIC entry without a gist gets its TITLE authored BEFORE its write (Codex review 2 #10): the host's
+        # summaries capability, called here (`author_diary_title(run, text)` -> authored_metadata | authoring_failure);
+        # his gist is his title, the record's summary is his words, a private entry's words never leave the book.
+        authoring: Dict[str, Any] = {}
+        if (author_diary_title is not None and str(e.visibility or "self").strip().lower() != "private"
+                and not str(e.gist or "").strip()):
+            authoring = dict(author_diary_title(run, e.text) or {})
         out = diary_write_handler(
             run,
             Effect(type=EffectType.DIARY_WRITE, payload={
+                **authoring,
                 "text": e.text,
                 "gist": e.gist,
                 "kind": e.kind,
@@ -316,6 +325,7 @@ def wrap_llm_handler_with_act_only(
     *,
     diary_write_handler: Optional[Callable[..., Any]] = None,
     rescue_dir: Any = None,
+    author_diary_title: Optional[Callable[[Any, str], Dict[str, Any]]] = None,
     **_retired: Any,
 ) -> Callable[..., Any]:
     """Wrap a host LLM_CALL handler with the WRITE-boundary capture: the
@@ -361,6 +371,7 @@ def wrap_llm_handler_with_act_only(
                     anchor_record_ids=payload.get("anchor_record_ids"),
                     anchor_graph_ids=payload.get("anchor_graph_ids"),
                     rescue_dir=rescue_dir,
+                    author_diary_title=author_diary_title,
                 )
             except ActOnlyResolutionError as e:
                 # Losing elected words silently or leaking them are both

@@ -95,6 +95,8 @@ def project_diary_entry(
     digest_method: Optional[str] = None,
     entry_record_hash: Optional[str] = None,
     home_dir: Optional[Any] = None,
+    authored: Optional[Dict[str, Any]] = None,
+    authoring_failure: Optional[Dict[str, Any]] = None,
 ) -> Tuple[Optional[str], List[str]]:
     """Project the MEMORY OF THE ACT of a diary write into the graph.
 
@@ -123,7 +125,7 @@ def project_diary_entry(
         return None, warnings
 
     private = visibility == "private"
-    title_missing = False  # a public entry with no gist (see below)
+    pending_fields: List[str] = []  # a public entry's fields its authoring could not write (see below)
     # Memory's closed diary_type vocabulary; the open kind stays in diary_kind.
     # "question" and "problem" are first-class (maintainer rounds 4+6: open
     # questions, problems, and ideas are autonomy drivers — curiosity,
@@ -167,61 +169,21 @@ def project_diary_entry(
             attributes["explores"] = explores
         provenance: Dict[str, Any] = {"source": "diary-projection", "entry_id": entry_id}
     else:
-        # W-GROUP known-limit root fix (memory c302, 2026-07-20): the
-        # no-gist template digest ("Wrote a diary entry (question) at ...")
-        # made 42 of Ephemeral's questions CLUSTER ON FORM — same-sitting
-        # projections sharing only machine words. A non-private entry's
-        # first line is HIS words and already public-plane; the digest
-        # carries it so clusters form on CONTENT. The WHOLE first line
-        # (ADR 0054, 2026-11-08: stored text is never truncated - it was
-        # `first_line[:120]`, cutting the look-back's questions mid-word).
-        fallback = ""
-        if isinstance(text, str) and text.strip():
-            first_line = text.strip().splitlines()[0].strip()
-            if first_line.lower().startswith("gist:"):
-                first_line = first_line[5:].strip()
-            fallback = first_line
-        digest = (gist or "").strip() or fallback or (
-            f"Wrote a diary entry ({kind}) at {written_at}; no gist elected."
-        )
-        # UNIFORM-TITLE FIX, public half (flow c5208 ask 1 — the c302 digest
-        # fix carried the entity's words, the TITLE didn't): every same-day
-        # projection shared one exact title, so dreams composed from titles
-        # were contentless ("'Diary entry (note)…' beside 'Diary entry
-        # (note)…'") and duplicate-group flags self-amplified. Fold a content
-        # slug from the digest into the PUBLIC title — the digest is already
-        # public-plane words by the c302 ruling, so the title discloses
-        # nothing new. The mechanical no-gist fallback stays out of the title
-        # (machine words would re-create clustering-on-form).
-        # Writer-declared MECHANICAL entries (digest_method present, c5270
-        # P2-2: deterministic close notes) keep the bare template title —
-        # folding machine words into titles would re-create the exact
-        # clustering-on-form the slug fix killed.
-        _slug = ""
-        if not digest_method:
-            # WHOLE (root ADR 0054; operator 2026-11-08: a title is explicit and readable): his elected gist, never
-            # a guess from his words (operator 2026-11-09: no fallback - his first line used to stand in, and a
-            # sentence split once cut "Dr. Smith..." to "Dr."). No gist: the title carries no words and the
-            # failure is recorded (title_failures).
-            _slug = (gist or "").strip()
-            title_missing = not _slug
-        if title_missing:
-            # Authored metadata (operator 2026-11-09): no gist = the title is PENDING (memory queues title.author);
-            # the drainer authors it from the book's words. Never a template standing in for his words.
-            title = None
-        elif _slug:
-            title = f"Diary entry ({kind}) — {written_date}: {_slug}"
-        else:
-            # MECHANICAL / no-gist entries carry no content slug (machine
-            # words would re-create clustering-on-form) — but same-day
-            # mechanical entries would then share ONE title, the exact
-            # uniform-title collision the slug fixed for the others
-            # (adversary C4, 2026-07-25; mechanical close notes are the most
-            # frequent same-day multiples). Disambiguate with the entry id's
-            # opaque tail — a KEY, not words, the same shape the private
-            # branch already uses; zero content disclosure.
-            _tail = str(entry_id or "")[-6:]
-            title = f"Diary entry ({kind}) — {written_date}" + (f" [{_tail}]" if _tail else "")
+        # AUTHORED AT FORMATION (operator 2026-11-09; Codex review 2 #10): no template, slug or cut. A diary record
+        # is his own act, so its SUMMARY is his words, never authored (memory refuses a pending summary on it): his
+        # elected gist, else his first line - a line is structure, kept whole (root ADR 0054). Its TITLE is his gist
+        # when he elected one, else authored by the summaries capability BEFORE the record forms (`authored`, passed
+        # by the lane that wrote the entry: ChatSession's DIARY_WRITE, the visit's close step). Only a recorded
+        # authoring failure forms the title pending - with its failure line (written below, once the record has its
+        # id); a lane that passed no authored title is that failure, said as such.
+        # A writer-declared MECHANICAL entry (digest_method: a deterministic close note) carries machine words, never
+        # his elected title: its title is authored like a gistless entry's.
+        his_title = None if digest_method else ((gist or "").strip() or None)
+        got = authored if isinstance(authored, dict) else {}
+        authored_title = str(got.get("title") or "").strip() or None
+        title = his_title or authored_title
+        pending_fields = ["title"] if title is None else []
+        digest = (gist or "").strip() or (str(text or "").strip().splitlines() or [""])[0].strip()
         attributes = {
             "entry_id": entry_id,
             "diary_type": diary_type,
@@ -234,6 +196,10 @@ def project_diary_entry(
             attributes["resolves"] = resolves
         if explores:
             attributes["explores"] = explores
+        authored_fields = ["title"] if (authored_title and not his_title) else []
+        if authored_fields:
+            attributes["metadata_authored"] = {"fields": authored_fields, "capability": "summaries",
+                                               **{k: got[k] for k in ("reader", "source") if got.get(k)}}
         provenance = {"source": "diary-projection", "entry_id": entry_id}
         provenance.update({k: v for k, v in origin.items() if v is not None})
 
@@ -270,7 +236,7 @@ def project_diary_entry(
                 MemoryRecordInput(
                     kind="diary",
                     title=title,
-                    **({"pending": ("title",)} if (not private and title_missing) else {}),
+                    **({"pending": tuple(pending_fields)} if (not private and pending_fields) else {}),
                     digest=digest,
                     keywords=(),
                     payload_ref=None,
@@ -285,7 +251,24 @@ def project_diary_entry(
             turn_id=turn_id,
         )
         record_id = str(record_ids[0]) if record_ids else None
-        return record_id, warnings
     except Exception as e:
         warnings.append(f"#FALLBACK diary projection failed (chain entry preserved): {e}")
         return None, warnings
+    if not private and pending_fields:
+        from ...identity.title_failures import record_authoring_failure
+
+        why = dict(authoring_failure or {}) if isinstance(authoring_failure, dict) else {}
+        if not why:
+            why = {"reason": "unavailable", "error_class": None,
+                   "error_message": "the lane that wrote this entry passed no authored title or summary"}
+        logged = record_authoring_failure(
+            home_dir, entity=entity_id, record_id=record_id, kind="diary", raw_block=str(text or ""),
+            template_id="diary.projection", provider=why.get("provider"), model=why.get("model"),
+            reason=str(why.get("reason") or "unavailable"),
+            missing="title",
+            extra={"entry_id": entry_id, "capability": "summaries",
+                   **{k: why[k] for k in ("error_class", "error_message", "error") if why.get(k)}},
+        )
+        if logged.get("logged"):
+            warnings.append(str(logged["logged"]))
+    return record_id, warnings

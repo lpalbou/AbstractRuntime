@@ -131,7 +131,7 @@ def test_diary_title_is_his_gist_whole_and_never_his_first_line() -> None:
     assert title in ("", "None"), title  # no gist: the title is pending (authored later from the book), never his words
     assert _project(None, DR_BODY) in ("", "None")
     gist = "Why does a research nation hollow out the institutions that produce its own breakthroughs?"
-    assert _project(gist, "prose").endswith(": " + gist)
+    assert _project(gist, "prose") == gist  # his gist, whole - no template around it (Codex review 2 #10)
     assert "…" not in _project(gist, "prose")
 
 

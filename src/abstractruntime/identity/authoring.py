@@ -40,6 +40,7 @@ __all__ = [
     "authoring_failure_fields",
     "authored_write",
     "declare_missing_metadata",
+    "diary_title_payload",
     "drain_authoring",
     "rearm_exhausted_authoring",
 ]
@@ -145,6 +146,21 @@ def parse_authored_result(result: Any) -> Dict[str, Any]:
     if not isinstance(summary, str) or not summary.strip():
         raise AuthoringFailed("the reply carried no summary")
     return {"title": title.strip(), "summary": summary.strip(), "model": result.get("model")}
+
+
+def diary_title_payload(result: Any) -> Dict[str, Any]:
+    """The DIARY_WRITE payload keys for a public gistless entry's title, from its authoring LLM_CALL result: the
+    `authored_metadata` {title, reader}, or the `authoring_failure` (reason, class, message, the capability's model
+    when its result named it) - the projection then forms the title pending and writes the failure line."""
+    try:
+        authored = parse_authored_result(result)
+    except Exception as e:  # noqa: BLE001
+        why = authoring_failure_fields(e)
+        res = result if isinstance(result, dict) else {}
+        return {"authoring_failure": {**why, "provider": res.get("provider"), "model": res.get("model"),
+                                      "error": f"{type(e).__name__}: {e}"}}
+    return {"authored_metadata": {"title": authored["title"],
+                                  "reader": {"capability": AUTHORING_CAPABILITY, "model": authored.get("model")}}}
 
 
 def _model_class():

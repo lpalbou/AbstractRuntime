@@ -311,7 +311,7 @@ def test_a_failed_or_unrouted_authoring_call_forms_pending_with_a_failure_line(t
         ert.close()
 
 
-def _close_visit(tmp_path: Path, capability_handlers: Any):
+def _close_visit(tmp_path: Path, capability_handlers: Any, *, diary: bool = False):
     """One visit turn, then the close: the look-back elects an interest, a lesson and a realization, none titled."""
     from test_visit_midturn_elections import _ScriptedHandler, _make_home as _visit_home
 
@@ -322,7 +322,8 @@ def _close_visit(tmp_path: Path, capability_handlers: Any):
     def look_back(run: Any) -> str:
         rid = str(list((run.vars.get("_visit") or {}).get("sheet") or [])[0][0])
         return ("A good visit.\n```interest\nwhy rivers bend\n```\n```lesson\nwait before answering\n```\n"
-                f"```realize\nI keep returning to rivers.\nevidence={rid}\n```\n")
+                f"```realize\nI keep returning to rivers.\nevidence={rid}\n```\n"
+                + ("```diary kind=note\nThe visitor asked about rivers.\n```\n" if diary else ""))
 
     home_dir = _visit_home(tmp_path)
     ert = open_entity_runtime(home_dir, extra_handlers={
@@ -342,6 +343,8 @@ def _close_visit(tmp_path: Path, capability_handlers: Any):
     for a in ert.home.ms.store.query(TripleQuery(predicate="dcterms:abstract", limit=0)):
         kind = (a.attributes or {}).get("record_kind")
         if kind in ("summary", "interest", "lesson", "realization", "episode"):
+            rows.setdefault(kind, []).append(a)
+        elif kind == "diary" and (a.attributes or {}).get("entry_id") != "diary_seedq":
             rows.setdefault(kind, []).append(a)
     return ert, home_dir, rows
 
@@ -519,3 +522,89 @@ def test_a_declaration_memory_answers_rearmed_is_a_repair_not_a_refusal() -> Non
     assert (receipt["declared"], receipt["repaired"], receipt["refused"]) == (1, 2, 1), receipt
     assert [ln for ln in lines if ln.startswith("#REPAIR_REFUSED")] == [
         "#REPAIR_REFUSED memory answered an unknown outcome 'mystery' declaring interest ex:interest-3"]
+
+
+# ---------------------------------------------------------------- Codex-2 #10: a diary entry's record is authored at formation
+
+
+_DIARY_GISTLESS = "Back.\n```diary kind=note\nThe tide leaves a readable line on the sand.\nIt stays until the next wave.\n```\n"
+_DIARY_GIST = "Back.\n```diary kind=note\ngist: the tide line\nThe tide leaves a readable line on the sand.\n```\n"
+
+
+def _diary_rows(home_dir: Path) -> List[Any]:
+    from abstractmemory import SQLiteTripleStore, TripleQuery
+
+    store = SQLiteTripleStore(home_dir / "memory.sqlite3")
+    try:
+        return [a for a in store.query(TripleQuery(scope="diary", predicate="dcterms:abstract", limit=0))
+                if (a.attributes or {}).get("record_kind") == "diary"
+                and (a.attributes or {}).get("entry_id") != "diary_seedq"]  # the home's seeded question
+    finally:
+        store.close()
+
+
+def test_a_diary_entry_forms_with_its_authored_title_and_summary_never_a_template(tmp_path: Path) -> None:
+    """Live 2026-11-09 (castor): a new diary entry's record read "Diary entry (note) - <date>: ...". Without a gist
+    its title is authored BEFORE its record forms (one summaries call); with one, his gist is his title, whole; the
+    summary is always his words (a diary entry is his act: memory never authors its body); nothing is pending."""
+    home_dir = _workspace_home(tmp_path)
+    cap = _Capability()
+    both = _DIARY_GISTLESS + _DIARY_GIST.replace("Back.\n", "")
+    home, s = _session(home_dir, [both, "A quiet close."])
+    s.llm_for_capability = lambda name: cap
+    s.turn("hi")
+    home.close()
+    rows = _diary_rows(home_dir)
+    assert len(rows) == 2, rows
+    gistless, gisted = sorted(rows, key=lambda r: r.attributes.get("title") != TITLE)
+    assert (gistless.attributes["title"], str(gistless.object)) == (TITLE, "The tide leaves a readable line on the sand.")
+    assert (gisted.attributes["title"], str(gisted.object)) == ("the tide line", "the tide line")
+    for r in rows:
+        assert "Diary entry" not in str(r.attributes["title"]) and "pending" not in r.attributes
+    assert gistless.attributes["metadata_authored"]["fields"] == ["title"]
+    assert gistless.attributes["metadata_authored"]["source"]["kind"] == "artifact"
+    assert "metadata_authored" not in gisted.attributes, "his gist is his title: nothing authored"
+    assert len(cap.prompts) >= 1 and any("The tide leaves a readable line" in p for p in cap.prompts)
+    assert [f for f in _failures(tmp_path) if f["kind"] == "diary"] == []
+
+
+def test_a_diary_entry_whose_authoring_fails_forms_pending_with_one_failure_line(tmp_path: Path) -> None:
+    home_dir = _workspace_home(tmp_path)
+    home, s = _session(home_dir, [_DIARY_GISTLESS, "A quiet close."])
+    s.llm_for_capability = lambda name: _Capability(exc=RuntimeError("gateway 500: capability route missing"))
+    s.turn("hi")
+    home.close()
+    (row,) = _diary_rows(home_dir)
+    assert row.attributes.get("title") in (None, "") and row.attributes["pending"]["title"] is True
+    assert str(row.object) == "The tide leaves a readable line on the sand.", "his words, never a template"
+    lines = [f for f in _failures(tmp_path) if f["kind"] == "diary"]
+    assert len(lines) == 1, lines
+    line = lines[0]
+    assert (line["record_id"], line["missing"], line["reason"]) == (str(row.subject), "title", "client_error")
+    assert (line["error_class"], line["model"]) == ("RuntimeError", "summarizer"), line
+
+
+def test_a_visit_close_diary_entry_forms_with_its_authored_title(tmp_path: Path) -> None:
+    """Codex review 2 #10, the visit lane: a gistless public diary entry the close writes gets its title from one
+    capability=summaries LLM_CALL BEFORE its record forms; its summary stays his words."""
+    from abstractruntime.core.runtime import EffectOutcome
+
+    asked: List[str] = []
+
+    def summaries(run: Any, effect: Any, dnn: Any = None) -> Any:
+        content = effect.payload["messages"][0]["content"]
+        kind = content.split("(kind: ", 1)[1].split(")", 1)[0]
+        asked.append(kind)
+        return EffectOutcome.completed({"capability": "summaries", "content": json.dumps(
+            {"title": f"{kind.capitalize()} title", "summary": f"What this {kind} holds."})})
+
+    ert, home_dir, rows = _close_visit(tmp_path, {"summaries": summaries}, diary=True)
+    try:
+        (entry,) = rows["diary"]
+        assert entry.attributes["title"] == "Diary title" and "pending" not in entry.attributes, (
+            sorted(entry.attributes.items()), asked, _failures(tmp_path))
+        assert str(entry.object) == "The visitor asked about rivers.", "his words stay the summary"
+        assert entry.attributes["metadata_authored"]["fields"] == ["title"]
+        assert "diary" in asked
+    finally:
+        ert.close()

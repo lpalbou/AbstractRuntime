@@ -1935,6 +1935,8 @@ class ChatSession:
         authoring: List[Dict[str, Any]] = []
         if etype == EffectType.MEMORY_FORM:
             payload, authoring = self._author_records(payload)
+        elif etype == EffectType.DIARY_WRITE:
+            payload = self._author_diary_entry(payload)
         out = self.home.handlers[etype](self.run, Effect(type=etype, payload=payload), None)
         if out.status != "completed":
             # strict entity posture: the engine failing is an identity failure —
@@ -2748,9 +2750,10 @@ class ChatSession:
                         # record one carries the right type (append-only: no
                         # re-typing later).
                         "kind": "episode",
-                        # The title and the summary are AUTHORED (operator 2026-11-09): formed pending - the
-                        # mechanical digest is the provisional summary, never the title - and authored by the
-                        # summaries capability model right after (below), else by the drainer.
+                        # The title and the summary are AUTHORED BEFORE the record forms (operator 2026-11-09;
+                        # Codex review 2 #10): `pending` + `_authoring` declare what the summaries capability writes
+                        # in this same MEMORY_FORM step (_author_records, run by _effect before dispatch); only a
+                        # failed call forms it pending (the mechanical digest provisional) with its failure line.
                         "title": None,
                         "pending": ["title", "summary"],
                         "_authoring": {"body": f"{speaker_label or self.participants[0]}: {user_text}\n\n"
@@ -3375,6 +3378,41 @@ class ChatSession:
                 }})
             new_records.append(rec)
         return {**payload, "records": new_records}, outcomes
+
+    def _author_diary_entry(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """A public diary entry's TITLE, authored BEFORE the write when he elected no gist (operator 2026-11-09; Codex
+        review 2 #10): one summaries capability call over the entry's words (kept as a home artifact, its source).
+        His gist is his title; the record's summary is always his words (a diary entry is his act). The write
+        carries `authored_metadata`, or `authoring_failure` (class, message, the capability model) when the call
+        failed, so the projection forms the record titled, or with its title pending and the failure line. A private
+        entry is left to the projection (its words never reach the graph)."""
+        from .authoring import _reader_of, _source_artifact, author_metadata, authoring_failure_fields
+        from .authoring import AuthoringUnavailable
+
+        if str(payload.get("visibility") or "self").strip().lower() == "private":
+            return payload
+        if payload.get("authored_metadata") or payload.get("authoring_failure"):
+            return payload
+        if str(payload.get("gist") or "").strip() and not payload.get("digest_method"):
+            return payload  # his gist is his title; nothing to author (a mechanical note's gist is machine words)
+        body = str(payload.get("text") or "")
+        llm = None
+        try:
+            if self.llm_for_capability is None:
+                raise AuthoringUnavailable("no summaries capability model in this session")
+            try:
+                llm = self.llm_for_capability("summaries")
+            except Exception as e:  # noqa: BLE001
+                raise AuthoringUnavailable(f"{type(e).__name__}: {e}") from e
+            authored = author_metadata(llm, kind="diary", body=body)
+            reader = _reader_of(llm)
+            sources = _source_artifact(self.home.artifacts, record_id=f"diary:{payload.get('turn_id') or ''}",
+                                       kind="diary", body=body, authored=authored, reader=reader)
+            return {**payload, "authored_metadata": {"title": authored["title"], "reader": reader,
+                                                     "source": sources[0]}}
+        except Exception as e:  # noqa: BLE001 - the entry is written; its record forms pending with the failure line
+            why = authoring_failure_fields(e, llm)
+            return {**payload, "authoring_failure": {**why, "error": f"{type(e).__name__}: {e}"}}
 
     def _log_authoring_failures(self, outcomes: List[Dict[str, Any]], result: Dict[str, Any]) -> None:
         from .title_failures import record_authoring_failure

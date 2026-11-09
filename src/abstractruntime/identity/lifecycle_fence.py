@@ -71,6 +71,16 @@ class StaleLifecycleGeneration(StoppedByOperator):
         super().__init__(what, expected=int(expected), found=int(found))
 
 
+class LifecycleSignalUnwritten(OSError):
+    """The bump moved phases.yaml to `generation` but the signal file could not be written (Fable F9): this process's
+    table has the Stop, the stale signal was removed (a process that saw it reads "vanished" = moved), and processes
+    that never saw a signal see the Stop at their next truth read."""
+
+    def __init__(self, generation: int, error: BaseException) -> None:
+        super().__init__(f"the lifecycle generation moved to {generation} but its signal could not be written: {error}")
+        self.generation = int(generation)
+
+
 class LifecycleUnreadable(ValueError):
     """The home's lifecycle generation cannot be read (a corrupt phases.yaml or signal file): nothing is admitted."""
 
@@ -164,18 +174,33 @@ def publish_under_lock(home_dir: Union[str, Path], generation: int) -> None:
 
 
 def signal_bump(home_dir: Union[str, Path], generation: int) -> None:
-    """THE bump's second half, under the home state lock and after phases.yaml was replaced: write the signal file
-    atomically and publish the new generation (this process's fences see the Stop at their next compare)."""
+    """THE bump's second half, under the home state lock and after phases.yaml was replaced: publish the new
+    generation FIRST (Fable F9: this process's fences see the Stop at their next compare whatever the disk does), then
+    write the signal file atomically. A failed write removes the stale signal (a process that saw it reads "vanished"
+    = moved) and raises LifecycleSignalUnwritten carrying the generation the Stop moved to."""
     from ..utils.atomic_files import atomic_write_text
 
     key = home_key(home_dir)
-    atomic_write_text(signal_path(home_dir), f"{int(generation)}\n")
-    signature = _stat_signature(str(signal_path(home_dir)))
-    _publish(key, signature, generation, authoritative=True)
+    path = signal_path(home_dir)
     with _table_lock:
-        inflight = list(_INFLIGHT.get(key, ()))
-    for event in inflight:
-        event.set()  # the operator's own act stops the decode in flight (not an arbitrary interrupt, §2.3)
+        previous = _SIGNAL.get(key)
+    _publish(key, previous[0] if previous else None, generation, authoritative=True)
+    try:
+        try:
+            atomic_write_text(path, f"{int(generation)}\n")
+            signature = _stat_signature(str(path))
+        except OSError as e:
+            try:
+                path.unlink()
+            except OSError:
+                pass
+            raise LifecycleSignalUnwritten(generation, e) from e
+        _publish(key, signature, generation, authoritative=True)
+    finally:
+        with _table_lock:
+            inflight = list(_INFLIGHT.get(key, ()))
+        for event in inflight:
+            event.set()  # the operator's own act stops the decode in flight (not an arbitrary interrupt, §2.3)
 
 
 def _reread_signal(key: str, path: str, signature: _Signature) -> Optional[int]:
@@ -402,6 +427,7 @@ __all__ = [
     "Fence",
     "FenceHolder",
     "LifecycleFence",
+    "LifecycleSignalUnwritten",
     "LifecycleUnreadable",
     "StaleLifecycleGeneration",
     "StoppedByOperator",

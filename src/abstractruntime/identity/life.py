@@ -47,6 +47,7 @@ from .lifecycle_fence import (
     KILL_SWITCH,
     RESUME,
     LifecycleFence,
+    LifecycleSignalUnwritten,
     LifecycleUnreadable,
     StaleLifecycleGeneration,  # noqa: F401 - re-exported: the state writers' refusal (f881cac's name)
     StoppedByOperator,
@@ -2653,6 +2654,11 @@ def hard_stop_loop(home_dir: Path, *, reason: str = "", requested_by: str = "adm
             resume_to_note = f"resume_to not cleared: {e}"
         try:
             generation = bump_lifecycle_generation(home_dir, written_by="kill_switch", timeout_s=None)
+        except LifecycleSignalUnwritten as e:
+            # The Stop stands (phases.yaml moved, this process's fences refuse); only its signal file is missing -
+            # other processes see it at their next truth read (Fable F9). Said, never "not bumped".
+            generation = e.generation
+            generation_note = str(e)
         except Exception as e:  # noqa: BLE001
             generation_note = f"lifecycle generation not bumped: {e}"
 

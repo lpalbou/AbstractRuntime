@@ -1600,3 +1600,30 @@ def test_bookkeeping_never_lands_after_a_racing_stop(tmp_path: Path, monkeypatch
     signal = home_dir / lf.LIFECYCLE_SIGNAL_FILENAME
     assert target.exists(), f"the {site} write never ran (the test would pass vacuously)"
     assert target.stat().st_mtime_ns <= signal.stat().st_mtime_ns, f"{site} landed after the Stop"
+
+
+def test_a_failed_signal_write_never_hides_the_stop(tmp_path: Path, monkeypatch) -> None:
+    """Fable F9 (P3): the bump wrote the signal BEFORE publishing the new generation, so an OSError there (a full
+    disk) left phases.yaml bumped, this process's table stale and every other process's stat unchanged - the Stop
+    invisible at every effect - and hard_stop_loop said "not bumped" although it was. Now the generation is
+    published first, a failed write removes the old signal (any process that saw it reads "vanished" = moved), and
+    the Stop reports the generation it moved to."""
+    import abstractruntime.utils.atomic_files as atomic_files
+
+    home_dir = _make_home(tmp_path)
+    _bump_in_another_process(home_dir)  # a signal exists (generation 1)
+    fence = LifecycleFence.admit(home_dir)
+    assert fence.generation == 1 and not fence.moved()
+    real = atomic_files.atomic_write_text
+
+    def disk_full(path, text, *a, **k):
+        if Path(path).name == lf.LIFECYCLE_SIGNAL_FILENAME:
+            raise OSError(28, "No space left on device")
+        return real(path, text, *a, **k)
+
+    monkeypatch.setattr(atomic_files, "atomic_write_text", disk_full)
+    out = hard_stop_loop(home_dir, reason="operator stop")
+    assert read_lifecycle_generation(home_dir) == 2
+    assert out["lifecycle_generation"] == 2 and "signal" in str(out.get("generation_note") or ""), out
+    assert fence.moved(), "the Stop was invisible in the bumping process"
+    assert not (home_dir / lf.LIFECYCLE_SIGNAL_FILENAME).exists(), "the stale signal still says generation 1"

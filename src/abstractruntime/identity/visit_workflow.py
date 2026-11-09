@@ -67,7 +67,7 @@ from .chat import (
     sheet_prompt_line,
 )
 from .digest import mechanical_digest_v2
-from .title_failures import untitled_label
+from .title_failures import untitled_attributes, untitled_label
 from .prelude import render_summon_prelude
 from .prompt_overlay import overlay_note, read_prompt_overlay
 from .reflection import (
@@ -267,24 +267,28 @@ def _deadline_iso(idle_seconds: float) -> str:
 
 
 def _visit_title_failure(
-    home: Any, visit: Dict[str, Any], kind: str, raw_block: str, reason: str, *, turn_id: str
+    home: Any, visit: Dict[str, Any], kind: str, raw_block: str, reason: str, *, turn_id: str,
+    record_id: Optional[str] = None, formation_failed: Optional[str] = None,
 ) -> None:
     """A visit election formed without a title (operator 2026-11-09: no fallback; see `title_failures`). Recorded
-    when the formation is planned: the record id is not known yet, the formation's turn id names it."""
+    AFTER the formation (Codex review 2026-11-09 #9): the line names the record it formed (or why none formed)."""
     from .title_failures import record_title_failure
 
     info = visit.get("model_info") if isinstance(visit.get("model_info"), dict) else {}
+    extra: Dict[str, Any] = {"turn_id": turn_id, "stored_title": untitled_label(kind, raw_block)}
+    if formation_failed:
+        extra["formation_failed"] = formation_failed
     record_title_failure(
         getattr(home, "home_dir", None),
         entity=getattr(home, "entity_id", None),
-        record_id=None,
+        record_id=record_id,
         kind=kind,
         raw_block=raw_block,
         template_id="visit_workflow.elections",
         provider=info.get("provider"),
         model=info.get("model"),
         reason=reason,
-        extra={"turn_id": turn_id, "stored_title": untitled_label(kind, raw_block)},
+        extra=extra,
     )
 
 
@@ -1097,6 +1101,17 @@ def build_visit_workflow(
         the diary + feelings queued behind it."""
         visit = _ns(run, "_visit")
         refl = _ns(run, "_reflect")
+        # An untitled election formed by the previous APPLY step: its failure line names the record it formed.
+        pending = refl.pop("title_pending", None)
+        if isinstance(pending, dict):
+            formed = refl.get(str(pending.get("result_key") or ""))
+            ids = list((formed or {}).get("record_ids") or []) if isinstance(formed, dict) else []
+            _visit_title_failure(
+                home, visit, str(pending.get("kind")), str(pending.get("raw") or ""), str(pending.get("reason")),
+                turn_id=str(pending.get("turn_id") or ""), record_id=str(ids[0]) if ids else None,
+                formation_failed=(str(formed.get("absorbed_failure")) if isinstance(formed, dict)
+                                  and formed.get("absorbed_failure") else None),
+            )
 
         def _note_absorbed(stage_key: str, label: str) -> None:
             out = refl.get(stage_key)
@@ -1254,8 +1269,9 @@ def build_visit_workflow(
             # title and a recorded failure (operator 2026-11-09: no fallback). A plain pending string reads too.
             _t, _w, _why = parse_elected_title(str(interests[i]))
             if _why:
-                _visit_title_failure(home, visit, "interest", str(interests[i]), _why,
-                                     turn_id=f"t-reflect-interest-{rid_scope}-{i}")
+                refl["title_pending"] = {"kind": "interest", "raw": str(interests[i]), "reason": _why,
+                                         "turn_id": f"t-reflect-interest-{rid_scope}-{i}",
+                                         "result_key": "interest_out"}
             return StepPlan(
                 node_id="APPLY",
                 effect=Effect(
@@ -1269,7 +1285,8 @@ def build_visit_workflow(
                             "edges": (
                                 [["from_session", str(session_record_id)]] if session_record_id else []
                             ),
-                            "attributes": {"session_id": str(run.session_id or "")},
+                            "attributes": {"session_id": str(run.session_id or ""),
+                                           **(untitled_attributes(_why) if _why else {})},
                             "provenance": {
                                 "source": "entity-visit-run-reflection-v0",
                                 "actor": "entity-reflection",
@@ -1301,8 +1318,9 @@ def build_visit_workflow(
             )
             _t, _w, _why = parse_elected_title(str(lessons[i]))
             if _why:
-                _visit_title_failure(home, visit, "lesson", str(lessons[i]), _why,
-                                     turn_id=f"t-reflect-lesson-{rid_scope}-{i}")
+                refl["title_pending"] = {"kind": "lesson", "raw": str(lessons[i]), "reason": _why,
+                                         "turn_id": f"t-reflect-lesson-{rid_scope}-{i}",
+                                         "result_key": "lesson_out"}
             return StepPlan(
                 node_id="APPLY",
                 effect=Effect(
@@ -1319,6 +1337,7 @@ def build_visit_workflow(
                             "attributes": {
                                 "session_id": str(run.session_id or ""),
                                 "phase": "visit",
+                                **(untitled_attributes(_why) if _why else {}),
                             },
                             "provenance": {
                                 "source": "entity-visit-run-reflection-v0",
@@ -1359,14 +1378,17 @@ def build_visit_workflow(
             if _r_title is None and not _r_why and "title_reason" not in r:
                 _r_title, _unused, _r_why = parse_elected_title(r_text)
             if _r_why:
-                _visit_title_failure(home, visit, "realization", str(r.get("raw") or r_text), str(_r_why),
-                                     turn_id=f"t-reflect-realize-{rid_scope}-{i}")
+                refl["title_pending"] = {"kind": "realization", "raw": str(r.get("raw") or r_text),
+                                         "reason": str(_r_why), "turn_id": f"t-reflect-realize-{rid_scope}-{i}",
+                                         "result_key": "realize_out"}
             r_attrs: Dict[str, Any] = {
                 "session_id": str(run.session_id or ""),
                 "phase": "visit",
             }
             if r.get("touches"):
                 r_attrs["touches"] = str(r["touches"])
+            if _r_why:
+                r_attrs.update(untitled_attributes(str(_r_why)))
             return StepPlan(
                 node_id="APPLY",
                 effect=Effect(

@@ -174,3 +174,36 @@ def test_a_diary_entry_without_a_gist_takes_no_title_from_its_text(tmp_path: Pat
     # His gist is his title: no failure.
     assert _project(home_dir, "Why rivers bend", "prose").endswith(": Why rivers bend")
     assert len(_failure_lines(tmp_path)) == 1
+
+
+def test_a_placeholder_is_marked_and_never_rendered_as_his_title(tmp_path: Path) -> None:
+    """Codex review 2026-11-09 #9 (interim until memory stores a missing title as None): the placeholder record says
+    so in its attributes (title_missing, title_failure_reason), and the recall shelf shows no title for it."""
+    pytest.importorskip("abstractmemory")
+    from abstractmemory import SQLiteTripleStore, TripleQuery
+
+    from abstractruntime.identity.chat import _memories_block
+    from abstractruntime.identity.title_failures import is_placeholder_title
+
+    home_dir = _workspace_home(tmp_path)
+    block = "why rivers bend"
+    home, s = _session(home_dir, ["Hello.", f"Back.\n```interest\n{block}\n```\n"])
+    s.turn("hi")
+    s.reflect()
+    home.close()
+    store = SQLiteTripleStore(home_dir / "memory.sqlite3")
+    try:
+        rows = [a for a in store.query(TripleQuery(predicate="dcterms:abstract", limit=0))
+                if (a.attributes or {}).get("record_kind") == "interest"]
+    finally:
+        store.close()
+    attrs = rows[-1].attributes
+    assert attrs["title"] == untitled_label("interest", block) and is_placeholder_title(attrs["title"])
+    assert attrs["title_missing"] is True and attrs["title_failure_reason"] == "missing"
+    shelf = _memories_block([
+        {"kind": "interest", "title": untitled_label("interest", block), "digest": block, "admission": "stimulus"},
+        {"kind": "lesson", "title": GOOD, "digest": "Wait before answering.", "admission": "stimulus"},
+    ], 7)
+    assert "untitled interest" not in shelf and f"{block} (" in shelf
+    assert f"{GOOD}: Wait before answering." in shelf
+    assert not is_placeholder_title("untitled thoughts [abc123]") and not is_placeholder_title("Untitled song")

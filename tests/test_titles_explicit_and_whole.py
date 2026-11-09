@@ -234,6 +234,9 @@ def test_visit_lane_stores_whole_titles(tmp_path: Path) -> None:
         failures = [json.loads(ln.split(" ", 1)[1]) for ln in log.splitlines() if ln.startswith("#TITLE_FAILURE ")]
         assert sorted((f["kind"], f["reason"], f["raw_block"]) for f in failures) == sorted(
             [("lesson", "missing", LONG_BODY), ("lesson", "missing", DR_BODY)]), failures
+        # Logged AFTER the formation (Codex review 2026-11-09 #9): each line names the record it formed.
+        stored_ids = {str(a.subject) for a in _abstract_rows(ert.home)}
+        assert all(f["record_id"] and f["record_id"] in stored_ids for f in failures), failures
     finally:
         ert.close()
 

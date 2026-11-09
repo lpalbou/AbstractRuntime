@@ -34,6 +34,8 @@ __all__ = [
     "TITLE_TEMPLATE_VERSION",
     "record_title_failure",
     "title_failures_dir",
+    "is_placeholder_title",
+    "untitled_attributes",
     "untitled_label",
 ]
 
@@ -56,6 +58,24 @@ def untitled_label(kind: str, raw_block: str) -> str:
 
     key = hashlib.sha256(str(raw_block or "").encode("utf-8")).hexdigest()[:6]
     return f"untitled {kind} [{key}]"
+
+
+_PLACEHOLDER_KINDS = ("interest", "lesson", "realization", "diary", "digest", "card")
+
+
+def is_placeholder_title(title: Any) -> bool:
+    """True for a label `untitled_label` made (`untitled <kind> [<6 hex>]`): the runtime's own storage placeholder,
+    never his words. Renderers show no title for it (Codex review 2026-11-09 #9, interim until memory stores None)."""
+    text = str(title or "")
+    if not text.startswith("untitled ") or not text.endswith("]"):
+        return False
+    kind, sep, key = text[len("untitled "):-1].partition(" [")
+    return bool(sep) and kind in _PLACEHOLDER_KINDS and len(key) == 6 and all(c in "0123456789abcdef" for c in key)
+
+
+def untitled_attributes(reason: str) -> Dict[str, Any]:
+    """The record attributes that say its title is a storage placeholder (title_missing) and why."""
+    return {"title_missing": True, "title_failure_reason": str(reason)}
 
 
 def title_failures_dir(home_dir: Any) -> Optional[Path]:

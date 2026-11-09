@@ -188,6 +188,8 @@ def render_summon_prelude(
         for i, r in enumerate(rows_, start=1):
             attrs = _attrs(r)
             title = str(attrs.get("title") or "").strip()
+            if attrs.get("title_missing"):
+                title = ""  # a storage placeholder is never shown as his title (Codex review 2026-11-09 #9)
             statement = str(getattr(r, "object", "") or "").strip()
             if classed:
                 klass = str(attrs.get("value_class") or "").strip() or "revisable"

@@ -54,7 +54,7 @@ from ..core.runtime import utc_now_iso
 from ..session_history import window_transcript
 from .diary import DiaryStore, build_diary_effect_handlers
 from .digest import mechanical_digest_v2
-from .title_failures import untitled_label
+from .title_failures import is_placeholder_title, untitled_attributes, untitled_label
 from .prelude import render_summon_prelude
 from .prompt_overlay import overlay_note, read_prompt_overlay
 from .reflection import (
@@ -889,6 +889,8 @@ def _memories_block(displayed: List[Dict[str, Any]], as_of_seq: Any) -> str:
     for h, rank in ordered:
         kind = str(h.get("kind") or "memory")
         title = str(h.get("title") or "").strip()
+        if is_placeholder_title(title):
+            title = ""  # a storage placeholder is never shown as his title (Codex review 2026-11-09 #9)
         digest = str(h.get("digest") or "").strip()
         why = _WHY.get(str(h.get("admission") or ""), "recalled")
         # ORIENTATION WHY-CUE (skill's live-render gate, room c37 ask 1;
@@ -1610,7 +1612,8 @@ class ChatSession:
                             "digest": lesson_words,
                             "keywords": [],
                             "edges": [],
-                            "attributes": {"session_id": self.session_id, "phase": self.phase},
+                            "attributes": {"session_id": self.session_id, "phase": self.phase,
+                                           **(untitled_attributes(lesson_reason) if lesson_reason else {})},
                             "provenance": {"source": "entity-midturn-v1", "actor": "entity-reflection"},
                         }],
                         "scope": "life", "owner_id": self.home.entity_id,
@@ -1635,7 +1638,8 @@ class ChatSession:
                             "digest": interest_words,
                             "keywords": [],
                             "edges": [],
-                            "attributes": {"session_id": self.session_id},
+                            "attributes": {"session_id": self.session_id,
+                                           **(untitled_attributes(interest_reason) if interest_reason else {})},
                             "provenance": {"source": "entity-midturn-v1", "actor": "entity-reflection"},
                         }],
                         "scope": "self", "owner_id": self.home.entity_id,
@@ -1718,6 +1722,8 @@ class ChatSession:
             touches = getattr(r, "touches", "") or ""
             if touches:
                 attributes["touches"] = touches
+            if getattr(r, "title_reason", None):
+                attributes.update(untitled_attributes(r.title_reason))
             try:
                 out = self._effect(
                     EffectType.MEMORY_FORM,
@@ -1964,7 +1970,7 @@ class ChatSession:
                 "graph_id": str((h.get("provenance") or {}).get("record_id") or ""),
                 "record_id": str(h.get("record_id") or ""),
                 "kind": str(h.get("kind") or "memory"),
-                "title": str(h.get("title") or "")[:120],
+                "title": "" if is_placeholder_title(h.get("title")) else str(h.get("title") or "")[:120],
                 "why": _WHY.get(str(h.get("admission") or ""), "recalled"),
                 "admission": str(h.get("admission") or ""),
                 # The probe surface (maintainer, 2026-07-08): what it cost,
@@ -3397,7 +3403,8 @@ class ChatSession:
                                 if session_record_id
                                 else []
                             ),
-                            "attributes": {"session_id": session_id},
+                            "attributes": {"session_id": session_id,
+                                           **(untitled_attributes(interest_reason) if interest_reason else {})},
                             "provenance": {
                                 "source": "entity-reflection-v1",
                                 "actor": "entity-reflection",
@@ -3454,7 +3461,8 @@ class ChatSession:
                                 ([["from_session", session_record_id]] if session_record_id else [])
                                 + ([["derived_from", derived_from_id]] if derived_from_id else [])
                             ),
-                            "attributes": {"session_id": session_id, "phase": phase or self.phase},
+                            "attributes": {"session_id": session_id, "phase": phase or self.phase,
+                                           **(untitled_attributes(lesson_reason) if lesson_reason else {})},
                             "provenance": {
                                 "source": "entity-reflection-v1",
                                 "actor": "entity-reflection",

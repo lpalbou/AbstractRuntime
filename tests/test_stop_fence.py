@@ -477,13 +477,14 @@ def _bench(fence: LifecycleFence) -> tuple:
 
 
 def test_fence_hot_path_budget(tmp_path: Path, capsys) -> None:
-    """Design §7 (4): the check is an int compare in process. In the bumping process (the gateway in every operator
-    Stop) it does ZERO I/O; in any other process exactly one stat per check and nothing else - no open, read, flock,
-    subprocess or yaml parse (today's check parsed phases.yaml at every call: ~300 us)."""
+    """Design §7 (4): the check is an int compare in process plus exactly one stat - in the bumping process too
+    (Fable F1) - and nothing else: no open, read, flock, subprocess or yaml parse (the check before the fence parsed
+    phases.yaml at every call: ~300 us)."""
     bumper_home = _make_home(tmp_path / "bumper")
     bump_lifecycle_generation(bumper_home, written_by="test:bench")  # this process bumped this home
     bumper_counts, bumper_ns = _bench(LifecycleFence.admit(bumper_home))
-    assert sum(bumper_counts.values()) == 0, bumper_counts
+    assert bumper_counts.get("os.stat") == N_EFFECTS, bumper_counts
+    assert sum(v for k, v in bumper_counts.items() if k != "os.stat") == 0, bumper_counts
 
     other_home = _make_home(tmp_path / "other")
     other_counts, other_ns = _bench(LifecycleFence.admit(other_home))
@@ -963,7 +964,7 @@ def test_the_runtime_lane_ends_cancelled_never_failed(tmp_path: Path) -> None:
 
 def test_fence_hot_path_budget_through_the_handler_table_and_the_commit_guard(tmp_path: Path, capsys) -> None:
     """Design §7 (4), the effect half: N no-op effects through the wrapped table and N commit-guard calls (the memory
-    guard is `fence.check`). Bumper: zero I/O. Non-bumper: one stat per fenced call, nothing else."""
+    guard is `fence.check`). Every process, the bumper too: one stat per fenced call, nothing else."""
     from abstractruntime.core.models import Effect, EffectType
     from abstractruntime.core.runtime import EffectOutcome
 
@@ -986,7 +987,8 @@ def test_fence_hot_path_budget_through_the_handler_table_and_the_commit_guard(tm
     bump_lifecycle_generation(bumper, written_by="test:bench")
     bumper_counts, bumper_ns = bench(bumper)
     other_counts, other_ns = bench(_make_home(tmp_path / "other"))
-    assert sum(bumper_counts.values()) == 0, bumper_counts
+    assert bumper_counts.get("os.stat") == 2 * N_EFFECTS, bumper_counts
+    assert sum(v for k, v in bumper_counts.items() if k != "os.stat") == 0, bumper_counts
     assert other_counts.get("os.stat") == 2 * N_EFFECTS, other_counts
     assert sum(v for k, v in other_counts.items() if k != "os.stat") == 0, other_counts
     assert bumper_ns < BUDGET_CEILING_NS and other_ns < BUDGET_CEILING_NS, (bumper_ns, other_ns)
@@ -1293,3 +1295,19 @@ def test_a_late_authoring_reply_is_abandoned_even_over_an_unguarded_home(tmp_pat
     finally:
         home.close()
     assert _artifact_files(home_dir) == before, "the late authoring reply was kept"
+
+
+# ------------------------------------------------------------------ Fable review 2026-11-09 (fixes)
+
+
+def test_a_process_that_bumped_once_still_sees_another_processes_stop(tmp_path: Path) -> None:
+    """Fable F1 (P1): the bumping process used to skip the signal stat for a home forever after its first Stop, so a
+    later Stop by ANOTHER process (a CLI hard_stop_loop, a service twin) passed every check until a truth read."""
+    home_dir = _make_home(tmp_path)
+    _stop_here(home_dir)  # this process bumps the home once (generation 1)
+    fence = LifecycleFence.admit(home_dir)
+    assert fence.generation == 1 and not fence.moved()
+    assert _bump_in_another_process(home_dir) == 2  # a second Stop, from another process
+    assert fence.moved(), "a Stop by another process was invisible to a process that had bumped once"
+    with pytest.raises(StoppedByOperator):
+        fence.check("before a model call")

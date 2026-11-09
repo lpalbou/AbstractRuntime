@@ -7,12 +7,12 @@ a `LifecycleFence` holding that number. Every commit point (the state writers in
 the diary and artifact stores, the effect handlers) takes the fence as a REQUIRED argument and refuses once the
 generation has moved: a write decided before a Stop never lands after it, whatever process holds it.
 
-The check is an int compare in process. `_SIGNAL` is a process-wide table, home -> (signature of the signal file
-when last read, the newest generation this process knows). The bumping process (the gateway in every operator Stop)
-updates it in the same critical section that writes phases.yaml, so it sees its own Stop with zero I/O. Every other
-process sees a Stop through `<home>/.lifecycle_generation`, a one-line file the bump replaces atomically under the
-same lock, AFTER phases.yaml: a stat (no open, no read, no lock) at each fenced effect, the int read only when the
-stat changed. Truth is re-read where the home lock is already held and phases.yaml already parsed (the state
+The check is an int compare in process plus ONE stat. `_SIGNAL` is a process-wide table, home -> (signature of the
+signal file when last read, the newest generation this process knows). The bumping process (the gateway in every
+operator Stop) updates it in the same critical section that writes phases.yaml, so its in-flight fences see its own
+Stop at their next compare. Every process - the bumper too - sees a Stop by ANY process through
+`<home>/.lifecycle_generation`, a one-line file the bump replaces atomically under the same lock, AFTER phases.yaml:
+a stat (no open, no read, no lock) at each fenced effect, the int read only when the stat changed. Truth is re-read where the home lock is already held and phases.yaml already parsed (the state
 writers, `commit`) and wherever a host reads the generation (`read_lifecycle_generation`), for free.
 
 Fail closed, never "not fenced": an unreadable signal or phases.yaml reads as MOVED, an unknown home as moved, a
@@ -24,9 +24,8 @@ Two writers bypass the check, and only for what a Stop or a Resume writes: `KILL
 own time revoked, the return cleared, loop status stopped) and `RESUME` (awake, nothing restored). The public writers
 refuse a sentinel for anything else.
 
-Known limit (design §7 (3)): a process that bumped a home skips the stat for it (it saw its own Stop); a Stop by a
-DIFFERENT process is then seen at its next truth read (a state write, a gateway `fenced()` / `read_record`), not at
-the next effect. One gateway process is the one bumper today; a second bumper process would need the stat back.
+No process is exempt from the stat (Fable review F1, 2026-11-09: a bumper that skipped it never saw a later Stop by
+another process - a CLI hard_stop_loop, a service twin - until a truth read). It costs about 1-3 us per check.
 """
 
 from __future__ import annotations
@@ -92,7 +91,6 @@ _SENTINELS = (KILL_SWITCH, RESUME)
 
 # ------------------------------------------------------------------------------------------- the process-wide table
 _SIGNAL: Dict[str, Tuple[_Signature, int]] = {}
-_BUMPED_HERE: set = set()
 _table_lock = threading.Lock()
 # home -> the threading.Events of the model calls in flight under a fence of that home (LifecycleFence.cancel_event):
 # the bump sets them in the bumping process, so a provider that honours `cancel_event=` stops within a token (§2.3).
@@ -167,14 +165,13 @@ def publish_under_lock(home_dir: Union[str, Path], generation: int) -> None:
 
 def signal_bump(home_dir: Union[str, Path], generation: int) -> None:
     """THE bump's second half, under the home state lock and after phases.yaml was replaced: write the signal file
-    atomically, publish the new generation, and mark this process as the home's bumper (it saw its own Stop)."""
+    atomically and publish the new generation (this process's fences see the Stop at their next compare)."""
     from ..utils.atomic_files import atomic_write_text
 
     key = home_key(home_dir)
     atomic_write_text(signal_path(home_dir), f"{int(generation)}\n")
     signature = _stat_signature(str(signal_path(home_dir)))
     _publish(key, signature, generation, authoritative=True)
-    _BUMPED_HERE.add(key)
     with _table_lock:
         inflight = list(_INFLIGHT.get(key, ()))
     for event in inflight:
@@ -225,8 +222,6 @@ class LifecycleFence:
         entry = _SIGNAL.get(self._key)
         if entry is None or entry[1] != self.generation:
             return True
-        if self._key in _BUMPED_HERE:
-            return False
         try:
             signature = _stat_signature(self._signal)
         except OSError:

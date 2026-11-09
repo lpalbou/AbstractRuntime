@@ -63,6 +63,9 @@ COMMIT_POINTS = (
     "write_entity_state", "_mutate_phases", "write_personal_grant", "write_resume_to", "_write_phases_bucket",
     "migrate_phase_sidecar", "write_loop_status", "touch_loop_heartbeat", "record_loop_substrate",
     "append_phase_changed", "_beat_before_each_call",
+    # the spawn reservation (Codex review 3 #6) and the fenced builders of the loop process
+    "_reserve_loop_start", "_record_spawned_child", "_release_failed_reservation",
+    "build_consolidator", "build_session_factory", "build_capability_llm_factory",
 )
 # Modules whose unfenced calls are still to be fenced in a later step of this lane (chat.py is another worker's file
 # until the lead frees it). The scan below fails when such a module is clean, so the exemption cannot outlive its fix.
@@ -137,6 +140,8 @@ def test_every_commit_point_requires_a_fence_and_none_has_a_default() -> None:
         assert params["fence"].kind is inspect.Parameter.KEYWORD_ONLY, name
         assert params["fence"].default is inspect.Parameter.empty, f"{name}'s fence has a default"
         assert "expected_generation" not in params, f"{name} still takes the optional expected_generation"
+    should_stop = inspect.signature(life._sleep_authoring).parameters["should_stop"]
+    assert should_stop.kind is inspect.Parameter.KEYWORD_ONLY and should_stop.default is inspect.Parameter.empty
 
 
 def _unfenced_calls(path: Path) -> List[int]:
@@ -483,3 +488,337 @@ def test_fence_hot_path_budget(tmp_path: Path, capsys) -> None:
     with capsys.disabled():
         print(f"\n[fence hot path] bumper {bumper_ns / 1000:.3f} us/check, non-bumper {other_ns / 1000:.3f} us/check "
               f"(N={N_EFFECTS}, budget 50 us)")
+
+
+# ------------------------------------------------------------------ T7 / I3: one loop per home, the spawn reservation
+
+
+class _FakeChild:
+    """Popen's stand-in for the loop child: `pid` is a real live process (a sleeper) that never registers - the child
+    that boots late. Every other Popen (ps, the sleeper itself) is the real one."""
+
+    def __init__(self, pid: int) -> None:
+        self.pid = pid
+
+    def poll(self):
+        return None
+
+
+def _stub_loop_popen(monkeypatch, sleeper_pid: int) -> List[List[str]]:
+    launched: List[List[str]] = []
+    real_popen = subprocess.Popen
+
+    def popen(argv, *a, **k):
+        if life.LOOP_MODULE_ARGV.split()[-1] in list(argv):
+            launched.append(list(argv))
+            return _FakeChild(sleeper_pid)
+        return real_popen(argv, *a, **k)
+
+    monkeypatch.setattr(subprocess, "Popen", popen)
+    return launched
+
+
+def test_spawn_reservation_single_loop(tmp_path: Path, monkeypatch) -> None:
+    """T7 (Codex review 3 #6): spawn released its lock after a fixed 0.6 s whatever the child had done; a child slow
+    to register let a second start spawn a second loop over the home. Now the reservation (phase starting, the
+    generation, the spawner and then the child pid) stands until the child replaces it: a second start - concurrent
+    or after the first returned - is refused, one Popen; and a Stop between Popen and the child's boot makes the child
+    refuse itself, writing nothing."""
+    from abstractruntime.identity.life import read_loop_status, spawn_loop_process
+
+    home_dir = _make_home(tmp_path)
+    sleeper = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(120)"])
+    try:
+        launched = _stub_loop_popen(monkeypatch, sleeper.pid)
+        results: List[Any] = []
+
+        def start() -> None:
+            try:
+                results.append(spawn_loop_process(home_dir, provider="lmstudio", model="m",
+                                                  first_day_unconditional=True))
+            except Exception as e:  # noqa: BLE001
+                results.append(e)
+
+        racers = [threading.Thread(target=start) for _ in range(2)]
+        for t in racers:
+            t.start()
+        for t in racers:
+            t.join(timeout=30)
+        assert len(launched) == 1, launched
+        assert sum(isinstance(r, dict) for r in results) == 1, results
+        status = read_loop_status(home_dir)
+        assert status["phase"] == "starting" and status["running"] is True, status
+        assert status["pid"] == sleeper.pid and status["generation"] == 0, status
+        # The first start returned; its child has not registered: a later start is refused too.
+        with pytest.raises(RuntimeError, match="already starting"):
+            spawn_loop_process(home_dir, provider="lmstudio", model="m")
+        assert len(launched) == 1
+        argv = launched[0]
+        assert argv[argv.index("--generation") + 1] == "0"
+
+        # The operator's Stop between Popen and the boot: the unverified child is not signalled (no token)...
+        _stop_here(home_dir)
+        assert sleeper.poll() is None
+        before = _snapshot(home_dir)
+        # ...and its own boot (the exact argv it was spawned with) refuses, writing nothing.
+        code = life.main(argv[argv.index(life.LOOP_MODULE_ARGV.split()[-1]) + 1:])
+        assert code == 0 and _snapshot(home_dir) == before
+    finally:
+        sleeper.kill()
+        sleeper.wait()
+
+
+def test_the_childs_boot_replaces_the_reservation_with_its_own_registration(tmp_path: Path, monkeypatch) -> None:
+    """The success half of the reservation: a child booting at the reserved generation claims the home (its own
+    pid in place of the reservation) and a kill switch that preceded the reservation is still known to it."""
+    from abstractruntime.identity.life import read_loop_status, spawn_loop_process
+
+    home_dir = _make_home(tmp_path)
+    write_loop_status(home_dir, "stopped", stopped_by="kill_switch", owner=(None, None), fence=KILL_SWITCH)
+    sleeper = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(120)"])
+    try:
+        launched = _stub_loop_popen(monkeypatch, sleeper.pid)
+        spawn_loop_process(home_dir, provider="lmstudio", model="m", return_to="personal")
+        assert read_loop_status(home_dir)["after_stopped_by"] == "kill_switch"
+        g = int(launched[0][launched[0].index("--generation") + 1])
+        lines: List[str] = []
+
+        def _never():  # noqa: ANN202
+            raise AssertionError("after a kill switch nothing is restored: no day opens")
+
+        report = LifeLoop(_never, tick_seconds=0, ticks_per_day=1, max_ticks=1, rest_minutes=0,
+                          stop_file=home_dir / "STOP", state_home=home_dir, sleep_fn=lambda s: None,
+                          out=lines.append, return_to="personal", fence=LifecycleFence(home_dir, g)).run()
+    finally:
+        sleeper.kill()
+        sleeper.wait()
+    assert report.stopped_by != "kill_switch", report
+    assert any("nothing is restored" in ln for ln in lines), lines  # the kill switch before the reservation
+    status = json.loads((home_dir / "loop_status").read_text(encoding="utf-8"))
+    # The reservation is gone: the record is the loop's own (its pid, no spawner), never the sleeper's.
+    assert status.get("pid") == os.getpid() and "spawner_pid" not in status and status["phase"] != "starting", status
+
+
+# ------------------------------------------------------------------ T5: the night's completion is fenced
+
+
+def test_sleep_completion_fenced(tmp_path: Path) -> None:
+    """T5 (Codex review 3 #2; design class H): the loop's night checked the state word, never the generation, and
+    passed memory no cancellation - a Stop during the final dream stage still recorded a completed night (resetting
+    the idle-sleep boundary) and the repair step ran on. Now the night carries the loop's fence: the stage in flight
+    ends, memory records no completion (cancelled_after set), the repair step and the night voice never run, and the
+    night's only word about it is one clean line."""
+    import warnings
+
+    from abstractmemory import MemoryRecordInput
+
+    from abstractruntime.identity.chat import open_home
+    from abstractruntime.identity.life import build_consolidator
+
+    home_dir = _make_home(tmp_path)
+    home = open_home(home_dir)
+    eid = home.entity_id
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)
+        for key, kind, digest, kws in (
+                ("s-1", "episode", "The connection pool saturated at noon.", ("pool", "saturation", "noon")),
+                ("s-3", "episode", "Planted the garden sensors at noon.", ("garden", "sensors", "noon")),
+                ("s-2", "lesson", "Batching the noon cron fixed it.", ("pool", "batching"))):
+            home.ms.remember_many([MemoryRecordInput(kind=kind, title=f"Exchange {key}", digest=digest, keywords=kws)],
+                                  scope="life", owner_id=eid, idempotency_key=key)
+    home.close()
+    write_entity_state(home_dir, "asleep", reason="self-elected sleep: full", mode="dreaming", written_by="self",
+                       fence=LifecycleFence.admit(home_dir))
+    fence = LifecycleFence.admit(home_dir)
+    calls: List[str] = []
+
+    class _StopsWhileAuthoring:
+        model_info = {"provider": "fake", "model": "summarizer"}
+
+        def generate(self, *, prompt: str, system_prompt: str, response_model: Any) -> Any:
+            calls.append(prompt)
+            if len(calls) == 1:
+                _stop_here(home_dir)  # the operator's Stop while this stage is being authored
+            return response_model(title="A noon dream", summary="Noon tied the pool and the garden.")
+
+    lines: List[str] = []
+    result = build_consolidator(home_dir, out=lines.append, llm_for_capability=lambda name: _StopsWhileAuthoring(),
+                                narrator_llm_factory=lambda: (_ for _ in ()).throw(AssertionError("no night voice")),
+                                fence=fence)()
+    assert len(calls) == 1, f"a capability call ran after the Stop: {len(calls)}"
+    assert result["stopped_by"] == "kill_switch" and result["engine"].get("cancelled_after"), result
+    home = open_home(home_dir)
+    try:
+        assert home.ms.tasks.last_maintenance([("self", eid), ("diary", eid), ("life", eid)]) is None, \
+            "a stopped night recorded a completed maintenance"
+    finally:
+        home.close()
+    assert result["authoring"] == {"skipped": "the operator's Stop"}, result["authoring"]
+    # T12 / I5: clean - one line, no #FALLBACK, nothing called failed.
+    assert [ln for ln in lines if "operator's Stop" in ln] == [
+        "(the operator's Stop - the night ends here; nothing more is written)"], lines
+    assert not [ln for ln in lines if "#FALLBACK" in ln or "fail" in ln.lower()], lines
+
+
+# ------------------------------------------------------------------ T11 / T12: a real loop process, the kill refused
+
+
+_FAKE_SITE = '''
+import json, os, time
+_dir = os.environ.get("FENCE_FAKE_LLM_DIR")
+if _dir:
+    import abstractcore, abstractmemory
+
+    class _Resp:
+        def __init__(self, content):
+            self.content = content
+            self.usage = {"total_tokens": 7}
+            self.tool_calls = None
+
+    class _FakeLLM:
+        """THE MODEL STUB of the real child: the first call announces itself and waits for the test's Stop."""
+        provider = "lmstudio"
+        model = "fake-model"
+        model_info = {"provider": "lmstudio", "model": "fake-model"}
+
+        def generate(self, *args, **kwargs):
+            calls = os.path.join(_dir, "calls.jsonl")
+            n = len(open(calls).readlines()) if os.path.exists(calls) else 0
+            with open(calls, "a") as fh:
+                fh.write(json.dumps({"n": n, "pid": os.getpid()}) + "\\n")
+            if n == 0:
+                open(os.path.join(_dir, "called"), "w").close()
+                deadline = time.monotonic() + 120
+                while not os.path.exists(os.path.join(_dir, "go")) and time.monotonic() < deadline:
+                    time.sleep(0.02)
+            return _Resp("A thought of my own, finished after the Stop.\\nnext: keep going")
+
+    abstractcore.create_llm = lambda provider, **kwargs: _FakeLLM()
+
+    class _NoEmbedder:
+        def __init__(self, *a, **k):
+            raise RuntimeError("this test runs vectorless")
+
+    abstractmemory.OpenAICompatTextEmbedder = _NoEmbedder
+'''
+
+
+def _wait_for(predicate, what: str, timeout_s: float = 90.0) -> None:
+    deadline = time.monotonic() + timeout_s
+    while not predicate():
+        if time.monotonic() > deadline:
+            raise AssertionError(f"timed out waiting for {what}")
+        time.sleep(0.05)
+
+
+def test_loop_process_refused_after_stop(tmp_path: Path, monkeypatch) -> None:
+    """T11 (design class F): a REAL loop process (spawned through the real door, a stub model inside it) whose kill
+    the Stop cannot deliver (the incarnation reads unknown). The Stop lands while its model call is in flight; the
+    child sees the moved generation by itself, forms nothing, writes nothing under the home, and exits saying so
+    once - no #FALLBACK, nothing failed (T12)."""
+    from abstractruntime.identity.life import spawn_loop_process
+
+    home_dir = _make_home(tmp_path)
+    site = tmp_path / "fake-model-site"
+    site.mkdir()
+    (site / "sitecustomize.py").write_text(_FAKE_SITE, encoding="utf-8")
+    talk = tmp_path / "model-talk"
+    talk.mkdir()
+    monkeypatch.setenv("FENCE_FAKE_LLM_DIR", str(talk))
+    monkeypatch.setenv("PYTHONPATH", os.pathsep.join([str(site), str(RUNTIME_SRC.parent)]))
+    monkeypatch.delenv("ABSTRACTGATEWAY_AUTH_TOKEN", raising=False)
+    # The Stop's kill is refused: the incarnation cannot be verified (EPERM, no token, a recycled pid...).
+    monkeypatch.setattr(life, "_verified_loop_incarnation",
+                        lambda pid, token, home: (False, "refused: the incarnation is unknown (test)"))
+    started = spawn_loop_process(home_dir, provider="lmstudio", model="fake-model", tick_seconds=0.0,
+                                 ticks_per_day=3, rest_minutes=30.0, first_day_unconditional=True)
+    pid = int(started["pid"])
+    try:
+        _wait_for(lambda: (talk / "called").exists(), "the child's first model call")
+        stop = hard_stop_loop(home_dir, reason="operator stop")
+        assert stop["killed"] is False and stop["lifecycle_generation"] == 1, stop
+        write_entity_state(home_dir, "paused", reason="stopped [by test]", fence=KILL_SWITCH)
+        before = _snapshot(home_dir)
+        before.pop(life.LOOP_LOG_FILENAME, None)
+        (talk / "go").write_text("", encoding="utf-8")  # the in-flight call returns now, after the Stop
+        _wait_for(lambda: life._pid_state(pid) == "gone", "the child to end by itself")
+    finally:
+        if life._pid_state(pid) != "gone":
+            os.kill(pid, 9)
+    after = _snapshot(home_dir)
+    log = after.pop(life.LOOP_LOG_FILENAME).decode("utf-8", "replace").splitlines()
+    changed = sorted(k for k in set(after) | set(before) if after.get(k) != before.get(k))
+    assert not changed, f"the stopped loop wrote under the home: {changed}\n" + "\n".join(log[-20:])
+    assert len((talk / "calls.jsonl").read_text().splitlines()) == 1, "a model call ran after the Stop"
+    status = json.loads((home_dir / "loop_status").read_text(encoding="utf-8"))
+    assert status["phase"] == "stopped" and status["stopped_by"] == "kill_switch", status
+    assert _history(home_dir)[-1]["state"] == "paused"
+    first = next(i for i, ln in enumerate(log) if "operator's Stop" in ln)
+    tail = log[first:]
+    assert not [ln for ln in tail if "#FALLBACK" in ln or "fail" in ln.lower() or "Traceback" in ln], "\n".join(log)
+    assert sum("this loop ends here" in ln for ln in tail) == 1 and "stopped by kill_switch" in tail[-1], "\n".join(log)
+
+
+def test_the_sleeps_repair_step_does_nothing_after_stop(tmp_path: Path) -> None:
+    """`_sleep_authoring(should_stop=)`: declared, re-armed and authored nothing once the fence moved (the drainer
+    takes the same check per task and after each answer, ab060bf)."""
+    from abstractmemory import MemoryRecordInput
+
+    from abstractruntime.identity.chat import open_home
+
+    home_dir = _make_home(tmp_path)
+    home = open_home(home_dir)
+    try:
+        home.ms.remember_many([MemoryRecordInput(
+            kind="lesson", title="untitled lesson [3fa2c1]", digest="Waiting lets the other finish.",
+            attributes={"title_missing": True, "title_failure_reason": "missing"},
+        )], scope="life", owner_id=home.entity_id, idempotency_key="legacy-1", turn_id="legacy-1")
+        before = len(list(home.ms.tasks.tasks()))
+        receipt = life._sleep_authoring(home, home.entity_id, [("life", home.entity_id)],
+                                        lambda name: (_ for _ in ()).throw(AssertionError("no authoring call")),
+                                        8, lambda s: None, should_stop=lambda: True)
+        after = len(list(home.ms.tasks.tasks()))
+    finally:
+        home.close()
+    assert receipt.get("cancelled") and receipt["declared"] == 0 and receipt["authored"] == 0, receipt
+    assert after == before, "the repair step declared work after the Stop"
+
+
+def test_an_engine_without_cancelled_still_ends_the_night_on_stop(tmp_path: Path, monkeypatch) -> None:
+    """The version-skew rung: an engine that predates `cancelled=` gets the fence through `should_continue` - a Stop
+    ends its night at the next stage."""
+    import abstractmemory
+
+    from abstractruntime.identity.life import build_consolidator
+
+    home_dir = _make_home(tmp_path)
+    write_entity_state(home_dir, "asleep", reason="self-elected sleep: full", mode="dreaming", written_by="self",
+                       fence=LifecycleFence.admit(home_dir))
+    fence = LifecycleFence.admit(home_dir)
+    seen: List[bool] = []
+
+    def old_sleep_pass(system, *, scopes, owner_id, should_continue=None, include_dream=True, author=None):
+        seen.append(should_continue())
+        hard_stop_loop(home_dir, reason="operator stop")  # the runtime's own Stop: it writes no state word
+        assert read_entity_state(home_dir)["state"] == "asleep"  # only the generation says a Stop happened
+        seen.append(should_continue())
+        return {"maintenance": {}, "dream": {}, "cancelled_after": "consolidation"}
+
+    monkeypatch.setattr(abstractmemory, "sleep_pass", old_sleep_pass)
+    result = build_consolidator(home_dir, out=lambda s: None, fence=fence)()
+    assert seen == [True, False], seen
+    assert result["stopped_by"] == "kill_switch"
+
+
+def test_the_spawner_never_records_its_child_over_a_registration(tmp_path: Path) -> None:
+    """The child may register before Popen returns to the spawner: the spawner's pid write then leaves the child's
+    own record alone (and never revives a reservation over it)."""
+    home_dir = _make_home(tmp_path)
+    fence = LifecycleFence.admit(home_dir)
+    life._reserve_loop_start(home_dir, fence=fence)
+    write_loop_status(home_dir, "between", fence=fence)  # the child's boot claim, in-process
+    claimed = json.loads((home_dir / "loop_status").read_text(encoding="utf-8"))
+    assert life._record_spawned_child(home_dir, 4_000_000, fence=fence) is False
+    assert json.loads((home_dir / "loop_status").read_text(encoding="utf-8")) == claimed
+    life._release_failed_reservation(home_dir, fence=fence)  # nor does a failed-start release touch it
+    assert json.loads((home_dir / "loop_status").read_text(encoding="utf-8")) == claimed

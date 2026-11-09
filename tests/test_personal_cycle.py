@@ -257,7 +257,7 @@ def test_night_predicate_has_no_clock(tmp_path, monkeypatch) -> None:
         return {"maintenance": {}, "dream": {}}
 
     monkeypatch.setattr(abstractmemory, "sleep_pass", _fake_sleep_pass)
-    consolidate = build_consolidator(home_dir, out=lambda s: None)
+    consolidate = build_consolidator(home_dir, out=lambda s: None, fence=LifecycleFence.admit(home_dir))
     write_entity_state(
         home_dir, "asleep", reason="self-elected sleep: full", written_by="self",
         wake_at=(datetime.now(timezone.utc) + timedelta(seconds=30)).isoformat(), fence=LifecycleFence.admit(home_dir),
@@ -337,7 +337,7 @@ def test_consolidator_flags_reach_the_engine_and_his_sleep_runs_the_whole_night(
         return {"maintenance": {}, "dream": {}}
 
     monkeypatch.setattr(abstractmemory, "sleep_pass", _fake_sleep_pass)
-    consolidate = build_consolidator(home_dir, out=lambda s: None)
+    consolidate = build_consolidator(home_dir, out=lambda s: None, fence=LifecycleFence.admit(home_dir))
     consolidate(include_dream=False)
     assert captured["include_dream"] is False, "the flag reaches the engine"
     consolidate()

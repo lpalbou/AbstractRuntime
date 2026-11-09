@@ -279,7 +279,7 @@ def test_build_consolidator_runs_against_a_real_home(tmp_path: Path) -> None:
     from abstractruntime.identity.life import build_consolidator
 
     home_dir = _make_home(tmp_path)
-    consolidate = build_consolidator(home_dir, embedding_model=None)
+    consolidate = build_consolidator(home_dir, embedding_model=None, fence=LifecycleFence.admit(home_dir))
     result = consolidate()  # must not raise; a quiet night is a valid result
     assert isinstance(result, dict)
     assert result["formed"] == bool((result["engine"].get("dream") or {}).get("created"))
@@ -1079,7 +1079,7 @@ def test_night_passes_a_graceful_yield_predicate_to_the_engine(tmp_path: Path, m
 
     monkeypatch.setattr(abstractmemory, "sleep_pass", fake_sleep_pass, raising=False)
     out_lines: List[str] = []
-    result = build_consolidator(home_dir, out=out_lines.append)()
+    result = build_consolidator(home_dir, out=out_lines.append, fence=LifecycleFence.admit(home_dir))()
     assert result is not None and result["formed"] is False
     predicate = captured["should_continue"]
     assert callable(predicate)

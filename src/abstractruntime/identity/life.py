@@ -1411,8 +1411,12 @@ LOOP_OWN_SLEEP_WRITERS = ("self", "personal-cycle", "grant-gate", "day-gate", "l
 # transitions so OTHER processes can yield-and-summon programmatically
 # (maintainer: "oh that's very manual, we need a programmatic way").
 # phase: "day" = a summon is open (ticking); "between" = no session open
-# (gate idle, nap, asleep/paused idle); "stopped" = the loop process exited.
-LOOP_PHASES = ("day", "between", "stopped")
+# (gate idle, nap, asleep/paused idle); "stopped" = the loop process exited;
+# "starting" = THE SPAWN RESERVATION (Codex review 3 #6; STOP-LANE-DESIGN §2.4): a start admitted at a lifecycle
+# generation whose child has not registered yet - written by the spawner under the home state lock before Popen,
+# replaced by the child's own "between" at its boot (or refused by it after a Stop). Running while the recorded
+# child (or, before Popen returned, the spawner) is alive - pid liveness, no clock.
+LOOP_PHASES = ("day", "between", "stopped", "starting")
 
 # Pid-reuse guard (B1 adversary, 2026-07-13): a loop killed mid-day leaves
 # {"phase":"day","pid":N}; after enough process churn (or a reboot) pid N can
@@ -1584,6 +1588,74 @@ def write_loop_status(
             pass
 
 
+def _reserve_loop_start(home_dir: Path, *, fence: Any) -> Dict[str, Any]:
+    """THE SPAWN RESERVATION (Codex review 3 #6; STOP-LANE-DESIGN §2.4), written under the home state lock before
+    Popen: {phase: starting, generation, spawner_pid, spawner_started_at, after_stopped_by}. A second start reads it
+    running while the spawner (then the recorded child) is alive. `after_stopped_by` carries why the previous loop
+    stopped, so the child's own boot still knows a kill switch preceded it."""
+    import os
+
+    token = _own_start_time()
+    with home_state_lock(home_dir):
+        _verify_fence(fence, home_dir, "reserving the loop start", read_lifecycle_generation(home_dir),
+                      sentinel_ok=False)
+        prior = _read_loop_status_raw(home_dir)
+        payload: Dict[str, Any] = {
+            "phase": "starting", "updated_at": _now_iso(),
+            "generation": int(fence.generation), "spawner_pid": os.getpid(),
+        }
+        if token:
+            payload["spawner_started_at"] = token
+        if prior.get("stopped_by"):
+            payload["after_stopped_by"] = str(prior["stopped_by"])
+        _write_loop_status_locked(home_dir, payload, stopped_by=None, day_kind=None, day_cause=None, tunables=None,
+                                  started=None)
+        return payload
+
+
+def _still_our_reservation(home_dir: Path, fence: Any) -> bool:
+    import os
+
+    current = _read_loop_status_raw(home_dir)
+    return (current.get("phase") == "starting" and current.get("spawner_pid") == os.getpid()
+            and current.get("generation") == int(fence.generation))
+
+
+def _record_spawned_child(home_dir: Path, child_pid: int, *, fence: Any) -> bool:
+    """After Popen: the reservation names the child (its pid; liveness from now on is the child's). Only over THIS
+    spawner's reservation - a child that already registered, or a Stop's record, is never overwritten. False when
+    the reservation was no longer ours."""
+    with home_state_lock(home_dir):
+        _verify_fence(fence, home_dir, "recording the spawned loop", read_lifecycle_generation(home_dir),
+                      sentinel_ok=False)
+        if not _still_our_reservation(home_dir, fence):
+            return False
+        current = _read_loop_status_raw(home_dir)
+        current["pid"] = int(child_pid)
+        current["updated_at"] = _now_iso()
+        _write_loop_status_locked(home_dir, current, stopped_by=None, day_kind=None, day_cause=None, tunables=None,
+                                  started=None)
+        return True
+
+
+def _release_failed_reservation(home_dir: Path, *, fence: Any) -> None:
+    """A child that died at once (confirmed by its exit code): the reservation ends stopped (start_failed), only
+    over THIS spawner's reservation and only while the generation stands (after a Stop its own record stands)."""
+    with home_state_lock(home_dir):
+        _verify_fence(fence, home_dir, "releasing a failed loop start", read_lifecycle_generation(home_dir),
+                      sentinel_ok=False)
+        if _still_our_reservation(home_dir, fence):
+            _write_loop_status_locked(home_dir, {"phase": "stopped", "updated_at": _now_iso()},
+                                      stopped_by="start_failed", day_kind=None, day_cause=None, tunables=None,
+                                      started=None)
+
+
+def _now_iso() -> str:
+    from datetime import datetime, timezone
+
+    return datetime.now(timezone.utc).isoformat()
+
+
 def _read_loop_status_raw(home_dir: Path) -> Dict[str, Any]:
     """The loop_status file as written (no liveness fold, no `ps`): what a writer merges over. {} when absent/bad."""
     import json
@@ -1728,6 +1800,12 @@ def read_loop_status(home_dir: Path) -> Dict[str, Any]:
             return {"phase": "stopped", "running": False}
     except Exception:  # noqa: BLE001
         return {"phase": "stopped", "running": False}
+    if data.get("phase") == "starting":
+        # THE SPAWN RESERVATION: running while the recorded child is alive - or, before Popen returned (no child
+        # recorded yet), the spawner. Pid liveness only (os.kill 0 after reaping our own zombie), never a ps or a clock.
+        child = data.get("pid")
+        data["running"] = _pid_alive_reaped(child) if child else _pid_alive_reaped(data.get("spawner_pid"))
+        return data
     running = bool(
         data.get("phase") in ("day", "between") and _pid_alive(data.get("pid"))
     )
@@ -2811,6 +2889,11 @@ def spawn_loop_process(
 
         status = loop_process_status(home_dir)
         if status.get("running"):
+            if status.get("phase") == "starting":
+                raise RuntimeError(
+                    f"his own time is already starting (pid {status.get('pid') or status.get('spawner_pid')}, "
+                    f"admitted at lifecycle generation {status.get('generation')})"
+                )
             raise RuntimeError(
                 f"his own time is already running (pid {status.get('pid')}, phase {status.get('phase')})"
             )
@@ -2845,6 +2928,11 @@ def spawn_loop_process(
             stop_file.unlink()
         skipped = fast_forward_loop_commands(home_dir)
 
+        # THE RESERVATION (Codex review 3 #6): admitted at the current generation and written BEFORE the child
+        # exists; the child is told that generation and refuses to start (writing nothing) once it moved.
+        fence = LifecycleFence.admit(home_dir)
+        _reserve_loop_start(home_dir, fence=fence)
+
         argv = [
             sys.executable,
             "-m",
@@ -2861,6 +2949,8 @@ def spawn_loop_process(
             # The child must not fast-forward again (it would eat a stop sent
             # in the spawn->boot window).
             "--skip-command-fast-forward",
+            # The generation of the reservation: the child's boot refuses (zero writes) when a Stop moved it.
+            "--generation", str(int(fence.generation)),
         ]
         if first_day_unconditional:
             argv.append("--first-day-unconditional")
@@ -2919,6 +3009,10 @@ def spawn_loop_process(
                 env=env,
                 start_new_session=True,  # survives host restarts; the inbox stays the brake
             )
+        try:
+            _record_spawned_child(home_dir, proc.pid, fence=fence)
+        except StoppedByOperator:
+            pass  # a Stop since the reservation: its record stands, and the child refuses itself at its boot
 
         # Honesty at the door: a child that dies within the first moment
         # (import error, bad interpreter) must NOT report started:true.
@@ -2929,6 +3023,12 @@ def spawn_loop_process(
         _time.sleep(0.6)
         exit_code = proc.poll()
         if exit_code is not None:
+            if fence.moved():
+                raise StoppedByOperator("while his own time was starting")
+            try:
+                _release_failed_reservation(home_dir, fence=fence)
+            except StoppedByOperator:
+                raise StoppedByOperator("while his own time was starting") from None
             tail = ""
             try:
                 tail = log_path.read_text(encoding="utf-8", errors="replace")[-500:]
@@ -2948,12 +3048,33 @@ def spawn_loop_process(
             "ticks_per_day": int(ticks_per_day),
             "rest_minutes": float(rest_minutes),
             "shelf_size": int(shelf_size),
+            "generation": int(fence.generation),
         }
     finally:
         try:
             lock_fh.close()
         except Exception:  # noqa: BLE001
             pass
+
+
+def _pid_alive_reaped(pid: Any) -> bool:
+    """`_pid_alive` after reaping `pid` when it is OUR exited child (a child refused at its boot is a zombie in its
+    spawner until reaped, and a zombie answers signal 0). One waitpid + one kill: no subprocess."""
+    import os
+
+    try:
+        pid = int(pid)
+    except (TypeError, ValueError):
+        return False
+    try:
+        done, _status = os.waitpid(pid, os.WNOHANG)
+        if done == pid:
+            return False
+    except ChildProcessError:
+        pass
+    except OSError:
+        pass
+    return _pid_alive(pid)
 
 
 def _pid_alive(pid: Any) -> bool:
@@ -3964,11 +4085,21 @@ class LifeLoop:
         # never returns to the own time the stopped loop was living, whatever its host passed - it works the queued
         # jobs and ends idle. Only the operator's own act (a grant or start: first_day_unconditional) opens own time.
         if self.state_home is not None and not self._first_day and self._return_to is not None:
-            if str(read_loop_status(self.state_home).get("stopped_by") or "") == "kill_switch":
+            _prior = read_loop_status(self.state_home)
+            if str(_prior.get("stopped_by") or _prior.get("after_stopped_by") or "") == "kill_switch":
                 self.out("(the last loop was stopped by the operator's kill switch - nothing is restored; own time "
                          "comes back only with the operator's grant)")
                 self._return_to = None
+        # THE BOOT CLAIM (STOP-LANE-DESIGN §2.4): the loop's first write replaces the spawn reservation with its
+        # own "between", fenced at the admitted generation - after a Stop it is refused and the loop ends here,
+        # having written nothing (the wake below runs only after it).
         self._status("between")
+        if self.stop_cause in ("kill_switch", "generation_unreadable"):
+            if self.stop_cause == "kill_switch":
+                self.out("(stopped before it started: the operator's Stop moved the lifecycle generation - this "
+                         "loop writes nothing)")
+            report.stopped_by = self.stop_cause
+            return report
         # SPAWN-WAKE (contract-phases v2 §1.2 rule 6, §10.1): a sleep an earlier loop wrote for itself (its own
         # election, the retired cycle, the retired gate/exit landings) has no process behind it any more; the new
         # loop wakes it. Operator sleeps and visit postures keep their own wake rules.
@@ -4746,6 +4877,7 @@ def build_consolidator(
     out: Callable[[str], None] = print,
     llm_for_capability: Optional[Callable[[str], Any]] = None,
     authoring_cap: int = 64,
+    fence: LifecycleFence,
 ) -> Callable[[], Optional[Dict[str, Any]]]:
     """The sleep-window pass (maintainer rulings 2026-07-08/09: sleep is
     where the graph is worked on — tending first, then the dream).
@@ -4773,12 +4905,19 @@ def build_consolidator(
     report under `engine`. The translation is deliberate: the engine's
     dream half says `created`, and reading it wrong here is exactly how a
     formed dream once reported as "a quiet night" (found 2026-07-09 — a
-    hand-written test double carried `formed` while the engine never did)."""
+    hand-written test double carried `formed` while the engine never did).
+
+    THE OPERATOR'S STOP (Codex review 3 #2; STOP-LANE-DESIGN §2.2, class H): `fence` is the loop's. A moved
+    generation ends the night at the engine's next stage (`should_continue`), stops the completion marker
+    (`sleep_pass(cancelled=fence.moved)`: a stopped night records no completed maintenance), the repair step's
+    authoring (`should_stop`) and the night voice; nothing is logged after it but one line."""
     def _night_should_continue() -> bool:
         # The night keeps its window while the entity still SLEEPS by its
         # own election and nobody pulled the manual brake. Any other state
         # (awake/paused, a visit's asleep+visiting rides mode not state...
         # the visit door writes state=asleep too, so mode decides) ends it.
+        if fence.moved():
+            return False  # the operator's Stop (an int compare and a stat, no file parse)
         if (Path(home_dir) / "STOP").exists():
             return False
         state = read_entity_state(home_dir)
@@ -4836,6 +4975,7 @@ def build_consolidator(
                         include_dream=include_dream,
                         include_identity=include_identity,
                         author=formation_author,
+                        cancelled=fence.moved,
                     )
                 except TypeError:
                     # Version skew ladder: engines predate include_identity
@@ -4865,6 +5005,14 @@ def build_consolidator(
                         except TypeError:
                             out("#FALLBACK engine sleep_pass has no should_continue; full night runs")
                             engine = sleep_pass(home.ms, scopes=scopes, owner_id=eid)
+            if fence.moved():
+                # THE OPERATOR'S STOP: the night ends here - no repair, no voice, no failure lines (a refusal the
+                # Stop caused is no failure); memory recorded no completion (cancelled=).
+                out("(the operator's Stop - the night ends here; nothing more is written)")
+                dream_seen = engine.get("dream") or {}
+                return {"authoring": {"skipped": "the operator's Stop"}, "formed": bool(dream_seen.get("created")),
+                        "dream_record_id": dream_seen.get("dream_record_id"), "maintenance_candidates": 0,
+                        "signals": [], "narration": None, "engine": engine, "stopped_by": "kill_switch"}
             if engine.get("cancelled_after"):
                 out(f"(the night ended early - host transition after {engine['cancelled_after']}; "
                     "the next sleep resumes there)")
@@ -4875,7 +5023,7 @@ def build_consolidator(
             # or a legacy record without a title or summary (declared pending here) is authored, bounded by the
             # pass's cap; skipped when the night was ended (a visitor, a wake). Never a cut.
             authoring = (
-                _sleep_authoring(home, eid, scopes, llm_for_capability, authoring_cap, out)
+                _sleep_authoring(home, eid, scopes, llm_for_capability, authoring_cap, out, should_stop=fence.moved)
                 if _night_should_continue() else {"skipped": "the night ended before the repair step"}
             )
             dream = engine.get("dream") or {}
@@ -4935,13 +5083,18 @@ def build_consolidator(
 
 def _sleep_authoring(home: Any, eid: str, scopes: List[Tuple[str, str]],
                      llm_for_capability: Optional[Callable[[str], Any]], cap: int,
-                     out: Callable[[str], None]) -> Dict[str, Any]:
+                     out: Callable[[str], None], *, should_stop: Callable[[], bool]) -> Dict[str, Any]:
     """The sleep's metadata work (operator 2026-11-09): declare what lacks a title or summary, then author what is
-    pending. Returns {declared, refused, authored, deferred, failed} for the pass's receipt; never raises."""
+    pending. Returns {declared, refused, authored, deferred, failed} for the pass's receipt; never raises.
+    `should_stop` (the loop's fence) is checked before each step and handed to the drainer, which checks it per task
+    and after each capability answer: nothing is declared, re-armed or authored after the operator's Stop."""
     from .authoring import declare_missing_metadata, drain_authoring, rearm_exhausted_authoring
 
     receipt: Dict[str, Any] = {"declared": 0, "refused": 0, "rearmed": 0, "authored": 0, "deferred": 0, "failed": 0}
     try:
+        if should_stop():
+            receipt["cancelled"] = "the operator's Stop"
+            return receipt
         declared = declare_missing_metadata(home.ms, scopes=scopes, out=out)
         receipt["declared"] = int(declared.get("declared") or 0)
         receipt["refused"] = int(declared.get("refused") or 0)
@@ -4950,6 +5103,9 @@ def _sleep_authoring(home: Any, eid: str, scopes: List[Tuple[str, str]],
         rearmed = rearm_exhausted_authoring(home.ms, scopes=scopes, out=out)
         receipt["rearmed"] = int(rearmed.get("rearmed") or 0) + int(declared.get("repaired") or 0)
         receipt["refused"] += int(rearmed.get("refused") or 0)
+        if should_stop():
+            receipt["cancelled"] = "the operator's Stop"
+            return receipt
 
         def _diary_text(entry_id: str) -> Optional[str]:
             entry = home.diary.get_entry(entry_id) if entry_id else None
@@ -4957,7 +5113,7 @@ def _sleep_authoring(home: Any, eid: str, scopes: List[Tuple[str, str]],
 
         drained = drain_authoring(home.ms, llm_for_capability=llm_for_capability, artifacts=home.artifacts,
                                   home_dir=home.home_dir, entity=eid, holder="sleep", cap=int(cap), window="nap",
-                                  diary_text=_diary_text, out=out)
+                                  diary_text=_diary_text, out=out, should_stop=should_stop)
         for key in ("authored", "deferred", "failed"):
             receipt[key] = int(drained.get(key) or 0)
     except Exception as e:  # noqa: BLE001 - the night's other work still runs
@@ -5325,6 +5481,11 @@ def main(argv: Optional[List[str]] = None) -> int:
         "(spec personal entered_by; contract-phases v2 §10). Without it the gate governs the first boundary too",
     )
     parser.add_argument(
+        "--generation", type=int, default=None,
+        help="internal (spawn_loop_process passes this): the lifecycle generation the start was reserved at; the "
+        "loop refuses to start - writing nothing - when the operator's Stop moved it since",
+    )
+    parser.add_argument(
         "--skip-command-fast-forward", action="store_true",
         help="internal (spawn_loop_process passes this): the starter already "
         "fast-forwarded the command inbox at the start-request moment; doing it "
@@ -5385,6 +5546,29 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(f"personal time -> {grant['mode']}{detail}{by}")
         print("(this armed the phase only - starting his own time is its own act)")
         return 0
+
+    # THE BOOT CHECK (STOP-LANE-DESIGN §2.2/§2.4), before anything else of the loop: a child spawned before the
+    # operator's Stop and booting after it refuses here and writes nothing. A hand start (no --generation) is
+    # admitted at the current generation and honors a running or reserved loop.
+    boot_fence: Optional[LifecycleFence] = None
+    if args.generation is not None:
+        boot_fence = LifecycleFence(home_dir, int(args.generation))
+        try:
+            moved = boot_fence.truth_moved()
+        except LifecycleUnreadable as e:
+            print(f"(the lifecycle generation is unreadable ({e}) - own time does not start; repair "
+                  f"{PHASES_FILENAME})")
+            return 2
+        if moved:
+            print("(stopped before it started: the operator's Stop moved the lifecycle generation since this start "
+                  "was reserved - this loop writes nothing)")
+            return 0
+    else:
+        current = loop_process_status(home_dir)
+        if current.get("running"):
+            print(f"his own time is already {'starting' if current.get('phase') == 'starting' else 'running'} "
+                  f"(pid {current.get('pid') or current.get('spawner_pid')}) - one loop per home")
+            return 1
 
     stop_file = home_dir / "STOP"
     if stop_file.exists():
@@ -5540,7 +5724,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     # THE LOOP'S FENCE (STOP-LANE-DESIGN §2.2): admitted once, before anything of the loop exists; every fenced write
     # and every model call of this process carries it. Unreadable = no loop (fail closed).
     try:
-        fence = LifecycleFence.admit(home_dir)
+        fence = boot_fence or LifecycleFence.admit(home_dir)
     except LifecycleUnreadable as e:
         print(f"(the lifecycle generation is unreadable ({e}) - own time does not start; repair {PHASES_FILENAME})")
         return 2
@@ -5595,6 +5779,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         embedding_base_url=args.embedding_base_url,
         narrator_llm_factory=_narrator_llm,
         llm_for_capability=llm_for_capability,
+        fence=fence,
     )
     # Substrate-heal (entity c75): the loop asks this before a terminal
     # failure cull — True when the home's substrate now differs from the

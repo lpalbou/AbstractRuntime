@@ -477,7 +477,7 @@ def test_the_night_has_no_clock_and_its_voice_yields_to_a_visitor(tmp_path: Path
     # A self sleep whose (legacy) stamped wake_at is long past: the night still runs - no clock ends it.
     write_entity_state(home_dir, "asleep", reason="self-elected sleep: full", mode="dreaming", written_by="self",
                        wake_at="2000-01-01T00:00:00+00:00", fence=LifecycleFence.admit(home_dir))
-    build_consolidator(home_dir, narrator_llm_factory=lambda: object(), out=lambda s: None)()
+    build_consolidator(home_dir, narrator_llm_factory=lambda: object(), out=lambda s: None, fence=LifecycleFence.admit(home_dir))()
     assert seen["continue"] is True
     assert narrated == [1]
     # A visitor knocked during the pass: the voice (a model call) yields, the dream stands.
@@ -486,7 +486,7 @@ def test_the_night_has_no_clock_and_its_voice_yields_to_a_visitor(tmp_path: Path
         return {"maintenance": {}, "dream": {"created": True, "signals": ["tension"], "dream_record_id": "d2"}}
 
     monkeypatch.setattr(abstractmemory, "sleep_pass", knocking_pass)
-    result = build_consolidator(home_dir, narrator_llm_factory=lambda: object(), out=lambda s: None)()
+    result = build_consolidator(home_dir, narrator_llm_factory=lambda: object(), out=lambda s: None, fence=LifecycleFence.admit(home_dir))()
     assert narrated == [1] and result["formed"] is True
 
 

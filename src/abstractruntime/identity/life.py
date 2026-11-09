@@ -2486,6 +2486,15 @@ FAILURE_BACKOFF_SECONDS = 60.0
 CLOSE_WAIT_MAX_POLLS = 24
 
 
+def _is_own_sleep(state: Dict[str, Any]) -> bool:
+    """A sleep the loop owns (LOOP_OWN_SLEEP_WRITERS), never the visit door's posture over it."""
+    return (
+        str(state.get("state") or "") == "asleep"
+        and str(state.get("mode") or "") != "visiting"
+        and str(state.get("written_by") or "") in LOOP_OWN_SLEEP_WRITERS
+    )
+
+
 class LifeLoop:
     """Run an entity's own time: days of self-prompted ticks over one home.
 
@@ -2760,13 +2769,10 @@ class LifeLoop:
                 and str(current.get("written_by")) == "self"
                 and str(current.get("mode") or "") == "dreaming"
             ):
-                # Carry the ORIGINAL sleep deadline through the rewrite —
-                # a fresh changed_at must not restart the bound clock.
-                deadline = sleep_bound_deadline(current)
+                # No deadline is stamped (v22: no clock ends a sleep; he wakes when its maintenance is done).
                 write_entity_state(
                     self.state_home, "asleep",
                     reason=f"self-elected sleep: {reason}", mode="resting", written_by="self",
-                    wake_at=deadline.isoformat() if deadline is not None else "",
                 )
         except Exception as e:  # noqa: BLE001 - a badge fix must never break the nap
             self.out(f"#FALLBACK could not clear the dreaming badge: {e}")
@@ -2843,14 +2849,15 @@ class LifeLoop:
                 self.out(f"#FALLBACK could not mark self-sleep state: {e}")
         self._last_activity_phase = PHASE_SLEEP
         dreamed = self._sleep_window(reason, mark_state=False)
-        if self._interruptible_sleep(self.rest_minutes * 60.0):
-            # Woken by a stop mid-sleep: honor it, leave state honest.
-            self._wake_from_self_sleep()
-            report.stopped_by = self.stop_cause or "stop_file"
-            return True
+        # HE WAKES WHEN THE MAINTENANCE IS DONE (contract-phases v2 §10.6; spec sleep->X#maintenance_done): no
+        # fixed nap after the pass. A visitor who knocked during it took the posture: the pass yielded at its next
+        # stage, the wake below leaves the door's posture alone, and the door's close hands the same sleep back.
         self._wake_from_self_sleep()
         self._wake_cue = self._compose_wake_cue(dreamed)
         report.dreams += 1 if (isinstance(dreamed, dict) and dreamed.get("formed")) else 0
+        if self._should_stop():
+            report.stopped_by = self.stop_cause or "stop_file"
+            return True
         return False
 
     def _compose_wake_cue(self, dreamed: Any) -> str:
@@ -2881,14 +2888,23 @@ class LifeLoop:
         return f"{_today_stamp()}you rested and your own time resumes.{dream_note}{circling}"
 
     def _resume_own_sleep(self, state: Dict[str, Any], report: "LifeReport") -> bool:
-        """A sleep of his own found at the operator gate (a visit's close handed it back, or an earlier loop left
-        it): it ends now - he wakes into what the toggles allow. Returns True when a stop arrived."""
-        try:
-            self._wake_own_leftover_sleep("his own sleep ends - awake")
-        except Exception as e:  # noqa: BLE001
-            self.out(f"#FALLBACK could not end his own sleep: {e}")
+        """A sleep of his own found at the operator gate: a visit's close handed back the sleep it interrupted
+        (contract-phases v2 §4.4: the SAME sleep continues - not a new one, no sleep->sleep). Its maintenance pass
+        resumes where it yielded (every engine phase is idempotent), then he wakes into what the toggles allow.
+        Returns True when a stop arrived."""
+        writer = str(state.get("written_by") or "")
+        reason = str(state.get("reason") or "")
+        if reason.startswith("self-elected sleep: "):
+            reason = reason[len("self-elected sleep: "):]
+        self.out(f"(his sleep continues after the visit ({writer}) - its maintenance resumes)")
         self._last_activity_phase = PHASE_SLEEP
-        self._wake_cue = f"{_today_stamp()}you rested and your own time resumes."
+        dreamed = self._sleep_window(reason or "the interrupted sleep", mark_state=False)
+        self._wake_from_self_sleep()
+        self._wake_cue = self._compose_wake_cue(dreamed)
+        report.dreams += 1 if (isinstance(dreamed, dict) and dreamed.get("formed")) else 0
+        if self._should_stop():
+            report.stopped_by = self.stop_cause or "stop_file"
+            return True
         return False
 
     def _rest_between_days(self, seconds: float) -> bool:
@@ -3167,11 +3183,7 @@ class LifeLoop:
             # the no-summon window is enforced by this very gate). Waking is
             # HONEST: the first cue names what happened and for how long.
             gate = self._operator_state()
-            if (
-                gate["state"] == "asleep"
-                and str(gate.get("mode") or "") != "visiting"
-                and str(gate.get("written_by") or "") in LOOP_OWN_SLEEP_WRITERS
-            ):
+            if _is_own_sleep(gate):
                 # A sleep of his own handed back by a visit's close (the door restores the interrupted sleep,
                 # contract-phases v2 §4.4) or left by an earlier loop: the loop owns it.
                 if self._resume_own_sleep(gate, report):
@@ -3183,7 +3195,10 @@ class LifeLoop:
                 # No clock ends a sleep (v22: the sleep bound and the 6 h need-check are retired): an operator sleep
                 # lasts until the operator's wake or its maintenance's end (the gateway writes awake); a visit until
                 # the door's close; paused until resume.
-                woke = self._idle_while(lambda s: s["state"] in ("asleep", "paused"), phase="between")
+                woke = self._idle_while(
+                    lambda s: s["state"] == "paused" or (s["state"] == "asleep" and not _is_own_sleep(s)),
+                    phase="between",
+                )
                 if woke["state"] == "stop":
                     report.stopped_by = self.stop_cause or "stop_file"
                     break
@@ -3193,6 +3208,12 @@ class LifeLoop:
                     self._last_activity_phase = "visit"
                 elif gate["state"] == "asleep":
                     self._last_activity_phase = PHASE_SLEEP
+                if _is_own_sleep(woke):
+                    # The visit's close handed back the sleep it interrupted (contract §4.4): it continues.
+                    if self._resume_own_sleep(woke, report):
+                        break
+                    cue = self._wake_cue
+                    continue
                 # Wake-cue seeding (R3, 2026-07-09): the awake state's reason
                 # now carries the VISIT'S FACTS (gateway writes "visitor
                 # session ended (person:laurent; 12 turns) - you elected to
@@ -3800,25 +3821,8 @@ def build_consolidator(
             return False  # a visitor is at the door — finish the phase, yield
         if state.get("state") != "asleep":
             return False
-        # WINDOW DEADLINE (memory c370, the cycle wiring): a stamped
-        # wake_at bounds the night - past (stamp - grace) the engine sheds
-        # remaining phases at the next boundary. Phase order (resolution ->
-        # tending -> world models -> mining -> dream) keeps every graph-
-        # QUALITY pass and drops only tonight's dream; the next window
-        # mints it if the tension still stands. Grace covers the
-        # complete-current-phase-then-stop overrun.
-        wake_raw = str(state.get("wake_at") or "").strip()
-        if wake_raw:
-            from datetime import datetime, timedelta, timezone
-
-            try:
-                wa = datetime.fromisoformat(wake_raw)
-                if wa.tzinfo is None:
-                    wa = wa.replace(tzinfo=timezone.utc)
-                if datetime.now(timezone.utc) >= wa - timedelta(seconds=60):
-                    return False
-            except ValueError:
-                pass  # unparseable stamp never ends a night early
+        # (v22: no stamped deadline ends a night - the v11 cycle window is retired; the pass runs to its end
+        # unless a visitor, a wake, a pause or the STOP brake ends it at the engine's next stage.)
         return True
 
     def _consolidate(
@@ -3901,7 +3905,11 @@ def build_consolidator(
             if not signals and dream.get("signals"):
                 signals = list(dream.get("signals") or [])
             narration: Optional[Dict[str, Any]] = None
-            if dream.get("created") and signals and narrator_llm_factory is not None:
+            if dream.get("created") and signals and narrator_llm_factory is not None and not _night_should_continue():
+                # A visitor (or a wake, a pause, the brake) arrived during the pass: the night voice is a model
+                # call - it yields too (contract-phases v2 §10.8); the dream stands, unnarrated.
+                out("(the night voice yields - the night ended at its last stage)")
+            elif dream.get("created") and signals and narrator_llm_factory is not None:
                 try:
                     from .night_voice import run_night_voice
                     from .prelude import render_summon_prelude

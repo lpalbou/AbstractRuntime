@@ -236,10 +236,9 @@ def test_sleep_bound_reads_the_blueprint_dial(tmp_path, monkeypatch) -> None:
     assert sleep_bound_deadline(stamped, home_dir=tmp_path) == changed + timedelta(minutes=5)
 
 
-def test_night_predicate_honors_stamped_window_deadline(tmp_path, monkeypatch) -> None:
-    """memory c370 wiring: the night's should_continue reads the stamped
-    wake_at - past (stamp - grace) it says stop (engine sheds at the next
-    phase boundary); a future stamp keeps the night."""
+def test_night_predicate_has_no_clock(tmp_path, monkeypatch) -> None:
+    """Re-based (v22; memory c370's stamped-window deadline retired with the cycle): the night's should_continue
+    ignores any wake_at - a pass runs to its end unless a visitor, a wake, a pause or the STOP brake ends it."""
     import sys
     from datetime import datetime, timedelta, timezone
 
@@ -258,24 +257,17 @@ def test_night_predicate_honors_stamped_window_deadline(tmp_path, monkeypatch) -
 
     monkeypatch.setattr(abstractmemory, "sleep_pass", _fake_sleep_pass)
     consolidate = build_consolidator(home_dir, out=lambda s: None)
-
-    # Future stamp: the night keeps its window.
     write_entity_state(
-        home_dir, "asleep", reason="personal_cycle maintenance (1h)",
-        written_by="personal-cycle",
-        wake_at=(datetime.now(timezone.utc) + timedelta(hours=1)).isoformat(),
+        home_dir, "asleep", reason="self-elected sleep: full", written_by="self",
+        wake_at=(datetime.now(timezone.utc) + timedelta(seconds=30)).isoformat(),
     )
     consolidate()
     assert captured["pred"] is not None, "the engine receives the predicate"
-    assert captured["pred"]() is True, "future stamp - night continues"
-
-    # Past-the-grace stamp: the night sheds.
-    write_entity_state(
-        home_dir, "asleep", reason="personal_cycle maintenance (1h)",
-        written_by="personal-cycle",
-        wake_at=(datetime.now(timezone.utc) + timedelta(seconds=30)).isoformat(),
-    )
-    assert captured["pred"]() is False, "inside the 60s grace - night sheds"
+    assert captured["pred"]() is True, "a stamp inside the old 60 s grace no longer sheds the night"
+    write_entity_state(home_dir, "asleep", mode="visiting", written_by="visit-door", reason="auto-yield")
+    assert captured["pred"]() is False, "a visitor ends it at the next stage"
+    write_entity_state(home_dir, "awake", reason="operator wake")
+    assert captured["pred"]() is False, "a wake ends it"
 
 
 def test_loop_status_carries_the_tunables_receipt(tmp_path) -> None:

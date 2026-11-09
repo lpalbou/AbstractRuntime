@@ -395,3 +395,89 @@ def test_due_maintenance_reaches_his_cue_as_facts(tmp_path: Path, monkeypatch) -
     assert "14 new record(s) since your last sleep, 2 group(s) of records sharing a title" in cue, cue
     assert "rest" in cue and "owed" not in cue
 
+# ---------------------------------------------------------------- §10.6 he wakes when the maintenance is done;
+# §10.8 the pass yields to a visitor and the visit's close hands the same sleep back (contract §4.4)
+
+
+def test_he_wakes_when_the_maintenance_is_done_with_no_nap(tmp_path: Path) -> None:
+    home_dir = _make_home(tmp_path)
+    naps: List[float] = []
+    llm = _ScriptedLLM(["Enough.\n```rest\nfull\n```", "R1.", "Back.", "R2."])
+    report = LifeLoop(_factory_for(home_dir, llm), tick_seconds=0, ticks_per_day=1, max_ticks=2, rest_minutes=30,
+                      stop_file=home_dir / "STOP", state_home=home_dir,
+                      on_sleep=lambda **kw: {"formed": False}, sleep_fn=naps.append, out=lambda s: None).run()
+    assert report.sleeps == 1 and report.days == 2
+    assert sum(naps) == 0, "no fixed nap after the pass (was rest_minutes x 60 = 1800 s)"
+    wake = [h for h in _history(home_dir) if h.get("state") == "awake"][-1]
+    assert wake.get("written_by") == "self"
+    for h in _history(home_dir):
+        if h.get("state") == "asleep":
+            assert not h.get("wake_at"), f"no clock stamped on his sleep: {h}"
+
+
+def test_a_visit_during_his_sleep_hands_back_the_same_sleep_whose_maintenance_resumes(tmp_path: Path) -> None:
+    home_dir = _make_home(tmp_path)
+    passes: List[str] = []
+    saved: Dict[str, Any] = {}
+
+    def on_sleep(**kw):
+        passes.append(str(read_entity_state(home_dir).get("written_by")))
+        if len(passes) == 1:
+            # The door opens mid-pass: it records the pre-visit state and writes the visiting posture; the engine
+            # yields at its next stage.
+            saved.update(read_entity_state(home_dir))
+            write_entity_state(home_dir, "asleep", mode="visiting", written_by="visit-door",
+                               reason="in conversation with person:laurent (auto-yield)")
+        return {"formed": False}
+
+    polls = {"n": 0}
+
+    def sleeper(_s: float) -> None:
+        if str(read_entity_state(home_dir).get("mode") or "") != "visiting":
+            return
+        polls["n"] += 1
+        if polls["n"] == 3:  # the door closes: the interrupted sleep is restored as it was
+            write_entity_state(home_dir, "asleep", reason=str(saved.get("reason")), mode=str(saved.get("mode")),
+                               written_by=str(saved.get("written_by")))
+
+    llm = _ScriptedLLM(["Enough.\n```rest\nfull\n```", "R1.", "Back after the sleep.", "R2."])
+    report = LifeLoop(_factory_for(home_dir, llm), tick_seconds=0, ticks_per_day=1, max_ticks=2, rest_minutes=30,
+                      stop_file=home_dir / "STOP", state_home=home_dir, on_sleep=on_sleep,
+                      sleep_fn=sleeper, out=lambda s: None).run()
+    assert passes == ["self", "self"], "the pass yielded to the visit, then resumed in the same sleep"
+    assert report.sleeps == 1, "one sleep, not two (visit->sleep is the same sleep)"
+    assert report.days == 2 and read_entity_state(home_dir)["state"] == "awake"
+    assert _markers(home_dir) == [("personal", "sleep", "self_elected"), ("sleep", "personal", "maintenance_done")]
+
+
+def test_the_night_has_no_clock_and_its_voice_yields_to_a_visitor(tmp_path: Path, monkeypatch) -> None:
+    import abstractmemory
+
+    from abstractruntime.identity.life import build_consolidator
+
+    home_dir = _make_home(tmp_path)
+    seen: Dict[str, Any] = {}
+
+    def fake_sleep_pass(ms, *, scopes, owner_id, should_continue=None, **kw):
+        seen["continue"] = should_continue()
+        return {"maintenance": {}, "dream": {"created": True, "signals": ["tension"], "dream_record_id": "d1"}}
+
+    monkeypatch.setattr(abstractmemory, "sleep_pass", fake_sleep_pass)
+    narrated: List[int] = []
+    import abstractruntime.identity.night_voice as nv
+
+    monkeypatch.setattr(nv, "run_night_voice", lambda *a, **k: narrated.append(1) or {"narrated": True})
+    # A self sleep whose (legacy) stamped wake_at is long past: the night still runs - no clock ends it.
+    write_entity_state(home_dir, "asleep", reason="self-elected sleep: full", mode="dreaming", written_by="self",
+                       wake_at="2000-01-01T00:00:00+00:00")
+    build_consolidator(home_dir, narrator_llm_factory=lambda: object(), out=lambda s: None)()
+    assert seen["continue"] is True
+    assert narrated == [1]
+    # A visitor knocked during the pass: the voice (a model call) yields, the dream stands.
+    def knocking_pass(ms, *, scopes, owner_id, should_continue=None, **kw):
+        write_entity_state(home_dir, "asleep", mode="visiting", written_by="visit-door", reason="auto-yield")
+        return {"maintenance": {}, "dream": {"created": True, "signals": ["tension"], "dream_record_id": "d2"}}
+
+    monkeypatch.setattr(abstractmemory, "sleep_pass", knocking_pass)
+    result = build_consolidator(home_dir, narrator_llm_factory=lambda: object(), out=lambda s: None)()
+    assert narrated == [1] and result["formed"] is True

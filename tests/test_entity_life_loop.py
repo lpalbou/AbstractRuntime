@@ -374,31 +374,29 @@ def test_hard_stop_freezes_now_without_ceremony(tmp_path: Path) -> None:
     assert status["running"] is False
 
 
-def test_stop_command_interrupts_nap(tmp_path: Path) -> None:
-    """A stop during a 24/7 nap lands within one poll chunk (~5s), not at the
-    nap's end (red-team finding: a 30-minute nap must not defer stops)."""
-    from abstractruntime.identity.life import request_loop_stop
+def test_stop_command_during_his_sleep_ends_the_loop_awake(tmp_path: Path) -> None:
+    """Re-based (contract-phases v2 §10.6: no nap after the pass): a stop that arrives during his sleep's
+    maintenance pass ends the loop as soon as the pass returns - never after a 30-minute nap - and he is awake."""
+    from abstractruntime.identity.life import read_entity_state, request_loop_stop
 
     home_dir = _make_home(tmp_path)
     llm = _ScriptedLLM(["Enough.\n```rest\nquiet\n```", "Day1 reflection."])
     slept: List[float] = []
 
-    def sleeper(s: float) -> None:
-        slept.append(s)
-        # The operator clicks stop early in the (30-minute) nap.
-        if len(slept) == 2:
-            request_loop_stop(home_dir, reason="stop mid-nap")
+    def on_sleep(**_kw):
+        request_loop_stop(home_dir, reason="stop mid-sleep")
+        return {"formed": False}
 
     loop = LifeLoop(
         _factory_for(home_dir, llm),
         tick_seconds=0, ticks_per_day=4, max_ticks=10,
         stop_file=home_dir / "STOP", state_home=home_dir,
-        rest_minutes=30.0, sleep_fn=sleeper, out=lambda s: None,
+        rest_minutes=30.0, on_sleep=on_sleep, sleep_fn=slept.append, out=lambda s: None,
     )
     report = loop.run()
     assert report.stopped_by == "stop_command"
-    # It stopped after ~2 chunks of the nap, nowhere near 1800s of sleeping.
-    assert sum(slept) <= 15.0
+    assert sum(slept) == 0.0, "no nap: the loop ended when the pass returned"
+    assert read_entity_state(home_dir)["state"] == "awake"
 
 
 def test_stop_command_wakes_idle_loop(tmp_path: Path) -> None:
@@ -482,8 +480,9 @@ def test_loop_days_close_and_reopen_sessions(tmp_path: Path) -> None:
 
 
 def test_loop_rest_is_a_nap_in_247_mode(tmp_path: Path) -> None:
-    """With rest_minutes > 0, an elected rest sleeps and a fresh day begins
-    with an acknowledging cue; the stop file still wins after the nap."""
+    """With rest_minutes > 0, an elected rest is his sleep and a fresh day begins
+    with an acknowledging cue. Re-based (contract-phases v2 §10.6): he wakes when
+    the maintenance is done - no fixed nap after it."""
     home_dir = _make_home(tmp_path)
     llm = _ScriptedLLM(
         [
@@ -501,10 +500,8 @@ def test_loop_rest_is_a_nap_in_247_mode(tmp_path: Path) -> None:
         rest_minutes=0.5, sleep_fn=lambda s: naps.append(s), out=lambda s: None,
     )
     report = loop.run()
-    # The nap really slept 0.5 min total — in interruptible chunks (≤5s each)
-    # so a stop command lands within seconds, not at the nap's end.
-    assert sum(naps) == 30.0
-    assert all(chunk <= 5.0 for chunk in naps)
+    # No nap: the sleep ended with its (absent) maintenance pass.
+    assert sum(naps) == 0.0
     assert report.ticks == 2
     assert report.days == 2
     # The resume cue acknowledges the rest rather than faking continuity.

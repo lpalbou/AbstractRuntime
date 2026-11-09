@@ -738,3 +738,36 @@ def test_the_operators_start_reaches_the_spawned_loop(tmp_path: Path, monkeypatc
             pass
     assert len(seen) == 2, seen
     assert "--first-day-unconditional" in seen[0] and "--first-day-unconditional" not in seen[1]
+
+
+# ---------------------------------------------------------------- Codex review 2026-11-09
+
+
+def test_a_sleep_handed_back_while_he_rests_resumes_its_maintenance_never_spins(tmp_path: Path) -> None:
+    """Codex #1: with nothing pulling, the gate chose the personal rest; the rest returned at once because he was
+    asleep (a visit's close had handed his sleep back) and the loop repeated forever without resuming the pass.
+    A held state (sleep, visit, pause) now goes to the state gate before any leg is chosen."""
+    from test_entity_life_loop import _make_home_no_drives
+
+    home_dir = _make_home_no_drives(tmp_path)
+    passes: List[str] = []
+    polls = {"n": 0}
+
+    def sleeper(_s: float) -> None:
+        polls["n"] += 1
+        if polls["n"] == 2:  # the door's close restores the sleep it interrupted
+            write_entity_state(home_dir, "asleep", reason="self-elected sleep: full", mode="dreaming",
+                               written_by="self")
+        if polls["n"] > 200:
+            raise AssertionError("the loop spun without resuming his sleep")
+
+    def on_sleep(**kw):
+        passes.append(str(read_entity_state(home_dir).get("written_by")))
+        (home_dir / "STOP").write_text("halt", encoding="utf-8")
+        return {"formed": False}
+
+    report = LifeLoop(_factory_for(home_dir, _ScriptedLLM([])), tick_seconds=1, ticks_per_day=1, max_ticks=1,
+                      rest_minutes=30, stop_file=home_dir / "STOP", state_home=home_dir, on_sleep=on_sleep,
+                      sleep_fn=sleeper, out=lambda s: None).run()
+    assert passes == ["self"], "the handed-back sleep's maintenance resumed"
+    assert report.stopped_by == "stop_file" and read_entity_state(home_dir)["state"] == "awake"

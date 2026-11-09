@@ -3421,6 +3421,10 @@ class LifeLoop:
             _prev_phase = self._last_activity_phase
             self._day_gate = None
             self._pending_day_marker = None
+            # A HELD STATE FIRST (Codex review 2026-11-09 #1): asleep (his own sleep handed back by a visit's close, an
+            # operator sleep), the visiting posture or paused - the state gate below owns it, and no leg is chosen
+            # over it (the personal rest used to return at once over a sleep and the loop spun without resuming it).
+            _held = self.state_home is not None and str(self._operator_state().get("state") or "") in ("asleep", "paused")
             if self.state_home is None and self._sleep_elected is not None:
                 # A harness loop (no home state): his sleep decision still runs its window (never after a sleep).
                 _elected = self._sleep_elected
@@ -3430,7 +3434,7 @@ class LifeLoop:
                         break
                     cue = self._wake_cue
                     continue
-            if self.state_home is not None:
+            if self.state_home is not None and not _held:
                 _elected = self._sleep_elected
                 self._sleep_elected = None  # consumed at this boundary, honored or refused
                 decision = read_day_gate(

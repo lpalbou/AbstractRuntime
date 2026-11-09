@@ -1589,6 +1589,14 @@ class Runtime:
             vars["_limits"] = merged_limits
         else:
             vars["_limits"] = self._config.to_limits_dict()
+        # Who set the budget (review 2026-11-09 finding 2): a caller's value (the person's
+        # request, the host's stored default) beats a workflow's own value; the seeded default
+        # does not. A carrier (an Agent-node child, a child flow) passes the parent's verdict
+        # explicitly; otherwise it is whether the caller named `_limits.max_iterations`.
+        from .vars import MAX_ITERATIONS_DECLARED_KEY
+
+        if not isinstance(vars["_limits"].get(MAX_ITERATIONS_DECLARED_KEY), bool):
+            vars["_limits"][MAX_ITERATIONS_DECLARED_KEY] = bool(caller_declared_max_iterations)
 
         # OPERATOR CEILING, refuse-at-start (laurent c786: hard ceiling on
         # agent iterations, default 100, operator-customizable; seam (b)
@@ -5261,14 +5269,25 @@ class Runtime:
                 sub_rt.setdefault("conversation", copy.deepcopy(conversation))
             # The iteration budget governs the whole run tree (operator
             # 2026-11-08: a requested 50 must reach the agent in a CHILD
-            # flow). The parent's `_limits.max_iterations` rides into the
-            # child's `_limits`; an explicit child value (or flat pin) wins.
+            # flow). An explicit child `_limits.max_iterations` (a delegated
+            # sub-agent's narrower budget) is kept. Otherwise a DECLARED
+            # parent budget (request / host default) governs the child, over
+            # a flat `max_iterations` a subflow pin passes (a workflow value;
+            # review 2026-11-09 finding 2), and a seeded parent budget rides
+            # only where the child names none, still marked as seeded.
+            from .vars import MAX_ITERATIONS_DECLARED_KEY, declared_max_iterations
+
             parent_limits = run.vars.get("_limits")
             parent_max_iter = parent_limits.get("max_iterations") if isinstance(parent_limits, dict) else None
-            if parent_max_iter is not None and sub_vars.get("max_iterations") is None:
-                sub_limits = sub_vars.get("_limits")
-                sub_limits = dict(sub_limits) if isinstance(sub_limits, dict) else {}
-                sub_limits.setdefault("max_iterations", parent_max_iter)
+            parent_declared = declared_max_iterations(parent_limits)
+            sub_limits_in = sub_vars.get("_limits")
+            child_explicit = isinstance(sub_limits_in, dict) and sub_limits_in.get("max_iterations") is not None
+            if not child_explicit and (
+                parent_declared is not None or (parent_max_iter is not None and sub_vars.get("max_iterations") is None)
+            ):
+                sub_limits = dict(sub_limits_in) if isinstance(sub_limits_in, dict) else {}
+                sub_limits["max_iterations"] = parent_declared if parent_declared is not None else parent_max_iter
+                sub_limits[MAX_ITERATIONS_DECLARED_KEY] = parent_declared is not None
                 sub_vars["_limits"] = sub_limits
         except Exception:
             pass

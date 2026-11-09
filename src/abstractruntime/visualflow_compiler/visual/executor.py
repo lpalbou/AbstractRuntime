@@ -16,6 +16,7 @@ import textwrap
 from copy import deepcopy
 from typing import Any, Dict, List, Optional, Tuple
 
+from ...core.vars import declared_max_iterations
 from ..flow import Flow
 from ...utils.workspace_paths import (
     BUILTIN_ALLOW_KEY,
@@ -2217,22 +2218,19 @@ def visual_to_flow(visual: VisualFlow) -> Flow:
                     if start_pin_ids:
                         out: Dict[str, Any] = {}
                         for pid in start_pin_ids:
+                            # The iteration budget, ONE order (review 2026-11-09 finding 2):
+                            # a DECLARED `_limits.max_iterations` (the person's request, the
+                            # host's stored default) > a flat value the run was given > this
+                            # pin's own default (the workflow's value) > nothing (the Agent
+                            # node then uses its own value, else the seeded default).
+                            if pid == "max_iterations":
+                                _declared = declared_max_iterations(input_data.get("_limits"))
+                                if _declared is not None:
+                                    out[pid] = _declared
+                                    input_data[pid] = _declared
+                                    continue
                             if pid in input_data:
                                 out[pid] = input_data.get(pid)
-                                continue
-                            # The iteration budget is the RUN's (`_limits.max_iterations`:
-                            # request > host default > DEFAULT_MAX_ITERATIONS, seeded at
-                            # start), never a start-pin default: the shipped basic-agent's
-                            # pin default 20 used to beat a requested `_limits` 50 through
-                            # the data edge into the Agent node (operator 2026-11-08).
-                            _run_limits = input_data.get("_limits")
-                            if (
-                                pid == "max_iterations"
-                                and isinstance(_run_limits, dict)
-                                and _run_limits.get("max_iterations") is not None
-                            ):
-                                out[pid] = _run_limits.get("max_iterations")
-                                input_data[pid] = out[pid]
                                 continue
                             if isinstance(pid, str) and pid in defaults:
                                 dv = defaults.get(pid)
@@ -5307,14 +5305,13 @@ def _create_data_aware_handler(
                 # they override same-named keys carried by the ambient exec payload.
                 if pin_id not in declared_input_pin_ids and pin_id in resolved_input:
                     continue
-                # A start-pin default never stands in for the run's iteration
-                # budget: `_limits.max_iterations` (seeded at start) applies
-                # instead (the event handler below reads it).
+                # A start-pin default never stands in for a DECLARED iteration
+                # budget (request / host default): the event handler applies
+                # that one first. A seeded budget does not hide the default.
                 if (
                     pin_id == "max_iterations"
                     and node_type == "on_flow_start"
-                    and isinstance(resolved_input.get("_limits"), dict)
-                    and resolved_input["_limits"].get("max_iterations") is not None
+                    and declared_max_iterations(resolved_input.get("_limits")) is not None
                 ):
                     continue
                 # Clone object/array defaults so handlers can't mutate the shared default.

@@ -6,7 +6,12 @@ agent is following the max iterations I request ... By default, set it to 50 eve
   Agent node and overwrite the requested budget in the react child's vars.
 - START_SUBWORKFLOW carries the parent's `_limits.max_iterations` into the child (an explicit
   child value wins).
-- No request = DEFAULT_MAX_ITERATIONS (50), exported by name; no reader carries a copy."""
+- No request = DEFAULT_MAX_ITERATIONS (50), exported by name; no reader carries a copy.
+
+ONE order everywhere (review 2026-11-09 finding 2): the person's request > the host's stored
+default (both a DECLARED `_limits.max_iterations`) > the workflow's own value (a start-pin or
+Agent-node pin default, an Agent node's config) > DEFAULT_MAX_ITERATIONS. The reviewer's probes
+(rt_probe/probe.py, probe2.py, probe3.py) are the Agent-node and start-pin cases below."""
 
 from __future__ import annotations
 
@@ -29,7 +34,7 @@ from abstractruntime import (
     WorkflowSpec,
 )
 from abstractruntime.core.config import RuntimeConfig
-from abstractruntime.core.vars import ensure_limits
+from abstractruntime.core.vars import MAX_ITERATIONS_DECLARED_KEY, declared_max_iterations, ensure_limits
 from abstractruntime.visualflow_compiler.compiler import compile_visualflow
 
 pytestmark = pytest.mark.basic
@@ -67,8 +72,8 @@ def _flow() -> Dict[str, Any]:
     }
 
 
-def _child_budget(vars: Dict[str, Any]) -> tuple[Any, Any]:
-    spec = compile_visualflow(_flow())
+def _child_budget(vars: Dict[str, Any], flow: Any = None) -> tuple[Any, Any]:
+    spec = compile_visualflow(flow if flow is not None else _flow())
     seen: Dict[str, Any] = {}
 
     def react_stub(run: RunState, ctx) -> StepPlan:  # stands in for the react child: records what it got
@@ -102,8 +107,61 @@ def test_the_flat_pin_still_counts_as_the_request() -> None:
     assert _child_budget({"max_iterations": 7}) == (7, 7)
 
 
-def test_no_request_gets_the_framework_default_not_the_pin_default() -> None:
-    assert _child_budget({}) == (DEFAULT_MAX_ITERATIONS, DEFAULT_MAX_ITERATIONS)
+def _start_pin(value: Any) -> Dict[str, Any]:
+    """The flow with the start pin's own default set to `value` (None = no default authored)."""
+    f = _flow()
+    defaults = f["nodes"][0]["data"]["pinDefaults"]
+    if value is None:
+        defaults.pop("max_iterations")
+    else:
+        defaults["max_iterations"] = value
+    return f
+
+
+def _agent_own(*, pin_default: Any = None, config: Any = None) -> Dict[str, Any]:
+    """The Agent node with its own budget and NO edge from the start pin (as the Flow editor saves it)."""
+    f = _flow()
+    agent = f["nodes"][1]["data"]
+    f["edges"] = [e for e in f["edges"] if e["targetHandle"] != "max_iterations"]
+    if pin_default is not None:
+        agent["pinDefaults"] = {"max_iterations": pin_default}
+    if config is not None:
+        agent["inputs"] = [p for p in agent["inputs"] if p["id"] != "max_iterations"]
+        agent["agentConfig"]["max_iterations"] = config
+    return f
+
+
+def test_nothing_anywhere_gets_the_framework_default() -> None:
+    assert _child_budget({}, _start_pin(None)) == (DEFAULT_MAX_ITERATIONS, DEFAULT_MAX_ITERATIONS)
+
+
+@pytest.mark.parametrize("pin", [5, 20])
+def test_a_deliberate_start_pin_value_applies_when_nothing_is_requested(pin: int) -> None:
+    """rt_probe/probe.py: a start pin of 5 used to give 50 (the seeded default always won)."""
+    assert _child_budget({}, _start_pin(pin)) == (pin, pin)
+
+
+@pytest.mark.parametrize("own", [{"pin_default": 20}, {"config": 20}])
+def test_the_request_beats_the_agent_nodes_own_value(own: Dict[str, Any]) -> None:
+    """rt_probe/probe3.py: an Agent node's saved pin default 20 beat a requested 100."""
+    assert _child_budget({"_limits": {"max_iterations": 100}}, _agent_own(**own)) == (100, 100)
+
+
+@pytest.mark.parametrize("own", [{"pin_default": 20}, {"config": 20}])
+def test_the_agent_nodes_own_value_beats_the_seeded_default(own: Dict[str, Any]) -> None:
+    assert _child_budget({}, _agent_own(**own)) == (20, 20)
+
+
+def test_start_stamps_whether_the_budget_was_declared() -> None:
+    reg = WorkflowRegistry()
+    spec = WorkflowSpec(workflow_id="w", entry_node="n", nodes={"n": lambda run, ctx: StepPlan(node_id="n", complete_output={})})
+    reg.register(spec)
+    rt = Runtime(run_store=InMemoryRunStore(), ledger_store=InMemoryLedgerStore(), workflow_registry=reg)
+    asked = rt.run_store.load(rt.start(workflow=spec, vars={"_limits": {"max_iterations": 9}})).vars["_limits"]
+    seeded = rt.run_store.load(rt.start(workflow=spec, vars={})).vars["_limits"]
+    assert asked[MAX_ITERATIONS_DECLARED_KEY] is True and declared_max_iterations(asked) == 9
+    assert seeded[MAX_ITERATIONS_DECLARED_KEY] is False and declared_max_iterations(seeded) is None
+    assert seeded["max_iterations"] == DEFAULT_MAX_ITERATIONS
 
 
 def test_the_default_is_50_and_exported_by_name() -> None:
@@ -140,4 +198,18 @@ def test_a_child_flow_inherits_the_parents_budget() -> None:
 
 
 def test_an_explicit_child_budget_wins_over_the_parents() -> None:
+    """A delegated sub-agent's narrower `_limits` budget is kept (abstractagent's min(explicit, parent))."""
     assert _spawn({"max_iterations": 37}, {"_limits": {"max_iterations": 5}})["max_iterations"] == 5
+
+
+def test_a_declared_parent_budget_beats_a_subflow_pin_value() -> None:
+    """A flat `max_iterations` a subflow pin passes is a workflow value: the request governs."""
+    child = _spawn({"max_iterations": 37}, {"max_iterations": 5})
+    assert child["max_iterations"] == 37 and child[MAX_ITERATIONS_DECLARED_KEY] is True
+
+
+def test_a_seeded_parent_budget_rides_as_seeded() -> None:
+    """The parent's seeded default reaches the child still marked seeded: a child workflow's own
+    value beats it there."""
+    child = _spawn({"max_iterations": DEFAULT_MAX_ITERATIONS, MAX_ITERATIONS_DECLARED_KEY: False}, {})
+    assert child["max_iterations"] == DEFAULT_MAX_ITERATIONS and child[MAX_ITERATIONS_DECLARED_KEY] is False

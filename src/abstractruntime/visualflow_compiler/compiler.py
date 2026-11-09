@@ -1830,9 +1830,15 @@ def _create_visual_agent_effect_handler(
                 include_context_cfg = agent_config.get("use_context")
             include_context = bool(include_context_cfg) if include_context_cfg is not None else False
 
-        # Agent loop budget (max_iterations) can come from a data-edge pin or from config.
-        max_iterations_raw = resolved_inputs.get("max_iterations") if isinstance(resolved_inputs, dict) else None
-        max_iterations_override = _coerce_max_iterations(max_iterations_raw)
+        # Agent loop budget, ONE order (review 2026-11-09 finding 2): a DECLARED run budget
+        # (the person's request, the host's stored default) > this node's own value (a
+        # data-edge pin, its pin default, its config) > the run's seeded default.
+        from abstractruntime.core.vars import declared_max_iterations
+
+        max_iterations_override = declared_max_iterations(run.vars.get("_limits") if isinstance(run.vars, dict) else None)
+        if max_iterations_override is None:
+            max_iterations_raw = resolved_inputs.get("max_iterations") if isinstance(resolved_inputs, dict) else None
+            max_iterations_override = _coerce_max_iterations(max_iterations_raw)
         if max_iterations_override is None:
             max_iterations_override = _coerce_max_iterations(agent_config.get("max_iterations"))
 

@@ -34,6 +34,29 @@ DEFAULT_MAX_TOKENS = 32768
 # 50 everywhere". Never copy the number.
 DEFAULT_MAX_ITERATIONS = 50
 
+# Whether `_limits.max_iterations` is a CALLER's word (the person's request or the host's
+# stored default, present in `_limits` when `Runtime.start` ran) rather than the seeded
+# DEFAULT_MAX_ITERATIONS. ONE precedence everywhere (review 2026-11-09 finding 2): request >
+# host default > the workflow's own value (a start-node or Agent-node pin default, an Agent
+# node's config) > DEFAULT_MAX_ITERATIONS. Stamped once at start; rides with `_limits` into
+# Agent-node children and child flows.
+MAX_ITERATIONS_DECLARED_KEY = "max_iterations_declared"
+
+
+def declared_max_iterations(limits: Any) -> "int | None":
+    """The run's iteration budget when a caller DECLARED it (see MAX_ITERATIONS_DECLARED_KEY),
+    else None: a seeded default never beats a workflow's own value."""
+    if not isinstance(limits, dict) or limits.get(MAX_ITERATIONS_DECLARED_KEY) is not True:
+        return None
+    raw = limits.get("max_iterations")
+    if isinstance(raw, bool):
+        return None
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return None
+    return value if value >= 1 else None
+
 
 def ensure_namespaces(vars: Dict[str, Any]) -> Dict[str, Any]:
     """Ensure the four canonical namespaces exist and are dicts."""

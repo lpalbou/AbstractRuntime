@@ -1016,3 +1016,53 @@ def test_own_time_revoked_during_the_work_ends_idle_when_the_jobs_are_done(tmp_p
     assert read_entity_state(home_dir)["state"] == "awake"
     assert read_resume_to(home_dir)["phase"] is None, "own time is cancelled, never given back"
     assert _task_status(home_dir, "t1")[-1][0] == "done"
+
+
+# ---------------------------------------------------------------- CONTRACT v3 D3: Stop cancels the remembered return;
+# nothing is restored after a hard stop
+
+
+def test_the_kill_switch_clears_resume_to_even_with_no_loop_running(tmp_path: Path) -> None:
+    from abstractruntime.identity.life import hard_stop_loop, read_resume_to, write_resume_to
+
+    home_dir = _make_home(tmp_path)
+    write_resume_to(home_dir, "personal", written_by="loop:job-interrupts-own-time")
+    out = hard_stop_loop(home_dir, reason="test")
+    remembered = read_resume_to(home_dir)
+    assert remembered["phase"] is None and remembered["written_by"] == "kill_switch"
+    assert out["killed"] is False and out["resume_to_cleared"] is True
+    # A home still on the gateway sidecar: the stop's null shadows its stale "personal".
+    other = tmp_path / "other"
+    other_home = _make_home(other)
+    _sidecar(other_home, {"resume_to": "personal"})
+    hard_stop_loop(other_home)
+    assert read_resume_to(other_home)["phase"] is None
+    # A corrupt phases.yaml: the stop stands and says what it could not clear.
+    (home_dir / "phases.yaml").write_text("{corrupt: [", encoding="utf-8")
+    bad = hard_stop_loop(home_dir)
+    assert bad["resume_to_cleared"] is False and "resume_to not cleared" in bad["resume_to_note"]
+    assert read_loop_status(home_dir)["stopped_by"] == "kill_switch"
+
+
+@pytest.mark.parametrize("operator_grants_again", [False, True])
+def test_after_a_hard_stop_the_next_loop_works_its_job_and_restores_nothing(tmp_path: Path,
+                                                                            operator_grants_again: bool) -> None:
+    """Stop, then a job queued: the next loop works the job and ends idle (jobs_done) even when its host passes the
+    old return (return_to personal) and the grant still reads armed. The operator's own act (a grant/start:
+    first_day_unconditional) is what opens own time again."""
+    from abstractruntime.identity.life import hard_stop_loop
+
+    home_dir = _make_home(tmp_path)  # grant armed
+    hard_stop_loop(home_dir, reason="operator stop")
+    _add_task(home_dir, "t1", "Label the boxes")
+    llm = _ScriptedLLM(["Labelled.\n```work\ndone: labelled\n```", "R1.", "My own thread.", "Look-back.", "R2."])
+    seen: List[tuple] = []
+    report = LifeLoop(_job_factory(home_dir, llm, seen), tick_seconds=1, ticks_per_day=1, max_ticks=2,
+                      rest_minutes=30, stop_file=home_dir / "STOP", state_home=home_dir, sleep_fn=lambda s: None,
+                      out=lambda s: None, return_to="personal",
+                      first_day_unconditional=operator_grants_again).run()
+    if operator_grants_again:
+        assert seen == [("work", "t1"), ("personal", None)], "the operator's grant opens own time after the job"
+    else:
+        assert seen == [("work", "t1")] and report.stopped_by == "jobs_done", seen
+        assert llm.replies == ["My own thread.", "Look-back.", "R2."]

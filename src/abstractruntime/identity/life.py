@@ -2277,6 +2277,15 @@ def hard_stop_loop(home_dir: Path, *, reason: str = "", requested_by: str = "adm
         if killed:
             outcome = "killed"
 
+    # STOP CANCELS THE REMEMBERED RETURN (CONTRACT v3 D3): nothing the stopped loop was doing is restored - Resume
+    # lands in idle, a queued job then moves him to work, and own time only comes back with a new grant. Written
+    # into the runtime bucket whatever the loop's fate (it also shadows a stale sidecar value).
+    resume_to_note: Optional[str] = None
+    try:
+        write_resume_to(home_dir, None, written_by="kill_switch")
+    except Exception as e:  # noqa: BLE001 - the stop itself stands; the result says what failed
+        resume_to_note = f"resume_to not cleared: {e}"
+
     # The status file must read stopped immediately (the dead process can no longer write its own transition) -
     # naming the loop it is about (its pid and token when it was verified), never this caller.
     try:
@@ -2295,6 +2304,10 @@ def hard_stop_loop(home_dir: Path, *, reason: str = "", requested_by: str = "adm
         "signal": signal_name,
         "reason": outcome,
         "requested_reason": str(reason or ""),
+        # The remembered return is cancelled (resume_to null, written_by kill_switch); False + note when the write
+        # failed (a corrupt phases.yaml or a newer schema).
+        "resume_to_cleared": resume_to_note is None,
+        **({"resume_to_note": resume_to_note} if resume_to_note else {}),
         # Legacy keys (kept for existing callers).
         "frozen": True,
         "was_running": bool(verified and signal_name),
@@ -3585,6 +3598,14 @@ class LifeLoop:
         report = LifeReport()
         cue = self.first_cue
         day = 0
+        # NOTHING IS RESTORED AFTER A HARD STOP (CONTRACT v3 D3): a loop that follows the operator's kill switch
+        # never returns to the own time the stopped loop was living, whatever its host passed - it works the queued
+        # jobs and ends idle. Only the operator's own act (a grant or start: first_day_unconditional) opens own time.
+        if self.state_home is not None and not self._first_day and self._return_to is not None:
+            if str(read_loop_status(self.state_home).get("stopped_by") or "") == "kill_switch":
+                self.out("(the last loop was stopped by the operator's kill switch - nothing is restored; own time "
+                         "comes back only with the operator's grant)")
+                self._return_to = None
         self._status("between")
         # SPAWN-WAKE (contract-phases v2 §1.2 rule 6, §10.1): a sleep an earlier loop wrote for itself (its own
         # election, the retired cycle, the retired gate/exit landings) has no process behind it any more; the new

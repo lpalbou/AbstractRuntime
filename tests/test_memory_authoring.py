@@ -517,6 +517,7 @@ def test_a_declaration_memory_answers_rearmed_is_a_repair_not_a_refusal() -> Non
     rows = [SimpleNamespace(subject=f"ex:interest-{i}", object="", assertion_id=f"a{i}",
                             attributes={"record_kind": "interest", "title": None}) for i in range(4)]
     ms = SimpleNamespace(tasks=object(), store=SimpleNamespace(query=lambda q: rows),
+                         journal=SimpleNamespace(closures=lambda **kw: []),  # nothing closed
                          declare_pending=lambda rid, **kw: next(answers))
     lines: List[str] = []
     receipt = declare_missing_metadata(ms, scopes=[("self", "entity:x")], out=lines.append)
@@ -919,3 +920,133 @@ def test_the_sleep_repairs_a_legacy_public_diary_records_title_and_summary(tmp_p
     assert (again.attributes["title"], str(again.object)) == (TITLE, SUMMARY)
     assert len([t for t in _tasks(home_dir, "digest.author") if t["target_id"] == rid]) == 1
     assert len([ln for ln in lines if ln.startswith("#REPAIR_REFUSED")]) == 1, lines
+
+
+def test_the_sleep_repairs_mechanical_episodes_and_session_reflections_by_stamp(tmp_path: Path, monkeypatch) -> None:
+    """Operator 2026-11-09 (every memory has an authored title and summary; the sleep repairs leftovers), as seen on
+    castor's graph: an episode formed before formation authored it (digest_method mechanical-v2, its title the
+    pre-authoring first-sentence fallback), a session summary titled with the runtime's template "session reflection:
+    <id>" (no digest_method: memory reads its author as unrecorded - the Entity app's "who wrote it was not
+    recorded"), and memory's own mechanical-dedup-v1 day summary carry no authored provenance. The sleep's repair
+    selects them BY STAMP and declares BOTH fields pending; the drainer authors them in the same night with the
+    capability model's provenance (author, reader, the call kept as an artifact), the stored texts kept as version 0.
+    Untouched: an authored:summaries episode, an episode authored before b6d50d3 (metadata_authored beside its
+    mechanical-v2 label), a closed mechanical episode (no refusal line). A reflection whose summary was already
+    authored gets its template title authored only. The next night declares nothing."""
+    import abstractmemory
+    from abstractmemory import MemoryRecordInput
+    from abstractmemory.understanding import reading_provenance
+
+    from abstractruntime.identity.chat import open_home
+    from abstractruntime.identity.life import build_consolidator, write_entity_state
+
+    home_dir = _workspace_home(tmp_path)
+    home = open_home(home_dir, fence=None)
+    eid = home.entity_id
+
+    def form(key: str, kind: str, *, title: str, digest: str, attributes: Dict[str, Any], source: str) -> str:
+        # A summary names what it summarizes (memory's rule): here the first episode.
+        edges = (("summarizes", ids["episode"]),) if kind == "summary" else ()
+        (gid,) = home.ms.remember_many([MemoryRecordInput(kind=kind, title=title, digest=digest, attributes=attributes,
+                                                          edges=edges, provenance={"source": source})],
+                                       scope="life", owner_id=eid, idempotency_key=key, turn_id=key)
+        return str(gid)
+
+    originals = {
+        "episode": ("He asked when the tide turns. I said twice a day, with the moon.",
+                    "person:ann: When does the tide turn? castor: Twice a day, with the moon."),
+        "reflection": ("session reflection: owntime-20261109T075602",
+                       "I kept the tide question open for later. [holding — results pending]"),
+        "dedup": ("Day 2026-07-09: 3 near-identical exchanges",
+                  "person:ann: Are you there? castor: I am here."),
+    }
+    ids: Dict[str, str] = {}
+    ids["episode"] = form("ep-mech", "episode", title=originals["episode"][0], digest=originals["episode"][1],
+                          attributes={"digest_method": "mechanical-v2", "participants": ["person:ann", eid]},
+                          source="entity-chat-v1")
+    ids.update({
+        "reflection": form("refl-legacy", "summary", title=originals["reflection"][0],
+                           digest=originals["reflection"][1],
+                           attributes={"session_id": "owntime-20261109T075602", "phase": "own_time"},
+                           source="entity-chat-reflection-v1"),
+        "dedup": form("dedup-day", "summary", title=originals["dedup"][0], digest=originals["dedup"][1],
+                      attributes={"digest_method": "mechanical-dedup-v1", "dedup_members": 3,
+                                  "origin_date": "2026-07-09"}, source="wake_cue_dedup"),
+    })
+    authored = form("ep-authored", "episode", title="Tide talk with Ann", digest="Ann asked about the tide.",
+                    attributes={"digest_method": "authored:summaries",
+                                "metadata_authored": {"fields": ["title", "summary"], "capability": "summaries"}},
+                    source="entity-chat-v1")
+    pre_b6d50d3 = form("ep-authored-old", "episode", title="Ann's question about the moon",
+                       digest="Ann asked how the moon moves the sea.",
+                       attributes={"digest_method": "mechanical-v2",
+                                   "metadata_authored": {"fields": ["title", "summary"], "capability": "summaries"}},
+                       source="entity-visit-run-v0")
+    closed = form("ep-closed", "episode", title="exchange: an old loop", digest="castor: tick.",
+                  attributes={"digest_method": "mechanical-v2"}, source="entity-chat-v1")
+    home.ms.close_record(closed, kind="supersede", replacement_ids=[authored], reason="wake-cue dedup (test)")
+    digest_authored = form("refl-digest-authored", "summary", title="session reflection: sess_0a1b2c",
+                           digest="A raw look-back.", attributes={"session_id": "sess_0a1b2c"},
+                           source="entity-chat-reflection-v1")
+    res = home.ms.rewrite_digest(digest_authored, text="A short session about bridges.",
+                                 author={"kind": "capability-model", "id": "summaries"},
+                                 reader={"provider": "fake", "model": "earlier", "thinking": None},
+                                 sources=[{"kind": "artifact", "artifact_id": "earlier-call"}], cause="repair",
+                                 expected_version=0)
+    assert res["outcome"] == "applied", res
+    stored = {str(r.subject): r for k in ("episode", "summary") for r in _rows(home_dir, k)}
+    # castor's shapes: the reflection's reading is unrecorded, the mechanical episode's is mechanical.
+    assert reading_provenance(stored[ids["reflection"]])["author"]["kind"] == "unrecorded"
+    assert reading_provenance(stored[ids["episode"]])["author"]["kind"] == "mechanical"
+    untouched = {gid: (str(stored[gid].object), stored[gid].attributes) for gid in (authored, pre_b6d50d3, closed)}
+    home.close()
+    monkeypatch.setattr(abstractmemory, "sleep_pass", lambda *a, **k: {"maintenance": {}, "dream": {}})
+
+    def night() -> tuple:
+        write_entity_state(home_dir, "asleep", reason="self-elected sleep: full", mode="dreaming", written_by="self",
+                           fence=LifecycleFence.admit(home_dir))
+        lines: List[str] = []
+        result = build_consolidator(home_dir, out=lines.append, llm_for_capability=lambda name: _Capability(),
+                                    fence=LifecycleFence.admit(home_dir))()
+        return result["authoring"], lines
+
+    receipt, lines = night()
+    # 3 records x 2 fields + the authored-summary reflection's title.
+    assert (receipt["declared"], receipt["authored"]) == (7, 7), receipt
+    assert receipt["failed"] == 0 and receipt["refused"] == 0, receipt
+    assert not [ln for ln in lines if ln.startswith("#REPAIR_REFUSED")], lines
+    rows = {str(r.subject): r for k in ("episode", "summary") for r in _rows(home_dir, k)}
+    home = open_home(home_dir, fence=None)
+    try:
+        for name, rid in ids.items():
+            row = rows[rid]
+            assert (row.attributes["title"], str(row.object)) == (TITLE, SUMMARY), (name, row.attributes, row.object)
+            assert "pending" not in row.attributes, (name, row.attributes.get("pending"))
+            # (c) the authored provenance the Entity app reads: never "who wrote it was not recorded" again.
+            for stamp in (row.attributes["understanding"], row.attributes["title_provenance"]):
+                assert stamp["author"] == {"kind": "capability-model", "id": "summaries"}, (name, stamp)
+                assert stamp["reader"]["model"] == "summarizer", (name, stamp)
+                assert [s["kind"] for s in stamp["sources"]] == ["artifact"], (name, stamp)
+            assert reading_provenance(row)["author"]["kind"] == "capability-model", name
+            assert row.attributes["digest_method"] == "authored-v1", name
+            # Nothing cut: the stored text and the old title are version 0.
+            assert home.ms.versions(rid)[0]["text"] == originals[name][1], name
+            assert home.ms.versions(rid, field="title")[0]["title"] == originals[name][0], name
+            tasks = [t for kind in AUTHORING_KINDS for t in home.ms.tasks.tasks(kind=(kind,), target_id=rid)]
+            assert sorted(t["kind"] for t in tasks) == ["digest.author", "title.author"], (name, tasks)
+            assert all(t["status"] == "done" and t["cause"]["declared"] is True for t in tasks), (name, tasks)
+        row = rows[digest_authored]
+        assert (row.attributes["title"], str(row.object)) == (TITLE, "A short session about bridges."), row.attributes
+        assert row.attributes["understanding"]["reader"]["model"] == "earlier", "its authored summary is kept"
+        assert row.attributes["title_provenance"]["author"] == {"kind": "capability-model", "id": "summaries"}
+        for gid, (obj, attrs) in untouched.items():
+            assert (str(rows[gid].object), rows[gid].attributes) == (obj, attrs), gid
+            assert not [t for kind in AUTHORING_KINDS for t in home.ms.tasks.tasks(kind=(kind,), target_id=gid)], gid
+    finally:
+        home.close()
+
+    receipt, lines = night()
+    assert (receipt["declared"], receipt["authored"], receipt["refused"]) == (0, 0, 0), receipt
+
+
+AUTHORING_KINDS = ("title.author", "digest.author")

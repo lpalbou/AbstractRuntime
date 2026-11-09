@@ -483,15 +483,90 @@ def _legacy_diary_summary(kind: str, a: Any) -> bool:
     return _public_diary_projection(kind, a) and str(author.get("kind") or "") not in ("capability-model", "operator")
 
 
+#: The runtime's own session look-back title template before 4eefddb formed it pending: f"session reflection:
+#: {session_id}" (ChatSession's reflection and the visit lane's close reflection, kind summary). A label format the
+#: runtime wrote, never words anyone authored; matched by its prefix only.
+RUNTIME_REFLECTION_TITLE_PREFIX = "session reflection: "
+
+
 def _legacy_mechanical_title(kind: str, title: Any, attrs: Dict[str, Any]) -> bool:
     """A card or dream stored before memory formed them pending (4f3a77e) carries memory's own mechanical label:
-    "World model: <subject>" with no authored title provenance, or "Dream: ...". Memory's label formats, not text."""
+    "World model: <subject>" with no authored title provenance, or "Dream: ..."; a session summary stored before the
+    runtime formed it pending (4eefddb) carries the runtime's own template "session reflection: <session id>" with no
+    authored title provenance. Label formats of the code that wrote them, never text read for meaning."""
     text = str(title or "")
     if kind == "world_model":
         return text.startswith("World model: ") and not attrs.get("title_provenance")
     if kind == "dream":
         return text.startswith("Dream: ")
+    if kind == "summary":
+        return text.startswith(RUNTIME_REFLECTION_TITLE_PREFIX) and not _authored_title_stamp(attrs)
     return False
+
+
+#: The kinds the runtime and memory FORM from their own bookkeeping and now author at formation (an exchange's
+#: episode; a session's look-back summary, a floored reflection, memory's day / dedup summary). A world-model card and
+#: a dream keep their own label rules (above); an elected kind (interest, lesson, realization, diary) is his words.
+FORMED_KINDS = frozenset({"episode", "summary"})
+#: Who wrote a reading that nobody authored, as memory derives it (`reading_provenance`): a machine (a `mechanical*`
+#: digest_method or a mechanical formation stamp) or nobody recorded (no label at all: the Entity app's "who wrote it
+#: was not recorded").
+UNAUTHORED_READING_KINDS = frozenset({"mechanical", "unrecorded"})
+
+
+def _authored_title_stamp(attrs: Dict[str, Any]) -> bool:
+    """The title carries an authored stamp: the formation step authored it (`metadata_authored.fields` names it) or
+    memory recorded who wrote it (`title_provenance` whose author is not mechanical - memory's own reading,
+    world_model._authored_title; a declaration's stamp is mechanical)."""
+    meta = attrs.get("metadata_authored")
+    if isinstance(meta, dict) and "title" in [str(f) for f in (meta.get("fields") or ())]:
+        return True
+    prov = attrs.get("title_provenance")
+    if not isinstance(prov, dict):
+        return False
+    author = prov.get("author") if isinstance(prov.get("author"), dict) else {}
+    return str(author.get("kind") or "") != "mechanical"
+
+
+def _formed_never_authored(kind: str, a: Any, attrs: Dict[str, Any]) -> bool:
+    """A record the runtime or memory formed mechanically before formation authored it (operator 2026-11-09), read BY
+    STAMP, never by its text: its kind is formed (FORMED_KINDS), it carries NO authored provenance (no
+    `metadata_authored`, no authored `title_provenance`, its current reading not written by a capability model, the
+    operator or the entity: memory's `reading_provenance` author is mechanical - a mechanical-v1 / -v2 / -floor-v1 /
+    -flow-v1 / -dedup-v1 / -close-v1 digest_method or stamp - or unrecorded). Both its title and its summary are then
+    declared pending. A ripple's consolidation record is never taken (memory refuses consolidation_record)."""
+    from abstractmemory.understanding import reading_provenance
+
+    if kind not in FORMED_KINDS or attrs.get("summary_role") == "re-understanding":
+        return False
+    if attrs.get("metadata_authored") or _authored_title_stamp(attrs):
+        return False
+    author = reading_provenance(a).get("author") or {}
+    return str(author.get("kind") or "") in UNAUTHORED_READING_KINDS
+
+
+def _repair_fields(a: Any) -> List[str]:
+    """The fields the sleep's repair declares pending on one stored, unclosed record (pure read;
+    `declare_missing_metadata`'s selection, the legacy public diary summary aside): [] for a non-record or a record
+    already pending."""
+    from .title_failures import is_placeholder_title
+
+    attrs = a.attributes if isinstance(a.attributes, dict) else {}
+    if not attrs.get("record_kind") or isinstance(attrs.get("pending"), dict):
+        return []
+    title = attrs.get("title")
+    kind = str(attrs.get("record_kind") or "")
+    method = str(attrs.get("digest_method") or "")
+    fields: List[str] = []
+    if (not (isinstance(title, str) and title.strip()) or is_placeholder_title(title)
+            or attrs.get("title_missing") or _legacy_mechanical_title(kind, title, attrs)
+            or _legacy_diary_title(kind, title, a)):
+        fields.append("title")
+    if not str(a.object or "").strip() or _legacy_mechanical_summary(kind, title, method):
+        fields.append("summary")
+    if _formed_never_authored(kind, a, attrs):
+        fields.extend(f for f in ("title", "summary") if f not in fields)
+    return [f for f in ("title", "summary") if f in fields]
 
 
 def _legacy_mechanical_summary(kind: str, title: Any, method: str) -> bool:
@@ -512,21 +587,25 @@ def declare_missing_metadata(ms: Any, *, scopes: Sequence[Tuple[str, str]], out:
                              ) -> Dict[str, Any]:
     """The sleep's scan (operator 2026-11-09): a record that LACKS a title or a summary (a legacy record formed
     before titles were mandatory, one stored with the runtime's old placeholder, a legacy card "World model:
-    <subject>" / mechanical-card-v2 or dream "Dream: ...") and carries no pending marker is DECLARED PENDING through
-    memory's `declare_pending` (AbstractMemory 11687df): the same marker and title.author / digest.author tasks a
-    record formed pending gets, so the drainer authors its title and its summary through retitle / rewrite_digest -
-    cards and dreams included. A declared title is stored None until authored (the old one stays in its history).
-    Nothing is authored here and nothing is cut. A refusal (e.g. protected_kind: the summary of his own act) is
-    logged loudly and counted. Memory may also answer outcome "rearmed" (or "applied" beside new fields) with the
-    fields whose task it REPAIRED (AbstractMemory 39e479e): a success, counted in `repaired`. Returns {declared
-    (fields), repaired (fields), scanned, refused}."""
+    <subject>" / mechanical-card-v2 or dream "Dream: ...", a session summary titled with the runtime's template
+    "session reflection: <id>") and carries no pending marker is DECLARED PENDING through memory's `declare_pending`
+    (AbstractMemory 11687df): the same marker and title.author / digest.author tasks a record formed pending gets, so
+    the drainer authors its title and its summary through retitle / rewrite_digest - cards and dreams included. So is
+    an episode or a summary the runtime or memory formed MECHANICALLY before formation authored it (selected by
+    stamp, `_formed_never_authored`: its reading mechanical or unrecorded, no authored provenance): both fields. A
+    declared title is stored None until authored (the old one stays in its history); a declared summary keeps the
+    stored text as its provisional version 0. Nothing is authored here and nothing is cut: the drainer authors under
+    its per-pass budget, so a home with many such records is repaired over several nights. A CLOSED record (memory
+    refuses `closed`; its replacement is the live one) is skipped, counted in `closed`. A refusal (e.g.
+    protected_kind: the summary of his own act) is logged loudly and counted. Memory may also answer outcome
+    "rearmed" (or "applied" beside new fields) with the fields whose task it REPAIRED (AbstractMemory 39e479e): a
+    success, counted in `repaired`. Returns {declared (fields), repaired (fields), scanned, refused, closed}."""
     from abstractmemory import TripleQuery
 
-    from .title_failures import is_placeholder_title
-
-    receipt = {"declared": 0, "repaired": 0, "scanned": 0, "refused": 0}
+    receipt = {"declared": 0, "repaired": 0, "scanned": 0, "refused": 0, "closed": 0}
     if getattr(ms, "tasks", None) is None:
         return receipt
+    closed = frozenset(str(c.assertion_id) for c in ms.journal.closures(limit=0))
     diary_summary_refusals: Dict[Tuple[str, str], int] = {}
     for scope, owner in scopes:
         for a in ms.store.query(TripleQuery(scope=scope, owner_id=owner or None, predicate="dcterms:abstract",
@@ -534,17 +613,12 @@ def declare_missing_metadata(ms: Any, *, scopes: Sequence[Tuple[str, str]], out:
             attrs = a.attributes if isinstance(a.attributes, dict) else {}
             if not attrs.get("record_kind") or isinstance(attrs.get("pending"), dict):
                 continue
+            if str(a.assertion_id or "") in closed:
+                receipt["closed"] += 1
+                continue
             receipt["scanned"] += 1
-            title = attrs.get("title")
             kind = str(attrs.get("record_kind") or "")
-            method = str(attrs.get("digest_method") or "")
-            fields = []
-            if (not (isinstance(title, str) and title.strip()) or is_placeholder_title(title)
-                    or attrs.get("title_missing") or _legacy_mechanical_title(kind, title, attrs)
-                    or _legacy_diary_title(kind, title, a)):
-                fields.append("title")
-            if not str(a.object or "").strip() or _legacy_mechanical_summary(kind, title, method):
-                fields.append("summary")
+            fields = _repair_fields(a)
             if _legacy_diary_summary(kind, a):
                 # A legacy public diary summary (his gist / first line stood in): declared pending like a title
                 # (AbstractMemory 8235daf, formation's rule diary_summary_refusal: marker + digest.author task, the

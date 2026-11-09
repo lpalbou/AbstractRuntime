@@ -137,8 +137,12 @@ def test_voice_projection_today_drops_transport_and_types_nothing(detail: str) -
     assert [a["artifact_id"] for a in turn["artifacts"]] == [IMAGE]
     # TODAY'S HOLE: nothing says this question was spoken or this answer was read aloud.
     assert "voice" not in turn
+    # The exact key set, so a voice field (or any other) cannot slip in unseen. `prompt_author`, `author` (turn
+    # authors, 6706188 + 3e8e08a) and `repeat_of` (1abcc26), all 2026-11-08, are conversation fields, not transport,
+    # and are pinned here on purpose.
     assert set(turn) == {"run_id", "workflow_id", "kind", "status", "created_at", "updated_at", "prompt", "prompt_verbatim",
-                         "prompt_metadata", "attachments", "answer", "answer_meta", "stats", "artifacts"}
+                         "prompt_metadata", "attachments", "answer", "answer_meta", "stats", "artifacts",
+                         "prompt_author", "author", "repeat_of"}
 
 
 def test_voice_projection_today_archive_keeps_playback_and_the_ledger_can_derive_it() -> None:

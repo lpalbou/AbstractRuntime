@@ -24,9 +24,10 @@ Design (posted for runtime owner-review, commons c2732):
   — an LLM naming pass can layer on later as a separate, labeled act.
 
 Privacy: labels and exemplars are built from KEYWORDS and TITLES only —
-diary projections carry no keywords and act-frame titles ("Diary entry
-(note) — <date>"), and PRIVATE entries' digests are word-free by the
-formation rule. Digest TEXT is never served by this module; a future
+diary projections carry no keywords; a PUBLIC entry's title is his gist or
+an authored title from its public words (Codex review 2 #10: public-plane
+words, as its digest already was), a PRIVATE entry's title is the
+content-free act frame and its digest is word-free by the formation rule. Digest TEXT is never served by this module; a future
 change that surfaced digests would expose non-private gists and must
 re-review this boundary (adversary F8).
 """

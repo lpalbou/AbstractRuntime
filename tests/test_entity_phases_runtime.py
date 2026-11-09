@@ -185,7 +185,7 @@ def test_transition_table_every_loop_edge_is_the_graphs_and_sleep_after_sleep_is
     assert sleep_refusal(home_dir, last_phase="sleep") is not None
     assert sleep_refusal(home_dir, last_phase="personal") is None
     (home_dir / "work_order.md").unlink()
-    after_sleep = read_day_gate(home_dir, sleep_elected="tired again", last_phase="sleep")
+    after_sleep = read_day_gate(home_dir, sleep_elected="tired again", last_phase="sleep", return_to="personal")
     assert after_sleep["phase"] == "personal" and "a sleep cannot follow a sleep" in after_sleep["note"]
     assert read_day_gate(home_dir, sleep_elected="tired", last_phase="personal")["phase"] == "sleep"
 
@@ -556,7 +556,7 @@ def test_the_gate_skips_work_while_work_is_off(tmp_path: Path) -> None:
     home_dir = _make_home(tmp_path)
     (home_dir / "work_order.md").write_text("Sort the shelf.", encoding="utf-8")
     write_work_toggle(home_dir, enabled=False, written_by="person:laurent")
-    decision = read_day_gate(home_dir)
+    decision = read_day_gate(home_dir, last_phase="personal")
     assert decision["phase"] == "personal" and "Work is off" in decision["note"]
     write_personal_grant(home_dir, mode="disabled")
     decision = read_day_gate(home_dir)
@@ -733,11 +733,16 @@ def test_the_operators_start_reaches_the_spawned_loop(tmp_path: Path, monkeypatc
     monkeypatch.setattr(subprocess, "Popen", fake_popen)
     for flag in (True, False):
         try:
-            spawn_loop_process(home_dir, provider="lmstudio", model="m", first_day_unconditional=flag)
+            spawn_loop_process(home_dir, provider="lmstudio", model="m", first_day_unconditional=flag,
+                               return_to="personal" if flag else None)
         except Exception:  # noqa: BLE001 - only the argv handed to the child matters here
             pass
     assert len(seen) == 2, seen
     assert "--first-day-unconditional" in seen[0] and "--first-day-unconditional" not in seen[1]
+    # Codex #2: the run's remembered return reaches the child; a host that predates it passes none (the home's
+    # resume_to decides).
+    assert seen[0][seen[0].index("--return-to") + 1] == "personal"
+    assert seen[1][seen[1].index("--return-to") + 1] == "none"
 
 
 # ---------------------------------------------------------------- Codex review 2026-11-09
@@ -771,3 +776,45 @@ def test_a_sleep_handed_back_while_he_rests_resumes_its_maintenance_never_spins(
                       sleep_fn=sleeper, out=lambda s: None).run()
     assert passes == ["self"], "the handed-back sleep's maintenance resumed"
     assert report.stopped_by == "stop_file" and read_entity_state(home_dir)["state"] == "awake"
+
+
+@pytest.mark.parametrize("last_phase", [None, "work", "sleep", "visit"])
+def test_drives_alone_never_admit_personal(tmp_path: Path, last_phase: Any) -> None:
+    """Codex #2 (spec v23 OWN-TIME-IS-A-PRIVILEGE): the grant armed and drives pulling are not enough - personal
+    needs the operator's start, a continuation of personal, or a remembered return to it."""
+    from abstractruntime.identity.life import read_day_gate, write_resume_to
+
+    home_dir = _make_home(tmp_path)  # grant armed, one standing drive
+    refused = read_day_gate(home_dir, last_phase=last_phase)
+    assert refused["phase"] == "idle" and refused["cause"] == "no_return", refused
+    assert read_day_gate(home_dir, last_phase=last_phase, first_day=True)["phase"] == "personal"
+    assert read_day_gate(home_dir, last_phase="personal")["phase"] == "personal"  # continuation
+    assert read_day_gate(home_dir, last_phase=last_phase, return_to="personal")["phase"] == "personal"
+    assert read_day_gate(home_dir, last_phase=last_phase, return_to="work")["cause"] == "no_return"
+    # The remembered return persisted by the gateway (sidecar today, the runtime bucket after migration).
+    _sidecar(home_dir, {"resume_to": "personal"})
+    assert read_day_gate(home_dir, last_phase=last_phase)["phase"] == "personal"
+    write_resume_to(home_dir, None, written_by="gateway:test")
+    assert read_day_gate(home_dir, last_phase=last_phase)["cause"] == "no_return"
+
+
+def test_a_run_started_for_work_alone_ends_idle_after_it(tmp_path: Path) -> None:
+    home_dir = _make_home(tmp_path)
+    (home_dir / "work_order.md").write_text("Sort the shelf.", encoding="utf-8")
+    llm = _ScriptedLLM(["Done.\n```work\ndone: sorted\n```", "R1.", "NEVER - no own time was granted"])
+    report = LifeLoop(_phase_factory(home_dir, llm), tick_seconds=1, ticks_per_day=1, max_ticks=3, rest_minutes=30,
+                      stop_file=home_dir / "STOP", state_home=home_dir, sleep_fn=lambda s: None,
+                      out=lambda s: None, return_to="work").run()
+    assert report.days == 1 and report.stopped_by == "no_return"
+    assert llm.replies == ["NEVER - no own time was granted"]
+    assert read_entity_state(home_dir)["state"] == "awake"
+    # The operator's grant during the work names the return (resume_to personal): own time follows.
+    from abstractruntime.identity.life import write_resume_to
+
+    (home_dir / "work_order.md").write_text("Label the boxes.", encoding="utf-8")
+    llm2 = _HookLLM(["Done.\n```work\ndone: labelled\n```", "R1.", "My own thread.", "Look-back.", "R2."],
+                    hooks={0: lambda: write_resume_to(home_dir, "personal", written_by="person:laurent")})
+    r2 = LifeLoop(_phase_factory(home_dir, llm2), tick_seconds=1, ticks_per_day=1, max_ticks=2, rest_minutes=30,
+                  stop_file=home_dir / "STOP", state_home=home_dir, sleep_fn=lambda s: None,
+                  out=lambda s: None, return_to="work").run()
+    assert r2.days == 2 and r2.ticks == 2

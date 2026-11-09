@@ -279,6 +279,7 @@ def read_day_gate(
     sleep_elected: Optional[str] = None,
     last_phase: Optional[str] = None,
     first_day: bool = False,
+    return_to: Optional[str] = None,
 ) -> Dict[str, Any]:
     """One decision per day boundary: {phase, cause, detail, note?, ...}.
 
@@ -289,7 +290,12 @@ def read_day_gate(
 
     `sleep_elected`: his own reason from a ```rest block (the decision); `last_phase`: the last activity phase he
     lived (personal / work / sleep, None at a start); `first_day`: the operator just started own time (the start IS
-    the pull, the first day is unconditional). `skip_phases` (graph-edit build c4837): the caller's graph consult
+    the pull, the first day is unconditional); `return_to`: the phase the caller remembers returning to.
+
+    OWN TIME IS THE OPERATOR'S PRIVILEGE (spec v23; Codex review 2026-11-09 #2): with the grant armed, personal is
+    admitted only by the operator's start (`first_day`), as a continuation of personal (`last_phase` personal), or
+    as a remembered return to it (`return_to` personal, or the home's resume_to bucket / the gateway sidecar) -
+    never from drives alone. Otherwise own time ends awake (idle, cause no_return). `skip_phases` (graph-edit build c4837): the caller's graph consult
     found a landing removed - the chain falls to the next legal landing; the floor is idle (never sleep)."""
     try:
         state = read_entity_state(home_dir)
@@ -328,6 +334,19 @@ def read_day_gate(
             cause, detail = "no_grant", grant_refusal
         idle: Dict[str, Any] = {"phase": "idle", "cause": cause, "detail": detail,
                                 "grant_cause": personal_grant_end_cause(grant)}
+        if notes:
+            idle["note"] = "; ".join(notes)
+        return idle
+    if not (
+        first_day
+        or str(last_phase or "") == PHASE_PERSONAL
+        or str(return_to or "") == PHASE_PERSONAL
+        or read_resume_to(home_dir).get("phase") == PHASE_PERSONAL
+    ):
+        idle = {"phase": "idle", "cause": "no_return",
+                "detail": ("own time is the operator's privilege: no start, no continuation of personal and no "
+                           "remembered return to it"),
+                "grant_cause": None}
         if notes:
             idle["note"] = "; ".join(notes)
         return idle
@@ -2357,6 +2376,9 @@ def spawn_loop_process(
     # The operator's own act (his grant, start or retry): the child's first day is his whatever pulls. A restore
     # after an interruption passes False (the gate governs: nothing pulling = he rests inside personal).
     first_day_unconditional: bool = False,
+    # The phase the run is started to (re)enter: "personal" (the operator's act, or a restore of own time), "work"
+    # (a restore of work alone) or None (the home's resume_to decides; the default for hosts that predate it).
+    return_to: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Spawn the own-time loop, detached, logging to <home>/own_time.log.
     The RUNTIME owns the home's files (single-writer discipline): hosts
@@ -2443,6 +2465,7 @@ def spawn_loop_process(
         ]
         if first_day_unconditional:
             argv.append("--first-day-unconditional")
+        argv += ["--return-to", str(return_to) if return_to in ("personal", "work") else "none"]
         if base_url:
             argv += ["--base-url", str(base_url)]
 
@@ -2811,6 +2834,7 @@ class LifeLoop:
         sleep_fn: Callable[[float], None] = time.sleep,
         out: Callable[[str], None] = print,
         first_day_unconditional: bool = False,
+        return_to: Optional[str] = PHASE_PERSONAL,
     ) -> None:
         if ticks_per_day < 1:
             raise ValueError("ticks_per_day must be >= 1")
@@ -2842,6 +2866,12 @@ class LifeLoop:
         self._sleep_elected: Optional[str] = None
         self._last_activity_phase: Optional[str] = None
         self._first_day: bool = bool(first_day_unconditional)
+        # The phase this run was started to (re)enter (spec v23): "personal" when the operator started or granted
+        # own time (a direct run, the CLI's default) or the host restores it; "work" or None when the host started
+        # it for work alone. A personal day sets it (continuation survives a sleep, a visit or a work day).
+        self._return_to: Optional[str] = (
+            PHASE_PERSONAL if first_day_unconditional else (return_to if return_to in RESUME_TO_PHASES else None)
+        )
         # The first cue after his own sleep (composed by the sleep leg, read by the next day-open).
         self._wake_cue: str = ""
         # Marker honesty (F7): the phase_changed marker for a day-opening
@@ -3439,6 +3469,7 @@ class LifeLoop:
                 self._sleep_elected = None  # consumed at this boundary, honored or refused
                 decision = read_day_gate(
                     self.state_home, sleep_elected=_elected, last_phase=_prev_phase, first_day=self._first_day,
+                    return_to=self._return_to,
                 )
                 if decision.get("note"):
                     self.out(f"({decision['note']})")
@@ -3449,7 +3480,7 @@ class LifeLoop:
                     if _edge_cause:
                         decision, _edge_cue = consult_gate_landing(
                             self.state_home, str(_prev_phase), decision, _edge_cause, self.out,
-                            last_phase=_prev_phase, first_day=self._first_day,
+                            last_phase=_prev_phase, first_day=self._first_day, return_to=self._return_to,
                         )
                         _edge_cause = _boundary_cause(_prev_phase, str(decision.get("phase") or ""), self.state_home)
                 if _edge_cue and _edge_cue not in (cue or ""):
@@ -3482,7 +3513,8 @@ class LifeLoop:
                 elif decision["phase"] == "idle":
                     # NOTHING ALLOWED: own time ends AWAKE (contract-phases v2 §10.1; spec v23: only the operator's
                     # grant starts it again). The exit wakes any sleep of the loop's own.
-                    report.stopped_by = {"no_grant": "personal_off", "work_off": "work_off"}.get(
+                    report.stopped_by = {"no_grant": "personal_off", "work_off": "work_off",
+                                         "no_return": "no_return"}.get(
                         str(decision.get("cause") or ""), str(decision.get("cause") or "personal_off")
                     )
                     self.out(
@@ -3674,6 +3706,8 @@ class LifeLoop:
             # The day OPENS here: it becomes the next boundary's from-side.
             if isinstance(self._day_gate, dict) and self._day_gate.get("phase"):
                 self._last_activity_phase = str(self._day_gate["phase"])
+                if self._last_activity_phase == PHASE_PERSONAL:
+                    self._return_to = PHASE_PERSONAL
             self._first_day = False
             self._status("day", day_cause=self._day_gate)
             opened = False
@@ -4610,6 +4644,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     )
     parser.add_argument("--state-reason", default="", help="reason recorded with --set-state")
     parser.add_argument(
+        "--return-to", choices=("personal", "work", "none"), default="personal",
+        help="the phase this run was started to (re)enter (spec v23 own time is the operator's privilege): personal "
+        "for the operator's own start (the default of a hand run); a host restoring work alone passes work, a host "
+        "that only knows the home's resume_to passes none",
+    )
+    parser.add_argument(
         "--first-day-unconditional", action="store_true",
         help="the operator started own time (his grant, start or retry): the first day is his whatever pulls "
         "(spec personal entered_by; contract-phases v2 §10). Without it the gate governs the first boundary too",
@@ -4867,6 +4907,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         on_sleep=consolidator,
         substrate_changed=_substrate_changed,
         first_day_unconditional=bool(args.first_day_unconditional),
+        return_to=None if args.return_to == "none" else args.return_to,
     )
     print(f"(own time starts: tick={args.tick_seconds}s, day={args.ticks_per_day} ticks, "
           f"stop: touch {stop_file} or Ctrl-C)")

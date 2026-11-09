@@ -1578,7 +1578,7 @@ def test_day_gate_drives_plus_grant_open_personal(tmp_path: Path) -> None:
     from abstractruntime.identity.life import read_day_gate
 
     home_dir = _make_home(tmp_path)  # fixture seeds one open question + grant
-    decision = read_day_gate(home_dir)
+    decision = read_day_gate(home_dir, return_to="personal")  # v23: a remembered return
     assert decision["phase"] == "personal"
     assert decision["cause"] == "drives"
     assert decision["total_open"] >= 1
@@ -1596,7 +1596,7 @@ def test_day_gate_settled_desk_rests_inside_personal_never_sleeps(tmp_path: Path
 
     home_dir = _make_home_no_drives(tmp_path)
     record_personal_usage(home_dir, PERSONAL_USE_FLOOR_SECONDS + 1)
-    decision = read_day_gate(home_dir)
+    decision = read_day_gate(home_dir, last_phase="personal")
     assert decision["phase"] == "personal" and decision.get("rest") is True
     assert decision["cause"] == "resting"
     assert "need_check_s" not in decision
@@ -1870,9 +1870,9 @@ def test_use_floor_is_retired_with_the_sleep_leg(tmp_path: Path) -> None:
     )
 
     home_dir = _make_home_no_drives(tmp_path)  # zero drives, grant armed
-    assert read_day_gate(home_dir)["cause"] == "resting"
+    assert read_day_gate(home_dir, last_phase="personal")["cause"] == "resting"
     record_personal_usage(home_dir, PERSONAL_USE_FLOOR_SECONDS + 60)
-    decision = read_day_gate(home_dir)
+    decision = read_day_gate(home_dir, last_phase="personal")
     assert decision["phase"] == "personal" and decision["cause"] == "resting"
 
 

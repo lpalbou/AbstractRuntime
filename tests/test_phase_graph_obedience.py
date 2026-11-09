@@ -257,7 +257,8 @@ class TestConsultGateLanding:
         lines = []
         decision = read_day_gate(home)
         assert decision["phase"] == "work"  # the gate still says work
-        decision, cue = consult_gate_landing(home, "personal", decision, "operator", lines.append)
+        decision, cue = consult_gate_landing(home, "personal", decision, "operator", lines.append,
+                                             last_phase="personal")
         assert decision["phase"] == "personal"
         assert any("skipped" in ln for ln in lines)
 
@@ -377,7 +378,7 @@ class TestFullLoopObedience:
 class TestGateSkipPhases:
     def test_skip_work_falls_to_personal(self, tmp_path):
         home = _arm_home(tmp_path, grant=True, work_order=True)
-        decision = read_day_gate(home, skip_phases=frozenset({"work"}))
+        decision = read_day_gate(home, skip_phases=frozenset({"work"}), last_phase="personal")
         assert decision["phase"] == "personal"
 
     def test_skip_personal_lands_idle_honestly_named(self, tmp_path):

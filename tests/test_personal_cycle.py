@@ -168,7 +168,7 @@ def test_retired_gate_dials_govern_nothing(tmp_path, monkeypatch) -> None:
     d = read_day_gate(home)
     assert d["phase"] == "idle" and d["cause"] == "no_grant" and "need_check_s" not in d
     write_personal_grant(home, mode="until_revoked", granted_by="operator:test")
-    d = read_day_gate(home)
+    d = read_day_gate(home, last_phase="personal")
     assert d["phase"] == "personal" and d["cause"] in ("resting", "grant_degraded"), d
 
 

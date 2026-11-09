@@ -89,6 +89,11 @@ VISIT_WORKFLOW_ID = "entity-visit@1"
 VISITOR_WAIT_KEY = "visitor_input"
 DEFAULT_IDLE_SECONDS = 30 * 60  # a visit left silent this long closes with reflection
 HARVEST_NODE = "HARVEST"  # the react middle's exit contract (final_next_node)
+# A VISIT NEVER FAILS (operator 2026-11-09): a turn whose model call fails (after the effect policy's retries) answers
+# the error for THAT turn and parks - the visit continues. Every model call of a turn is routed through MODEL_GATE
+# (the failure is absorbed into its result key) and a failed one goes to TURN_FAILED.
+MODEL_GATE_NODE = "VISIT_MODEL_GATE"
+TURN_FAILED_NODE = "VISIT_TURN_FAILED"
 
 # HISTORY WINDOW (operator ruling 2026-09-28, ADR-0026): the visit's
 # history rides every prompt through THE runtime history window
@@ -281,6 +286,38 @@ def _visit_title_failure(
         reason=reason,
         extra={"turn_id": turn_id, "stored_title": untitled_label(kind, raw_block)},
     )
+
+
+def _get_path(obj: Any, dotted: str) -> Any:
+    cur = obj
+    for part in [p for p in str(dotted or "").split(".") if p]:
+        if not isinstance(cur, dict):
+            return None
+        cur = cur.get(part)
+    return cur
+
+
+def _guard_model_call(run: RunState, plan: StepPlan) -> StepPlan:
+    """Route one planned model call through MODEL_GATE: its final failure is absorbed into its result key (the
+    runtime's `_absorb_failure`) instead of failing the visit run, and the gate sends the turn to TURN_FAILED."""
+    eff = plan.effect
+    if eff is None or eff.type != EffectType.LLM_CALL or not plan.next_node or not eff.result_key:
+        return plan
+    gate = _ns(run, "_visit_model_gate")
+    gate["after"] = str(plan.next_node)
+    gate["result_key"] = str(eff.result_key)
+    payload = dict(eff.payload or {})
+    payload["_absorb_failure"] = True
+    return dataclasses.replace(
+        plan, effect=dataclasses.replace(eff, payload=payload), next_node=MODEL_GATE_NODE,
+    )
+
+
+def _guarded_node(handler: Callable[[RunState, Any], StepPlan]) -> Callable[[RunState, Any], StepPlan]:
+    def _node(run: RunState, ctx: Any) -> StepPlan:
+        return _guard_model_call(run, handler(run, ctx))
+
+    return _node
 
 
 def build_visit_workflow(
@@ -670,7 +707,7 @@ def build_visit_workflow(
             # (`payload.media`: file paths) — the same contract as BRIDGE's
             # `context.attachments` on the react arm.
             payload["media"] = media
-        return StepPlan(
+        return _guard_model_call(run, StepPlan(
             node_id="REASON",
             effect=Effect(
                 type=EffectType.LLM_CALL,
@@ -678,7 +715,7 @@ def build_visit_workflow(
                 result_key="_turn.llm",
             ),
             next_node="ELECT",
-        )
+        ))
 
     def elect_node(run: RunState, ctx: Any) -> StepPlan:
         """Fold the wrapper-captured elections (pure node): the book was
@@ -946,6 +983,50 @@ def build_visit_workflow(
                     # turn's tool truth (driver-authored; [] on the v0
                     # single-call path where no tool can run by construction).
                     "tools_ran": list(turn.get("tools_ran") or []),
+                },
+                result_key="_turn.answered",
+            ),
+            next_node="PARK",
+        )
+
+    def model_gate_node(run: RunState, ctx: Any) -> StepPlan:
+        """After a guarded model call: a failure (absorbed into its result key) ends THIS turn in TURN_FAILED;
+        success continues where the call was going."""
+        gate = _ns(run, "_visit_model_gate")
+        after = str(gate.get("after") or "")
+        result = _get_path(run.vars, str(gate.get("result_key") or "")) if gate.get("result_key") else None
+        if isinstance(result, dict) and result.get("absorbed_failure") and result.get("ok") is False:
+            _ns(run, "_turn")["model_error"] = str(result.get("absorbed_failure") or "the model call failed")
+            gate.clear()
+            return StepPlan(node_id=MODEL_GATE_NODE, next_node=TURN_FAILED_NODE)
+        gate.clear()
+        return StepPlan(node_id=MODEL_GATE_NODE, next_node=after or "PARK")
+
+    def turn_failed_node(run: RunState, ctx: Any) -> StepPlan:
+        """THIS turn could not be answered: answer the error for it (level error) and park - the visit continues.
+        The turn leaves no half in the transcript (the visitor's message of the failed turn is taken back out of
+        the adapter's messages, so the next turn never stacks two user messages); nothing is formed."""
+        turn = _ns(run, "_turn")
+        err = str(turn.get("model_error") or "the model call failed")
+        runtime_ns = _ns(run, "_runtime")
+        start = runtime_ns.get("history_window_turn_start")
+        msgs = (run.vars.get("context") or {}).get("messages") if isinstance(run.vars.get("context"), dict) else None
+        if isinstance(msgs, list) and isinstance(start, int) and 0 <= start <= len(msgs):
+            del msgs[start:]
+        runtime_ns.pop("history_window_turn_start", None)
+        context_ns = run.vars.get("context")
+        if isinstance(context_ns, dict):
+            context_ns.pop("attachments", None)
+        return StepPlan(
+            node_id=TURN_FAILED_NODE,
+            effect=Effect(
+                type=EffectType.ANSWER_USER,
+                payload={
+                    "message": f"This turn could not be answered: {err}",
+                    "level": "error",
+                    "turn_id": turn.get("turn_id"),
+                    "turn_error": err,
+                    "tools_ran": [],
                 },
                 result_key="_turn.answered",
             ),
@@ -1427,6 +1508,8 @@ def build_visit_workflow(
         "REFLECT": reflect_node,
         "APPLY": apply_node,
         "DONE": done_node,
+        MODEL_GATE_NODE: model_gate_node,
+        TURN_FAILED_NODE: turn_failed_node,
     }
     if react_middle is not None:
         collisions = sorted(set(react_middle.nodes.keys()) & set(nodes.keys()))
@@ -1513,6 +1596,9 @@ def build_visit_workflow(
                 next_node=str(react_middle.entry))
 
         nodes[str(react_middle.entry)] = guidance_boundary
+        # Every model call the middle plans is guarded (a visit never fails on one failed call).
+        for _mid in list(react_middle.nodes.keys()):
+            nodes[_mid] = _guarded_node(nodes[_mid])
         nodes["VISIT_GUIDANCE_RENDER"] = render_guidance
         nodes["REASON"] = bridge_node  # RENDER routes in unchanged
         nodes[HARVEST_NODE] = harvest_node  # the middle's declared exit

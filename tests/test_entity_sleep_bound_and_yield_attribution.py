@@ -11,6 +11,7 @@ visit-yield attribution, titled election markers.
 
 from __future__ import annotations
 
+from abstractruntime.identity.lifecycle_fence import LifecycleFence  # noqa: E402
 from datetime import datetime, timedelta, timezone
 
 from abstractruntime.identity.life import (
@@ -65,7 +66,7 @@ def test_naive_timestamps_read_as_utc_never_raise() -> None:
 
 def test_wake_at_persists_normalized(tmp_path) -> None:
     payload = write_entity_state(
-        tmp_path, "asleep", reason="operator sleep", wake_at="2026-07-15T22:00:00+02:00"
+        tmp_path, "asleep", reason="operator sleep", wake_at="2026-07-15T22:00:00+02:00", fence=LifecycleFence.admit(tmp_path)
     )
     assert payload["wake_at"].endswith("+00:00"), "aware-UTC at the write boundary"
 
@@ -76,15 +77,15 @@ def test_wake_at_persists_normalized(tmp_path) -> None:
 
 
 def test_visit_yields_never_count_as_operator_sleeps(tmp_path) -> None:
-    write_entity_state(tmp_path, "asleep", reason="operator sleep")
+    write_entity_state(tmp_path, "asleep", reason="operator sleep", fence=LifecycleFence.admit(tmp_path))
     write_entity_state(
         tmp_path, "asleep", reason="in conversation (auto-yield)",
-        mode="visiting", written_by="visit-door",
+        mode="visiting", written_by="visit-door", fence=LifecycleFence.admit(tmp_path),
     )
     # Legacy yield (pre-fix stamp): operator + mode=visiting still folds
     # into the yield bucket, not the operator's.
-    write_entity_state(tmp_path, "asleep", reason="yield", mode="visiting")
-    write_entity_state(tmp_path, "asleep", reason="rest", written_by="self")
+    write_entity_state(tmp_path, "asleep", reason="yield", mode="visiting", fence=LifecycleFence.admit(tmp_path))
+    write_entity_state(tmp_path, "asleep", reason="rest", written_by="self", fence=LifecycleFence.admit(tmp_path))
     stats = life_sleep_stats(tmp_path)
     assert stats["sleeps"] == 4
     assert stats["operator"] == 1

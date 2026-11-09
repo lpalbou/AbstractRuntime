@@ -8,6 +8,7 @@ whole text. A screen or a prompt may still fold; the one prompt fold kept here (
 """
 from __future__ import annotations
 
+from abstractruntime.identity.lifecycle_fence import LifecycleFence  # noqa: E402
 import json
 from typing import Any, Dict
 
@@ -200,7 +201,7 @@ def test_fallback_notices_quote_the_skipped_line_whole() -> None:
 def test_loop_status_day_cause_detail_and_next_cue_are_whole(tmp_path) -> None:
     from abstractruntime.identity.life import parse_next_cue, read_loop_status, write_loop_status
 
-    write_loop_status(tmp_path, "day", day_kind="personal", day_cause={"cause": "drives", "detail": LONG_LINE})
+    write_loop_status(tmp_path, "day", day_kind="personal", day_cause={"cause": "drives", "detail": LONG_LINE}, fence=LifecycleFence.admit(tmp_path))
     assert read_loop_status(tmp_path)["day_cause"]["detail"] == LONG_LINE
     assert parse_next_cue("Done for now.\nnext: " + LONG_LINE) == LONG_LINE
 

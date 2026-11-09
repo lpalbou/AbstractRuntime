@@ -8,6 +8,7 @@ on a run, the fingerprint formula, the one-sentence summon cue and its place in 
 
 from __future__ import annotations
 
+from abstractruntime.identity.lifecycle_fence import LifecycleFence  # noqa: E402
 import colorsys
 import copy
 import hashlib
@@ -260,7 +261,7 @@ def test_identity_at_rev(home: Path) -> None:
 def test_life_sleep_stats_ignores_identity_rows(home: Path) -> None:
     from abstractruntime.identity.life import life_sleep_stats, write_entity_state
 
-    write_entity_state(home, "asleep", written_by="self")
+    write_entity_state(home, "asleep", written_by="self", fence=LifecycleFence.admit(home))
     before = life_sleep_stats(home)
     _write(home)
     _write(home, voice=_voice(PIPER))

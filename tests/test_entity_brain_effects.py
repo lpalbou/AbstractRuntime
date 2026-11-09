@@ -10,6 +10,7 @@ results, never crashes.
 
 from __future__ import annotations
 
+from abstractruntime.identity.lifecycle_fence import LifecycleFence  # noqa: E402
 import copy as _copy
 import json
 from pathlib import Path
@@ -578,7 +579,7 @@ def test_consolidate_refuses_honestly_when_paused(tmp_path: Path) -> None:
     from abstractruntime.identity.life import write_entity_state
 
     home_dir = _make_home(tmp_path)
-    write_entity_state(home_dir, "paused", reason="operator freeze")
+    write_entity_state(home_dir, "paused", reason="operator freeze", fence=LifecycleFence.admit(home_dir))
     home = open_home(home_dir)
     try:
         out = _result(_dispatch(home.handlers, EffectType.MEMORY_CONSOLIDATE, {}))

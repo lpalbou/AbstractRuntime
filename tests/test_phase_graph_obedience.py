@@ -12,6 +12,7 @@ unknown causes refuse naming the legal list, and the phase_changed marker
 marker contract) lands machine-readably without diluting life_sleep_stats.
 """
 
+from abstractruntime.identity.lifecycle_fence import LifecycleFence  # noqa: E402
 import json
 from pathlib import Path
 
@@ -309,7 +310,7 @@ class TestPhaseChangedMarker:
         append_phase_changed(
             home, from_phase="sleep", to="personal",
             cause="maintenance_done", written_by="self",
-            provenance="blueprint edit #8",
+            provenance="blueprint edit #8", fence=LifecycleFence.admit(home),
         )
         rows = [
             json.loads(ln)

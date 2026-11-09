@@ -8,6 +8,7 @@ participants, and the workspace is live inside the loop.
 
 from __future__ import annotations
 
+from abstractruntime.identity.lifecycle_fence import LifecycleFence  # noqa: E402
 import json
 from pathlib import Path
 from typing import Any, Dict, List
@@ -95,7 +96,7 @@ def _arm_personal(home_dir: Path, *, mode: str = "until_revoked", expires_at: st
         return
     write_personal_grant(
         home_dir, mode=mode, granted_by="person:test-operator",
-        expires_at=expires_at or None,
+        expires_at=expires_at or None, fence=LifecycleFence.admit(home_dir),
     )
 
 
@@ -253,10 +254,10 @@ def test_life_sleep_stats_counts_and_shares(tmp_path: Path) -> None:
     empty = life_sleep_stats(home_dir)
     assert empty["sleeps"] == 0 and empty["sleep_share"] == 0.0
 
-    write_entity_state(home_dir, "asleep", reason="op sleep", written_by="operator")
-    write_entity_state(home_dir, "awake", written_by="operator")
-    write_entity_state(home_dir, "asleep", reason="self sleep", written_by="self")
-    write_entity_state(home_dir, "awake", written_by="self")
+    write_entity_state(home_dir, "asleep", reason="op sleep", written_by="operator", fence=LifecycleFence.admit(home_dir))
+    write_entity_state(home_dir, "awake", written_by="operator", fence=LifecycleFence.admit(home_dir))
+    write_entity_state(home_dir, "asleep", reason="self sleep", written_by="self", fence=LifecycleFence.admit(home_dir))
+    write_entity_state(home_dir, "awake", written_by="self", fence=LifecycleFence.admit(home_dir))
 
     stats = life_sleep_stats(home_dir)
     assert stats["sleeps"] == 2
@@ -417,7 +418,7 @@ def test_stop_command_wakes_idle_loop(tmp_path: Path) -> None:
     from abstractruntime.identity.life import request_loop_stop, write_entity_state
 
     home_dir = _make_home(tmp_path)
-    write_entity_state(home_dir, "asleep", reason="operator sleep")
+    write_entity_state(home_dir, "asleep", reason="operator sleep", fence=LifecycleFence.admit(home_dir))
 
     polls = {"n": 0}
 
@@ -546,9 +547,9 @@ def test_loop_operator_sleep_closes_day_and_wakes_honestly(tmp_path: Path) -> No
         # idle polls later, wakes him.
         polls["n"] += 1
         if polls["n"] == 1:
-            write_entity_state(home_dir, "asleep", reason="dream window")
+            write_entity_state(home_dir, "asleep", reason="dream window", fence=LifecycleFence.admit(home_dir))
         elif polls["n"] == 3:
-            write_entity_state(home_dir, "awake")
+            write_entity_state(home_dir, "awake", fence=LifecycleFence.admit(home_dir))
 
     loop = LifeLoop(
         _factory_for(home_dir, llm),
@@ -583,9 +584,9 @@ def test_loop_operator_pause_freezes_mid_day_and_tells_him(tmp_path: Path) -> No
     def sleeper(_s: float) -> None:
         polls["n"] += 1
         if polls["n"] == 1:
-            write_entity_state(home_dir, "paused", reason="maintenance")
+            write_entity_state(home_dir, "paused", reason="maintenance", fence=LifecycleFence.admit(home_dir))
         elif polls["n"] == 3:
-            write_entity_state(home_dir, "awake")
+            write_entity_state(home_dir, "awake", fence=LifecycleFence.admit(home_dir))
 
     loop = LifeLoop(
         _factory_for(home_dir, llm),
@@ -637,13 +638,13 @@ def test_loop_status_phases_and_await_quiescent(tmp_path: Path) -> None:
     # await: quiescent immediately when stopped/between.
     assert await_loop_quiescent(home_dir, timeout_seconds=1, sleep_fn=lambda s: None)
     # open day with THIS process's pid -> blocks until phase changes.
-    write_loop_status(home_dir, "day")
+    write_loop_status(home_dir, "day", fence=LifecycleFence.admit(home_dir))
     calls = {"n": 0}
 
     def sleeper(_s: float) -> None:
         calls["n"] += 1
         if calls["n"] >= 2:
-            write_loop_status(home_dir, "between")
+            write_loop_status(home_dir, "between", fence=LifecycleFence.admit(home_dir))
 
     assert await_loop_quiescent(home_dir, timeout_seconds=30, sleep_fn=sleeper)
     # dead-pid day counts as quiescent.
@@ -725,7 +726,7 @@ def test_write_personal_grant_is_the_one_writer(tmp_path: Path) -> None:
     home_dir.mkdir()
 
     # Arm until_revoked: principal required, granted_at clocked here.
-    grant = write_personal_grant(home_dir, mode="until_revoked", granted_by="person:laurent")
+    grant = write_personal_grant(home_dir, mode="until_revoked", granted_by="person:laurent", fence=LifecycleFence.admit(home_dir))
     assert grant["mode"] == "until_revoked"
     assert grant["granted_by"] == "person:laurent"
     assert grant["granted_at"]  # server-clocked
@@ -735,7 +736,7 @@ def test_write_personal_grant_is_the_one_writer(tmp_path: Path) -> None:
     # beside UTC clocks mis-orders silently — the WAIT_UNTIL lesson).
     grant = write_personal_grant(
         home_dir, mode="timer", granted_by="person:laurent",
-        expires_at="2999-01-01T12:00:00+02:00",
+        expires_at="2999-01-01T12:00:00+02:00", fence=LifecycleFence.admit(home_dir),
     )
     assert grant["expires_at"] == "2999-01-01T10:00:00+00:00"
 
@@ -744,7 +745,7 @@ def test_write_personal_grant_is_the_one_writer(tmp_path: Path) -> None:
     raw["work"] = {"tools": ["read_file"]}
     raw["personal"]["future_knob"] = "kept"
     (home_dir / "phases.yaml").write_text(yaml.safe_dump(raw), encoding="utf-8")
-    write_personal_grant(home_dir, mode="disabled")
+    write_personal_grant(home_dir, mode="disabled", fence=LifecycleFence.admit(home_dir))
     after = yaml.safe_load((home_dir / "phases.yaml").read_text(encoding="utf-8"))
     assert after["work"] == {"tools": ["read_file"]}
     assert after["personal"]["future_knob"] == "kept"
@@ -756,22 +757,22 @@ def test_write_personal_grant_is_the_one_writer(tmp_path: Path) -> None:
 
     # Refusals, each naming its rule.
     with pytest.raises(ValueError, match="unknown personal mode"):
-        write_personal_grant(home_dir, mode="always", granted_by="person:x")
+        write_personal_grant(home_dir, mode="always", granted_by="person:x", fence=LifecycleFence.admit(home_dir))
     with pytest.raises(ValueError, match="timer requires expires_at"):
-        write_personal_grant(home_dir, mode="timer", granted_by="person:x")
+        write_personal_grant(home_dir, mode="timer", granted_by="person:x", fence=LifecycleFence.admit(home_dir))
     with pytest.raises(ValueError, match="not an ISO-8601"):
-        write_personal_grant(home_dir, mode="timer", granted_by="person:x", expires_at="tomorrow")
+        write_personal_grant(home_dir, mode="timer", granted_by="person:x", expires_at="tomorrow", fence=LifecycleFence.admit(home_dir))
     with pytest.raises(ValueError, match="granted_by is required"):
-        write_personal_grant(home_dir, mode="until_revoked")
+        write_personal_grant(home_dir, mode="until_revoked", fence=LifecycleFence.admit(home_dir))
     (home_dir / "phases.yaml").write_text("{not yaml", encoding="utf-8")
     with pytest.raises(ValueError, match="unreadable"):
-        write_personal_grant(home_dir, mode="until_revoked", granted_by="person:x")
+        write_personal_grant(home_dir, mode="until_revoked", granted_by="person:x", fence=LifecycleFence.admit(home_dir))
     (home_dir / "phases.yaml").write_text(
         yaml.safe_dump({"schema_version": PHASES_SCHEMA_VERSION + 1, "personal": {"mode": "disabled"}}),
         encoding="utf-8",
     )
     with pytest.raises(ValueError, match="upgrade the runtime"):
-        write_personal_grant(home_dir, mode="until_revoked", granted_by="person:x")
+        write_personal_grant(home_dir, mode="until_revoked", granted_by="person:x", fence=LifecycleFence.admit(home_dir))
 
 
 def test_grant_revoked_during_an_idle_is_seen_at_the_wake(tmp_path: Path) -> None:
@@ -792,10 +793,10 @@ def test_grant_revoked_during_an_idle_is_seen_at_the_wake(tmp_path: Path) -> Non
         steps["n"] += 1
         if steps["n"] == 1:
             # Mid-idle: the operator revokes personal, then wakes him.
-            write_personal_grant(home_dir, mode="disabled")
-            write_entity_state(home_dir, "awake", reason="maintenance done")
+            write_personal_grant(home_dir, mode="disabled", fence=LifecycleFence.admit(home_dir))
+            write_entity_state(home_dir, "awake", reason="maintenance done", fence=LifecycleFence.admit(home_dir))
 
-    write_entity_state(home_dir, "asleep", reason="operator sleep")
+    write_entity_state(home_dir, "asleep", reason="operator sleep", fence=LifecycleFence.admit(home_dir))
     loop = LifeLoop(
         never_factory, tick_seconds=0, ticks_per_day=2, max_ticks=4,
         state_home=home_dir, sleep_fn=sleeper, out=lines.append,
@@ -822,7 +823,7 @@ def test_mid_day_revocation_ends_the_day_at_the_next_tick(tmp_path: Path) -> Non
         steps["n"] += 1
         if steps["n"] == 1:
             # Between-tick idle after tick 1: the operator revokes.
-            write_personal_grant(home_dir, mode="disabled")
+            write_personal_grant(home_dir, mode="disabled", fence=LifecycleFence.admit(home_dir))
 
     loop = LifeLoop(
         _factory_for(home_dir, llm), tick_seconds=5, ticks_per_day=4, max_ticks=4,
@@ -851,8 +852,8 @@ def test_grant_end_leaves_the_entity_awake_naming_the_cause(tmp_path: Path) -> N
     home_dir = _make_home(tmp_path)
 
     # Revocation: mode=disabled with the file present.
-    write_entity_state(home_dir, "awake", reason="was living")
-    write_personal_grant(home_dir, mode="disabled")
+    write_entity_state(home_dir, "awake", reason="was living", fence=LifecycleFence.admit(home_dir))
+    write_personal_grant(home_dir, mode="disabled", fence=LifecycleFence.admit(home_dir))
     loop = LifeLoop(
         lambda: (_ for _ in ()).throw(AssertionError("no session")),
         tick_seconds=0, ticks_per_day=1, max_ticks=2,
@@ -869,10 +870,10 @@ def test_grant_end_leaves_the_entity_awake_naming_the_cause(tmp_path: Path) -> N
     # Expiry: a lapsed timer names grant_expired.
     write_personal_grant(
         home_dir, mode="timer", granted_by="person:test",
-        expires_at="2020-01-01T00:00:00+00:00",
+        expires_at="2020-01-01T00:00:00+00:00", fence=LifecycleFence.admit(home_dir),
     )
     assert personal_grant_end_cause(read_personal_grant(home_dir)) == "grant_expired"
-    write_entity_state(home_dir, "awake", reason="woken for the expiry check")
+    write_entity_state(home_dir, "awake", reason="woken for the expiry check", fence=LifecycleFence.admit(home_dir))
     lines2: List[str] = []
     report2 = LifeLoop(
         lambda: (_ for _ in ()).throw(AssertionError("no session")),
@@ -954,7 +955,7 @@ def test_pid_identity_token_kills_the_recycled_pid_corpse(tmp_path: Path) -> Non
     home_dir.mkdir()
 
     # Live writer: stamps its own start time; reads back running.
-    write_loop_status(home_dir, "between")
+    write_loop_status(home_dir, "between", fence=LifecycleFence.admit(home_dir))
     status = read_loop_status(home_dir)
     assert status["running"] is True
     own_stamp = status.get("pid_started_at")
@@ -1006,12 +1007,12 @@ def test_paused_idle_heartbeats_the_day_phase(tmp_path: Path) -> None:
         steps["n"] += 1
         if steps["n"] == 1:
             # Between-tick idle after tick 1: the operator pauses.
-            write_entity_state(home_dir, "paused", reason="maintenance")
+            write_entity_state(home_dir, "paused", reason="maintenance", fence=LifecycleFence.admit(home_dir))
         elif steps["n"] < 4:
             # Inside the paused freeze: capture the heartbeat's fresh stamp.
             heartbeats.append(str(read_loop_status(home_dir).get("updated_at")))
         else:
-            write_entity_state(home_dir, "awake", reason="maintenance done")
+            write_entity_state(home_dir, "awake", reason="maintenance done", fence=LifecycleFence.admit(home_dir))
 
     loop = LifeLoop(
         _factory_for(home_dir, llm), tick_seconds=5, ticks_per_day=2, max_ticks=2,
@@ -1037,7 +1038,7 @@ def test_paused_blocks_the_sleep_window_and_never_gets_clobbered(tmp_path: Path)
     from abstractruntime.identity.life import LifeLoop, read_entity_state, write_entity_state
 
     home_dir = _make_home(tmp_path)
-    write_entity_state(home_dir, "paused", reason="operator freeze", written_by="operator")
+    write_entity_state(home_dir, "paused", reason="operator freeze", written_by="operator", fence=LifecycleFence.admit(home_dir))
 
     ran: Dict[str, int] = {"nights": 0}
 
@@ -1084,16 +1085,16 @@ def test_night_passes_a_graceful_yield_predicate_to_the_engine(tmp_path: Path, m
     assert callable(predicate)
 
     # Self-elected sleep stands: the night continues.
-    write_entity_state(home_dir, "asleep", reason="rest", written_by="self")
+    write_entity_state(home_dir, "asleep", reason="rest", written_by="self", fence=LifecycleFence.admit(home_dir))
     assert predicate() is True
     # A visitor at the door (the gateway's auto-yield write) ends it.
-    write_entity_state(home_dir, "asleep", reason="in conversation (auto-yield)", mode="visiting")
+    write_entity_state(home_dir, "asleep", reason="in conversation (auto-yield)", mode="visiting", fence=LifecycleFence.admit(home_dir))
     assert predicate() is False
     # An operator wake ends it.
-    write_entity_state(home_dir, "awake", reason="woken")
+    write_entity_state(home_dir, "awake", reason="woken", fence=LifecycleFence.admit(home_dir))
     assert predicate() is False
     # The manual brake ends it regardless of state.
-    write_entity_state(home_dir, "asleep", reason="rest", written_by="self")
+    write_entity_state(home_dir, "asleep", reason="rest", written_by="self", fence=LifecycleFence.admit(home_dir))
     (home_dir / "STOP").touch()
     assert predicate() is False
 
@@ -1167,12 +1168,12 @@ def test_read_loop_status_answers_running_for_the_visit_doors(tmp_path: Path) ->
     # No file yet: not running.
     assert read_loop_status(home_dir).get("running") is False
     # A live loop (this process's pid) in either live phase: running.
-    write_loop_status(home_dir, "day")
+    write_loop_status(home_dir, "day", fence=LifecycleFence.admit(home_dir))
     assert read_loop_status(home_dir).get("running") is True
-    write_loop_status(home_dir, "between")
+    write_loop_status(home_dir, "between", fence=LifecycleFence.admit(home_dir))
     assert read_loop_status(home_dir).get("running") is True
     # Stopped phase: not running even with a live pid in the file.
-    write_loop_status(home_dir, "stopped")
+    write_loop_status(home_dir, "stopped", fence=LifecycleFence.admit(home_dir))
     assert read_loop_status(home_dir).get("running") is False
     # A crashed loop (dead pid, live phase): not running — a visit must
     # never wait on a corpse.
@@ -1181,7 +1182,7 @@ def test_read_loop_status_answers_running_for_the_visit_doors(tmp_path: Path) ->
     )
     assert read_loop_status(home_dir).get("running") is False
     # The gateway's exact consumption shape.
-    write_loop_status(home_dir, "day")
+    write_loop_status(home_dir, "day", fence=LifecycleFence.admit(home_dir))
     assert bool(read_loop_status(home_dir).get("running")) is True
     assert os.getpid() == read_loop_status(home_dir).get("pid")
 
@@ -1355,20 +1356,20 @@ def test_loop_status_carries_the_running_substrate(tmp_path: Path) -> None:
 
     home_dir = tmp_path / "h"
     home_dir.mkdir()
-    record_loop_substrate(home_dir, "lmstudio", "ornith-1.0-35b")
+    record_loop_substrate(home_dir, "lmstudio", "ornith-1.0-35b", fence=LifecycleFence.admit(home_dir))
     s = read_loop_status(home_dir)
     assert s["substrate"] == {"provider": "lmstudio", "model": "ornith-1.0-35b"}
     assert s.get("substrate_at"), "the stamp time rides so a cue can compare"
 
     # A phase write (heartbeat) must PRESERVE the substrate + its stamp.
-    write_loop_status(home_dir, "day")
+    write_loop_status(home_dir, "day", fence=LifecycleFence.admit(home_dir))
     s2 = read_loop_status(home_dir)
     assert s2["phase"] == "day"
     assert s2["substrate"] == {"provider": "lmstudio", "model": "ornith-1.0-35b"}
     assert s2.get("substrate_at"), "the stamp survives the heartbeat"
 
     # A day-open re-resolution to a new mind updates the stamp.
-    record_loop_substrate(home_dir, "endpoint:airelay", "gpt-5.6-sol")
+    record_loop_substrate(home_dir, "endpoint:airelay", "gpt-5.6-sol", fence=LifecycleFence.admit(home_dir))
     s3 = read_loop_status(home_dir)
     assert s3["substrate"]["model"] == "gpt-5.6-sol"
 
@@ -1510,11 +1511,11 @@ def test_loop_status_carries_day_kind() -> None:
     from abstractruntime.identity.life import read_loop_status, write_loop_status
 
     tmp = Path(tempfile.mkdtemp())
-    write_loop_status(tmp, "day", day_kind="work")
+    write_loop_status(tmp, "day", day_kind="work", fence=LifecycleFence.admit(tmp))
     st = read_loop_status(tmp)
     assert st.get("day_kind") == "work"
     # A between write without day_kind does not carry a stale one forward.
-    write_loop_status(tmp, "between")
+    write_loop_status(tmp, "between", fence=LifecycleFence.admit(tmp))
     st2 = read_loop_status(tmp)
     assert st2.get("day_kind") is None
 
@@ -1575,7 +1576,7 @@ def test_day_gate_work_order_needs_no_grant(tmp_path: Path) -> None:
     from abstractruntime.identity.life import read_day_gate, write_personal_grant
 
     home_dir = _make_home(tmp_path)
-    write_personal_grant(home_dir, mode="disabled")
+    write_personal_grant(home_dir, mode="disabled", fence=LifecycleFence.admit(home_dir))
     (home_dir / "work_order.md").write_text("Sort the shelf.", encoding="utf-8")
     decision = read_day_gate(home_dir)
     assert decision["phase"] == "work"
@@ -1808,7 +1809,7 @@ def test_loop_status_carries_the_day_cause_trace(tmp_path: Path) -> None:
     home_dir = _make_home(tmp_path)
     write_loop_status(
         home_dir, "day", day_kind="personal",
-        day_cause={"cause": "drives", "detail": "3 standing drive(s)"},
+        day_cause={"cause": "drives", "detail": "3 standing drive(s)"}, fence=LifecycleFence.admit(home_dir),
     )
     status = read_loop_status(home_dir)
     assert status["day_cause"] == {"kind": "drives", "detail": "3 standing drive(s)"}
@@ -1821,7 +1822,7 @@ def test_terminal_exit_leaves_awake_and_never_clears_paused(tmp_path: Path) -> N
     from abstractruntime.identity.life import read_entity_state, write_entity_state
 
     home_dir = _make_home(tmp_path)
-    write_entity_state(home_dir, "awake", reason="living")
+    write_entity_state(home_dir, "awake", reason="living", fence=LifecycleFence.admit(home_dir))
     llm = _ScriptedLLM(["One.", "Reflection."])
     loop = LifeLoop(
         _factory_for(home_dir, llm),
@@ -1837,7 +1838,7 @@ def test_terminal_exit_leaves_awake_and_never_clears_paused(tmp_path: Path) -> N
 
     # The kill switch stays: a paused home is untouched by the landing.
     home2 = _make_home_no_drives(tmp_path)
-    write_entity_state(home2, "paused", reason="operator froze")
+    write_entity_state(home2, "paused", reason="operator froze", fence=LifecycleFence.admit(home2))
     (home2 / "work_order.md").write_text("one thing", encoding="utf-8")
     llm2 = _ScriptedLLM([])
     loop2 = LifeLoop(
@@ -1859,7 +1860,7 @@ def test_loop_exit_landing_wakes_on_next_spawn(tmp_path: Path) -> None:
 
     home_dir = _make_home(tmp_path)
     write_entity_state(home_dir, "asleep", reason="loop ended (max_ticks) - idle is sleep (v8)",
-                       written_by="loop-exit")
+                       written_by="loop-exit", fence=LifecycleFence.admit(home_dir))
     llm = _ScriptedLLM(["One.", "Reflection."])
     loop = LifeLoop(
         _factory_for(home_dir, llm),
@@ -1893,7 +1894,7 @@ def test_work_order_always_beats_sleep(tmp_path: Path) -> None:
     from abstractruntime.identity.life import read_day_gate, write_personal_grant
 
     home_dir = _make_home_no_drives(tmp_path)
-    write_personal_grant(home_dir, mode="disabled")  # no grant at all
+    write_personal_grant(home_dir, mode="disabled", fence=LifecycleFence.admit(home_dir))  # no grant at all
     (home_dir / "work_order.md").write_text("The task.", encoding="utf-8")
     assert read_day_gate(home_dir)["phase"] == "work"
 
@@ -1989,7 +1990,7 @@ def test_visit_preempts_the_gate(tmp_path: Path) -> None:
 
     home_dir = _make_home(tmp_path)  # drives + grant: would open personal
     write_entity_state(home_dir, "asleep", reason="auto-yield to a visit",
-                       mode="visiting", written_by="visit-door")
+                       mode="visiting", written_by="visit-door", fence=LifecycleFence.admit(home_dir))
     decision = read_day_gate(home_dir)
     assert decision["phase"] == "visit"
     assert decision["cause"] == "visit_open"

@@ -10,6 +10,7 @@ declares legacy records that lack a title or summary.
 
 from __future__ import annotations
 
+from abstractruntime.identity.lifecycle_fence import LifecycleFence  # noqa: E402
 import json
 import sys
 from pathlib import Path
@@ -199,7 +200,7 @@ def test_the_sleep_repairs_a_legacy_record_without_a_title(tmp_path: Path, monke
     monkeypatch.setattr(abstractmemory, "sleep_pass", lambda *a, **k: {"maintenance": {}, "dream": {}})
     from abstractruntime.identity.life import write_entity_state
 
-    write_entity_state(home_dir, "asleep", reason="self-elected sleep: full", mode="dreaming", written_by="self")
+    write_entity_state(home_dir, "asleep", reason="self-elected sleep: full", mode="dreaming", written_by="self", fence=LifecycleFence.admit(home_dir))
     result = build_consolidator(home_dir, out=lambda s: None, llm_for_capability=lambda name: _Capability())()
     assert result["authoring"]["declared"] == 1 and result["authoring"]["authored"] == 1, result["authoring"]
     lesson = [r for r in _rows(home_dir, "lesson") if str(r.subject) == str(rid)][-1]
@@ -423,7 +424,7 @@ def test_the_sleep_repairs_legacy_mechanical_cards_and_dreams(tmp_path: Path, mo
                                           turn_id=f"legacy-{kind}")[0]
     home.close()
     monkeypatch.setattr(abstractmemory, "sleep_pass", lambda *a, **k: {"maintenance": {}, "dream": {}})
-    write_entity_state(home_dir, "asleep", reason="self-elected sleep: full", mode="dreaming", written_by="self")
+    write_entity_state(home_dir, "asleep", reason="self-elected sleep: full", mode="dreaming", written_by="self", fence=LifecycleFence.admit(home_dir))
     result = build_consolidator(home_dir, out=lambda s: None, llm_for_capability=lambda name: _Capability())()
     receipt = result["authoring"]
     assert receipt["declared"] == 4 and receipt["authored"] == 4, receipt  # both titles and both summaries
@@ -631,7 +632,7 @@ def _night_with_an_interest(tmp_path: Path, capability: Any) -> Any:
     s.llm_for_capability = lambda name: _Capability()
     s.turn("hi")
     home.close()
-    write_entity_state(home_dir, "asleep", reason="self-elected sleep: full", mode="dreaming", written_by="self")
+    write_entity_state(home_dir, "asleep", reason="self-elected sleep: full", mode="dreaming", written_by="self", fence=LifecycleFence.admit(home_dir))
     lines: List[str] = []
     build_consolidator(home_dir, out=lines.append, llm_for_capability=lambda name: capability)()
     cards = [a for a in _rows(home_dir, "world_model")]
@@ -879,7 +880,7 @@ def test_the_sleep_repairs_a_legacy_public_diary_records_title_and_summary(tmp_p
     monkeypatch.setattr(abstractmemory, "sleep_pass", lambda *a, **k: {"maintenance": {}, "dream": {}})
 
     def night() -> tuple:
-        write_entity_state(home_dir, "asleep", reason="self-elected sleep: full", mode="dreaming", written_by="self")
+        write_entity_state(home_dir, "asleep", reason="self-elected sleep: full", mode="dreaming", written_by="self", fence=LifecycleFence.admit(home_dir))
         lines: List[str] = []
         result = build_consolidator(home_dir, out=lines.append, llm_for_capability=lambda name: _Capability())()
         return result["authoring"], lines

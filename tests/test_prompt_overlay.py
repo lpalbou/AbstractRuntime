@@ -17,6 +17,7 @@ REWRITTEN. Ownership rules under test:
 
 from __future__ import annotations
 
+from abstractruntime.identity.lifecycle_fence import LifecycleFence  # noqa: E402
 import copy
 import json
 from pathlib import Path
@@ -328,7 +329,7 @@ class TestSessionComposition:
         factory = build_session_factory(
             castor_home, provider="lmstudio", model="test", base_url="http://x",
             embedding_model=None, embedding_base_url="http://x",
-            context_window=32768, out=lambda s: None,
+            context_window=32768, out=lambda s: None, fence=LifecycleFence.admit(castor_home),
         )
         session = factory()
         assert "This hour is yours alone." in session.system_base
@@ -352,7 +353,7 @@ class TestSessionComposition:
         factory = build_session_factory(
             castor_home, provider="lmstudio", model="test", base_url="http://x",
             embedding_model=None, embedding_base_url="http://x",
-            context_window=32768, out=lambda s: None,
+            context_window=32768, out=lambda s: None, fence=LifecycleFence.admit(castor_home),
         )
         session = factory()
         assert OWN_TIME_CONTRACT in session.system_base

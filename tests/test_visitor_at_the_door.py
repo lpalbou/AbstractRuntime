@@ -7,6 +7,7 @@ skips the tick's look-back, and yields at the boundary right after.
 
 from __future__ import annotations
 
+from abstractruntime.identity.lifecycle_fence import LifecycleFence  # noqa: E402
 import json
 import os
 from pathlib import Path
@@ -101,7 +102,7 @@ def test_the_loop_yields_after_the_in_flight_call_when_a_visitor_knocks(tmp_path
             write_entity_state(
                 home_dir, "asleep",
                 reason="in conversation with person:test [visit v-1] (auto-yield)",
-                mode="visiting", written_by="visit-door",
+                mode="visiting", written_by="visit-door", fence=LifecycleFence.admit(home_dir),
             )
 
     llm = _LLM([_ELECTS_A_WRITE, "SURPLUS - must stay unconsumed"], on_call=knock)
@@ -145,7 +146,7 @@ def _knocking_loop(home_dir: Path, replies: List[str], *, lines: List[str], **kw
             write_entity_state(
                 home_dir, "asleep",
                 reason="in conversation with person:test [visit v-1] (auto-yield)",
-                mode="visiting", written_by="visit-door",
+                mode="visiting", written_by="visit-door", fence=LifecycleFence.admit(home_dir),
             )
 
     llm = _LLM(replies, on_call=knock)

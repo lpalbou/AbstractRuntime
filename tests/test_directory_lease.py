@@ -18,6 +18,7 @@ open salvages it.
 
 from __future__ import annotations
 
+from abstractruntime.identity.lifecycle_fence import LifecycleFence  # noqa: E402
 import json
 import subprocess
 import sys
@@ -415,7 +416,7 @@ def test_visit_yield_defers_the_look_back_and_the_next_open_salvages_it(tmp_path
             # must work by itself.
             write_entity_state(
                 home_dir, "asleep",
-                reason="in conversation with person:test", mode="visiting",
+                reason="in conversation with person:test", mode="visiting", fence=LifecycleFence.admit(home_dir),
             )
         else:
             stop.touch()  # end the yielded-gate idle deterministically
@@ -439,7 +440,7 @@ def test_visit_yield_defers_the_look_back_and_the_next_open_salvages_it(tmp_path
 
     # --- the next open salvages the deferred look-back -------------------
     stop.unlink()
-    write_entity_state(home_dir, "awake", reason="visitor session ended (auto-yield return)")
+    write_entity_state(home_dir, "awake", reason="visitor session ended (auto-yield return)", fence=LifecycleFence.admit(home_dir))
     llm2 = _ScriptedLLM(["Salvage reflection: that day mattered.", "New day tick.", "New day reflection."])
     lines2: List[str] = []
     probes2: Dict[str, Any] = {}
@@ -508,7 +509,7 @@ def test_visit_yield_detects_the_auto_yield_reason_channel(tmp_path: Path) -> No
         if steps["n"] == 1:
             write_entity_state(
                 home_dir, "asleep",
-                reason="in conversation with person:test (auto-yield)",
+                reason="in conversation with person:test (auto-yield)", fence=LifecycleFence.admit(home_dir),
             )
         else:
             stop.touch()

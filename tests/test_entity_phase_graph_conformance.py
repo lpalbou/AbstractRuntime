@@ -14,6 +14,7 @@ loud on any machine that carries both repos.
 """
 from __future__ import annotations
 
+from abstractruntime.identity.lifecycle_fence import LifecycleFence  # noqa: E402
 import json
 from pathlib import Path
 
@@ -171,9 +172,9 @@ def test_day_kind_writer_accepts_graph_words_only() -> None:
     from abstractruntime.identity.life import read_loop_status, write_loop_status
 
     tmp = Path(tempfile.mkdtemp())
-    write_loop_status(tmp, "day", day_kind="WORK")
+    write_loop_status(tmp, "day", day_kind="WORK", fence=LifecycleFence.admit(tmp))
     assert read_loop_status(tmp).get("day_kind") == "work"
-    write_loop_status(tmp, "day", day_kind="awake")
+    write_loop_status(tmp, "day", day_kind="awake", fence=LifecycleFence.admit(tmp))
     assert read_loop_status(tmp).get("day_kind") is None, "non-graph word dropped"
 
 

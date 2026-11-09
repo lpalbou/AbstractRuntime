@@ -3,6 +3,7 @@ v11 personal<->sleep maintenance cycle (laurent dm#104), the v13 need-check and 
 'a fixed clock never forces sleep' (contract-phases v2 §10.4-§10.6). Those dials stay readable and govern nothing."""
 from __future__ import annotations
 
+from abstractruntime.identity.lifecycle_fence import LifecycleFence  # noqa: E402
 import json
 from pathlib import Path
 
@@ -167,7 +168,7 @@ def test_retired_gate_dials_govern_nothing(tmp_path, monkeypatch) -> None:
     home.mkdir()
     d = read_day_gate(home)
     assert d["phase"] == "idle" and d["cause"] == "no_grant" and "need_check_s" not in d
-    write_personal_grant(home, mode="until_revoked", granted_by="operator:test")
+    write_personal_grant(home, mode="until_revoked", granted_by="operator:test", fence=LifecycleFence.admit(home))
     d = read_day_gate(home, last_phase="personal")
     assert d["phase"] == "personal" and d["cause"] in ("resting", "grant_degraded"), d
 
@@ -188,7 +189,7 @@ def test_no_need_check_and_no_bound_wake_an_operator_sleep(tmp_path, monkeypatch
     (home_dir / "work_order.md").write_text("desk", encoding="utf-8")
     write_entity_state(
         home_dir, "asleep", reason="sleep now", written_by="operator",
-        wake_at=(datetime.now(timezone.utc) - timedelta(hours=7)).isoformat(),
+        wake_at=(datetime.now(timezone.utc) - timedelta(hours=7)).isoformat(), fence=LifecycleFence.admit(home_dir),
     )
     polls = {"n": 0}
     seen = []
@@ -198,7 +199,7 @@ def test_no_need_check_and_no_bound_wake_an_operator_sleep(tmp_path, monkeypatch
         st = read_entity_state(home_dir)
         seen.append((st["state"], st.get("written_by")))
         if polls["n"] == 20:
-            write_entity_state(home_dir, "awake", reason="operator wake")
+            write_entity_state(home_dir, "awake", reason="operator wake", fence=LifecycleFence.admit(home_dir))
 
     llm = _ScriptedLLM(["Working.\n```work\ndone: sorted\n```", "R."])
     report = LifeLoop(
@@ -259,14 +260,14 @@ def test_night_predicate_has_no_clock(tmp_path, monkeypatch) -> None:
     consolidate = build_consolidator(home_dir, out=lambda s: None)
     write_entity_state(
         home_dir, "asleep", reason="self-elected sleep: full", written_by="self",
-        wake_at=(datetime.now(timezone.utc) + timedelta(seconds=30)).isoformat(),
+        wake_at=(datetime.now(timezone.utc) + timedelta(seconds=30)).isoformat(), fence=LifecycleFence.admit(home_dir),
     )
     consolidate()
     assert captured["pred"] is not None, "the engine receives the predicate"
     assert captured["pred"]() is True, "a stamp inside the old 60 s grace no longer sheds the night"
-    write_entity_state(home_dir, "asleep", mode="visiting", written_by="visit-door", reason="auto-yield")
+    write_entity_state(home_dir, "asleep", mode="visiting", written_by="visit-door", reason="auto-yield", fence=LifecycleFence.admit(home_dir))
     assert captured["pred"]() is False, "a visitor ends it at the next stage"
-    write_entity_state(home_dir, "awake", reason="operator wake")
+    write_entity_state(home_dir, "awake", reason="operator wake", fence=LifecycleFence.admit(home_dir))
     assert captured["pred"]() is False, "a wake ends it"
 
 
@@ -279,14 +280,14 @@ def test_loop_status_carries_the_tunables_receipt(tmp_path) -> None:
     write_loop_status(tmp_path, "between", tunables={
         "personal_cycle": {"personal_window_h": 2.0, "sleep_window_h": 1.0, "enabled": True},
         "sleep_bound_h": 1.0, "$comment": "stripped",
-    })
+    }, fence=LifecycleFence.admit(tmp_path))
     st = read_loop_status(tmp_path)
     assert st["tunables"]["sleep_bound_h"] == 1.0
     assert "$comment" not in st["tunables"], "doc keys never ride the receipt"
     assert st.get("tunables_at"), "the read moment is stamped"
     first_at = st["tunables_at"]
     # A later heartbeat WITHOUT tunables preserves the receipt.
-    write_loop_status(tmp_path, "day")
+    write_loop_status(tmp_path, "day", fence=LifecycleFence.admit(tmp_path))
     st2 = read_loop_status(tmp_path)
     assert st2["tunables"] == st["tunables"] and st2["tunables_at"] == first_at
 
@@ -453,7 +454,7 @@ def test_an_operator_sleep_on_a_bare_desk_never_wakes_into_a_day(tmp_path) -> No
     (home_dir / PHASES_FILENAME).unlink()
     write_entity_state(
         home_dir, "asleep", reason="sleep now", written_by="operator",
-        wake_at=(datetime.now(timezone.utc) - timedelta(seconds=5)).isoformat(),
+        wake_at=(datetime.now(timezone.utc) - timedelta(seconds=5)).isoformat(), fence=LifecycleFence.admit(home_dir),
     )
     before = (home_dir / "state_history.jsonl").read_text().strip().splitlines()
     polls = {"n": 0}

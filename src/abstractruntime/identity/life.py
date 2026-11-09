@@ -1621,10 +1621,11 @@ def _still_our_reservation(home_dir: Path, fence: Any) -> bool:
             and current.get("generation") == int(fence.generation))
 
 
-def _record_spawned_child(home_dir: Path, child_pid: int, *, fence: Any) -> bool:
-    """After Popen: the reservation names the child (its pid; liveness from now on is the child's). Only over THIS
-    spawner's reservation - a child that already registered, or a Stop's record, is never overwritten. False when
-    the reservation was no longer ours."""
+def _record_spawned_child(home_dir: Path, child_pid: int, *, fence: Any, token: Optional[str] = None) -> bool:
+    """After Popen: the reservation names the child (its pid and, when it could be read, its start-time token -
+    liveness from now on is the child's, the token guarding against a reused pid). Only over THIS spawner's
+    reservation - a child that already registered, or a Stop's record, is never overwritten. False when the
+    reservation was no longer ours."""
     with home_state_lock(home_dir):
         _verify_fence(fence, home_dir, "recording the spawned loop", read_lifecycle_generation(home_dir),
                       sentinel_ok=False)
@@ -1632,6 +1633,8 @@ def _record_spawned_child(home_dir: Path, child_pid: int, *, fence: Any) -> bool
             return False
         current = _read_loop_status_raw(home_dir)
         current["pid"] = int(child_pid)
+        if token:
+            current["pid_started_at"] = str(token)
         current["updated_at"] = _now_iso()
         _write_loop_status_locked(home_dir, current, stopped_by=None, day_kind=None, day_cause=None, tunables=None,
                                   started=None)
@@ -1802,9 +1805,18 @@ def read_loop_status(home_dir: Path) -> Dict[str, Any]:
         return {"phase": "stopped", "running": False}
     if data.get("phase") == "starting":
         # THE SPAWN RESERVATION: running while the recorded child is alive - or, before Popen returned (no child
-        # recorded yet), the spawner. Pid liveness only (os.kill 0 after reaping our own zombie), never a ps or a clock.
+        # recorded yet), the spawner (os.kill 0 after reaping our own zombie, never a clock) - and still the SAME
+        # process: its recorded start-time token is compared, as day/between do (Fable F5: a reused pid read
+        # "already starting" forever). One ps per status read, never per effect.
         child = data.get("pid")
-        data["running"] = _pid_alive_reaped(child) if child else _pid_alive_reaped(data.get("spawner_pid"))
+        pid = child if child else data.get("spawner_pid")
+        token = str((data.get("pid_started_at") if child else data.get("spawner_started_at")) or "")
+        alive = _pid_alive_reaped(pid)
+        if alive and token:
+            current = _pid_start_time(pid)
+            if current is not None and current != token:
+                alive = False
+        data["running"] = alive
         return data
     running = bool(
         data.get("phase") in ("day", "between") and _pid_alive(data.get("pid"))
@@ -3010,7 +3022,9 @@ def spawn_loop_process(
                 start_new_session=True,  # survives host restarts; the inbox stays the brake
             )
         try:
-            _record_spawned_child(home_dir, proc.pid, fence=fence)
+            # The child's start-time token (one ps per spawn, read before the lock): a reused pid never keeps the
+            # reservation alive, and a Stop can verify the incarnation of a child that has not registered yet.
+            _record_spawned_child(home_dir, proc.pid, fence=fence, token=_pid_start_time(proc.pid))
         except StoppedByOperator:
             pass  # a Stop since the reservation: its record stands, and the child refuses itself at its boot
 

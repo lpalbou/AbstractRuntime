@@ -771,7 +771,8 @@ def test_the_operators_start_reaches_the_spawned_loop(tmp_path: Path, monkeypatc
             return None
 
     def fake_popen(argv, *a, **k):
-        seen.append(list(argv))
+        if "abstractruntime.identity.life" in list(argv):  # the loop child (a ps for its start token is not one)
+            seen.append(list(argv))
         return _Proc()
 
     monkeypatch.setattr(subprocess, "Popen", fake_popen)
@@ -1109,7 +1110,8 @@ def test_queued_work_is_admitted_at_the_spawn_door_with_own_time_off(tmp_path: P
         def poll(self):
             return None
 
-    monkeypatch.setattr(subprocess, "Popen", lambda argv, *a, **k: spawned.append(list(argv)) or _Proc())
+    monkeypatch.setattr(subprocess, "Popen", lambda argv, *a, **k: (
+        spawned.append(list(argv)) if "abstractruntime.identity.life" in list(argv) else None) or _Proc())
     with pytest.raises(RuntimeError, match="no personal time"):
         spawn_loop_process(home_dir, provider="lmstudio", model="m")
     assert spawned == []

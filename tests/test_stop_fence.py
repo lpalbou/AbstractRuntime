@@ -1427,3 +1427,22 @@ def test_open_home_and_chat_session_take_their_fence_by_signature(tmp_path: Path
             ChatSession(home, _HookLLM([]), participants=["person:x"], context_window=20000, fence=None)
     finally:
         home.close()
+
+
+@pytest.mark.parametrize("who", ["spawner", "child"])
+def test_a_reservation_whose_pid_was_reused_reads_not_running(tmp_path: Path, who: str) -> None:
+    """Fable F5 (P3): the `starting` branch checked pid liveness only, so a reservation whose spawner (or child) died
+    and whose pid was reused (a reboot) read "already starting" forever - no clock clears it. It compares the
+    recorded start-time token now, exactly as day/between do (one `ps` per status read, never per effect)."""
+    from abstractruntime.identity.life import read_loop_status
+
+    home_dir = _make_home(tmp_path)
+    fence = LifecycleFence.admit(home_dir)
+    life._reserve_loop_start(home_dir, fence=fence)
+    if who == "child":
+        life._record_spawned_child(home_dir, os.getpid(), fence=fence, token=life._own_start_time())
+    assert read_loop_status(home_dir)["running"] is True  # this live process, its own token
+    raw = json.loads((home_dir / "loop_status").read_text(encoding="utf-8"))
+    raw["pid_started_at" if who == "child" else "spawner_started_at"] = "Mon Jan  1 00:00:00 2001"  # another process
+    (home_dir / "loop_status").write_text(json.dumps(raw) + "\n", encoding="utf-8")
+    assert read_loop_status(home_dir)["running"] is False, "a reused pid kept the reservation alive"

@@ -2293,9 +2293,18 @@ def hard_stop_loop(home_dir: Path, *, reason: str = "", requested_by: str = "adm
         if killed:
             outcome = "killed"
 
-    # STOP CANCELS THE REMEMBERED RETURN (CONTRACT v3 D3): nothing the stopped loop was doing is restored - Resume
-    # lands in idle, a queued job then moves him to work, and own time only comes back with a new grant. Written
-    # into the runtime bucket whatever the loop's fate (it also shadows a stale sidecar value).
+    # STOP REVOKES OWN TIME AND CANCELS THE REMEMBERED RETURN (CONTRACT v3 D3; Codex review 2 #7): nothing the
+    # stopped loop was doing is restored - Resume lands in idle, a queued job then moves him to work, and own time
+    # only comes back with the operator's new grant. Both are written whatever the loop's fate; the revocation is
+    # the same write the gateway's Stop makes (mode disabled, by kill_switch) and is skipped when already disabled.
+    personal_note: Optional[str] = None
+    personal_revoked = False
+    try:
+        if read_personal_grant(home_dir).get("mode") != "disabled":
+            write_personal_grant(home_dir, mode="disabled", granted_by="kill_switch")
+            personal_revoked = True
+    except Exception as e:  # noqa: BLE001 - the stop itself stands; the result says what failed
+        personal_note = f"personal not revoked: {e}"
     resume_to_note: Optional[str] = None
     try:
         write_resume_to(home_dir, None, written_by="kill_switch")
@@ -2324,6 +2333,9 @@ def hard_stop_loop(home_dir: Path, *, reason: str = "", requested_by: str = "adm
         # failed (a corrupt phases.yaml or a newer schema).
         "resume_to_cleared": resume_to_note is None,
         **({"resume_to_note": resume_to_note} if resume_to_note else {}),
+        # Own time revoked by this stop (False when it was already off, or when the write failed: personal_note).
+        "personal_revoked": personal_revoked,
+        **({"personal_note": personal_note} if personal_note else {}),
         # Legacy keys (kept for existing callers).
         "frozen": True,
         "was_running": bool(verified and signal_name),

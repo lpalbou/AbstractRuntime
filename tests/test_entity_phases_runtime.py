@@ -1059,6 +1059,9 @@ def test_after_a_hard_stop_the_next_loop_works_its_job_and_restores_nothing(tmp_
 
     home_dir = _make_home(tmp_path)  # grant armed
     hard_stop_loop(home_dir, reason="operator stop")
+    # Stop revoked own time (Codex-2 #7). The grant is armed again here, so the restore guard is what is tested:
+    # without the operator's start act (first_day_unconditional) nothing of the stopped loop comes back.
+    write_personal_grant(home_dir, mode="until_revoked", granted_by="person:laurent")
     _add_task(home_dir, "t1", "Label the boxes")
     llm = _ScriptedLLM(["Labelled.\n```work\ndone: labelled\n```", "R1.", "My own thread.", "Look-back.", "R2."])
     seen: List[tuple] = []
@@ -1118,3 +1121,23 @@ def test_queued_work_is_admitted_at_the_spawn_door_with_own_time_off(tmp_path: P
     from abstractruntime.identity.life import loop_start_refusal
 
     assert loop_start_refusal(home_dir) is None
+
+
+def test_the_kill_switch_revokes_own_time_once(tmp_path: Path) -> None:
+    """Codex-2 #7 (runtime half): Stop cleared the return but left the grant armed, so a later restore could open
+    own time again. The runtime Stop revokes personal too (the gateway's own write: mode disabled, by kill_switch),
+    and a second Stop writes nothing new."""
+    from abstractruntime.identity.life import hard_stop_loop, loop_start_refusal
+
+    home_dir = _make_home(tmp_path)  # grant until_revoked
+    out = hard_stop_loop(home_dir, reason="operator stop")
+    assert read_personal_grant(home_dir)["mode"] == "disabled"
+    assert out["personal_revoked"] is True and "personal_note" not in out
+    assert loop_start_refusal(home_dir) is not None, "nothing queued and own time revoked: no start"
+    before = (home_dir / "phases.yaml").read_text(encoding="utf-8")
+    again = hard_stop_loop(home_dir, reason="second stop")
+    assert again["personal_revoked"] is False and read_personal_grant(home_dir)["mode"] == "disabled"
+    import yaml
+
+    assert yaml.safe_load((home_dir / "phases.yaml").read_text(encoding="utf-8"))["personal"] == \
+        yaml.safe_load(before)["personal"], "idempotent"

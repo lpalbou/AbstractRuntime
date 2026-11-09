@@ -183,3 +183,25 @@ def test_a_replayed_answer_carries_its_own_time_after_the_question():
     user, answer = session_chat_messages(run_store=rs, session_id="sess-1")
     assert user["metadata"]["ts"] == "2026-11-08T10:01:00+00:00"
     assert answer["metadata"]["ts"] == "2026-11-08T10:01:09+00:00"
+
+
+def test_an_entity_rereading_its_own_session_reads_its_replies_bare():
+    """Review 2026-11-09 REVIEW-1 #7: a re-summoned entity replayed its own earlier replies as
+    "Nerin (entity): ..." (the model may copy the prefix, and the bytes no longer match what it
+    said, so every prefix cache of the session missed). The label is for OTHER readers only."""
+    rs = _store()
+    own = session_chat_messages(run_store=rs, session_id="sess-1", reader_entity_id="entity:nerin")
+    # Byte-identical to what the entity said (prompt-cache safe); the author stays structured.
+    assert own[3]["content"] == "I think it holds."
+    assert own[3]["metadata"]["author"] == NERIN
+    # Every other message is unchanged by the reader.
+    plain = session_chat_messages(run_store=rs, session_id="sess-1")
+    assert [m["content"] for m in own[:3]] == [m["content"] for m in plain[:3]]
+    # Another reader (an agent, another entity, nobody named) still sees who spoke.
+    for reader in (None, "entity:castor", ""):
+        other = session_chat_messages(run_store=rs, session_id="sess-1", reader_entity_id=reader)
+        assert other[3]["content"] == "Nerin (entity): I think it holds."
+    # The legacy id spelling (entity:<name>@<home_id>) and the bare name are the same reader.
+    for same in ("entity:nerin@6f1c2a", "nerin", "Entity:Nerin"):
+        assert speaker_line(NERIN, "t", reader_entity_id=same) == "t"
+    assert speaker_line(NERIN, "t", reader_entity_id="entity:castor") == "Nerin (entity): t"

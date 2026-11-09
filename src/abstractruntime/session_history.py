@@ -383,6 +383,7 @@ def session_chat_messages(
     automation_id: Optional[str] = None,
     through_occurrence: Optional[int] = None,
     strict: bool = False,
+    reader_entity_id: Optional[str] = None,
     max_messages: Optional[int] = None,
     max_total_chars: Optional[int] = None,
     max_chars_per_message: Optional[int] = None,
@@ -406,7 +407,8 @@ def session_chat_messages(
     "content": str, "metadata": {"kind": "session_turn", "run_id": ...,
     "ts": ..., "author": {kind, name, entity_id, identity_ref, avatar}}}` in
     chronological order (an entity's reply reads "<name> (entity): ...", see
-    `core.turn_author.speaker_line`), the newest whole turns that fit
+    `core.turn_author.speaker_line`; when `reader_entity_id` names that same
+    entity, its own replies stay the exact bytes it said), the newest whole turns that fit
     `max_tokens` (`fold_history_window`) — with the window's receipt in
     `.report`. Strictly alternating user/assistant PAIRS: a turn missing
     either side is skipped whole (runtime review A3 — dangling user messages
@@ -446,6 +448,7 @@ def session_chat_messages(
         automation_id=automation_id,
         through_occurrence=through_occurrence,
         strict=strict,
+        reader_entity_id=reader_entity_id,
     )
     if ignored:
         history.report["ignored_inputs"] = ignored
@@ -477,6 +480,7 @@ def _session_chat_messages(
     automation_id: Optional[str],
     through_occurrence: Optional[int],
     strict: bool,
+    reader_entity_id: Optional[str] = None,
 ) -> ReplayedHistory:
     budget = _validated_max_tokens(max_tokens)
     sid = str(session_id or "").strip()
@@ -519,7 +523,7 @@ def _session_chat_messages(
         older_unread = len(turns or []) >= fetch
         # The discussion seed is the OLDEST history: prepended, dropped first —
         # and only once the session's own turns were all read.
-        pairs = _turn_pairs(turns, excluded=excluded)
+        pairs = _turn_pairs(turns, excluded=excluded, reader_entity_id=reader_entity_id)
         if not older_unread:
             pairs = seed_pairs + pairs
         kept, report = fold_history_window(pairs, max_tokens=budget, older_unread=older_unread)
@@ -534,7 +538,9 @@ def _session_chat_messages(
     return ReplayedHistory(messages, report=report)
 
 
-def _turn_pairs(turns: Any, *, excluded: set) -> List[List[Dict[str, Any]]]:
+def _turn_pairs(
+    turns: Any, *, excluded: set, reader_entity_id: Optional[str] = None
+) -> List[List[Dict[str, Any]]]:
     """Whole user/assistant pairs from session turns, chronological.
 
     Built whole first: the window drops turns atomically — a leading assistant
@@ -578,7 +584,8 @@ def _turn_pairs(turns: Any, *, excluded: set) -> List[List[Dict[str, Any]]]:
         # THE SPEAKER (entity mentions, 2026-11-08): each message carries its structured
         # `author` (core.turn_author); an ENTITY's reply is also rendered "<name> (entity): ..."
         # so the next agent run never reads another speaker's words as its own. Driven by the
-        # field alone; agent and person messages keep their exact bytes (prefix caches).
+        # field alone; agent and person messages keep their exact bytes (prefix caches), and so
+        # do the READER's own replies (REVIEW-1 #7: an entity re-reading its session).
         user_meta = {**meta, "author": turn.get("prompt_author")} if turn.get("prompt_author") else dict(meta)
         if turn.get("repeat_of"):
             # The prompt repeats another turn's (an @entity mention): kept, so the pair stays whole.
@@ -593,7 +600,7 @@ def _turn_pairs(turns: Any, *, excluded: set) -> List[List[Dict[str, Any]]]:
         turn_pairs.append(
             [
                 {"role": "user", "content": prompt, "metadata": user_meta},
-                {"role": "assistant", "content": speaker_line(answer_author, answer), "metadata": answer_meta},
+                {"role": "assistant", "content": speaker_line(answer_author, answer, reader_entity_id=reader_entity_id), "metadata": answer_meta},
             ]
         )
     return turn_pairs

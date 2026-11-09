@@ -207,11 +207,31 @@ def turn_authors(vars_obj: Any, *, workflow_id: Any = None) -> Dict[str, Dict[st
     return {"prompt": prompt_author(vars_obj), "answer": answer_author(vars_obj, workflow_id=workflow_id)}
 
 
-def speaker_line(author: Any, text: str) -> str:
+def _entity_key(value: Any) -> str:
+    """The entity name an id names: `entity:<name>`, the legacy `entity:<name>@<home_id>` and a
+    bare `<name>` all give `<name>` (lowercase); anything else gives ""."""
+    if not isinstance(value, str):
+        return ""
+    text = value.strip()
+    head, sep, tail = text.partition(":")
+    if sep and head.strip().lower() == "entity":
+        text = tail
+    return text.split("@", 1)[0].strip().lower()
+
+
+def speaker_line(author: Any, text: str, *, reader_entity_id: Optional[str] = None) -> str:
     """The text a model sees for a replayed message: `<name> (entity): <text>` for an entity's
-    reply, the text unchanged for anyone else (an agent's own reply, a person)."""
+    reply, the text unchanged for anyone else (an agent's own reply, a person).
+
+    `reader_entity_id`: the entity that will READ this history. Its own replies stay exactly the
+    bytes it said (review 2026-11-09 REVIEW-1 #7: a re-summoned entity read its own words as
+    "<name> (entity): ...", which a model may copy and which breaks every prefix cache of the
+    session). The label is for other readers only."""
     a = read_author(author)
     if a is None or a["kind"] != "entity":
+        return text
+    reader = _entity_key(reader_entity_id)
+    if reader and reader == (_entity_key(a["entity_id"]) or _entity_key(a["name"])):
         return text
     name = a["name"] or a["entity_id"] or "entity"
     return f"{name} (entity): {text}"

@@ -116,7 +116,7 @@ def test_growing_history_is_the_50k_token_window_and_the_run_records_it(env):
     kid = children(runtime, aid)[0]
     history = kid.vars["context"]["messages"]
     assert len(history) == 60 and kid.output["response"].endswith("| history=60")
-    assert all(m["content"] == answer.strip() for m in history[1::2])  # uncut
+    assert all(m["content"] == answer for m in history[1::2])  # uncut, the stored bytes (trailing space kept)
     note = kid.vars["_runtime"]["session_history"]
     assert note["max_tokens"] == 50_000 and note["policy"] == "most_recent_whole_turns"
     assert note["replayed_messages"] == 60 and note["dropped_messages"] == 0

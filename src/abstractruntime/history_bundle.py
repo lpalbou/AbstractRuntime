@@ -828,7 +828,9 @@ def _best_effort_session_turns(
         answer = ""
         for c in candidates:
             if isinstance(c, str) and c.strip():
-                answer = c.strip()
+                # The stored bytes, whitespace included (Codex review 2026-11-09 #10: the session's own entity
+                # replays its answer byte for byte); .strip() only decides that there is one.
+                answer = c
                 break
 
         meta0 = out.get("meta") if isinstance(out.get("meta"), dict) else None

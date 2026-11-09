@@ -205,3 +205,20 @@ def test_an_entity_rereading_its_own_session_reads_its_replies_bare():
     for same in ("entity:nerin@6f1c2a", "nerin", "Entity:Nerin"):
         assert speaker_line(NERIN, "t", reader_entity_id=same) == "t"
     assert speaker_line(NERIN, "t", reader_entity_id="entity:castor") == "Nerin (entity): t"
+
+
+def test_an_entitys_own_reply_replays_byte_for_byte_whitespace_included():
+    """Codex review 2026-11-09 finding 10: the answer was .strip()-ed before the reader-aware label, so
+    "  indented answer\\n\\n" replayed as "indented answer" - not the bytes the entity said."""
+    rs = InMemoryRunStore()
+    run = _mention_run()
+    run.output = {"answer": "  indented answer\n\n- a list item\n\n"}
+    rs.save(run)
+    own = session_chat_messages(run_store=rs, session_id="sess-1", reader_entity_id="entity:nerin")
+    assert own[1]["content"] == "  indented answer\n\n- a list item\n\n"
+    other = session_chat_messages(run_store=rs, session_id="sess-1")
+    assert other[1]["content"] == "Nerin (entity):   indented answer\n\n- a list item\n\n"
+    # A whitespace-only answer is still no answer (the pair is skipped whole).
+    run.output = {"answer": "  \n "}
+    rs.save(run)
+    assert session_chat_messages(run_store=rs, session_id="sess-1", reader_entity_id="entity:nerin") == []

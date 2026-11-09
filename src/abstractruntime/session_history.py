@@ -563,8 +563,10 @@ def _turn_pairs(
             # is invisible to replay (contract question (a), conservative).
             continue
         prompt = str(turn.get("prompt") or "").strip()
-        answer = str(turn.get("answer") or "").strip()
-        if not prompt or not answer:
+        # The answer replays as STORED (Codex review 2026-11-09 #10): an entity re-reading its own session must get
+        # the exact bytes it said, whitespace included; .strip() only decides whether there is an answer at all.
+        answer = str(turn.get("answer") or "")
+        if not prompt or not answer.strip():
             continue
         # BYTE-EXACT REPLAY (mission A, 2026-09-22). `prompt` is the DISPLAY form —
         # the runtime's `<runtime_metadata>` envelope stripped off so UIs show what

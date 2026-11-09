@@ -224,7 +224,10 @@ def test_the_spawn_hands_the_capability_profiles_to_the_child(tmp_path: Path, mo
             return None
 
     def fake_popen(argv, *a, **k):
-        seen.append(dict(k.get("env") or {}))
+        # The loop child's own Popen (the spawner's start-token `ps` - the spawn reservation, Stop fence step 2 -
+        # goes through Popen too, before the child's; its env is never the child's).
+        if "abstractruntime.identity.life" in list(argv):
+            seen.append(dict(k.get("env") or {}))
         return _Proc()
 
     monkeypatch.setattr(subprocess, "Popen", fake_popen)
@@ -233,6 +236,7 @@ def test_the_spawn_hands_the_capability_profiles_to_the_child(tmp_path: Path, mo
             "summaries": {"spec": "endpoint:theforge", "profile": {"base_url": "http://x", "api_key": "k"}}})
     except Exception:  # noqa: BLE001 - only what the child would receive matters
         pass
+    assert len(seen) == 1, seen  # exactly one loop child was spawned
     packed = json.loads(seen[0]["ABSTRACTRUNTIME_CAPABILITY_ENDPOINT_PROFILES_JSON"])
     assert packed == {"summaries": {"spec": "endpoint:theforge", "profile": {"base_url": "http://x", "api_key": "k"}}}
 

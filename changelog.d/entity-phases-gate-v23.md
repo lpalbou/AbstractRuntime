@@ -6,10 +6,10 @@
   the statuses idle and stopped, the self-loops, no sleep->sleep). `read_day_gate` decides, in order: a visit
   posture; HIS OWN SLEEP DECISION (a ```rest block he wrote, passed as `sleep_elected`) unless the last activity
   phase was already sleep (`sleep_refusal`: no sleep->sleep) or it came from own time the operator has since
-  revoked; a standing work order with Work on; personal while the operator's grant stands (a day when drives pull;
+  revoked; a standing work order; personal while the operator's grant stands (a day when drives pull;
   the first day after the operator's start when the loop is started with `first_day_unconditional=True`; otherwise
   he RESTS between days inside personal, awake, zero model calls, waking early for a visit, a work order or a
-  revoked grant); else `idle`: own time ends awake (`stopped_by=personal_off`, `work_off` or `edge_removed`). The
+  revoked grant); else `idle`: own time ends awake (`stopped_by=personal_off`, `no_return` or `edge_removed`). The
   gate never chooses sleep by itself. Every loop-written boundary consults the effective graph by its own edge
   (`personal->personal#personal_cycle`, `work->work#task_complete`, `work->personal#no_task|#operator`,
   `personal->work#operator`, `sleep->personal|work#maintenance_done`, `personal|work->sleep#self_elected`); a

@@ -18,6 +18,7 @@ from abstractruntime.identity.life import (  # noqa: E402
     LifeLoop,
     read_entity_state,
     read_loop_status,
+    read_personal_grant,
     write_entity_state,
     write_personal_grant,
 )
@@ -483,8 +484,8 @@ def test_the_night_has_no_clock_and_its_voice_yields_to_a_visitor(tmp_path: Path
     assert narrated == [1] and result["formed"] is True
 
 
-# ---------------------------------------------------------------- §10.2 / §6.4 the Work toggle: one runtime-owned
-# bucket, the sidecar migration, the gate, the durable pause at the next effect boundary, preserved across restarts
+# ---------------------------------------------------------------- CONTRACT v3 D1: there is no work toggle. Work starts
+# when a job is queued; the toggle bucket, its sidecar key and the work-off pause (a24350a) are retired and never read
 
 
 def _sidecar(home_dir: Path, rec: Dict[str, Any]) -> Path:
@@ -494,151 +495,105 @@ def _sidecar(home_dir: Path, rec: Dict[str, Any]) -> Path:
     return p
 
 
-def test_work_toggle_bucket_is_field_merged_with_one_writer(tmp_path: Path) -> None:
+def _old_work_off(home_dir: Path) -> None:
+    """A home a24350a left with Work OFF: the phases.yaml `work` bucket and the gateway sidecar's `work` key."""
     import yaml
 
-    from abstractruntime.identity.life import read_personal_grant, read_work_toggle, write_work_toggle
+    doc = yaml.safe_load((home_dir / "phases.yaml").read_text(encoding="utf-8"))
+    doc["work"] = {"enabled": False, "written_by": "person:laurent", "written_at": "2026-11-09T15:00:00+00:00"}
+    (home_dir / "phases.yaml").write_text(yaml.safe_dump(doc, sort_keys=False), encoding="utf-8")
+    _sidecar(home_dir, {"rev": 4, "work": False})
+
+
+def test_an_old_work_off_is_never_read_a_standing_order_runs_its_work_day(tmp_path: Path) -> None:
+    """D1: the work toggle is gone. A home that still carries Work off (the old bucket and the sidecar key) runs the
+    standing order like any other: the gate chooses work, the day works it, the verdict archives it."""
+    from abstractruntime.identity.life import read_day_gate
 
     home_dir = _make_home(tmp_path)
-    assert read_work_toggle(home_dir)["enabled"] is True and read_work_toggle(home_dir)["source"] == "default"
-    doc = yaml.safe_load((home_dir / "phases.yaml").read_text(encoding="utf-8"))
-    doc["work"] = None
-    doc["visit"] = {"tools": ["read_file"]}
-    (home_dir / "phases.yaml").write_text(yaml.safe_dump(doc), encoding="utf-8")
-    out = write_work_toggle(home_dir, enabled=False, written_by="person:laurent")
-    assert out == {"enabled": False, "written_by": "person:laurent", "written_at": out["written_at"],
-                   "source": "phases.yaml"}
-    doc = yaml.safe_load((home_dir / "phases.yaml").read_text(encoding="utf-8"))
-    assert doc["visit"] == {"tools": ["read_file"]}, "other sections ride through"
-    assert read_personal_grant(home_dir)["mode"] == "until_revoked", "the personal grant is untouched"
-    with pytest.raises(ValueError):
-        write_work_toggle(home_dir, enabled="no", written_by="x")  # type: ignore[arg-type]
-    with pytest.raises(ValueError):
-        write_work_toggle(home_dir, enabled=True, written_by="")
-    (home_dir / "phases.yaml").write_text("{corrupt: [", encoding="utf-8")
-    with pytest.raises(ValueError):
-        write_work_toggle(home_dir, enabled=True, written_by="x")
-    assert read_work_toggle(home_dir)["enabled"] is False, "a corrupt file fails closed"
+    (home_dir / "work_order.md").write_text("Sort the shelf.", encoding="utf-8")
+    _old_work_off(home_dir)
+    assert read_day_gate(home_dir, last_phase="personal")["phase"] == "work"
+    write_personal_grant(home_dir, mode="disabled")
+    decision = read_day_gate(home_dir)
+    assert decision["phase"] == "work" and decision["cause"] == "work_order", decision
+    llm = _ScriptedLLM(["Done.\n```work\ndone: sorted\n```", "R1."])
+    report = LifeLoop(_phase_factory(home_dir, llm), tick_seconds=1, ticks_per_day=1, max_ticks=3, rest_minutes=30,
+                      stop_file=home_dir / "STOP", state_home=home_dir, sleep_fn=lambda s: None,
+                      out=lambda s: None).run()
+    assert report.days == 1 and "sorted" in (home_dir / "work_order.done.md").read_text(encoding="utf-8")
 
 
-def test_sidecar_migration_is_idempotent_then_the_sidecar_is_projection_only(tmp_path: Path) -> None:
-    from abstractruntime.identity.life import (
-        migrate_phase_sidecar,
-        read_resume_to,
-        read_work_toggle,
-        work_enabled,
-    )
+def test_the_sidecar_migration_carries_resume_to_only_and_leaves_an_old_work_bucket_untouched(tmp_path: Path) -> None:
+    import yaml
+
+    from abstractruntime.identity.life import migrate_phase_sidecar, read_resume_to, write_resume_to
 
     home_dir = _make_home(tmp_path)
+    _old_work_off(home_dir)
     side = _sidecar(home_dir, {"rev": 4, "work": False, "resume_to": "personal"})
     # Before the migration the runtime reads the gateway's sidecar.
-    assert read_work_toggle(home_dir)["source"] == "gateway-sidecar" and work_enabled(home_dir) is False
     assert read_resume_to(home_dir) == {"phase": "personal", "written_by": None, "written_at": None,
                                         "source": "gateway-sidecar"}
     first = migrate_phase_sidecar(home_dir, migrated_by="gateway:test")
-    assert first["work"] == "migrated" and first["resume_to"] == "migrated"
-    toggle = read_work_toggle(home_dir)
-    assert toggle["source"] == "phases.yaml" and toggle["enabled"] is False
-    assert toggle["written_by"].startswith("gateway:test")
+    assert first == {"sidecar": str(side), "resume_to": "migrated"}, first
     assert read_resume_to(home_dir)["phase"] == "personal"
     before = (home_dir / "phases.yaml").read_text(encoding="utf-8")
-    assert migrate_phase_sidecar(home_dir) == {"sidecar": str(side), "work": "present", "resume_to": "present"}
+    assert migrate_phase_sidecar(home_dir) == {"sidecar": str(side), "resume_to": "present"}
     assert (home_dir / "phases.yaml").read_text(encoding="utf-8") == before, "the second run writes nothing"
     # From now on the sidecar is a projection: a stale value there changes nothing.
     _sidecar(home_dir, {"rev": 5, "work": True, "resume_to": None})
-    assert work_enabled(home_dir) is False and read_resume_to(home_dir)["phase"] == "personal"
-    assert migrate_phase_sidecar(home_dir)["work"] == "present"
+    assert read_resume_to(home_dir)["phase"] == "personal"
+    # The old work bucket rides through every write untouched and unread (it is not this runtime's any more).
+    write_resume_to(home_dir, None, written_by="gateway:test")
+    doc = yaml.safe_load((home_dir / "phases.yaml").read_text(encoding="utf-8"))
+    assert doc["work"]["enabled"] is False and doc["resume_to"]["phase"] is None
+    assert read_personal_grant(home_dir)["mode"] == "until_revoked", "the personal grant is untouched"
+    with pytest.raises(ValueError):
+        write_resume_to(home_dir, "sleep", written_by="x")
+    with pytest.raises(ValueError):
+        write_resume_to(home_dir, None, written_by="")
+    (home_dir / "phases.yaml").write_text("{corrupt: [", encoding="utf-8")
+    with pytest.raises(ValueError):
+        write_resume_to(home_dir, "personal", written_by="x")
 
 
-def test_the_gate_skips_work_while_work_is_off(tmp_path: Path) -> None:
-    from abstractruntime.identity.life import read_day_gate, write_work_toggle
+def test_no_work_toggle_is_read_anywhere_in_the_runtime() -> None:
+    """D1 grep pin: no reader or writer of a work toggle, its sidecar key or the work-off pause survives in the
+    runtime's code (the vendored phase spec is the Entity owner's document and is checked byte for byte elsewhere)."""
+    import re
 
-    home_dir = _make_home(tmp_path)
-    (home_dir / "work_order.md").write_text("Sort the shelf.", encoding="utf-8")
-    write_work_toggle(home_dir, enabled=False, written_by="person:laurent")
-    decision = read_day_gate(home_dir, last_phase="personal")
-    assert decision["phase"] == "personal" and "Work is off" in decision["note"]
-    write_personal_grant(home_dir, mode="disabled")
-    decision = read_day_gate(home_dir)
-    assert decision["phase"] == "idle" and decision["cause"] == "work_off"
-    write_work_toggle(home_dir, enabled=True, written_by="person:laurent")
-    assert read_day_gate(home_dir)["phase"] == "work"
+    import abstractruntime
 
-
-def test_work_off_pauses_the_work_day_at_its_next_effect_boundary_then_resumes(tmp_path: Path) -> None:
-    """Work off during a work day: the in-flight call finishes, the tool its reply elected does not run, the day
-    closes at the tick boundary (no tick 2), the order stands and the pause is recorded; own time follows while the
-    grant stands (work->personal#operator). Work on again: the next boundary resumes the work, and he is told."""
-    from abstractruntime.identity.life import read_work_pause, write_work_toggle
-
-    home_dir = _make_home(tmp_path)
-    (home_dir / "work_order.md").write_text("Sort the shelf.", encoding="utf-8")
-    turned_off = lambda: write_work_toggle(home_dir, enabled=False, written_by="person:laurent")  # noqa: E731
-    turned_on = lambda: write_work_toggle(home_dir, enabled=True, written_by="person:laurent")  # noqa: E731
-    llm = _HookLLM(
-        ["Let me note it.\n\n```tool name=write_file path=note.md\nshelf plan\n```",  # Work goes off during it
-         "R1.",
-         "A free thought.", "The tick's look-back.", "R2.",  # own time; Work comes back on during it
-         "Done.\n```work\ndone: sorted\n```", "R3."],
-        hooks={0: turned_off, 3: turned_on},
+    root = Path(abstractruntime.__file__).parent
+    pattern = re.compile(
+        r"work_enabled|work_toggle|WORK_BUCKET|work_pause|WORK_PAUSE|Work (is|was turned) off|work_paused"
+        r"|[\[(]\s*[\"']work[\"']\s*[\])]"
     )
-    lines: List[str] = []
-    report = LifeLoop(_phase_factory(home_dir, llm), tick_seconds=1, ticks_per_day=1, max_ticks=3, rest_minutes=30,
-                      stop_file=home_dir / "STOP", state_home=home_dir, sleep_fn=lambda s: None,
-                      out=lines.append).run()
-    assert not (home_dir / "workspace" / "note.md").exists(), "the elected tool did not run"
-    assert report.records[0].tools == []
-    assert any("Work was turned off - the work pauses here" in ln for ln in lines), lines
-    assert report.days == 3 and report.ticks == 3
-    assert _markers(home_dir) == [("work", "personal", "operator"), ("personal", "work", "operator")]
-    assert "Your work resumes" in report.records[2].cue
-    assert read_work_pause(home_dir) is None, "the pause is marked resumed"
-    pause = json.loads((home_dir / "work_pause.json").read_text(encoding="utf-8"))
-    assert pause["reason"] == "work_off" and pause["resumed_at"]
-    assert "sorted" in (home_dir / "work_order.done.md").read_text(encoding="utf-8")
+    hits = [
+        f"{path.relative_to(root)}:{n}: {line.strip()}"
+        for path in sorted(root.rglob("*.py"))
+        for n, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1)
+        if pattern.search(line)
+    ]
+    assert hits == [], "\n".join(hits)
 
 
-def test_toggles_and_work_orders_survive_a_restart_and_his_sleep(tmp_path: Path) -> None:
-    from abstractruntime.identity.life import read_personal_grant, read_work_toggle, write_work_toggle
-
+def test_the_order_and_the_grant_survive_his_sleep_and_a_restart(tmp_path: Path) -> None:
     home_dir = _make_home(tmp_path)
     (home_dir / "work_order.md").write_text("Sort the shelf.", encoding="utf-8")
-    write_work_toggle(home_dir, enabled=False, written_by="person:laurent")
-    llm = _ScriptedLLM(["Enough.\n```rest\nfull\n```", "R1.", "Back.", "Look-back.", "R2."])
+    llm = _ScriptedLLM(["Tired.\n```rest\nlong task\n```", "R1.", "Working.", "Look-back.", "R2."])
     LifeLoop(_phase_factory(home_dir, llm), tick_seconds=1, ticks_per_day=1, max_ticks=2, rest_minutes=0.001,
              stop_file=home_dir / "STOP", state_home=home_dir, on_sleep=lambda **kw: {"formed": False},
              sleep_fn=lambda s: None, out=lambda s: None).run()
-    # His sleep and the loop's end changed neither toggle nor the order.
-    assert read_work_toggle(home_dir)["enabled"] is False
+    # His sleep and the loop's end changed neither the grant nor the order.
     assert read_personal_grant(home_dir)["mode"] == "until_revoked"
     assert (home_dir / "work_order.md").read_text(encoding="utf-8") == "Sort the shelf."
-    # A new loop (a restart) reads the same toggles: Work still off -> personal, the order still waits.
-    llm2 = _ScriptedLLM(["Thinking.", "Look-back.", "R."])
-    r2 = LifeLoop(_phase_factory(home_dir, llm2), tick_seconds=1, ticks_per_day=1, max_ticks=1, rest_minutes=30,
-                  stop_file=home_dir / "STOP", state_home=home_dir, sleep_fn=lambda s: None,
-                  out=lambda s: None).run()
-    assert r2.ticks == 1 and (home_dir / "work_order.md").exists()
-    write_work_toggle(home_dir, enabled=True, written_by="person:laurent")
-    llm3 = _ScriptedLLM(["Done.\n```work\ndone: sorted\n```", "R."])
-    LifeLoop(_phase_factory(home_dir, llm3), tick_seconds=1, ticks_per_day=1, max_ticks=1, rest_minutes=30,
+    # A new loop (a restart) finds the same order and works it.
+    llm2 = _ScriptedLLM(["Done.\n```work\ndone: sorted\n```", "R."])
+    LifeLoop(_phase_factory(home_dir, llm2), tick_seconds=1, ticks_per_day=1, max_ticks=1, rest_minutes=30,
              stop_file=home_dir / "STOP", state_home=home_dir, sleep_fn=lambda s: None, out=lambda s: None).run()
     assert not (home_dir / "work_order.md").exists() and (home_dir / "work_order.done.md").exists()
-
-
-def test_a_work_turn_cut_by_work_off_names_its_cause(tmp_path: Path) -> None:
-    from test_visitor_at_the_door import _ELECTS_A_WRITE, _LLM, _session
-
-    home_dir = _make_home(tmp_path)
-    llm = _LLM([_ELECTS_A_WRITE, "SURPLUS - never asked"])
-    s = _session(home_dir, llm)
-    s.yield_check = lambda: "Work was turned off"
-    try:
-        reply, report = s.turn("the task")
-    finally:
-        s.home.close()
-    assert not (home_dir / "workspace" / "note.md").exists() and report.tools == []
-    assert "[tool call not run: write_file - Work was turned off]" in reply
-    assert any(n.startswith("#NOTE Work was turned off: 1 tool call(s) not run") for n in report.notices)
 
 
 # ---------------------------------------------------------------- the kill switch's runtime half (gateway slice

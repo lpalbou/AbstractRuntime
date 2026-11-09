@@ -300,3 +300,52 @@ def test_the_lookback_default_test_turns_red_when_the_default_moves(tmp_path: Pa
     with pytest.raises(AssertionError):
         _assert_default_lookback_is_the_day(mutant, tmp_path)
     _assert_default_lookback_is_the_day(cp, tmp_path)
+
+
+# ---------------------------------------------------------------- sleep thresholds (CONTRACT v3 D2): idle -> sleep
+
+
+def test_the_sleep_thresholds_default_to_24_hours_and_500_memories_and_round_trip(tmp_path: Path) -> None:
+    profile = cp.read_cognition_profile(tmp_path)
+    assert profile["sleep"] == {"after_hours": 24, "after_events": 500,
+                                "sources": {"after_hours": "default", "after_events": "default"}}
+    assert cp.sleep_thresholds(tmp_path) == {"after_hours": 24, "after_events": 500}
+    stored = cp.write_cognition_profile(tmp_path, {"sleep": {"after_hours": 720, "after_events": 1}})
+    assert stored == {"schema_version": 1, "sleep": {"after_hours": 720, "after_events": 1}}
+    assert yaml.safe_load((tmp_path / "cognition.yaml").read_text(encoding="utf-8")) == stored
+    assert cp.sleep_thresholds(tmp_path) == {"after_hours": 720, "after_events": 1}
+    assert cp.read_cognition_profile(tmp_path)["sleep"]["sources"] == {"after_hours": "profile",
+                                                                       "after_events": "profile"}
+    # One field chosen, the other its default; null returns it to the default.
+    stored = cp.write_cognition_profile(tmp_path, {"sleep": {"after_hours": 6, "after_events": None}})
+    assert stored["sleep"] == {"after_hours": 6}
+    assert cp.sleep_thresholds(tmp_path) == {"after_hours": 6, "after_events": 500}
+
+
+@pytest.mark.parametrize(
+    "value, field, words",
+    [
+        ({"after_hours": 0}, "sleep.after_hours", "Hours before he sleeps must be a whole number from 1 to 720."),
+        ({"after_hours": 721}, "sleep.after_hours", "from 1 to 720"),
+        ({"after_hours": 24.0}, "sleep.after_hours", "from 1 to 720"),
+        ({"after_hours": True}, "sleep.after_hours", "from 1 to 720"),
+        ({"after_events": 0}, "sleep.after_events", "New memories before he sleeps must be a whole number of at least 1."),
+        ({"after_events": "500"}, "sleep.after_events", "at least 1"),
+        ({"after_minutes": 5}, "sleep.after_minutes", "unknown field 'after_minutes'"),
+    ],
+)
+def test_a_sleep_threshold_outside_the_schema_is_refused_with_its_field(tmp_path: Path, value: dict, field: str,
+                                                                        words: str) -> None:
+    with pytest.raises(cp.CognitionProfileInvalid) as refused:
+        cp.write_cognition_profile(tmp_path, {"sleep": value})
+    assert refused.value.field == field and words in str(refused.value)
+    assert not (tmp_path / "cognition.yaml").exists()
+
+
+def test_a_bad_sleep_threshold_in_the_file_reads_as_its_default_with_a_warning(tmp_path: Path) -> None:
+    (tmp_path / "cognition.yaml").write_text(
+        "schema_version: 1\nsleep: {after_hours: 0, after_events: 42}\n", encoding="utf-8"
+    )
+    profile = cp.read_cognition_profile(tmp_path)
+    assert (profile["sleep"]["after_hours"], profile["sleep"]["after_events"]) == (24, 42)
+    assert any("sleep.after_hours" in w for w in profile["warnings"])

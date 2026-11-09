@@ -17,6 +17,9 @@ The profile lives in the home, beside the mind (`substrate.yaml`):
           cap_per_turn: 3                   # 0..10 memory tasks a turn may run at most; 0 = only while resting
         lookback:
           context: day                      # what the end-of-tick look-back sees: "day" (the whole day so far) or "tick"
+        sleep:
+          after_hours: 24                   # idle -> sleep once this long since the last completed sleep; 1..720
+          after_events: 500                 # ... or once this many new memories formed since it; >= 1
 
 Rules:
 
@@ -36,6 +39,10 @@ Rules:
   time sees: "day" (the default) = the whole day so far, which a prefix cache
   keeps at a roughly constant cost of new tokens; "tick" = this tick's
   exchange plus a short recap of the day's earlier moments.
+- `sleep` holds the two thresholds after which an IDLE entity goes to sleep
+  (CONTRACT v3 D2: hours since the last completed maintenance pass, memories
+  formed since it); the gateway's idle sweep reads them (`sleep_thresholds`).
+  Defaults 24 hours and 500 memories.
 - Absent fields read as their defaults. A malformed file, or a malformed
   field, reads as unset and logs a warning naming the field; a read never
   raises. Writes are validated (`CognitionProfileInvalid`, with a sentence a
@@ -87,15 +94,22 @@ CAP_PER_TURN_MAX = 10
 LOOKBACK_CONTEXTS: Tuple[str, ...] = ("day", "tick")
 DEFAULT_LOOKBACK_CONTEXT = "day"
 
+DEFAULT_SLEEP_AFTER_HOURS = 24
+DEFAULT_SLEEP_AFTER_EVENTS = 500
+SLEEP_AFTER_HOURS_MIN = 1
+SLEEP_AFTER_HOURS_MAX = 720
+SLEEP_AFTER_EVENTS_MIN = 1
+
 SOURCE_PROFILE = "profile"
 SOURCE_DEFAULT = "default"
 SOURCE_MIND = "mind"
 
 _CHOICE_KEYS = ("provider", "model", "thinking", "max_input_tokens")
-_TOP_KEYS = ("schema_version", "capabilities", "recall", "rebuild", "lookback")
+_TOP_KEYS = ("schema_version", "capabilities", "recall", "rebuild", "lookback", "sleep")
 _RECALL_KEYS = ("shelf_size",)
 _REBUILD_KEYS = ("sensitivity", "cap_per_turn")
 _LOOKBACK_KEYS = ("context",)
+_SLEEP_KEYS = ("after_hours", "after_events")
 
 
 class CognitionProfileInvalid(ValueError):
@@ -223,6 +237,24 @@ def validate_lookback_context(value: Any) -> str:
     return context
 
 
+def validate_sleep_after_hours(value: Any) -> int:
+    if not _is_int(value) or not (SLEEP_AFTER_HOURS_MIN <= value <= SLEEP_AFTER_HOURS_MAX):
+        raise CognitionProfileInvalid(
+            "sleep.after_hours",
+            f"Hours before he sleeps must be a whole number from {SLEEP_AFTER_HOURS_MIN} to {SLEEP_AFTER_HOURS_MAX}.",
+        )
+    return int(value)
+
+
+def validate_sleep_after_events(value: Any) -> int:
+    if not _is_int(value) or value < SLEEP_AFTER_EVENTS_MIN:
+        raise CognitionProfileInvalid(
+            "sleep.after_events",
+            f"New memories before he sleeps must be a whole number of at least {SLEEP_AFTER_EVENTS_MIN}.",
+        )
+    return int(value)
+
+
 def validate_cognition_profile(profile: Any) -> Dict[str, Any]:
     """The stored form of `profile`, strictly validated (raises `CognitionProfileInvalid`).
 
@@ -233,7 +265,7 @@ def validate_cognition_profile(profile: Any) -> Dict[str, Any]:
     unknown = sorted(str(k) for k in profile.keys() if k not in _TOP_KEYS)
     if unknown:
         raise CognitionProfileInvalid(
-            unknown[0], f"Unknown field {unknown[0]!r}. Send capabilities, recall, rebuild or lookback."
+            unknown[0], f"Unknown field {unknown[0]!r}. Send capabilities, recall, rebuild, lookback or sleep."
         )
     version = profile.get("schema_version", COGNITION_SCHEMA_VERSION)
     if version != COGNITION_SCHEMA_VERSION or isinstance(version, bool):
@@ -259,6 +291,8 @@ def validate_cognition_profile(profile: Any) -> Dict[str, Any]:
         ("recall", _RECALL_KEYS, {"shelf_size": validate_shelf_size}),
         ("rebuild", _REBUILD_KEYS, {"sensitivity": validate_sensitivity, "cap_per_turn": validate_cap_per_turn}),
         ("lookback", _LOOKBACK_KEYS, {"context": validate_lookback_context}),
+        ("sleep", _SLEEP_KEYS, {"after_hours": validate_sleep_after_hours,
+                                "after_events": validate_sleep_after_events}),
     ):
         raw = profile.get(block)
         if raw is None:
@@ -344,6 +378,7 @@ def _stored_with_warnings(home_dir: Path) -> Tuple[Dict[str, Any], List[str]]:
         ("recall", {"shelf_size": validate_shelf_size}),
         ("rebuild", {"sensitivity": validate_sensitivity, "cap_per_turn": validate_cap_per_turn}),
         ("lookback", {"context": validate_lookback_context}),
+        ("sleep", {"after_hours": validate_sleep_after_hours, "after_events": validate_sleep_after_events}),
     ):
         raw = data.get(block)
         if raw is None:
@@ -376,6 +411,8 @@ def read_cognition_profile(home_dir: Path) -> Dict[str, Any]:
          "rebuild": {"sensitivity": float, "cap_per_turn": int,
                      "sources": {"sensitivity": ..., "cap_per_turn": ...}},
          "lookback": {"context": "day" | "tick", "source": "profile" | "default"},
+         "sleep": {"after_hours": int, "after_events": int,
+                   "sources": {"after_hours": ..., "after_events": ...}},
          "warnings": [sentences about malformed fields]}
 
     `recall.shelf_size` is None when the profile does not choose one: the width
@@ -402,6 +439,7 @@ def read_cognition_profile(home_dir: Path) -> Dict[str, Any]:
     recall_stored = stored.get("recall") or {}
     rebuild_stored = stored.get("rebuild") or {}
     lookback_stored = stored.get("lookback") or {}
+    sleep_stored = stored.get("sleep") or {}
     return {
         "schema_version": COGNITION_SCHEMA_VERSION,
         "capabilities": capabilities,
@@ -419,6 +457,11 @@ def read_cognition_profile(home_dir: Path) -> Dict[str, Any]:
         "lookback": {
             "context": str(lookback_stored.get("context", DEFAULT_LOOKBACK_CONTEXT)),
             "source": SOURCE_PROFILE if "context" in lookback_stored else SOURCE_DEFAULT,
+        },
+        "sleep": {
+            "after_hours": int(sleep_stored.get("after_hours", DEFAULT_SLEEP_AFTER_HOURS)),
+            "after_events": int(sleep_stored.get("after_events", DEFAULT_SLEEP_AFTER_EVENTS)),
+            "sources": {key: (SOURCE_PROFILE if key in sleep_stored else SOURCE_DEFAULT) for key in _SLEEP_KEYS},
         },
         "warnings": list(warnings),
     }
@@ -517,6 +560,13 @@ def lookback_context(home_dir: Path) -> str:
     return str(read_cognition_profile(Path(home_dir))["lookback"]["context"])
 
 
+def sleep_thresholds(home_dir: Path) -> Dict[str, int]:
+    """`{after_hours, after_events}`: when an idle entity goes to sleep (CONTRACT v3 D2) - the profile's values,
+    else 24 hours and 500 new memories since the last completed sleep."""
+    sleep = read_cognition_profile(Path(home_dir))["sleep"]
+    return {"after_hours": int(sleep["after_hours"]), "after_events": int(sleep["after_events"])}
+
+
 __all__ = [
     "CAPABILITIES",
     "CAPABILITY_LABELS",
@@ -527,10 +577,15 @@ __all__ = [
     "DEFAULT_LOOKBACK_CONTEXT",
     "DEFAULT_REBUILD_CAP_PER_TURN",
     "DEFAULT_REBUILD_SENSITIVITY",
+    "DEFAULT_SLEEP_AFTER_EVENTS",
+    "DEFAULT_SLEEP_AFTER_HOURS",
     "MAX_INPUT_TOKENS_CEILING",
     "MAX_INPUT_TOKENS_FLOOR",
     "SHELF_SIZE_MAX",
     "SHELF_SIZE_MIN",
+    "SLEEP_AFTER_HOURS_MAX",
+    "SLEEP_AFTER_HOURS_MIN",
+    "SLEEP_AFTER_EVENTS_MIN",
     "THINKING_VOCABULARY",
     "check_capability_name",
     "lookback_context",
@@ -538,11 +593,14 @@ __all__ = [
     "recall_shelf_size",
     "read_cognition_profile",
     "resolve_capability",
+    "sleep_thresholds",
     "stored_cognition_profile",
     "validate_cap_per_turn",
     "validate_capability_choice",
     "validate_cognition_profile",
     "validate_lookback_context",
     "validate_shelf_size",
+    "validate_sleep_after_events",
+    "validate_sleep_after_hours",
     "validate_sensitivity",
 ]

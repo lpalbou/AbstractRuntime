@@ -19,8 +19,9 @@
   writer window, after a visitor) and at a session's close, bounded by the cognition profile's `cap_per_turn`; it
   writes through `retitle` / `rewrite_digest` (which settle the task and clear the marker), defers on an unreachable
   endpoint without spending an attempt, and logs a reply without the fields. The sleep pass adds one repair step
-  after its engine pass: records lacking a title or summary (or carrying the retired placeholder) get their task,
-  then pending ones are authored; its receipt carries `authoring: {declared, authored, deferred, failed}`.
+  after its engine pass: records lacking a title or summary (or carrying the retired placeholder) are declared
+  pending, then pending ones are authored; its receipt carries `authoring: {declared, refused, authored, deferred,
+  failed}`.
 - **Capability clients in the loop process**: `spawn_loop_process(capability_endpoint_profiles={cap: {spec,
   profile}})` hands them to the child in one env key (never logged); the child installs them in the ambient endpoint
   resolver and builds `llm_for_capability` (`build_capability_llm_factory`, the day client's patience window) for its

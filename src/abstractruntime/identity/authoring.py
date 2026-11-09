@@ -314,8 +314,7 @@ def drain_authoring(
             authored_write(ms, artifacts, record_id=str(t["target_id"]), kind=kind, body=body, authored=authored,
                            reader=_reader_of(llm), need=need, task_ids={need[0]: t["task_id"]},
                            expected={need[0]: int(packet.get("expected_version") or 0)},
-                           cause="repair" if str((t.get("cause") or {}).get("cause") if isinstance(t.get("cause"), dict)
-                                                 else t.get("cause") or "") == "legacy_missing" else "formation")
+                           cause=_write_cause(t))
             receipt["authored"] += 1
         except AuthoringUnavailable as e:
             until = (datetime.now(timezone.utc) + timedelta(seconds=DEFER_SECONDS)).isoformat()
@@ -332,6 +331,16 @@ def drain_authoring(
                 missing=need[0], extra={"task_id": t["task_id"], "error": str(e)}, out=out,
             )
     return receipt
+
+
+def _write_cause(task: Dict[str, Any]) -> str:
+    """The cause the authored write records: "repair" for a task the sleep's repair declared (memory's
+    declare_pending stamps its tasks {cause: "repair", pending, declared: True}; a task 7d2419e enqueued directly
+    carries cause legacy_missing), "formation" for a record formed pending."""
+    cause = task.get("cause")
+    word = str(cause.get("cause") or "") if isinstance(cause, dict) else str(cause or "")
+    declared = isinstance(cause, dict) and bool(cause.get("declared"))
+    return "repair" if declared or word in ("repair", "legacy_missing") else "formation"
 
 
 def _legacy_mechanical_title(kind: str, title: Any, attrs: Dict[str, Any]) -> bool:
@@ -362,17 +371,19 @@ def _legacy_mechanical_summary(kind: str, title: Any, method: str) -> bool:
 def declare_missing_metadata(ms: Any, *, scopes: Sequence[Tuple[str, str]], out: Callable[[str], None] = lambda _s: None
                              ) -> Dict[str, Any]:
     """The sleep's scan (operator 2026-11-09): a record that LACKS a title or a summary (a legacy record formed
-    before titles were mandatory, or one stored with the runtime's old placeholder) and carries no pending marker
-    gets its authoring task through memory's queue (`tasks.enqueue`, the basis memory's own formation uses, so the
-    task is idempotent). Nothing is authored here and nothing is cut. Returns {declared, scanned}."""
+    before titles were mandatory, one stored with the runtime's old placeholder, a legacy card "World model:
+    <subject>" / mechanical-card-v2 or dream "Dream: ...") and carries no pending marker is DECLARED PENDING through
+    memory's `declare_pending` (AbstractMemory 11687df): the same marker and title.author / digest.author tasks a
+    record formed pending gets, so the drainer authors its title and its summary through retitle / rewrite_digest -
+    cards and dreams included. A declared title is stored None until authored (the old one stays in its history).
+    Nothing is authored here and nothing is cut. A refusal (e.g. protected_kind: the summary of his own act) is
+    logged loudly and counted. Returns {declared (fields), scanned, refused}."""
     from abstractmemory import TripleQuery
-    from abstractmemory.memory_tasks import FORMATION_PRIORITY
 
     from .title_failures import is_placeholder_title
 
-    receipt = {"declared": 0, "scanned": 0}
-    tasks = getattr(ms, "tasks", None)
-    if tasks is None:
+    receipt = {"declared": 0, "scanned": 0, "refused": 0}
+    if getattr(ms, "tasks", None) is None:
         return receipt
     for scope, owner in scopes:
         for a in ms.store.query(TripleQuery(scope=scope, owner_id=owner or None, predicate="dcterms:abstract",
@@ -384,20 +395,21 @@ def declare_missing_metadata(ms: Any, *, scopes: Sequence[Tuple[str, str]], out:
             title = attrs.get("title")
             kind = str(attrs.get("record_kind") or "")
             method = str(attrs.get("digest_method") or "")
-            lacks = []
+            fields = []
             if (not (isinstance(title, str) and title.strip()) or is_placeholder_title(title)
                     or attrs.get("title_missing") or _legacy_mechanical_title(kind, title, attrs)):
-                lacks.append(("title.author", "title"))
+                fields.append("title")
             if not str(a.object or "").strip() or _legacy_mechanical_summary(kind, title, method):
-                lacks.append(("digest.author", "summary"))
-            for task_kind, fld in lacks:
-                res = tasks.enqueue(
-                    task_kind, str(a.subject), scope=scope, owner_id=owner, assertion_id=str(a.assertion_id or ""),
-                    basis=f"{a.assertion_id}@pending-{fld}", basis_version=0, strength=1.0,
-                    cause={"cause": "legacy_missing", "pending": fld}, priority=FORMATION_PRIORITY,
-                )
-                if res.get("enqueued"):
-                    receipt["declared"] += 1
+                fields.append("summary")
+            if not fields:
+                continue
+            res = ms.declare_pending(str(a.subject), fields=fields, cause="repair", reason="legacy_missing")
+            if res.get("outcome") == "refused":
+                receipt["refused"] += 1
+                out(f"#REPAIR_REFUSED memory refused to declare {kind} {a.subject} pending ({', '.join(fields)}): "
+                    f"{res.get('reason')}{' - ' + str(res.get('detail')) if res.get('detail') else ''}")
+                continue
+            receipt["declared"] += len(res.get("declared") or [])
     if receipt["declared"]:
-        out(f"(sleep: {receipt['declared']} record(s) lacking a title or summary were given their authoring task)")
+        out(f"(sleep: {receipt['declared']} missing title(s)/summary(ies) declared pending for their authoring)")
     return receipt

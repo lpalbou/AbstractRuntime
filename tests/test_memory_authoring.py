@@ -372,10 +372,10 @@ def test_a_failing_handler_leaves_the_close_records_pending_with_their_failure_l
 
 def test_the_sleep_repairs_legacy_mechanical_cards_and_dreams(tmp_path: Path, monkeypatch) -> None:
     """Memory 4f3a77e forms cards and dreams pending; ones stored before it carry memory's mechanical labels ("World
-    model: <subject>", "Dream: ...", a mechanical-card body). The sleep's repair declares them and the drainer
-    authors their titles through retitle. Their SUMMARIES: memory refuses rewrite_digest on a card or dream that
-    carries no pending marker (use_author_world_model / use_narrate_dream) and offers no verb to declare a stored
-    record pending - the drainer logs that refusal loudly (memory_refused) instead of writing around it."""
+    model: <subject>", "Dream: ...", a mechanical-card body). The sleep's repair DECLARES them pending through
+    memory's declare_pending (11687df) - the marker and tasks formation gives - so the drainer authors their titles
+    (retitle) AND their summaries (rewrite_digest: the card through its own write, the dream in place); nothing is
+    refused any more (the memory_refused path of 7d2419e is gone)."""
     import abstractmemory
     from abstractmemory import MemoryRecordInput
 
@@ -398,10 +398,11 @@ def test_the_sleep_repairs_legacy_mechanical_cards_and_dreams(tmp_path: Path, mo
     write_entity_state(home_dir, "asleep", reason="self-elected sleep: full", mode="dreaming", written_by="self")
     result = build_consolidator(home_dir, out=lambda s: None, llm_for_capability=lambda name: _Capability())()
     receipt = result["authoring"]
-    assert receipt["declared"] == 4, receipt  # both titles and both summaries
-    assert receipt["authored"] == 2, receipt  # the two titles
+    assert receipt["declared"] == 4 and receipt["authored"] == 4, receipt  # both titles and both summaries
+    assert receipt["failed"] == 0 and receipt["refused"] == 0, receipt
     for kind, rid in ids.items():
         row = [r for r in _rows(home_dir, kind) if str(r.subject) == str(rid)][-1]
         assert row.attributes["title"] == TITLE, (kind, row.attributes["title"])
-    refused = [f for f in _failures(tmp_path) if f["reason"] == "memory_refused"]
-    assert {f["kind"] for f in refused} == {"world_model", "dream"} and all(f["missing"] == "summary" for f in refused)
+        assert row.object == SUMMARY, (kind, row.object)
+        assert not isinstance(row.attributes.get("pending"), dict), (kind, row.attributes.get("pending"))
+    assert _failures(tmp_path) == [], "no authoring failure, no memory_refused"

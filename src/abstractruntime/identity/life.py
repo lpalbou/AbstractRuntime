@@ -4500,12 +4500,14 @@ def _sleep_authoring(home: Any, eid: str, scopes: List[Tuple[str, str]],
                      llm_for_capability: Optional[Callable[[str], Any]], cap: int,
                      out: Callable[[str], None]) -> Dict[str, Any]:
     """The sleep's metadata work (operator 2026-11-09): declare what lacks a title or summary, then author what is
-    pending. Returns {declared, authored, deferred, failed} for the pass's receipt; never raises."""
+    pending. Returns {declared, refused, authored, deferred, failed} for the pass's receipt; never raises."""
     from .authoring import declare_missing_metadata, drain_authoring
 
-    receipt: Dict[str, Any] = {"declared": 0, "authored": 0, "deferred": 0, "failed": 0}
+    receipt: Dict[str, Any] = {"declared": 0, "refused": 0, "authored": 0, "deferred": 0, "failed": 0}
     try:
-        receipt["declared"] = int(declare_missing_metadata(home.ms, scopes=scopes, out=out).get("declared") or 0)
+        declared = declare_missing_metadata(home.ms, scopes=scopes, out=out)
+        receipt["declared"] = int(declared.get("declared") or 0)
+        receipt["refused"] = int(declared.get("refused") or 0)
 
         def _diary_text(entry_id: str) -> Optional[str]:
             entry = home.diary.get_entry(entry_id) if entry_id else None

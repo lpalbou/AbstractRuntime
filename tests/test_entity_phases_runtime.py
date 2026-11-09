@@ -1242,5 +1242,85 @@ def test_a_loop_ends_when_stop_moves_the_generation_and_its_own_late_writes_are_
     report = LifeLoop(_factory_for(home_dir, llm), tick_seconds=1, ticks_per_day=3, max_ticks=5, rest_minutes=30,
                       stop_file=home_dir / "STOP", state_home=home_dir, sleep_fn=lambda s: None,
                       out=lambda s: None).run()
-    assert report.stopped_by == "kill_switch" and report.ticks == 1, report
+    # The in-flight turn stops at its next effect boundary and forms nothing (Codex-2 #2): no tick is recorded.
+    assert report.stopped_by == "kill_switch" and report.ticks == 0 and report.failures == 0, report
     assert "NEVER - a tick after Stop" in llm.replies
+
+
+# ---------------------------------------------------------------- Codex-2 #2: a cancelled turn stops at its next effect
+
+
+def _two_writes() -> str:
+    return ("Two notes.\n\n```tool name=write_file path=a.md\nfirst\n```\n\n"
+            "```tool name=write_file path=b.md\nsecond\n```")
+
+
+def test_a_cancelled_turn_runs_no_further_tool_no_model_call_and_forms_nothing(tmp_path: Path, monkeypatch) -> None:
+    """Codex-2 #2: chat.py ran the whole tool batch after cancellation, then another model call, and the turn formed.
+    Now the check runs before EACH tool and before every model call: the first write ran, the second did not, no
+    continuation was asked, nothing formed, and TurnCancelled carries the honest report."""
+    from test_visitor_at_the_door import _LLM, _session
+
+    import abstractruntime.identity.tools as tools_mod
+    from abstractruntime.identity.chat import TurnCancelled
+
+    home_dir = _make_home(tmp_path)
+    llm = _LLM([_two_writes(), "SURPLUS - no model call after Stop"])
+    s = _session(home_dir, llm)
+    stop = {"now": False}
+    s.cancel_check = lambda: stop["now"]
+    real = tools_mod.TOOL_DESCRIPTORS["write_file"].executor
+
+    def write_then_stop(e, ctx):  # the operator's Stop lands while the first write runs
+        out = real(e, ctx)
+        stop["now"] = True
+        return out
+
+    import dataclasses
+
+    monkeypatch.setitem(tools_mod.TOOL_DESCRIPTORS, "write_file",
+                        dataclasses.replace(tools_mod.TOOL_DESCRIPTORS["write_file"], executor=write_then_stop))
+    before = len(s.home.ms.store.query(__import__("abstractmemory").TripleQuery(limit=0)))
+    try:
+        with pytest.raises(TurnCancelled) as cancelled:
+            s.turn("your own time")
+        after = len(s.home.ms.store.query(__import__("abstractmemory").TripleQuery(limit=0)))
+    finally:
+        s.home.close()
+    assert (home_dir / "workspace" / "a.md").exists() and not (home_dir / "workspace" / "b.md").exists()
+    assert llm.replies == ["SURPLUS - no model call after Stop"], "no continuation after Stop"
+    report = cancelled.value.report
+    assert report.tools == ["write_file"] and [f["path"] for f in report.files] == ["a.md"]
+    assert any("1 tool call(s) not run" in n for n in report.notices)
+    assert after == before, "nothing formed after Stop"
+
+
+def test_the_authoring_drainer_writes_nothing_after_stop(tmp_path: Path) -> None:
+    """Codex-2 #2: the drainer wrote after its model returned without rechecking Stop. Now a Stop seen after the
+    capability answered writes nothing and hands the tasks back unspent."""
+    sys.path.insert(0, str(Path(__file__).parent))
+    from test_memory_authoring import TITLE, _Capability, _rows  # noqa: F401
+    from test_title_failures import _session as _tf_session, _workspace_home
+
+    from abstractruntime.identity.authoring import drain_authoring
+
+    home_dir = _workspace_home(tmp_path)
+    home, s = _tf_session(home_dir, ["Back.\n```interest\nwhy rivers bend\n```\n", "A quiet close."])
+    s.llm_for_capability = None  # forms pending
+    s.turn("hi")
+    stop = {"now": False}
+
+    class _StopsWhileAnswering(_Capability):
+        def generate(self, **kw):
+            stop["now"] = True  # the operator's Stop lands while the capability answers
+            return super().generate(**kw)
+
+    receipt = drain_authoring(home.ms, llm_for_capability=lambda name: _StopsWhileAnswering(), artifacts=home.artifacts,
+                              home_dir=home_dir, entity=home.entity_id, holder="test", cap=3, window="turn",
+                              should_stop=lambda: stop["now"])
+    tasks = [t for t in home.ms.tasks.tasks(kind=("title.author",))]
+    home.close()
+    assert receipt["authored"] == 0 and receipt.get("cancelled", 0) >= 1, receipt
+    interest = _rows(home_dir, "interest")[-1]
+    assert interest.attributes.get("title") in (None, "") and isinstance(interest.attributes.get("pending"), dict)
+    assert all(int(t.get("attempts") or 0) == 0 and t["status"] in ("deferred", "pending") for t in tasks), tasks

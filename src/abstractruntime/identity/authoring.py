@@ -303,6 +303,7 @@ def drain_authoring(
     window: str = "turn",
     diary_text: Optional[Callable[[str], Optional[str]]] = None,
     out: Callable[[str], None] = lambda _s: None,
+    should_stop: Optional[Callable[[], bool]] = None,
 ) -> Dict[str, Any]:
     """Run up to `cap` pending `title.author` / `digest.author` tasks (and no other kind): select, claim, read the
     target, one structured call, write through retitle / rewrite_digest (which settle the task). An unreachable
@@ -315,6 +316,9 @@ def drain_authoring(
     tasks = getattr(ms, "tasks", None)
     if tasks is None or int(cap) <= 0:
         return receipt
+    if should_stop is not None and should_stop():  # cancelled before anything: no re-arm, no claim, no call
+        receipt["cancelled"] = 0
+        return receipt
     # A pending record whose every authoring task ran out (failed after its attempts, skipped, superseded) would
     # stay pending forever: memory re-arms it first, so this pass can author it.
     receipt["rearmed"] = int(rearm_exhausted_authoring(ms, out=out).get("rearmed") or 0)
@@ -325,7 +329,22 @@ def drain_authoring(
         return receipt
     claimed = tasks.claim([t["task_id"] for t in picked], holder=holder, window=window).get("claimed") or []
     llm = None
-    for t in claimed:
+
+    def _cancelled(left: List[Dict[str, Any]]) -> bool:
+        # CANCELLATION (Codex review 2 #2): the host's Stop - no further model call or write; the tasks still held go
+        # back without spending an attempt (defer to now).
+        if should_stop is None or not should_stop():
+            return False
+        now = datetime.now(timezone.utc).isoformat()
+        for held in left:
+            tasks.release(held["task_id"], holder=holder, outcome="defer", reason="cancelled", until=now)
+        receipt["cancelled"] = len(left)
+        out(f"(authoring: cancelled - {len(left)} task(s) handed back unspent)")
+        return True
+
+    for n, t in enumerate(claimed):
+        if _cancelled(claimed[n:]):
+            break
         receipt["considered"] += 1
         need = ["title"] if t["kind"] == "title.author" else ["summary"]
         try:
@@ -355,6 +374,8 @@ def drain_authoring(
                 except Exception as e:  # noqa: BLE001 - no model resolves / builds: the task waits
                     raise AuthoringUnavailable(f"{type(e).__name__}: {e}") from e
             authored = author_metadata(llm, kind=kind, body=body)
+            if _cancelled(claimed[n:]):  # the model answered after Stop: nothing is written
+                break
             authored_write(ms, artifacts, record_id=str(t["target_id"]), kind=kind, body=body, authored=authored,
                            reader=_reader_of(llm), need=need, task_ids={need[0]: t["task_id"]},
                            expected={need[0]: int(packet.get("expected_version") or 0)},

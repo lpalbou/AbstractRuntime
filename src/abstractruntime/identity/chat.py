@@ -1037,6 +1037,18 @@ def parse_diary_blocks(reply: str) -> Tuple[str, List[DiaryElection], List[str]]
     return marked.strip(), elections, notices
 
 
+class TurnCancelled(RuntimeError):
+    """The turn was cancelled by its host (the operator's Stop; `ChatSession.cancel_check`): no further tool, model
+    call, formation or authoring ran after the check that saw it. `report` is the turn so far (the tools that really
+    ran, its notices, ending with the cancellation's own); `where` names the boundary that saw it. Nothing of the
+    turn was formed: the host records the cancellation (a stopped-by-the-operator record), never a reply."""
+
+    def __init__(self, report: Any, where: str) -> None:
+        super().__init__(f"the turn was cancelled ({where})")
+        self.report = report
+        self.where = where
+
+
 @dataclass
 class TurnReport:
     turn_id: str
@@ -1113,6 +1125,11 @@ class ChatSession:
         # Set by the own-time loop only (life.py): True = a visitor is at the
         # door, so the turn runs no new tools and ends on what he has said.
         self.yield_check: Optional[Callable[[], bool]] = None
+        # Set by a host (the gateway's Stop fence, the own-time loop's lifecycle generation): True = the turn is
+        # CANCELLED (Codex review 2 #2). Checked before every model call, before each tool, before the turn forms
+        # anything and inside the authoring drainer; the turn raises TurnCancelled and forms nothing.
+        self.cancel_check: Optional[Callable[[], bool]] = None
+        self._turn_report: Optional[Any] = None
         # `capability -> client` for the models other than the mind (the summaries capability authors titles and
         # summaries, identity/authoring.py). Set by the host; None = records stay pending for the drainer.
         self.llm_for_capability: Optional[Callable[[str], Any]] = None
@@ -1851,6 +1868,7 @@ class ChatSession:
             # operator (or the home's substrate file) set one. Only when set:
             # clients and test doubles without the kwarg stay untouched.
             kwargs["thinking"] = self.thinking
+        self._check_cancelled("before a model call")
         last_error: Optional[Exception] = None
         for attempt in range(1 + self._HARMONY_RETRIES):
             try:
@@ -1946,10 +1964,27 @@ class ChatSession:
             "entity_id": self.home.entity_id,
         }
 
+    def _cancelled(self) -> bool:
+        return self.cancel_check is not None and bool(self.cancel_check())
+
+    def _check_cancelled(self, where: str) -> None:
+        """Raise TurnCancelled at this boundary when the host cancelled (nothing after it runs)."""
+        if not self._cancelled():
+            return
+        report = self._turn_report
+        if report is not None:
+            report.notices.append(
+                f"#NOTE the turn was cancelled {where}: {len(report.tools)} tool call(s) ran before it; "
+                "nothing was formed"
+            )
+        raise TurnCancelled(report, where)
+
     def turn(self, user_text: str, *, speaker_label: Optional[str] = None) -> Tuple[str, TurnReport]:
         self.turn_n += 1
         turn_id = f"t-{self.turn_n:04d}"
         report = TurnReport(turn_id=turn_id)
+        self._turn_report = report
+        self._check_cancelled("before the turn began")
 
         # 1. RECALL - gate-shaped: ladder, posture budget, stamped participants.
         recall = self._effect(
@@ -2208,21 +2243,27 @@ class ChatSession:
                     )
                     raw_reply = tool_marked
                     break
+                self._check_cancelled("before its tools ran")
                 rounds += 1
                 turn_budget -= len(tool_elections)
                 report.tools.extend(e.name for e in tool_elections)
                 self.spend["tool_calls"] += len(tool_elections)
                 round_details: List[Dict[str, str]] = []
+                round_files: List[Optional[Dict[str, str]]] = []
                 for e in tool_elections:
                     arg = " ".join((e.body or "").split())  # whole (root ADR 0054)
+                    file_entry: Optional[Dict[str, str]] = None
                     if e.name == "write_file":
                         arg = (e.args or {}).get("path", "") or arg
-                        report.files.append({"path": arg, "action": "wrote"})
+                        file_entry = {"path": arg, "action": "wrote"}
                     elif e.name == "read_file":
                         arg = (e.body or "").strip().splitlines()[0].strip() if (e.body or "").strip() else ""
-                        report.files.append({"path": arg, "action": "read"})
+                        file_entry = {"path": arg, "action": "read"}
                     elif e.name == "list_files":
-                        report.files.append({"path": (e.body or "").strip() or ".", "action": "listed"})
+                        file_entry = {"path": (e.body or "").strip() or ".", "action": "listed"}
+                    if file_entry is not None:
+                        report.files.append(file_entry)
+                    round_files.append(file_entry)
                     detail = {"name": e.name, "arg": arg}
                     round_details.append(detail)
                     report.tool_details.append(detail)
@@ -2242,8 +2283,20 @@ class ChatSession:
                     # artifacts of the home, named in the result text.
                     artifact_store=self.home.artifacts,
                     artifact_context=self._artifact_context(turn_id),
+                    should_stop=self._cancelled,
                 )
                 report.notices.extend(exec_notices)
+                not_run = [e for e in tool_elections if e.cancelled]
+                if not_run:
+                    # Only what really ran stays on the report (the batch was counted before it ran).
+                    ran = [e.name for e in tool_elections if not e.cancelled]
+                    report.tools = report.tools[: len(report.tools) - len(tool_elections)] + ran
+                    self.spend["tool_calls"] -= len(not_run)
+                    dropped = [id(x) for x, e in zip(round_details, tool_elections) if e.cancelled]
+                    dropped += [id(x) for x, e in zip(round_files, tool_elections) if e.cancelled and x is not None]
+                    report.tool_details = [d for d in report.tool_details if id(d) not in dropped]
+                    report.files = [f for f in report.files if id(f) not in dropped]
+                    self._check_cancelled(f"between its tools ({len(not_run)} not run)")
                 # What each lookup RETURNED, on the probe surface (maintainer
                 # 2026-07-09: "tool results are invisible"). Verbatim — the
                 # operator sees exactly what the entity saw; the gateway turn
@@ -2443,6 +2496,9 @@ class ChatSession:
                         "#FALLBACK the corrected reply STILL claims a live lookup with no tool run "
                         "- delivered as-is; tools_ran is the only authority"
                     )
+
+        # CANCELLED: nothing of the turn is formed (no elections, diary, commit, episode or authoring).
+        self._check_cancelled("before anything formed")
 
         # 4. ELECTIONS - the entity's own blocks (offered, never required).
         # W1 (laurent's metronome ruling, wave-4 disposition table): feelings,
@@ -3003,7 +3059,7 @@ class ChatSession:
             return drain_authoring(
                 self.home.ms, llm_for_capability=self.llm_for_capability, artifacts=self.home.artifacts,
                 home_dir=self.home.home_dir, entity=self.home.entity_id, holder=f"session:{self.session_id}",
-                cap=bound, window=window, diary_text=_diary_text, out=self.out,
+                cap=bound, window=window, diary_text=_diary_text, out=self.out, should_stop=self._cancelled,
             )
         except Exception as e:  # noqa: BLE001 - authoring never breaks a close
             self.out(f"#FALLBACK the authoring drainer did not run ({type(e).__name__}: {e})")

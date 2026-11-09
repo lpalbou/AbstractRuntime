@@ -40,6 +40,7 @@ from .chat import (
     ENTITY_LLM_TIMEOUT_FLOOR_S,
     ChatHome,
     ChatSession,
+    TurnCancelled,
     _entity_patience_window,
 )
 from .tool_policy import PHASE_PERSONAL, PHASE_SLEEP, PHASE_WORK
@@ -3275,15 +3276,21 @@ class LifeLoop:
         except Exception:  # noqa: BLE001 - inbox trouble must not kill the loop
             return None
 
+    def _generation_moved(self) -> bool:
+        """True once the operator's Stop moved the home's lifecycle generation past the one this loop started at."""
+        if self.state_home is None or self._generation is None:
+            return False
+        try:
+            return read_lifecycle_generation(self.state_home) != self._generation
+        except Exception:  # noqa: BLE001 - an unreadable file is no Stop (its writers refuse anyway)
+            return False
+
     def _should_stop(self) -> bool:
         if self.stop_file and self.stop_file.exists():
             self.stop_cause = "stop_file"
             return True
         if self.state_home is not None and self._generation is not None:
-            try:
-                moved = read_lifecycle_generation(self.state_home) != self._generation
-            except Exception:  # noqa: BLE001 - an unreadable file is no Stop (its writers refuse anyway)
-                moved = False
+            moved = self._generation_moved()
             if moved:
                 self.stop_cause = "kill_switch"
                 self.out("(the operator's Stop moved the lifecycle generation - this loop ends here)")
@@ -4099,6 +4106,9 @@ class LifeLoop:
                 # (operator 2026-11-09: reachable within a minute or two): the
                 # session checks this before running the tools a reply elects.
                 session.yield_check = lambda: visitor_waiting(self._operator_state())
+                # THE OPERATOR'S STOP cancels the turn at its next effect boundary (Codex review 2 #2): a moved
+                # lifecycle generation - no further tool, model call, formation or authoring in this process.
+                session.cancel_check = self._generation_moved
                 # F2 commit-exclusion half: drive ids the cue names must not
                 # be strengthened BY the cue turn (a day-open mention is the
                 # composer's act, not his use). First turn only; a later
@@ -4265,6 +4275,13 @@ class LifeLoop:
                         finally:
                             if tick_lease is not None:
                                 tick_lease.release()  # the tick's writer window ends HERE
+                    except TurnCancelled as cancelled:
+                        # THE OPERATOR'S STOP (Codex review 2 #2): the turn stopped at an effect boundary and formed
+                        # nothing; no failure, no backoff - the loop ends here.
+                        self.out(f"(the turn was cancelled {cancelled.where} - the operator's Stop; the loop ends)")
+                        self.stop_cause = "kill_switch"
+                        report.stopped_by = "kill_switch"
+                        break
                     except (RuntimeError, Exception) as e:  # noqa: BLE001
                         report.failures += 1
                         consecutive_failures += 1
@@ -4512,7 +4529,7 @@ class LifeLoop:
                 # he stays awake). Supervised runs end here as before.
                 report.stopped_by = "max_ticks"
                 continue
-            if report.stopped_by in ("rest", "stop_file", "stop_command", "failures"):
+            if report.stopped_by in ("rest", "stop_file", "stop_command", "failures", "kill_switch"):
                 break
             if report.stopped_by == "work_done":
                 # A finished work order ends the LOOP RUN cleanly (adversary

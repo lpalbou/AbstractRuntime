@@ -209,6 +209,8 @@ class ToolElection:
     # operator-transparency ruling; prompt-ephemerality is about the RECORD,
     # not about hiding the turn from its operator).
     result: Optional[str] = None
+    # True when the turn was cancelled before this election ran (execute_tool_elections' should_stop).
+    cancelled: bool = False
     # DURABILITY (root 1145 step 1; operator 2026-11-08: "there should be no
     # activity, either by human or by entities, that does not go through
     # the runtime"): what the tool actually RETRIEVED, whole, when the shown
@@ -1799,8 +1801,12 @@ def execute_tool_elections(
     results_carry_media: bool = False,
     artifact_store: Any = None,
     artifact_context: Optional[Dict[str, Any]] = None,
+    should_stop: Optional[Callable[[], bool]] = None,
 ) -> Tuple[str, List[str]]:
     """Run elected tools; return (results_message, notices).
+
+    CANCELLATION (Codex review 2 #2): `should_stop` is checked before EACH election; once it answers True no further
+    tool runs - the elections left keep `result` None and `cancelled` True, and one notice says how many were not run.
 
     Failures are honest strings handed back to the entity (a failed lookup is
     information, not an aborted turn). `web_search_fn` is injectable for
@@ -1834,7 +1840,12 @@ def execute_tool_elections(
         artifact_context=dict(artifact_context or {}),
     )
     sections: List[str] = []
-    for e in elections:
+    for i, e in enumerate(elections):
+        if should_stop is not None and should_stop():
+            for left in elections[i:]:
+                left.cancelled = True
+            ctx.notices.append(f"#NOTE the turn was cancelled: {len(elections) - i} tool call(s) not run")
+            break
         failed = False
         try:
             d = TOOL_DESCRIPTORS.get(e.name)

@@ -823,17 +823,19 @@ def test_drives_alone_never_admit_personal(tmp_path: Path, last_phase: Any) -> N
     from abstractruntime.identity.life import read_day_gate, write_resume_to
 
     home_dir = _make_home(tmp_path)  # grant armed, one standing drive
+    # Right after a work day with nothing queued the same refusal is stated as jobs_done (CONTRACT v3 D1).
+    no_return = "jobs_done" if last_phase == "work" else "no_return"
     refused = read_day_gate(home_dir, last_phase=last_phase)
-    assert refused["phase"] == "idle" and refused["cause"] == "no_return", refused
+    assert refused["phase"] == "idle" and refused["cause"] == no_return, refused
     assert read_day_gate(home_dir, last_phase=last_phase, first_day=True)["phase"] == "personal"
     assert read_day_gate(home_dir, last_phase="personal")["phase"] == "personal"  # continuation
     assert read_day_gate(home_dir, last_phase=last_phase, return_to="personal")["phase"] == "personal"
-    assert read_day_gate(home_dir, last_phase=last_phase, return_to="work")["cause"] == "no_return"
+    assert read_day_gate(home_dir, last_phase=last_phase, return_to="work")["cause"] == no_return
     # The remembered return persisted by the gateway (sidecar today, the runtime bucket after migration).
     _sidecar(home_dir, {"resume_to": "personal"})
     assert read_day_gate(home_dir, last_phase=last_phase)["phase"] == "personal"
     write_resume_to(home_dir, None, written_by="gateway:test")
-    assert read_day_gate(home_dir, last_phase=last_phase)["cause"] == "no_return"
+    assert read_day_gate(home_dir, last_phase=last_phase)["cause"] == no_return
 
 
 def test_a_run_started_for_work_alone_ends_idle_after_it(tmp_path: Path) -> None:
@@ -843,7 +845,7 @@ def test_a_run_started_for_work_alone_ends_idle_after_it(tmp_path: Path) -> None
     report = LifeLoop(_phase_factory(home_dir, llm), tick_seconds=1, ticks_per_day=1, max_ticks=3, rest_minutes=30,
                       stop_file=home_dir / "STOP", state_home=home_dir, sleep_fn=lambda s: None,
                       out=lambda s: None, return_to="work").run()
-    assert report.days == 1 and report.stopped_by == "no_return"
+    assert report.days == 1 and report.stopped_by == "jobs_done"
     assert llm.replies == ["NEVER - no own time was granted"]
     assert read_entity_state(home_dir)["state"] == "awake"
     # The operator's grant during the work names the return (resume_to personal): own time follows.
@@ -856,3 +858,161 @@ def test_a_run_started_for_work_alone_ends_idle_after_it(tmp_path: Path) -> None
                   stop_file=home_dir / "STOP", state_home=home_dir, sleep_fn=lambda s: None,
                   out=lambda s: None, return_to="work").run()
     assert r2.days == 2 and r2.ticks == 2
+
+
+# ---------------------------------------------------------------- CONTRACT v3 D1/D4: work is driven by the job queue
+# (the standing work order and the inbox's pending/taken tasks); all jobs done -> his own time if still granted and
+# remembered, else idle with the stated reason jobs_done
+
+
+def _add_task(home_dir: Path, task_id: str, title: str, brief: str = "", by: str = "person:laurent") -> None:
+    """A task left with him, as AbstractGateway's entity_tasks.append_task writes it."""
+    with (home_dir / "task_inbox.jsonl").open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps({"event": "added", "task_id": task_id, "title": title, "brief": brief,
+                             "origin": "operator", "at": "2026-11-09T18:00:00+00:00", "by": by}) + "\n")
+
+
+def _task_status(home_dir: Path, task_id: str) -> List[tuple]:
+    rows = [json.loads(ln) for ln in (home_dir / "task_inbox.jsonl").read_text(encoding="utf-8").splitlines()]
+    return [(r["status"], r.get("note")) for r in rows if r.get("event") == "status" and r["task_id"] == task_id]
+
+
+def _job_factory(home_dir: Path, llm: Any, seen: List[tuple]):
+    """The production factory's shape (phase + job): a work day carries its job's contract in the system prompt."""
+    from abstractruntime.identity.chat import ChatSession, open_home
+    from abstractruntime.identity.life import OWN_TIME_CONTRACT, work_day_text
+
+    def _open(phase: str = "personal", job: Any = None) -> ChatSession:
+        seen.append((phase, (job or {}).get("id")))
+        home = open_home(home_dir)
+        session = ChatSession(home, llm, participants=[home.entity_id], context_window=20000,
+                              enable_workspace=True, out=lambda s: None, phase=phase)
+        session.system_base += "\n\n" + (work_day_text(job) if phase == "work" and job else OWN_TIME_CONTRACT)
+        return session
+
+    return _open
+
+
+def test_the_job_queue_is_the_order_then_the_taken_then_the_pending_tasks(tmp_path: Path) -> None:
+    from abstractruntime.identity.life import append_task_status, jobs_queued, read_day_gate, read_job_queue
+
+    home_dir = _make_home(tmp_path)
+    write_personal_grant(home_dir, mode="disabled")
+    for tid in ("t1", "t2", "t3", "t4"):
+        _add_task(home_dir, tid, f"Task {tid}")
+    append_task_status(home_dir, "t3", "taken", by="entity:liveling")
+    append_task_status(home_dir, "t1", "done", by="person:laurent")
+    append_task_status(home_dir, "t4", "parked", by="entity:liveling")
+    with (home_dir / "task_inbox.jsonl").open("a", encoding="utf-8") as fh:
+        fh.write("{torn\n")
+    (home_dir / "work_order.md").write_text("Sort the shelf.\nCarefully.", encoding="utf-8")
+    queue = read_job_queue(home_dir)
+    assert [(j["kind"], j["id"]) for j in queue["jobs"]] == [("work_order", "work_order.md"), ("task", "t3"),
+                                                              ("task", "t2")]
+    assert queue["jobs_queued"] == jobs_queued(home_dir) == 3 and "1 unparseable" in queue["note"]
+    decision = read_day_gate(home_dir)
+    assert decision["phase"] == "work" and decision["cause"] == "work_order" and decision["jobs_queued"] == 3
+    (home_dir / "work_order.md").unlink()
+    decision = read_day_gate(home_dir)
+    assert decision["cause"] == "task" and decision["job"]["id"] == "t3", decision
+    with pytest.raises(KeyError):
+        append_task_status(home_dir, "nope", "done", by="x")
+    with pytest.raises(ValueError):
+        append_task_status(home_dir, "t2", "finished", by="x")
+
+
+def test_no_work_leg_without_a_job(tmp_path: Path) -> None:
+    """Done and parked tasks, an empty order file: nothing is queued, so no work day opens - the gate never runs a
+    work leg on its own (personal off: idle)."""
+    from abstractruntime.identity.life import append_task_status, read_day_gate
+
+    home_dir = _make_home(tmp_path)
+    write_personal_grant(home_dir, mode="disabled")
+    _add_task(home_dir, "t1", "Done already")
+    _add_task(home_dir, "t2", "Parked")
+    append_task_status(home_dir, "t1", "done", by="person:laurent")
+    append_task_status(home_dir, "t2", "parked", by="person:laurent")
+    (home_dir / "work_order.md").write_text("   \n", encoding="utf-8")
+    for last in (None, "work", "personal", "sleep", "visit"):
+        assert read_day_gate(home_dir, last_phase=last)["phase"] == "idle", last
+    report = LifeLoop(_never, tick_seconds=0, ticks_per_day=1, max_ticks=2, rest_minutes=30, state_home=home_dir,
+                      sleep_fn=lambda s: None, out=lambda s: None).run()
+    assert report.days == 0 and report.stopped_by == "personal_off"
+
+
+def test_a_queued_job_with_personal_off_runs_a_work_day_and_ends_idle(tmp_path: Path) -> None:
+    from abstractruntime.identity.life import read_resume_to
+
+    home_dir = _make_home(tmp_path)
+    write_personal_grant(home_dir, mode="disabled")
+    _add_task(home_dir, "t1", "Label the boxes", "Every box on the shelf gets a label.", by="entity:sol@home-x")
+    llm = _ScriptedLLM(["Labelled.\n```work\ndone: every box labelled\n```", "R1.", "NEVER - no own time"])
+    seen: List[tuple] = []
+    lines: List[str] = []
+    report = LifeLoop(_job_factory(home_dir, llm, seen), tick_seconds=1, ticks_per_day=1, max_ticks=3,
+                      rest_minutes=30, stop_file=home_dir / "STOP", state_home=home_dir, sleep_fn=lambda s: None,
+                      out=lines.append, return_to=None).run()
+    assert seen == [("work", "t1")] and report.days == 1
+    system = llm.calls[0]["system_prompt"]
+    assert "THE TASK, left by entity:sol@home-x:\nLabel the boxes\n\nEvery box on the shelf gets a label." in system
+    assert "The task below was left for you" in system and "Your operator left you" not in system
+    assert _task_status(home_dir, "t1") == [("taken", None), ("done", "done: every box labelled")]
+    assert report.stopped_by == "jobs_done" and read_loop_status(home_dir)["stopped_by"] == "jobs_done"
+    assert llm.replies == ["NEVER - no own time"]
+    assert read_entity_state(home_dir)["state"] == "awake"
+    assert read_resume_to(home_dir)["source"] == "default", "no own time was interrupted: nothing remembered"
+    assert any("all jobs are done" in ln for ln in lines), lines
+
+
+def test_a_blocked_verdict_parks_the_task_and_the_next_job_follows(tmp_path: Path) -> None:
+    home_dir = _make_home(tmp_path)
+    write_personal_grant(home_dir, mode="disabled")
+    _add_task(home_dir, "t1", "Fetch the key")
+    _add_task(home_dir, "t2", "Open the door")
+    llm = _ScriptedLLM(["Stuck.\n```work\nblocked: the key is not in the drawer\n```", "R1.",
+                        "Opened.\n```work\ndone: door open\n```", "R2."])
+    seen: List[tuple] = []
+    report = LifeLoop(_job_factory(home_dir, llm, seen), tick_seconds=1, ticks_per_day=1, max_ticks=5,
+                      rest_minutes=30, stop_file=home_dir / "STOP", state_home=home_dir, sleep_fn=lambda s: None,
+                      out=lambda s: None, return_to=None).run()
+    assert seen == [("work", "t1"), ("work", "t2")] and report.stopped_by == "jobs_done"
+    assert _task_status(home_dir, "t1")[-1] == ("parked", "blocked: the key is not in the drawer")
+    assert _task_status(home_dir, "t2")[-1] == ("done", "done: door open")
+
+
+def test_a_job_during_his_own_time_interrupts_it_and_he_returns_to_it(tmp_path: Path) -> None:
+    from abstractruntime.identity.life import read_resume_to
+
+    home_dir = _make_home(tmp_path)  # grant armed; the run is his own time (return_to personal)
+    llm = _HookLLM(["A free thought.", "The tick's look-back.", "R1.",
+                    "Labelled.\n```work\ndone: labelled\n```", "R2.",
+                    "Back to my thread.", "Look-back.", "R3."],
+                   hooks={0: lambda: _add_task(home_dir, "t1", "Label the boxes")})
+    seen: List[tuple] = []
+    report = LifeLoop(_job_factory(home_dir, llm, seen), tick_seconds=1, ticks_per_day=1, max_ticks=3,
+                      rest_minutes=30, stop_file=home_dir / "STOP", state_home=home_dir, sleep_fn=lambda s: None,
+                      out=lambda s: None).run()
+    assert seen == [("personal", None), ("work", "t1"), ("personal", None)] and report.days == 3
+    assert _markers(home_dir) == [("personal", "work", "operator"), ("work", "personal", "no_task")]
+    remembered = read_resume_to(home_dir)
+    assert remembered["phase"] == "personal" and remembered["written_by"] == "loop:job-interrupts-own-time"
+
+
+def test_own_time_revoked_during_the_work_ends_idle_when_the_jobs_are_done(tmp_path: Path) -> None:
+    """D4: the job interrupted his own time (resume_to personal); the operator revokes it during the work - the work
+    finishes (work never yields to the grant) and he ends idle (jobs_done); the remembered return is cancelled."""
+    from abstractruntime.identity.life import read_resume_to
+
+    home_dir = _make_home(tmp_path)
+    _add_task(home_dir, "t1", "Label the boxes")
+    llm = _HookLLM(["Half done.", "Labelled.\n```work\ndone: labelled\n```", "R1.", "NEVER - own time was revoked"],
+                   hooks={0: lambda: write_personal_grant(home_dir, mode="disabled")})
+    seen: List[tuple] = []
+    report = LifeLoop(_job_factory(home_dir, llm, seen), tick_seconds=1, ticks_per_day=2, max_ticks=4,
+                      rest_minutes=30, stop_file=home_dir / "STOP", state_home=home_dir, sleep_fn=lambda s: None,
+                      out=lambda s: None, first_day_unconditional=True).run()
+    assert seen == [("work", "t1")] and report.ticks == 2, "the revocation did not cut the work"
+    assert report.stopped_by == "jobs_done" and llm.replies == ["NEVER - own time was revoked"]
+    assert read_entity_state(home_dir)["state"] == "awake"
+    assert read_resume_to(home_dir)["phase"] is None, "own time is cancelled, never given back"
+    assert _task_status(home_dir, "t1")[-1][0] == "done"

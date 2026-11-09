@@ -159,6 +159,138 @@ def read_work_order_verdicts(home_dir: Path) -> List[Dict[str, str]]:
     return out
 
 
+# ----------------------------------------------------------- the job queue (CONTRACT v3 D1/D4, operator 2026-11-09)
+# WORK IS DRIVEN BY THE JOBS QUEUED FOR HIM, never by a toggle: a job queued moves him to work (from idle, and from
+# his own time, which the job interrupts), and when every job is done he returns to his own time if it is still
+# granted, else idle. The loop's jobs are the two durable desks in his home:
+#   - the standing work order (`work_order.md`, the operator's; archived by his verdict), worked first;
+#   - the tasks of the task inbox (`task_inbox.jsonl`, written by AbstractGateway's entity_tasks.py - the file schema
+#     is the cross-package contract) whose folded status is `pending` or `taken`; a taken one (already begun) first,
+#     then the pending ones in the order they were left. `parked` and `done` tasks are not queued.
+# A work day opens on the head of the queue; a task it opens is marked `taken`, and his ```work verdict marks it
+# `done` (done:) or `parked` (blocked:) with the verdict line as its note. Gateway runs (summons, automations) are the
+# gateway's work, not this loop's.
+TASK_INBOX_FILENAME = "task_inbox.jsonl"
+QUEUED_TASK_STATUSES = ("taken", "pending")
+_TASK_STATUSES = ("pending", "taken", "done", "parked")
+
+
+def _task_inbox_fold(home_dir: Path) -> Tuple[List[Dict[str, Any]], Optional[str]]:
+    """The task inbox folded like AbstractGateway's read_task_inbox (append-only events; the newest known status of a
+    task is its status; an unparseable line or a status for an unknown task is skipped and counted). Returns (tasks in
+    file order, a labeled note when lines were skipped or the file is unreadable). No file = ([], None)."""
+    import json as _json
+
+    path = Path(home_dir) / TASK_INBOX_FILENAME
+    if not path.is_file():
+        return [], None
+    try:
+        raw_lines = path.read_text(encoding="utf-8").splitlines()
+    except Exception as e:  # noqa: BLE001
+        return [], f"#FALLBACK task inbox unreadable ({e})"
+    tasks: Dict[str, Dict[str, Any]] = {}
+    order: List[str] = []
+    skipped = 0
+    for raw in raw_lines:
+        raw = raw.strip()
+        if not raw:
+            continue
+        try:
+            ev = _json.loads(raw)
+        except ValueError:
+            skipped += 1
+            continue
+        tid = str(ev.get("task_id") or "") if isinstance(ev, dict) else ""
+        if not tid:
+            skipped += 1
+            continue
+        if ev.get("event") == "added":
+            if tid not in tasks:
+                order.append(tid)
+            tasks[tid] = {"task_id": tid, "title": str(ev.get("title") or ""), "brief": str(ev.get("brief") or ""),
+                          "by": str(ev.get("by") or ""), "origin": str(ev.get("origin") or ""), "status": "pending"}
+        elif ev.get("event") == "status" and tid in tasks:
+            word = str(ev.get("status") or "").strip().lower()
+            if word in _TASK_STATUSES:
+                tasks[tid]["status"] = word
+        else:
+            skipped += 1
+    note = f"#FALLBACK {skipped} unparseable/orphan task inbox line(s) skipped" if skipped else None
+    return [tasks[t] for t in order], note
+
+
+def read_job_queue(home_dir: Path) -> Dict[str, Any]:
+    """The jobs queued for him, in the order he works them: {"jobs": [...], "jobs_queued": n, "note"?}. Each job is
+    {"kind": "work_order", "id": "work_order.md", "title", "text"} or {"kind": "task", "id": <task_id>, "title",
+    "text": <brief>, "by", "status"}. Pure read."""
+    jobs: List[Dict[str, Any]] = []
+    order = read_work_order(home_dir)
+    if order:
+        jobs.append({"kind": "work_order", "id": WORK_ORDER_FILENAME, "title": order.splitlines()[0].strip(),
+                     "text": order})
+    tasks, note = _task_inbox_fold(home_dir)
+    for status in QUEUED_TASK_STATUSES:
+        jobs.extend({"kind": "task", "id": t["task_id"], "title": t["title"], "text": t["brief"], "by": t["by"],
+                     "status": t["status"]} for t in tasks if t["status"] == status)
+    out: Dict[str, Any] = {"jobs": jobs, "jobs_queued": len(jobs)}
+    if note:
+        out["note"] = note
+    return out
+
+
+def jobs_queued(home_dir: Path) -> int:
+    """How many jobs are queued for him (the work order and the pending/taken tasks). Pure read."""
+    return int(read_job_queue(home_dir)["jobs_queued"])
+
+
+def append_task_status(home_dir: Path, task_id: str, status: str, *, by: str, note: str = "") -> Dict[str, Any]:
+    """Append one `status` event to the task inbox - the same flock-guarded single-line append AbstractGateway's
+    entity_tasks._append_event makes (two writer processes: the gateway door and this loop). An unknown task id or
+    status word is refused (KeyError / ValueError) before anything is written."""
+    import json as _json
+    import os
+
+    from ..core.runtime import utc_now_iso
+
+    word = str(status or "").strip().lower()
+    if word not in _TASK_STATUSES:
+        raise ValueError(f"unknown task status {status!r} (one of {_TASK_STATUSES})")
+    tasks, _note = _task_inbox_fold(home_dir)
+    if str(task_id) not in {t["task_id"] for t in tasks}:
+        raise KeyError(f"no task {task_id!r} in {TASK_INBOX_FILENAME}")
+    event: Dict[str, Any] = {"event": "status", "task_id": str(task_id), "status": word, "at": utc_now_iso(),
+                             "by": str(by)}
+    if str(note or "").strip():
+        event["note"] = str(note).strip()
+    line = _json.dumps(event, ensure_ascii=False, separators=(",", ":")) + "\n"
+    with open(Path(home_dir) / TASK_INBOX_FILENAME, "a", encoding="utf-8") as fh:
+        import fcntl
+
+        fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+        try:
+            fh.write(line)
+            fh.flush()
+            os.fsync(fh.fileno())
+        finally:
+            fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+    return event
+
+
+TASK_CONTRACT_INTRO = "The task below was left for you"
+
+
+def work_day_text(job: Dict[str, Any]) -> str:
+    """The work day's contract with its job: the operator's order as before; a task names who left it."""
+    if job.get("kind") == "task":
+        contract = WORK_CONTRACT.replace("Your operator left you the task below", TASK_CONTRACT_INTRO, 1)
+        by = str(job.get("by") or "").strip()
+        head = f"THE TASK, left by {by}:" if by else "THE TASK:"
+        title = str(job.get("title") or "").strip()
+        body = str(job.get("text") or "").strip()
+        return contract + "\n\n" + head + "\n" + "\n\n".join(x for x in (title, body) if x)
+    return WORK_CONTRACT + "\n\nTHE TASK, from your operator:\n" + str(job.get("text") or "")
+
+
 # ----------------------------------------------------------- the day gate
 # THE DAY GATE (contract-phases v2 §10.3-§10.5; TARGET 2026-11-08 19:02/19:11; spec v23 OWN-TIME-IS-A-PRIVILEGE). One
 # decision per boundary, in this order:
@@ -166,12 +298,13 @@ def read_work_order_verdicts(home_dir: Path) -> List[Dict[str, str]]:
 #   2. HIS OWN SLEEP DECISION (a ```rest block he wrote in the day that just closed) -> sleep, cause self_elected,
 #      unless the last activity phase was already sleep (no sleep->sleep) or it came from own time the operator has
 #      since revoked (PERSONAL-OFF-NEVER-SLEEPS). Nothing else puts him to sleep: no clock, no gate leg, no toggle.
-#   3. a standing work order -> work, whatever the personal grant says (the gate reads the order before any grant
-#      check, dm#89). There is no work toggle (CONTRACT v3 D1, operator 2026-11-09): work starts when a job is
-#      queued and nothing else admits or refuses it.
+#   3. a job queued (the standing work order, a pending/taken task) -> work, whatever the personal grant says (the
+#      gate reads the queue before any grant check, dm#89). There is no work toggle (CONTRACT v3 D1, operator
+#      2026-11-09): work starts when a job is queued and nothing else admits or refuses it.
 #   4. the personal grant armed (the operator's privilege) -> personal: a day when something pulls (standing drives),
 #      the first day after the operator's start, else he RESTS between days inside personal (awake, zero LLM).
-#   5. nothing allowed -> idle: own time ends AWAKE (the loop exits; only the operator's grant starts it again).
+#   5. nothing allowed -> idle: own time ends AWAKE (the loop exits; only the operator's grant or a queued job starts
+#      it again). Right after a work day this is `jobs_done`: every job is done and there is no own time to return to.
 # The retired v8-v13 machinery is gone: the settled-desk sleep leg, the 6 h unattended need-check, the 2 h grant-use
 # floor and the timed personal cycle (their dials stay readable, wired:false in the blueprint).
 UNATTENDED_NEED_CHECK_SECONDS = 6 * 3600  # retired (v22); kept for readers of the constant
@@ -286,8 +419,9 @@ def read_day_gate(
     """One decision per day boundary: {phase, cause, detail, note?, ...}.
 
     phase: "visit" | "sleep" | "work" | "personal" | "idle" (see the order above). cause is the trace word served in
-    loop_status.day_cause: visit_open | self_elected | work_order | start | drives | grant_degraded | resting |
-    no_grant | edge_removed. A "personal" decision with `rest: True` opens no day: he rests between days.
+    loop_status.day_cause: visit_open | self_elected | work_order | task | start | drives | grant_degraded | resting |
+    no_grant | no_return | jobs_done | edge_removed. A work decision carries `job` (the head of read_job_queue, whole)
+    and `jobs_queued`. A "personal" decision with `rest: True` opens no day: he rests between days.
     "idle" means own time ends awake. Pure read.
 
     `sleep_elected`: his own reason from a ```rest block (the decision); `last_phase`: the last activity phase he
@@ -313,24 +447,37 @@ def read_day_gate(
             return {"phase": PHASE_SLEEP, "cause": "self_elected", "detail": str(sleep_elected),
                     "reason": str(sleep_elected)}
         notes.append(f"his sleep decision is not taken: {refused}")
-    order = read_work_order(home_dir)
-    if order and PHASE_WORK not in skip_phases:
+    queue = read_job_queue(home_dir)
+    if queue.get("note"):
+        notes.append(str(queue["note"]))
+    jobs = queue["jobs"]
+    if jobs and PHASE_WORK not in skip_phases:
+        job = jobs[0]
         out_work: Dict[str, Any] = {
-            "phase": PHASE_WORK, "cause": "work_order",
-            "detail": WORK_ORDER_FILENAME, "work_order": order,
+            "phase": PHASE_WORK, "cause": job["kind"],
+            "detail": WORK_ORDER_FILENAME if job["kind"] == "work_order" else f"task {job['id']}: {job['title']}",
+            "job": dict(job),
+            "jobs_queued": len(jobs),
         }
+        if job["kind"] == "work_order":
+            out_work["work_order"] = job["text"]
         if notes:
             out_work["note"] = "; ".join(notes)
         return out_work
+    # The boundary right after a work day with nothing queued: every job is done. He returns to his own time only
+    # while it is granted and remembered (below); otherwise he ends idle with that stated reason (jobs_done).
+    jobs_done = str(last_phase or "") == PHASE_WORK and not jobs
     grant = read_personal_grant(home_dir)
     grant_refusal = personal_grant_refusal(grant)
     if grant_refusal is not None or PHASE_PERSONAL in skip_phases:
         if grant_refusal is None:
             cause, detail = "edge_removed", "the blueprint removed this boundary's personal landing"
+        elif jobs_done:
+            cause, detail = "jobs_done", f"all jobs are done and his own time is not granted ({grant_refusal})"
         else:
             cause, detail = "no_grant", grant_refusal
         idle: Dict[str, Any] = {"phase": "idle", "cause": cause, "detail": detail,
-                                "grant_cause": personal_grant_end_cause(grant)}
+                                "grant_cause": personal_grant_end_cause(grant) if cause == "no_grant" else None}
         if notes:
             idle["note"] = "; ".join(notes)
         return idle
@@ -340,8 +487,9 @@ def read_day_gate(
         or str(return_to or "") == PHASE_PERSONAL
         or read_resume_to(home_dir).get("phase") == PHASE_PERSONAL
     ):
-        idle = {"phase": "idle", "cause": "no_return",
-                "detail": ("own time is the operator's privilege: no start, no continuation of personal and no "
+        idle = {"phase": "idle", "cause": "jobs_done" if jobs_done else "no_return",
+                "detail": (("all jobs are done and " if jobs_done else "")
+                           + "own time is the operator's privilege: no start, no continuation of personal and no "
                            "remembered return to it"),
                 "grant_cause": None}
         if notes:
@@ -407,7 +555,7 @@ def consult_gate_landing(
       contract-phases v2 §10; never a sleep).
     - REDIRECT: the landing's target substitutes BEFORE any write — with
       R8's guards-travel rule enforced here (a redirect into personal
-      requires the armed grant; into work requires a standing order;
+      requires the armed grant; into work requires a queued job;
       refused redirects fall back to the skip path, loudly).
     - INSTRUCTION: returned as the provenance-stamped cue line (STEERING,
       never law) for the caller to ride on the day cue.
@@ -461,10 +609,10 @@ def consult_gate_landing(
                 skipped.add(target)
                 decision = _regate("redirect refused")
                 continue
-            if landing.to == PHASE_WORK and not read_work_order(home_dir):
+            if landing.to == PHASE_WORK and not jobs_queued(home_dir):
                 out(
                     f"(blueprint redirect {from_phase}->{target}#{cause} -> work "
-                    "REFUSED: no standing order - a work day needs a desk)"
+                    "REFUSED: no job queued - a work day needs a desk)"
                 )
                 skipped.add(target)
                 decision = _regate("redirect refused")
@@ -495,7 +643,7 @@ def consult_gate_landing(
 def _boundary_cause(from_phase: Optional[str], to: str, home_dir: Path) -> Optional[str]:
     """The spec cause word of a LOOP-written day-boundary edge (spec v23 transitions; None = no loop edge: a start,
     a visit's close, idle). work->work#task_complete and personal->personal#personal_cycle are the self-loops;
-    work->personal is #no_task when the order is gone and #operator over a standing one (only a removed work edge);
+    work->personal is #no_task when no job is queued and #operator over a queued one (only a removed work edge);
     personal->work#operator (work admitted); sleep->personal/work#maintenance_done (his own sleep's end)."""
     frm = str(from_phase or "")
     if frm == PHASE_PERSONAL:
@@ -504,7 +652,7 @@ def _boundary_cause(from_phase: Optional[str], to: str, home_dir: Path) -> Optio
         if to == PHASE_WORK:
             return "task_complete"
         if to == PHASE_PERSONAL:
-            return "no_task" if not read_work_order(home_dir) else "operator"
+            return "no_task" if not jobs_queued(home_dir) else "operator"
         return None
     if frm == PHASE_SLEEP and to in (PHASE_PERSONAL, PHASE_WORK):
         return "maintenance_done"
@@ -1411,7 +1559,7 @@ def write_loop_status(
             payload["day_kind"] = dk
     # day_cause: the drive-cause TRACE (dm#89 build; entity renders it the
     # day it is named — THIS is the named wire shape): {kind, detail}.
-    # kind: work_order|drives|grant_degraded|settled_desk|no_grant.
+    # kind: work_order|task|drives|grant_degraded|settled_desk|no_grant.
     if isinstance(day_cause, dict) and day_cause.get("cause"):
         payload["day_cause"] = {
             "kind": str(day_cause.get("cause") or ""),
@@ -2845,6 +2993,9 @@ class LifeLoop:
         # loop_status.day_cause) and the cue's offered drive ids (the
         # first-turn commit-exclusion half of the F2 contract).
         self._day_gate: Optional[Dict[str, Any]] = None
+        # The job a work day opens on (the head of read_job_queue at its gate; CONTRACT v3 D1): the work order or a
+        # task of the inbox. His ```work verdict settles THIS job, whatever was queued meanwhile.
+        self._day_job: Optional[Dict[str, Any]] = None
         self._cue_drive_ids: List[str] = []
         # THE GATE'S INPUTS (contract-phases v2 §10.3-§10.5, spec v23):
         # - his own sleep decision, taken from a ```rest block at a day's close and consumed by the next gate;
@@ -3220,7 +3371,7 @@ class LifeLoop:
     def _rest_between_days(self, seconds: float) -> bool:
         """He rests inside personal when nothing pulls (awake, no summon, zero LLM). Returns True on a stop; returns
         early (False) when the boundary has something new to read: a state change (a visit, a sleep, a pause), a
-        work order, or the operator's grant revoked."""
+        queued job, or the operator's grant revoked."""
         remaining = float(seconds)
         while remaining > 0:
             if self._should_stop():
@@ -3230,7 +3381,7 @@ class LifeLoop:
                 st = self._operator_state()
                 if str(st.get("state") or "") != "awake" or str(st.get("mode") or ""):
                     return False
-                if read_work_order(self.state_home):
+                if jobs_queued(self.state_home):
                     return False
                 if personal_grant_refusal(read_personal_grant(self.state_home)) is not None:
                     return False
@@ -3265,6 +3416,58 @@ class LifeLoop:
         except Exception as e:  # noqa: BLE001
             self.out(f"#FALLBACK could not clear self-sleep state: {e}")
 
+    def _open_work_job(self) -> None:
+        """A work day opens on its job (CONTRACT v3 D1/D4). A task it opens is marked `taken`. When the job interrupts
+        his own time - granted, and the phase this run returns to - the home remembers it: resume_to = personal, so
+        the end of the work (in this loop or a later one) returns him there while the grant still stands."""
+        if self.state_home is None:
+            return
+        job = self._day_job or {}
+        if job.get("kind") == "task" and job.get("status") == "pending":
+            try:
+                append_task_status(self.state_home, str(job["id"]), "taken",
+                                   by=_manifest_entity_id(self.state_home) or "own-time-loop")
+            except Exception as e:  # noqa: BLE001 - the day still works its task
+                self.out(f"#FALLBACK could not mark task {job.get('id')} taken: {e}")
+        if (
+            self._return_to == PHASE_PERSONAL
+            and personal_grant_refusal(read_personal_grant(self.state_home)) is None
+            and read_resume_to(self.state_home).get("phase") != PHASE_PERSONAL
+        ):
+            try:
+                write_resume_to(self.state_home, PHASE_PERSONAL, written_by="loop:job-interrupts-own-time")
+                self.out("(a job interrupts his own time - he returns to it when every job is done, if still granted)")
+            except Exception as e:  # noqa: BLE001 - the in-process return still holds for this loop
+                self.out(f"#FALLBACK could not remember the return to his own time: {e}")
+
+    def _settle_work_job(self, verdict: str) -> None:
+        """His ```work verdict settles the day's job: the order archives (as ever); a task is marked done (done:) or
+        parked (blocked:), the verdict line as its note."""
+        job = self._day_job or {"kind": "work_order"}
+        if job.get("kind") != "task":
+            archive_work_order(self.state_home, verdict=verdict)
+            return
+        status = "parked" if verdict.strip().lower().startswith("blocked:") else "done"
+        try:
+            append_task_status(self.state_home, str(job["id"]), status,
+                               by=_manifest_entity_id(self.state_home) or "own-time-loop", note=verdict)
+        except Exception as e:  # noqa: BLE001 - loud; the next gate re-reads the queue
+            self.out(f"#FALLBACK could not settle task {job.get('id')} ({status}): {e}")
+
+    def _cancel_remembered_return(self, by: str) -> None:
+        """Own time ended without an interruption: the remembered return (resume_to) is cancelled - in this process
+        and in the home's bucket when the runtime holds one (a home still on the gateway sidecar is the gateway's to
+        clear, contract §4.1)."""
+        self._return_to = None
+        if self.state_home is None:
+            return
+        try:
+            current = read_resume_to(self.state_home)
+            if current.get("source") == "phases.yaml" and current.get("phase") is not None:
+                write_resume_to(self.state_home, None, written_by=by)
+        except Exception as e:  # noqa: BLE001 - the exit itself stands
+            self.out(f"#FALLBACK could not cancel the remembered return: {e}")
+
     def _open_day_session(self) -> ChatSession:
         """Open the day's session in the phase the GATE decided (work or personal). A factory that takes `phase`
         (production: build_session_factory) is told; a zero-argument factory (harnesses) opens its own."""
@@ -3272,10 +3475,12 @@ class LifeLoop:
 
         phase = str((self._day_gate or {}).get("phase") or "")
         try:
-            takes_phase = "phase" in inspect.signature(self.open_session).parameters
+            params = inspect.signature(self.open_session).parameters
         except (TypeError, ValueError):
-            takes_phase = False
-        if takes_phase and phase in (PHASE_WORK, PHASE_PERSONAL):
+            params = {}
+        if "phase" in params and phase in (PHASE_WORK, PHASE_PERSONAL):
+            if "job" in params and phase == PHASE_WORK and self._day_job is not None:
+                return self.open_session(phase=phase, job=self._day_job)
             return self.open_session(phase=phase)
         return self.open_session()
 
@@ -3406,6 +3611,7 @@ class LifeLoop:
             # door's act). STOP always wins; paused stays the kill switch (the operator state gate below).
             _prev_phase = self._last_activity_phase
             self._day_gate = None
+            self._day_job = None
             self._pending_day_marker = None
             # A HELD STATE FIRST (Codex review 2026-11-09 #1): asleep (his own sleep handed back by a visit's close, an
             # operator sleep), the visiting posture or paused - the state gate below owns it, and no leg is chosen
@@ -3468,19 +3674,24 @@ class LifeLoop:
                     continue
                 elif decision["phase"] == "idle":
                     # NOTHING ALLOWED: own time ends AWAKE (contract-phases v2 §10.1; spec v23: only the operator's
-                    # grant starts it again). The exit wakes any sleep of the loop's own.
-                    report.stopped_by = {"no_grant": "personal_off", "no_return": "no_return"}.get(
+                    # grant or a queued job starts it again). The exit wakes any sleep of the loop's own. Own time
+                    # ending here is no interruption: a remembered return is cancelled (CONTRACT v3 D4; contract §4.1
+                    # "cleared when own time ends without an interruption") - he is idle, and a later job from idle
+                    # returns to idle.
+                    report.stopped_by = {"no_grant": "personal_off", "no_return": "no_return",
+                                         "jobs_done": "jobs_done"}.get(
                         str(decision.get("cause") or ""), str(decision.get("cause") or "personal_off")
                     )
                     self.out(
                         f"(own time ends: {decision.get('grant_cause') or decision.get('cause')}: "
                         f"{decision.get('detail') or ''} - he stays awake and reachable)"
                     )
+                    self._cancel_remembered_return(f"loop:{report.stopped_by}")
                     break
                 elif decision.get("rest"):
                     # NOTHING PULLS: he rests between days INSIDE personal (awake; zero LLM). Supervised mode ends
                     # the run (the supervisor owns what comes next); 24/7 rests `rest_minutes`, returning early for
-                    # a stop, a state change (visit, sleep, pause), a work order or a revoked grant.
+                    # a stop, a state change (visit, sleep, pause), a queued job or a revoked grant.
                     self.out(f"(personal: {decision['detail']})")
                     if self.rest_minutes <= 0:
                         report.stopped_by = "settled_desk"
@@ -3492,6 +3703,7 @@ class LifeLoop:
                     continue
                 else:
                     self._day_gate = decision
+                    self._day_job = decision.get("job") if decision.get("phase") == PHASE_WORK else None
 
             # Operator state gate before a day opens (a2a 0008): asleep or
             # paused idles here (dreams may run gateway-side while asleep -
@@ -3648,6 +3860,8 @@ class LifeLoop:
                 self._last_activity_phase = str(self._day_gate["phase"])
                 if self._last_activity_phase == PHASE_PERSONAL:
                     self._return_to = PHASE_PERSONAL
+                elif self._last_activity_phase == PHASE_WORK:
+                    self._open_work_job()
             self._first_day = False
             self._status("day", day_cause=self._day_gate)
             opened = False
@@ -3921,7 +4135,7 @@ class LifeLoop:
                             # restart over the un-archived order). Leaseless
                             # test homes (state_home=None) skip the archive.
                             if self.state_home is not None:
-                                archive_work_order(self.state_home, verdict=verdict)
+                                self._settle_work_job(verdict)
                             report.stopped_by = "work_done"
                             self.out(f"(work verdict: {verdict[:120]})")
                             break
@@ -4429,7 +4643,7 @@ def build_session_factory(
             )
         return day_shelf
 
-    def _factory(phase: Optional[str] = None) -> ChatSession:
+    def _factory(phase: Optional[str] = None, job: Optional[Dict[str, Any]] = None) -> ChatSession:
         day_provider, day_model, day_thinking = _resolve_current_substrate()
         day_shelf_size = _resolve_current_shelf_size()
         # Record the mind this day runs on so an observer's staleness cue
@@ -4509,12 +4723,15 @@ def build_session_factory(
         # where the operator's matrix says so) and the contract is a
         # mission, honestly. No order = his own time, exactly as before.
         # The day's phase is the GATE's decision (the loop passes it; a blueprint redirect too); without one (a
-        # direct call) the order decides, as before.
-        work_order = read_work_order(home_dir)
+        # direct call) the job queue decides. A work day works ONE job (CONTRACT v3 D1): the one the loop's gate
+        # chose (`job`), else the head of the queue - the work order, or a task of the inbox.
         if phase in (PHASE_WORK, PHASE_PERSONAL):
             day_phase = phase
         else:
-            day_phase = PHASE_WORK if work_order else PHASE_PERSONAL
+            day_phase = PHASE_WORK if jobs_queued(home_dir) else PHASE_PERSONAL
+        if day_phase == PHASE_WORK and job is None:
+            _queued = read_job_queue(home_dir)["jobs"]
+            job = _queued[0] if _queued else None
 
         session = ChatSession(
             home,
@@ -4549,8 +4766,8 @@ def build_session_factory(
             workspace_enabled=session.workspace is not None,
             enable_tools=session.enable_tools,
             own_time_text=(
-                (WORK_CONTRACT + "\n\nTHE TASK, from your operator:\n" + work_order)
-                if work_order and day_phase == PHASE_WORK
+                work_day_text(job)
+                if job is not None and day_phase == PHASE_WORK
                 else (session.prompt_overlay.get("personal") or OWN_TIME_CONTRACT)
             ),
             # The memory-teaching layer rides the re-compose too (ChatSession

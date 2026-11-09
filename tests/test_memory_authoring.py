@@ -737,3 +737,26 @@ def test_the_flow_brain_sleep_pass_is_authored_by_the_hosts_summaries_handler(tm
         assert result["title"] == TITLE and result["author"]["kind"] == "capability-model" and result["sources"]
     finally:
         ert.close()
+
+
+def test_a_tick_lookback_summary_has_an_authored_title_never_the_tick_template(tmp_path: Path) -> None:
+    """Codex review 3 #8: the tick look-back's summary record was titled "tick reflection: <session> #<n>" and only
+    its summary was authored. Both are authored now; the tick's label stays as structure (lookback_label)."""
+    from test_lookback_offers import LOOKBACK_REPLY, _Recorder
+
+    from abstractruntime.identity.chat import ChatSession, open_home
+
+    home_dir = _workspace_home(tmp_path)
+    home = open_home(home_dir)
+    s = ChatSession(home, _Recorder(["A tick.", LOOKBACK_REPLY]), participants=[home.entity_id],
+                    context_window=20000, out=lambda _s: None, phase="personal")
+    s.llm_for_capability = lambda name: _Capability()
+    s.turn("(cue) one")
+    result = s.tick_lookback()
+    home.close()
+    rid = result["session_record_id"]
+    (row,) = [a for a in _rows(home_dir, "summary") if str(a.subject) == str(rid)]
+    assert (row.attributes["title"], str(row.object)) == (TITLE, SUMMARY), row.attributes.get("title")
+    assert row.attributes["lookback_label"] == f"{s.session_id} #1"
+    assert row.attributes["metadata_authored"]["fields"] == ["title", "summary"]
+    assert "pending" not in row.attributes

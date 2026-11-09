@@ -3232,7 +3232,9 @@ class ChatSession:
             turn_id=f"t-reflect-{self.session_id}-tick-{n}",
             resolutions=resolutions,
             moment="tick",
-            title=f"tick reflection: {self.session_id} #{n}",
+            # The tick's label is STRUCTURE (attributes.lookback_label), never the title: the summary record's title
+            # and summary are both authored (Codex review 3 #8).
+            label=f"{self.session_id} #{n}",
             summary_only_if_kept=True,
             context_messages=context,
             preamble=preamble,
@@ -3252,6 +3254,7 @@ class ChatSession:
         phase: Optional[str],
         title: Optional[str],
         topics: List[str],
+        label: Optional[str] = None,
     ) -> Optional[str]:
         """The reflection itself is remembered (kind=summary, life scope) —
         it is also the target for `target=session` feelings. The engine
@@ -3267,7 +3270,8 @@ class ChatSession:
                         # lived records (the kind vocabulary is memory's to
                         # grow; a dedicated "reflection" kind is a candidate).
                         "kind": "summary",
-                        # Authored (operator 2026-11-09): formed pending, authored right after (below) or by the drainer.
+                        # Authored IN THIS STEP before it forms (operator 2026-11-09; _author_records): title and
+                        # summary unless the caller names the title; only a failed call forms them pending.
                         "title": title or None,
                         "pending": ["summary"] if title else ["title", "summary"],
                         "_authoring": {"body": marked_reply, "raw_block": marked_reply,
@@ -3287,6 +3291,8 @@ class ChatSession:
                             # scan (attributes.topics is the pinned seam;
                             # summaries are eligible evidence).
                             **({"topics": list(topics)} if topics else {}),
+                            # A tick look-back's structural label (session #n), never its title.
+                            **({"lookback_label": label} if label else {}),
                             # r-rt-3: awake-phase provenance the MEMORIES
                             # origin labels key on ("your own time"). A
                             # salvaged look-back stamps the ENDED session's
@@ -3458,6 +3464,7 @@ class ChatSession:
         resolutions: Optional[List[Tuple[str, str, str]]] = None,
         moment: str = "session",
         title: Optional[str] = None,
+        label: Optional[str] = None,
         summary_only_if_kept: bool = False,
         count_session_caps: bool = True,
         context_messages: Optional[List[Dict[str, str]]] = None,
@@ -3539,7 +3546,7 @@ class ChatSession:
         else:
             session_record_id = self._form_reflection_summary(
                 marked_reply, sheet, session_id=session_id, turn_id=turn_id,
-                phase=phase, title=title, topics=topics,
+                phase=phase, title=title, topics=topics, label=label,
             )
 
         # IN-DAY topic cards (build 4): the elected subjects revise their

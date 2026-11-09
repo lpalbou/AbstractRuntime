@@ -139,10 +139,11 @@ def test_voice_projection_today_drops_transport_and_types_nothing(detail: str) -
     assert "voice" not in turn
     # The exact key set, so a voice field (or any other) cannot slip in unseen. `prompt_author`, `author` (turn
     # authors, 6706188 + 3e8e08a) and `repeat_of` (1abcc26), all 2026-11-08, are conversation fields, not transport,
-    # and are pinned here on purpose.
+    # and are pinned here on purpose. `notices` (turn.notices, 2026-11-09: what the answering turn formed, beside the
+    # answer) is a conversation field too.
     assert set(turn) == {"run_id", "workflow_id", "kind", "status", "created_at", "updated_at", "prompt", "prompt_verbatim",
                          "prompt_metadata", "attachments", "answer", "answer_meta", "stats", "artifacts",
-                         "prompt_author", "author", "repeat_of"}
+                         "prompt_author", "author", "repeat_of", "notices"}
 
 
 def test_voice_projection_today_archive_keeps_playback_and_the_ledger_can_derive_it() -> None:

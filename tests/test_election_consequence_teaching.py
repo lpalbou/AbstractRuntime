@@ -172,9 +172,13 @@ def test_diary_resolve_marker_names_the_resolved_question() -> None:
     s.llm = _LLM([
         f"```diary kind=note resolves={qid}\ngist: time-order answers it\nTime-order, not word-match, makes a trail useful.\n```\nAnswered.",
     ])
-    reply2, report2 = s.turn("Did you figure it out?")
+    served2, report2 = s.turn("Did you figure it out?")
+    # The marker is what he RE-READS: the stored reply (turn.notices contract 2026-11-09: the served reply carries
+    # no bracket line; the act is served as a notice beside it).
+    reply2 = report2.marked_reply
     assert f"resolves your open question {qid}" in reply2, "the marker names the resolution"
     assert "reread: diary_read" in reply2
+    assert "reread: diary_read" not in served2 and [n["kind"] for n in report2.reply_notices] == ["diary"]
     home.close()
 
 
@@ -323,7 +327,8 @@ def test_invalid_resolves_keeps_entry_but_never_the_claim() -> None:
     s.llm = _LLM([
         f"```diary kind=note resolves={note_id}\ngist: wrong target\nAnswering a note?\n```\nDone.",
     ])
-    reply1, rep1 = s.turn("Try to resolve the note.")
+    _served1, rep1 = s.turn("Try to resolve the note.")
+    reply1 = rep1.marked_reply  # the stored reply he re-reads (the served one carries no marker)
     assert "resolves your open question" not in reply1
     assert "reread: diary_read" in reply1, "the entry itself stands"
     assert any("did not match an open question" in n for n in rep1.notices)
@@ -332,7 +337,8 @@ def test_invalid_resolves_keeps_entry_but_never_the_claim() -> None:
     s.llm = _LLM([
         "```diary kind=note resolves=diary_feedfacefeedfacefeedface\ngist: ghost\nGhost target.\n```\nOk.",
     ])
-    reply2, rep2 = s.turn("Resolve a ghost.")
+    _served2, rep2 = s.turn("Resolve a ghost.")
+    reply2 = rep2.marked_reply  # the stored reply he re-reads (the served one carries no marker)
     assert "resolves your open question" not in reply2
     assert any("target_not_found" in n for n in rep2.notices)
 
@@ -345,14 +351,16 @@ def test_invalid_resolves_keeps_entry_but_never_the_claim() -> None:
     s.llm = _LLM([
         f"```diary kind=note resolves={qid}\ngist: answered\nTime-order.\n```\nAnswered.",
     ])
-    reply4, rep4 = s.turn("Answer it.")
+    _served4, rep4 = s.turn("Answer it.")
+    reply4 = rep4.marked_reply  # the stored reply he re-reads (the served one carries no marker)
     assert f"resolves your open question {qid}" in reply4
 
     # Case 4: resolving it AGAIN — already resolved, claim refused.
     s.llm = _LLM([
         f"```diary kind=note resolves={qid}\ngist: again\nAgain.\n```\nAgain.",
     ])
-    reply5, rep5 = s.turn("Answer it again.")
+    _served5, rep5 = s.turn("Answer it again.")
+    reply5 = rep5.marked_reply  # the stored reply he re-reads (the served one carries no marker)
     assert "resolves your open question" not in reply5
     assert any("target_already_resolved" in n for n in rep5.notices)
     home.close()
@@ -451,9 +459,11 @@ def test_midturn_lesson_fence_forms_the_record() -> None:
         participants=["agent:t"], context_window=20000, out=lambda s: None,
     )
     reply, report = s.turn("What did you learn?")
-    assert '[learned: "Trails need time-order."]' in reply, (
-        "the fence parsed to the titled marker"
+    assert '[learned: "Trails need time-order."]' in report.marked_reply, (
+        "the fence parsed to the titled marker (the stored reply)"
     )
+    assert "[learned:" not in reply, "the served reply carries a notice beside it instead"
+    assert [(n["kind"], n["text"]) for n in report.reply_notices] == [("lesson", "Trails need time-order.")]
     assert not any("lessons are kept at" in n for n in report.notices), "notice era over"
     # The record formed in life scope.
     from abstractmemory import TripleQuery
@@ -804,7 +814,8 @@ def test_problems_are_resolvable_too() -> None:
     s.llm = _LLM([
         f"```diary kind=note resolves={pid}\ngist: fixed it\nLengthened the tag window; misfires gone.\n```\nFixed.",
     ])
-    reply2, rep2 = s.turn("Did you fix it?")
+    _served2, rep2 = s.turn("Did you fix it?")
+    reply2 = rep2.marked_reply  # the stored reply he re-reads (the served one carries no marker)
     assert f"repairs your open problem {pid}" in reply2, "the ack names the repair"
     assert "reread: diary_read" in reply2
 
@@ -817,7 +828,8 @@ def test_problems_are_resolvable_too() -> None:
     s.llm = _LLM([
         f"```diary kind=note resolves={nid}\ngist: wrong\nWrong target.\n```\nk.",
     ])
-    reply4, rep4 = s.turn("Resolve the note.")
+    _served4, rep4 = s.turn("Resolve the note.")
+    reply4 = rep4.marked_reply
     assert "repairs your open problem" not in reply4
     assert "resolves your open question" not in reply4
     assert any("target_not_resolvable" in n for n in rep4.notices)

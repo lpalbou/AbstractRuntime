@@ -264,9 +264,14 @@ class TestDiaryElection:
         reply, report = s.turn("I wanted you to know why I built all this.")
         # R-A site 3 (laurent c2596): the write-time marker carries the
         # reread command — the entry ID is a key, never words, so private
-        # entries carry it too.
-        assert "[kept a private diary entry - reread: diary_read diary_" in reply
-        assert "silverfin" not in reply
+        # entries carry it too. It rests in the STORED reply he re-reads; the
+        # served reply carries a notice beside it instead (turn.notices,
+        # 2026-11-09), private: no words, no title.
+        assert "[kept a private diary entry - reread: diary_read diary_" in report.marked_reply
+        assert reply == "That moved me.\n\nThank you for telling me."
+        assert [(n["kind"], n["title"], n.get("visibility")) for n in report.reply_notices] == [
+            ("diary", "", "private")]
+        assert "silverfin" not in reply and "silverfin" not in json.dumps(report.reply_notices)
         assert "silverfin" not in json.dumps(s.history)
         assert len(report.diary) == 1
 

@@ -368,6 +368,50 @@ def elected_title_and_words(elected: str) -> Tuple[Optional[str], str]:
     return title, words
 
 
+def interest_marker(body: str) -> str:
+    """The marker a kept ```interest block leaves in the MARKED reply (the stored verbatim; ADR 0054: whole)."""
+    return f'[kept interest: "{elected_title_and_words(body)[1]}"]'
+
+
+def lesson_marker(body: str) -> str:
+    """The marker a kept ```lesson block leaves in the MARKED reply (the stored verbatim; ADR 0054: whole)."""
+    return f'[learned: "{elected_title_and_words(body)[1]}"]'
+
+
+def realization_marker(text: str) -> str:
+    """The marker a held ```realize block leaves in the MARKED reply (`RealizeElection.text`, whole)."""
+    return f'[realized: "{text}" - held for sleep]'
+
+
+def without_markers(marked: str, markers: List[str]) -> str:
+    """The SERVED reply: the marked reply without the markers whose act is served as a structured turn notice
+    (`turn.notices`; the Entity app owner's contract 2026-11-09). Each marker is the exact string this runtime put
+    there (the builders above, the diary marker), removed once; a marker alone on its line takes the line (and one
+    of the blank lines around it) with it. Nothing else of his words changes. The STORED reply (episode verbatim,
+    the session's own history) keeps every marker: they are his words at rest (ADR 0054)."""
+    out = str(marked or "")
+    for m in markers:
+        if not m:
+            continue
+        lines = out.split("\n")
+        hit = next((i for i, ln in enumerate(lines) if ln.strip() == m), None)
+        if hit is not None:
+            del lines[hit]
+            # "A\n\n[m]\n\nB" reads "A\n\nB": drop one of the two blank lines the marker sat between.
+            if 0 < hit < len(lines) and not lines[hit - 1].strip() and not lines[hit].strip():
+                del lines[hit]
+            out = "\n".join(lines)
+            continue
+        i = out.find(m)
+        if i < 0:
+            continue
+        before, after = out[:i], out[i + len(m):]
+        if before.endswith(" ") and after.startswith(" "):
+            after = after[1:]
+        out = before + after
+    return out.strip()
+
+
 def parse_interest_blocks(
     reply: str, *, room: Optional[int] = None,
 ) -> Tuple[str, List[str], List[str]]:
@@ -405,7 +449,7 @@ def parse_interest_blocks(
         # readable later, never a bare "[kept an interest]". WHOLE words
         # (ADR 0054, 2026-11-08): the marked reply is stored as the turn's
         # verbatim, so an 80-character cut here was a stored cut.
-        return f'[kept interest: "{words}"]'
+        return interest_marker(body)
 
     marked = _INTEREST_FENCE_RE.sub(_sub, reply)
     return marked.strip(), interests, notices
@@ -516,7 +560,7 @@ def parse_realize_blocks(reply: str) -> Tuple[str, List[RealizeElection], List[s
         # The marker carries the realization WHOLE (root ADR 0026/0054,
         # 2026-11-08): the marked reply is stored as the turn's verbatim, and
         # a marked 80-character cut there was still a stored cut.
-        return f'[realized: "{body}" - held for sleep]'
+        return realization_marker(body)
 
     marked = _REALIZE_FENCE_RE.sub(_sub, reply)
     return marked.strip(), realizations, notices
@@ -645,7 +689,7 @@ def parse_lesson_blocks(
         lessons.append(body)
         # The marker carries the lesson whole (ADR 0054): the marked reply
         # is the stored verbatim of the turn.
-        return f'[learned: "{words}"]'
+        return lesson_marker(body)
 
     marked = _LESSON_FENCE_RE.sub(_sub, reply)
     return marked.strip(), lessons, notices

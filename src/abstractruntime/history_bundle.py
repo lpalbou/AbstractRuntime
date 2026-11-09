@@ -795,10 +795,7 @@ def _best_effort_session_turns(
             return None
 
     def _extract_answer_from_run_output(run: Any) -> Tuple[str, Optional[Dict[str, Any]]]:
-        out = getattr(run, "output", None)
-        resolved = _resolve_offloaded_output(out)
-        if resolved is not None:
-            out = resolved
+        out = _run_output(run)
         if not isinstance(out, dict):
             return ("", None)
 
@@ -838,6 +835,11 @@ def _best_effort_session_turns(
             meta0 = nested.get("meta") if isinstance(nested.get("meta"), dict) else None
         meta = dict(meta0) if isinstance(meta0, dict) else None
         return (answer, meta)
+
+    def _run_output(run: Any) -> Any:
+        out = getattr(run, "output", None)
+        resolved = _resolve_offloaded_output(out)
+        return resolved if resolved is not None else out
 
     sid = str(session_id or "").strip()
     if not sid:
@@ -952,6 +954,9 @@ def _best_effort_session_turns(
                 "attachments": attachments,
                 "answer": answer or None,
                 "answer_meta": answer_meta,
+                # What the answering turn formed, served BESIDE the answer (turn.notices, 2026-11-09): the run
+                # output's `notices` list as its host recorded it; [] when it recorded none.
+                "notices": turn_notices_of(_run_output(r)),
                 "prompt_author": authors["prompt"],
                 "author": authors["answer"],
                 "repeat_of": prompt_repeat_of(input_data),
@@ -960,6 +965,21 @@ def _best_effort_session_turns(
             }
         )
     return out
+
+
+def turn_notices_of(output: Any) -> List[Dict[str, Any]]:
+    """The structured turn notices a run output carries (`turn.notices`, the Entity app owner's contract 2026-11-09:
+    [{kind, record_id, title, text?}]): `output.notices`, else `output.result.notices` / `output.output.notices`.
+    Only notice-shaped items (a dict with a `kind`); a list of plain strings (an operator log) is not this list."""
+    if not isinstance(output, dict):
+        return []
+    for src in (output, output.get("result"), output.get("output")):
+        raw = src.get("notices") if isinstance(src, dict) else None
+        if isinstance(raw, list):
+            items = [dict(n) for n in raw if isinstance(n, dict) and str(n.get("kind") or "").strip()]
+            if items:
+                return items
+    return []
 
 
 def _run_authors(run: Any) -> Dict[str, Any]:

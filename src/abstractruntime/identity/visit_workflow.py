@@ -63,8 +63,10 @@ from .chat import (
     authored_digest_attributes,
     clean_model_reply,
     compose_system_base,
+    diary_notice,
     floored_reflection_digest,
     parse_diary_blocks,
+    served_turn,
     sheet_prompt_line,
 )
 from .digest import mechanical_digest_v2
@@ -74,12 +76,15 @@ from .reflection import (
     FeelingElection,
     build_reflection_prompt,
     elected_title_and_words,
+    interest_marker,
+    lesson_marker,
     parse_elected_title,
     parse_feel_blocks,
     parse_interest_blocks,
     parse_lesson_blocks,
     parse_realize_blocks,
     parse_topic_blocks,
+    realization_marker,
     resolve_feeling_targets,
 )
 
@@ -267,6 +272,30 @@ def _deadline_iso(idle_seconds: float) -> str:
 
 
 AUTHOR_EPISODE_NODE = "VISIT_AUTHOR"
+
+
+def _captured_diary_marker(marked: str, meta: Dict[str, Any]) -> str:
+    """The exact marker the act-only capture left for one diary entry (act_only.capture_diary_elections: the plain
+    "[kept in diary - <kind>" / "[kept a private diary entry" head, the verified resolution note, then
+    " - reread: diary_read <entry_id>]"), read back from the marked reply by its entry id; "" when it is not there."""
+    entry_id = str((meta or {}).get("entry_id") or "")
+    if not entry_id:
+        return ""
+    tail = f" - reread: diary_read {entry_id}]"
+    end = marked.find(tail)
+    if end < 0:
+        return ""
+    head = ("[kept a private diary entry" if str(meta.get("visibility") or "") == "private"
+            else f"[kept in diary - {meta.get('kind')}")
+    start = marked.rfind(head, 0, end + 1)
+    return marked[start:end + len(tail)] if start >= 0 else ""
+
+
+def _staged_notice(kind: str, body: str) -> Dict[str, Any]:
+    """A visit-lane election staged for the close (it forms there, so it has no record yet): record_id None,
+    staged true, its elected title ("" without one: the close authors it) and his words, whole."""
+    title, words, _reason = parse_elected_title(body)
+    return {"kind": kind, "record_id": None, "title": str(title or ""), "text": words, "staged": True}
 
 
 def _authoring_step(node_id: str, kind: str, body: str, *, result_key: str, next_node: str) -> StepPlan:
@@ -777,6 +806,15 @@ def build_visit_workflow(
         llm = turn.get("llm") or {}
         marked = clean_model_reply(str(llm.get("content") or ""))
         notices = list(llm.get("act_only_warnings") or [])
+        # (notice, marker) per act of this turn, served BESIDE the reply (turn.notices, the Entity app owner's
+        # contract 2026-11-09); the marker leaves the served reply and stays in the stored one (ADR 0054).
+        served: List[Tuple[Dict[str, Any], str]] = []
+        for meta in list(llm.get("diary_entries") or []):
+            marker = _captured_diary_marker(marked, meta)
+            notice = diary_notice(kind=str(meta.get("kind") or ""), visibility=str(meta.get("visibility") or ""),
+                                  record_id=meta.get("projected_record_id"), title=meta.get("title"))
+            if marker and notice:
+                served.append((notice, marker))
         if marked:
             sheet_now = [(str(r), str(d)) for r, d in (visit.get("sheet") or [])]
             sheet_lines = [f"{i}. {d}" for i, (_r, d) in enumerate(sheet_now, start=1)]
@@ -814,8 +852,10 @@ def build_visit_workflow(
                 )
             if interests:
                 pending["interests"].extend(str(x) for x in interests)
+                served.extend((_staged_notice("interest", str(x)), interest_marker(str(x))) for x in interests)
             if lessons:
                 pending["lessons"].extend(str(x) for x in lessons)
+                served.extend((_staged_notice("lesson", str(x)), lesson_marker(str(x))) for x in lessons)
             if topics:
                 pending["topics"].extend(str(x) for x in topics)
             if realize_elections:
@@ -843,6 +883,8 @@ def build_visit_workflow(
                         pending["realizations"].append(
                             {"text": _re.text, "touches": _re.touches, "title": _re.title, "gids": gids, "title_reason": _re.title_reason, "raw": _re.raw}
                         )
+                        served.append(({"kind": "realization", "record_id": None, "title": str(_re.title or ""),
+                                        "text": _re.text, "staged": True}, realization_marker(_re.text)))
                     else:
                         notices.append(
                             "#FALLBACK realization refused (no evidence resolved against "
@@ -859,6 +901,8 @@ def build_visit_workflow(
             marked = "…"  # an empty reply still closes the turn honestly
             notices.append("#FALLBACK the model returned no words this turn")
         turn["marked_reply"] = marked
+        # The SERVED reply and its notices (ANSWER serves them; the visit history and the episode keep `marked`).
+        turn["reply"], turn["reply_notices"] = served_turn(marked, served)
         turn["diary_meta"] = list(llm.get("diary_entries") or [])
         turn["notices"] = notices
         return StepPlan(node_id="ELECT", next_node="COMMIT")
@@ -1048,12 +1092,16 @@ def build_visit_workflow(
             effect=Effect(
                 type=EffectType.ANSWER_USER,
                 payload={
-                    "message": turn["marked_reply"],
+                    # The SERVED reply (no bracket markers; a turn parked before 2026-11-09 has only its marked one).
+                    "message": turn.get("reply", turn["marked_reply"]),
                     "turn_id": turn["turn_id"],
                     # H7a tools_ran parity: the door serves this list as the
                     # turn's tool truth (driver-authored; [] on the v0
                     # single-call path where no tool can run by construction).
                     "tools_ran": list(turn.get("tools_ran") or []),
+                    # turn.notices (2026-11-09): what the turn formed (a diary entry: its graph projection) or
+                    # staged for the visit's close (record_id None, staged true), as data beside the reply.
+                    "notices": [dict(n) for n in (turn.get("reply_notices") or [])],
                 },
                 result_key="_turn.answered",
             ),

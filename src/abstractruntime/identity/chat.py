@@ -60,13 +60,17 @@ from .prompt_overlay import overlay_note, read_prompt_overlay
 from .reflection import (
     build_reflection_prompt,
     elected_title_and_words,
+    interest_marker,
+    lesson_marker,
     parse_elected_title,
     parse_feel_blocks,
     parse_interest_blocks,
     parse_lesson_blocks,
     parse_realize_blocks,
     parse_topic_blocks,
+    realization_marker,
     resolve_feeling_targets,
+    without_markers,
 )
 from .tools import (
     TIER1_TOOL_NAMES,
@@ -244,6 +248,44 @@ def authored_digest_attributes(attributes: Dict[str, Any], fields: Any) -> Dict[
     if "summary" in [str(f) for f in (fields or [])]:
         out["digest_method"] = AUTHORED_SUMMARIES_METHOD
     return out
+
+
+def formed_notice(kind: str, formed: Any, *, title: Optional[str], text: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    """One structured turn notice (`turn.notices`, the Entity app owner's contract 2026-11-09) for a record a
+    MEMORY_FORM just formed: {kind, record_id: the GRAPH id it formed, title: as formed (his elected title, else
+    the authored one; "" while it is still being written), text: his words, whole}. None when nothing formed."""
+    ids = [str(r) for r in ((formed or {}).get("record_ids") or []) if str(r or "").strip()] \
+        if isinstance(formed, dict) else []
+    if not ids:
+        return None
+    authored = next(iter((formed or {}).get("authored") or []), None) or {}
+    out: Dict[str, Any] = {"kind": kind, "record_id": ids[0],
+                           "title": str(title or authored.get("title") or "")}
+    if text:
+        out["text"] = str(text)
+    return out
+
+
+def diary_notice(*, kind: str, visibility: str, record_id: Any, title: Any) -> Optional[Dict[str, Any]]:
+    """The structured turn notice of a diary entry: kind "question" for an open question he kept (diary
+    kind=question), else "diary"; record_id = its GRAPH projection (never only the book's diary_ id); title = the
+    record's title as formed. A private entry is named as private and carries no words (the room may hold others)."""
+    if not str(record_id or "").strip():
+        return None
+    private = str(visibility or "").strip().lower() == "private"
+    out: Dict[str, Any] = {"kind": "question" if str(kind or "").strip().lower() == "question" else "diary",
+                           "record_id": str(record_id), "title": "" if private else str(title or "")}
+    if private:
+        out["visibility"] = "private"
+    return out
+
+
+def served_turn(marked_reply: str, served: List[Tuple[Dict[str, Any], str]]) -> Tuple[str, List[Dict[str, Any]]]:
+    """(served reply, notices) from the marked reply and the (notice, marker) pairs of what the turn formed: the
+    notices in the order their markers stand in his reply, the reply without those markers (`without_markers`)."""
+    pairs = [(n, m) for n, m in served if n and m]
+    pairs.sort(key=lambda nm: (marked_reply.find(nm[1]) if nm[1] in marked_reply else len(marked_reply)))
+    return without_markers(marked_reply, [m for _n, m in pairs]), [dict(n) for n, _m in pairs]
 
 
 def floored_reflection_digest(
@@ -1104,6 +1146,13 @@ class TurnReport:
     # THE history window's receipt for this turn's prompt (session_history
     # report: replayed/dropped messages and tokens, the 50k budget).
     history_window: Dict[str, Any] = field(default_factory=dict)
+    # What this turn FORMED, served BESIDE the reply (`turn.notices`, the Entity app owner's contract 2026-11-09):
+    # [{kind: diary|lesson|interest|question|realization, record_id: graph id, title, text?}]. The `notices`
+    # strings above stay the operator's log lines. The reply `turn()` returns is the served one, without the
+    # bracket markers these replace; `marked_reply` is the reply as STORED (episode verbatim, the session's own
+    # history: his words at rest, markers included - ADR 0054).
+    reply_notices: List[Dict[str, Any]] = field(default_factory=list)
+    marked_reply: str = ""
 
 
 class ChatSession:
@@ -1587,6 +1636,7 @@ class ChatSession:
         *,
         turn_id: str,
         report: Any,
+        served: Optional[List[Tuple[Dict[str, Any], str]]] = None,
     ) -> None:
         """W1: feelings/lessons/interests kept IN THE MOMENT (the disposition
         table's mid-turn lanes). Feelings ride MEMORY_APPRAISE with the
@@ -1668,6 +1718,9 @@ class ChatSession:
                 )
                 report.notices.extend(out.get("warnings", []))
                 self.out(f'(lesson kept: "{lesson_title or lesson_words}")')
+                if served is not None:
+                    served.append((formed_notice("lesson", out, title=lesson_title, text=lesson_words),
+                                   lesson_marker(lesson_text)))
             except RuntimeError as exc:
                 report.notices.append(f"#FALLBACK mid-turn lesson refused: {exc}")
         for i, interest_text in enumerate(interests):
@@ -1694,6 +1747,9 @@ class ChatSession:
                 )
                 report.notices.extend(out.get("warnings", []))
                 self.out(f'(interest kept: "{interest_title or interest_words}")')
+                if served is not None:
+                    served.append((formed_notice("interest", out, title=interest_title, text=interest_words),
+                                   interest_marker(interest_text)))
             except RuntimeError as exc:
                 report.notices.append(f"#FALLBACK mid-turn interest refused: {exc}")
 
@@ -1730,6 +1786,7 @@ class ChatSession:
         notices: List[str],
         session_id: Optional[str] = None,
         phase: Optional[str] = None,
+        served: Optional[List[Tuple[Dict[str, Any], str]]] = None,
     ) -> None:
         """Identity-pass spine, WAKING half (cti#399 design adopted at #400;
         build gate ruled already satisfied, framework c4779): each elected
@@ -1790,6 +1847,9 @@ class ChatSession:
                 )
                 notices.extend(out.get("warnings", []))
                 self.out(f'(realization held for sleep: "{getattr(r, "title", None) or r.text}")')
+                if served is not None:
+                    served.append((formed_notice("realization", out, title=getattr(r, "title", None), text=r.text),
+                                   realization_marker(r.text)))
             except (RuntimeError, ValueError) as exc:
                 # Version-skew half: the kind vocabulary is MEMORY's to grow
                 # and their engine half lands in the same wave (c4779 orders
@@ -2559,11 +2619,14 @@ class ChatSession:
                 "if you want it kept in words"
             )
         report.notices.extend(notices)
+        # (notice, marker) per act this turn FORMED: the notice is served beside the reply, the marker leaves the
+        # served reply (it stays in the stored one).
+        served: List[Tuple[Dict[str, Any], str]] = []
         self._apply_midturn_elections(
             midturn_feelings, midturn_lessons, midturn_interests,
-            turn_id=turn_id, report=report,
+            turn_id=turn_id, report=report, served=served,
         )
-        self._apply_realizations(midturn_realizations, turn_id=turn_id, notices=report.notices)
+        self._apply_realizations(midturn_realizations, turn_id=turn_id, notices=report.notices, served=served)
         turn_diary_projections: List[str] = []
         for e in elections:
             try:
@@ -2658,6 +2721,9 @@ class ChatSession:
                 + f" - reread: diary_read {diary_out['entry_id']}]"
             )
             marked_reply = marked_reply.replace(plain_marker, enriched_marker, 1)
+            served.append((diary_notice(kind=e.kind, visibility=e.visibility,
+                                        record_id=diary_out.get("projected_record_id"),
+                                        title=diary_out.get("title")), enriched_marker))
             if resolved_ok:
                 word = "problem" if rs == "repaired_open_problem" else "question"
                 self.out(f"(resolved: {word} {e.resolves} leaves your open desk)")
@@ -2835,8 +2901,11 @@ class ChatSession:
         self.history.append({"role": "user", "content": user_text})
         self.history.append({"role": "assistant", "content": marked_reply})
 
+        # SERVED beside the reply (turn.notices): what he formed, as data; the reply served without the markers.
+        report.marked_reply = marked_reply
+        reply, report.reply_notices = served_turn(marked_reply, served)
         self.reports.append(report)
-        return marked_reply, report
+        return reply, report
 
     # -------------------------------------------------------- open greeting
     def open_greeting(self) -> Tuple[str, TurnReport]:

@@ -787,9 +787,14 @@ class ReplayView:
         if eff_type == "answer_user" and status == "completed":
             text = _text_of(res) or _text_of(payload)
             if text:
+                # turn.notices (2026-11-09): what the answering turn formed, served beside its words.
+                raw_notices = raw_payload.get("notices")
+                notices = [dict(n) for n in raw_notices if isinstance(n, dict) and n.get("kind")] \
+                    if isinstance(raw_notices, list) else []
                 self._message(f"{run_id}:{step_id}:answer_user", role="assistant", kind="answer", text=text,
                               run_id=run_id, step_id=step_id, seq=seq, ts=ts, source="answer_user",
-                              artifact_ids=[a for a, _ in _artifact_refs(result)])
+                              artifact_ids=[a for a, _ in _artifact_refs(result)],
+                              extra={"notices": notices or None})
         self._note_artifacts(run_id, step_id, seq, result, ts)
         self._dirty["activities"].add(aid)
 

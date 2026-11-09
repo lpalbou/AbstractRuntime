@@ -153,7 +153,6 @@ LOOP_EDGES = [
     ("personal", "personal", "personal_cycle"),
     ("work", "work", "task_complete"),
     ("work", "personal", "no_task"),
-    ("work", "personal", "operator"),
     ("personal", "work", "operator"),
     ("sleep", "personal", "maintenance_done"),
     ("sleep", "work", "maintenance_done"),
@@ -169,13 +168,19 @@ def test_transition_table_every_loop_edge_is_the_graphs_and_sleep_after_sleep_is
     graph, _w = load_effective_graph()
     for frm, to, cause in LOOP_EDGES:
         assert graph.legal_to(frm, to, cause) is not None, f"{frm}->{to}#{cause} missing from the vendored graph"
+    # Spec v25 removed work->personal#operator with the work toggle: no loop path names it.
+    assert graph.legal_to("work", "personal", "operator") is None
     home_dir = _make_home(tmp_path)
     # The causes the loop computes at a boundary are those edges.
     assert _boundary_cause("personal", "personal", home_dir) == "personal_cycle"
     assert _boundary_cause("work", "work", home_dir) == "task_complete"
     assert _boundary_cause("work", "personal", home_dir) == "no_task"
     (home_dir / "work_order.md").write_text("still standing", encoding="utf-8")
-    assert _boundary_cause("work", "personal", home_dir) == "operator"
+    assert _boundary_cause("work", "personal", home_dir) == "no_task", "never the removed operator edge"
+    # A job still queued and the work landing removed by the blueprint: no landing out of work is legal -> idle,
+    # never personal (even with his own time granted and remembered).
+    skipped = read_day_gate(home_dir, last_phase="work", return_to="personal", skip_phases=frozenset({"work"}))
+    assert skipped["phase"] == "idle" and skipped["cause"] == "edge_removed", skipped
     assert _boundary_cause("personal", "work", home_dir) == "operator"
     assert _boundary_cause("sleep", "personal", home_dir) == "maintenance_done"
     assert _boundary_cause(None, "personal", home_dir) is None  # a start is the operator's act, not a loop edge

@@ -471,6 +471,16 @@ def read_day_gate(
     # The boundary right after a work day with nothing queued: every job is done. He returns to his own time only
     # while it is granted and remembered (below); otherwise he ends idle with that stated reason (jobs_done).
     jobs_done = str(last_phase or "") == PHASE_WORK and not jobs
+    if jobs and str(last_phase or "") == PHASE_WORK:
+        # A job is still queued but the blueprint removed this boundary's work landing: spec v25 has no edge out of
+        # work to personal while a job is queued (work->personal#operator went with the work toggle; #no_task needs
+        # the queue empty), so the floor is idle.
+        idle_skip: Dict[str, Any] = {"phase": "idle", "cause": "edge_removed", "grant_cause": None,
+                                     "detail": "the blueprint removed this boundary's work landing and a job is "
+                                               "still queued - no other landing out of work is legal"}
+        if notes:
+            idle_skip["note"] = "; ".join(notes)
+        return idle_skip
     grant = read_personal_grant(home_dir)
     grant_refusal = personal_grant_refusal(grant)
     if grant_refusal is not None or PHASE_PERSONAL in skip_phases:
@@ -645,10 +655,12 @@ def consult_gate_landing(
 
 
 def _boundary_cause(from_phase: Optional[str], to: str, home_dir: Path) -> Optional[str]:
-    """The spec cause word of a LOOP-written day-boundary edge (spec v23 transitions; None = no loop edge: a start,
+    """The spec cause word of a LOOP-written day-boundary edge (spec v25 transitions; None = no loop edge: a start,
     a visit's close, idle). work->work#task_complete and personal->personal#personal_cycle are the self-loops;
-    work->personal is #no_task when no job is queued and #operator over a queued one (only a removed work edge);
-    personal->work#operator (work admitted); sleep->personal/work#maintenance_done (his own sleep's end)."""
+    work->personal is #no_task, the only edge back to his own time once every job is done (v25 removed
+    work->personal#operator with the work toggle; read_day_gate never lands personal from work while a job is
+    queued); personal->work#operator (a job interrupts own time); sleep->personal/work#maintenance_done (his own
+    sleep's end)."""
     frm = str(from_phase or "")
     if frm == PHASE_PERSONAL:
         return {"personal": "personal_cycle", "work": "operator"}.get(to)
@@ -656,7 +668,7 @@ def _boundary_cause(from_phase: Optional[str], to: str, home_dir: Path) -> Optio
         if to == PHASE_WORK:
             return "task_complete"
         if to == PHASE_PERSONAL:
-            return "no_task" if not jobs_queued(home_dir) else "operator"
+            return "no_task"
         return None
     if frm == PHASE_SLEEP and to in (PHASE_PERSONAL, PHASE_WORK):
         return "maintenance_done"

@@ -131,28 +131,22 @@ def test_restore_previous_rides_the_standing_grant() -> None:
 
 
 def test_newborn_shape_is_the_artifacts_answer() -> None:
-    """NEWBORN=SLEEP: the artifact rules state=asleep at birth with the
-    phase derivation folding asleep->sleep, and KEEPS every door open via
-    auto-wake. Runtime's missing-state-file default (awake) is therefore a
-    GATEWAY-BIRTH-WRITE dependency — pinned here so the contract's runtime
-    half (asleep handled correctly from birth: gate idles, doors wake) is
-    the verified-equivalent behavior, not an accident."""
-    from abstractruntime.identity.life import read_entity_state
+    """NEWBORN = IDLE (spec v25, contract v3 D5; supersedes NEWBORN =
+    SLEEP): a new entity starts idle - awake, reachable, no own time. The
+    runtime half: a home with no state file reads awake (no birth sleep to
+    wake from), and a newborn's first gate, with no job queued and no own
+    time granted, opens nothing (idle)."""
+    from abstractruntime.identity.life import read_day_gate, read_entity_state
 
     graph = _graph()
-    assert graph["initial_phase"] == "sleep"
-    assert any("NEWBORN = SLEEP" in inv for inv in graph["invariants"])
-    # Runtime half: an asleep state file reads back asleep (the loop's gate
-    # idles on it; visit doors auto-wake) — no runtime surface fights the
-    # birth write.
+    assert graph["initial_phase"] == "idle"
+    assert any("NEWBORN = IDLE" in inv for inv in graph["invariants"])
     import tempfile
 
     with tempfile.TemporaryDirectory() as d:
         home = Path(d)
-        (home / "state").write_text(
-            '{"state": "asleep", "reason": "born"}\n', encoding="utf-8"
-        )
-        assert read_entity_state(home)["state"] == "asleep"
+        assert read_entity_state(home)["state"] == "awake"
+        assert read_day_gate(home)["phase"] == "idle"
 
 
 def test_runtime_phase_marker_single_writer() -> None:

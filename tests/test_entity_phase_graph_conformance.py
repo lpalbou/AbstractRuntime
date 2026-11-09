@@ -52,8 +52,8 @@ def test_phase_vocabulary_is_the_graphs() -> None:
 
     g = _graph()
     assert set(PHASES) == set(g["phases"].keys()), (PHASES, list(g["phases"]))
-    assert g["initial_phase"] in g["phases"]
-    assert g["initial_phase"] == "sleep"  # NEWBORN = SLEEP (ruled)
+    # NEWBORN = IDLE (spec v25): idle is a state of the cycle, kept in `statuses` - never a phase key or a tool radio.
+    assert g["initial_phase"] == "idle" and "idle" in g["statuses"] and "idle" not in PHASES
 
 
 def test_spoken_synonyms_canonicalize_to_their_phase() -> None:

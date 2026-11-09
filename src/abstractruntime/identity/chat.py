@@ -2797,12 +2797,7 @@ class ChatSession:
                 if isinstance(p, str) and ":" in p and not p.startswith("entity:")
             ]
             if wm_targets:
-                world_model_update(
-                    self.home.ms,
-                    scopes=[("life", self.home.entity_id)],
-                    owner_id=self.home.entity_id,
-                    targets=wm_targets,
-                )
+                self._world_model_update(world_model_update, wm_targets)
         except ImportError:
             pass  # older engine: cards ride the sleep pass alone
         except Exception as e:  # noqa: BLE001
@@ -3379,6 +3374,20 @@ class ChatSession:
             new_records.append(rec)
         return {**payload, "records": new_records}, outcomes
 
+    def _world_model_update(self, world_model_update: Callable[..., Any], targets: List[str]) -> Any:
+        """A card update authored WITH the card (AbstractMemory c46b4cd; Codex review 2 #10): the summaries capability
+        is memory's formation author; each failure the update reports is written as an authoring-failure line."""
+        from .authoring import capability_formation_author, log_pass_authoring_failures
+
+        seen: Dict[str, Any] = {}
+        result = world_model_update(
+            self.home.ms, scopes=[("life", self.home.entity_id)], owner_id=self.home.entity_id, targets=targets,
+            author=capability_formation_author(self.llm_for_capability, self.home.artifacts, seen),
+        )
+        log_pass_authoring_failures(result, home_dir=getattr(self.home, "home_dir", None),
+                                    entity=self.home.entity_id, reader=seen.get("reader"), out=self.out)
+        return result
+
     def _author_diary_entry(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         """A public diary entry's TITLE, authored BEFORE the write when he elected no gist (operator 2026-11-09; Codex
         review 2 #10): one summaries capability call over the entry's words (kept as a home artifact, its source).
@@ -3545,12 +3554,7 @@ class ChatSession:
             try:
                 from abstractmemory import world_model_update
 
-                wm_out = world_model_update(
-                    self.home.ms,
-                    scopes=[("life", self.home.entity_id)],
-                    owner_id=self.home.entity_id,
-                    targets=[f"topic:{t}" for t in topics],
-                )
+                wm_out = self._world_model_update(world_model_update, [f"topic:{t}" for t in topics])
                 revised = [
                     str(v.get("target") or "")
                     for v in (wm_out.get("formed") or [])

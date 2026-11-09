@@ -39,6 +39,9 @@ __all__ = [
     "author_metadata",
     "authoring_failure_fields",
     "authored_write",
+    "capability_formation_author",
+    "handler_formation_author",
+    "log_pass_authoring_failures",
     "declare_missing_metadata",
     "diary_title_payload",
     "drain_authoring",
@@ -548,3 +551,101 @@ def rearm_exhausted_authoring(ms: Any, *, scopes: Optional[Sequence[Tuple[str, s
     if receipt["rearmed"]:
         out(f"(authoring: {receipt['rearmed']} pending record(s) whose tasks had all ended were re-armed)")
     return receipt
+
+
+# ------------------------------------------------- memory's formation author (AbstractMemory c46b4cd; Codex review 2 #10)
+# Memory's own passes (world_model_pass / world_model_update, dream_pass, mine_candidates_pass, consolidation_pass,
+# wake_cue_dedup_pass, and sleep_pass running the first four) take a host `author(kind, body, context)` and author a
+# record's title and summary WITH it; only a recorded failure forms it pending (`attributes.pending.failure`, and the
+# pass receipt's `authoring.failures`, from which the host writes its authoring-failure lines).
+
+
+def _formation_result(authored: Dict[str, Any], fields: Sequence[str], reader: Dict[str, Any],
+                      sources: List[Dict[str, Any]]) -> Dict[str, Any]:
+    out: Dict[str, Any] = {"author": {"kind": "capability-model", "id": AUTHORING_CAPABILITY}, "reader": reader,
+                           "sources": sources}
+    for f in ("title", "summary"):
+        if f in fields:
+            out[f] = authored[f]
+    return out
+
+
+def capability_formation_author(llm_for_capability: Optional[Callable[[str], Any]], artifacts: Any,
+                                seen: Optional[Dict[str, Any]] = None) -> Callable[[str, str, Any], Dict[str, Any]]:
+    """Memory's `author` from the summaries capability client (the loop's sleep, a session's card updates): one
+    structured call per record, the call kept as a home artifact (its `sources`); raises on any failure, which memory
+    records as `author_raised` with the class and message. `seen` (optional) gets the client's reader, so the host's
+    failure lines can name the model."""
+
+    def author(kind: str, body: str, context: Any) -> Dict[str, Any]:
+        fields = list((context or {}).get("fields") or ("title", "summary"))
+        if llm_for_capability is None:
+            raise AuthoringUnavailable("no summaries capability model in this process")
+        llm = llm_for_capability(AUTHORING_CAPABILITY)
+        reader = _reader_of(llm)
+        if seen is not None:
+            seen["reader"] = reader
+        try:
+            authored = author_metadata(llm, kind=str(kind), body=str(body or ""))
+        except (AuthoringFailed, AuthoringUnavailable) as e:
+            # Memory records the class and message of what the author raised: the client's own exception when it
+            # raised (never the wrapper), else the authoring failure itself (a reply that did not fit).
+            if e.__cause__ is not None:
+                raise e.__cause__ from None
+            raise
+        record = f"{(context or {}).get('pass') or 'memory'}:{(context or {}).get('record_kind') or kind}"
+        sources = _source_artifact(artifacts, record_id=record, kind=str(kind), body=str(body or ""),
+                                   authored=authored, reader=reader)
+        return _formation_result(authored, fields, reader, sources)
+
+    return author
+
+
+def handler_formation_author(handler: Any, artifacts: Any, *, run: Any = None) -> Callable[[str, str, Any], Dict[str, Any]]:
+    """Memory's `author` from a host's capability LLM_CALL handler (the durable lanes: open_entity_runtime's
+    `capability_handlers["summaries"]`): the authoring payload goes to the handler directly, its result is read as
+    the formation step reads one (`parse_authored_result`, the capability echo stamped), the call kept as an
+    artifact; raises on any failure."""
+    from ..core.models import Effect, EffectType
+
+    def author(kind: str, body: str, context: Any) -> Dict[str, Any]:
+        fields = list((context or {}).get("fields") or ("title", "summary"))
+        out = handler(run, Effect(type=EffectType.LLM_CALL, payload=authoring_llm_call_payload(str(kind), str(body or ""))),
+                      None)
+        if getattr(out, "status", None) != "completed" or not isinstance(getattr(out, "result", None), dict):
+            raise AuthoringUnavailable(str(getattr(out, "error", "") or "the authoring call failed"))
+        result = {**out.result, AUTHORING_CAPABILITY_KEY: AUTHORING_CAPABILITY}
+        parsed = parse_authored_result(result)
+        reader = {"provider": str(result.get("provider") or "capability"),
+                  "model": str(parsed.get("model") or result.get("model") or AUTHORING_CAPABILITY), "thinking": None}
+        authored = {**parsed, "raw": json.dumps({"title": parsed["title"], "summary": parsed["summary"]})}
+        record = f"{(context or {}).get('pass') or 'memory'}:{(context or {}).get('record_kind') or kind}"
+        sources = _source_artifact(artifacts, record_id=record, kind=str(kind), body=str(body or ""),
+                                   authored=authored, reader=reader)
+        return _formation_result(authored, fields, reader, sources)
+
+    return author
+
+
+def log_pass_authoring_failures(result: Any, *, home_dir: Any, entity: Optional[str],
+                                reader: Optional[Dict[str, Any]] = None,
+                                out: Callable[[str], None] = lambda _s: None) -> int:
+    """One authoring-failure line per failure a memory pass reports (`result["authoring"]["failures"]`: record_id,
+    record_kind, pass, fields, reason no_author_supplied | author_raised | invalid_result, error_class, message, at),
+    naming the capability model used when one was built. Returns how many were written."""
+    from .title_failures import record_authoring_failure
+
+    failures = list(((result or {}).get("authoring") or {}).get("failures") or []) if isinstance(result, dict) else []
+    for f in failures:
+        fields = [str(x) for x in (f.get("fields") or [])]
+        record_authoring_failure(
+            home_dir, entity=entity, record_id=f.get("record_id"), kind=str(f.get("record_kind") or "memory"),
+            raw_block="", template_id=f"memory.{f.get('pass') or 'pass'}",
+            provider=(reader or {}).get("provider"), model=(reader or {}).get("model"),
+            reason=str(f.get("reason") or "unknown"),
+            missing="both" if len(fields) == 2 else (fields[0] if fields else "title"),
+            extra={"error_class": f.get("error_class"), "error_message": f.get("message"), "pass": f.get("pass"),
+                   "capability": AUTHORING_CAPABILITY, "failed_at": f.get("at")},
+            out=out,
+        )
+    return len(failures)

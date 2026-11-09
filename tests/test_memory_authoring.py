@@ -608,3 +608,132 @@ def test_a_visit_close_diary_entry_forms_with_its_authored_title(tmp_path: Path)
         assert "diary" in asked
     finally:
         ert.close()
+
+
+# ---------------------------------------------------------------- AbstractMemory c46b4cd: memory's passes author WITH the
+# record through the runtime's summaries capability (Codex review 2 #10)
+
+
+def _night_with_an_interest(tmp_path: Path, capability: Any) -> Any:
+    from abstractruntime.identity.life import build_consolidator, write_entity_state
+
+    home_dir = _workspace_home(tmp_path)
+    home, s = _session(home_dir, ["Back.\n```interest\ntitle: Rivers and their bends\nwhy rivers bend\n```\n",
+                                  "A quiet close."])
+    s.llm_for_capability = lambda name: _Capability()
+    s.turn("hi")
+    home.close()
+    write_entity_state(home_dir, "asleep", reason="self-elected sleep: full", mode="dreaming", written_by="self")
+    lines: List[str] = []
+    build_consolidator(home_dir, out=lines.append, llm_for_capability=lambda name: capability)()
+    cards = [a for a in _rows(home_dir, "world_model")]
+    return home_dir, cards, lines
+
+
+def test_the_nights_world_model_card_forms_with_its_authored_title_and_summary(tmp_path: Path) -> None:
+    """The sleep pass's world_model_pass forms the interest's card WITH its title and summary, authored by the
+    summaries capability through the runtime's formation author - never pending for want of an author."""
+    home_dir, cards, _lines = _night_with_an_interest(tmp_path, _Capability())
+    assert cards, "the night formed the interest's card"
+    card = cards[-1]
+    assert card.attributes["title"] == TITLE and str(card.object) == SUMMARY, (card.attributes, card.object)
+    assert not isinstance(card.attributes.get("pending"), dict), card.attributes.get("pending")
+    # Authored AS it formed: no authoring task was ever queued for it (a pending card the sleep's repair step authors
+    # afterwards would carry its title.author / digest.author tasks).
+    owed = [t for k in ("title.author", "digest.author") for t in _tasks(home_dir, k)
+            if t["target_id"] == str(card.subject)]
+    assert owed == [], owed
+    assert [f for f in _failures(tmp_path) if f["kind"] == "world_model"] == []
+
+
+def test_a_raising_capability_leaves_the_nights_card_pending_with_its_failure_line(tmp_path: Path) -> None:
+    home_dir, cards, _lines = _night_with_an_interest(tmp_path, _Capability(exc=RuntimeError("capability 500")))
+    card = cards[-1]
+    pending = card.attributes.get("pending")
+    assert isinstance(pending, dict) and pending["title"] and pending["failure"]["reason"] == "author_raised"
+    # The pass's own line (the drainer's retries of the card's tasks after it write theirs, client_error).
+    lines = [f for f in _failures(tmp_path) if f["kind"] == "world_model" and f.get("pass") == "world_model_pass"]
+    assert len(lines) == 1, _failures(tmp_path)
+    line = lines[0]
+    assert (line["reason"], line["error_class"], line["error_message"]) == ("author_raised", "RuntimeError",
+                                                                             "capability 500")
+    assert line["record_id"] == str(card.subject) and line["model"] == "summarizer", line
+
+
+@pytest.mark.parametrize("kind", ["world_model", "dream", "summary"])
+def test_the_runtime_author_satisfies_memorys_formation_contract_for_every_pass_kind(tmp_path: Path, kind: str) -> None:
+    """Every memory pass (world models, dreams, candidates, consolidation, wake-cue dedup) asks the same author
+    through formation_authoring.author_formation: the runtime's answer is authored metadata memory accepts (author
+    capability-model, reader, sources = the call kept as an artifact) - no failure, nothing pending."""
+    from abstractmemory.formation_authoring import author_formation
+
+    from abstractruntime.identity.authoring import capability_formation_author
+    from abstractruntime.identity.chat import open_home
+
+    home = open_home(_workspace_home(tmp_path))
+    try:
+        author = capability_formation_author(lambda name: _Capability(), home.artifacts)
+        got = author_formation(author, kind=kind, body="what the pass composed",
+                               context={"pass": f"{kind}_pass", "record_kind": kind}, fields=["title", "summary"])
+    finally:
+        home.close()
+    assert got.failure is None and got.pending == (), got
+    assert (got.title, got.summary) == (TITLE, SUMMARY)
+    assert got.author["kind"] == "capability-model" and got.reader["model"] == "summarizer" and got.sources
+
+
+def test_a_sessions_card_update_passes_the_author_and_writes_its_failures(tmp_path: Path, monkeypatch) -> None:
+    import abstractmemory
+
+    home_dir = _workspace_home(tmp_path)
+    home, s = _session(home_dir, ["Hello."])
+    s.llm_for_capability = lambda name: _Capability()
+    seen: Dict[str, Any] = {}
+
+    def spy(ms, *, scopes, owner_id, targets, author=None, **kw):
+        seen["author"] = author
+        return {"formed": [], "authoring": {"authored": [], "failures": [{
+            "record_id": "ex:world_model-1", "record_kind": "world_model", "pass": "world_model_update",
+            "fields": ["title", "summary"], "reason": "invalid_result", "error_class": "ValueError",
+            "message": "no title", "at": "2026-11-09T18:00:00+00:00"}]}}
+
+    monkeypatch.setattr(abstractmemory, "world_model_update", spy)
+    try:
+        s._world_model_update(abstractmemory.world_model_update, ["person:sol"])
+    finally:
+        home.close()
+    assert callable(seen["author"]), "the session's card update is authored by the summaries capability"
+    lines = [f for f in _failures(tmp_path) if f["kind"] == "world_model"]
+    assert len(lines) == 1 and (lines[0]["reason"], lines[0]["missing"]) == ("invalid_result", "both"), lines
+
+
+def test_the_flow_brain_sleep_pass_is_authored_by_the_hosts_summaries_handler(tmp_path: Path, monkeypatch) -> None:
+    import abstractmemory
+
+    from abstractruntime.core.models import EffectType
+    from abstractruntime.core.runtime import EffectOutcome
+    from abstractruntime.identity.entity_runtime import open_entity_runtime
+
+    home_dir = _workspace_home(tmp_path)
+    seen: Dict[str, Any] = {}
+
+    def spy(ms, **kw):
+        seen["author"] = kw.get("author")
+        return {"maintenance": {}, "dream": {}}
+
+    def summaries(run: Any, effect: Any, dnn: Any = None) -> Any:
+        return EffectOutcome.completed({"content": json.dumps({"title": TITLE, "summary": SUMMARY})})
+
+    monkeypatch.setattr(abstractmemory, "sleep_pass", spy)
+    ert = open_entity_runtime(home_dir, capability_handlers={"summaries": summaries})
+    try:
+        from types import SimpleNamespace
+
+        handler = ert.runtime._handlers[EffectType.MEMORY_CONSOLIDATE]
+        handler(SimpleNamespace(run_id="r1", vars={}), SimpleNamespace(payload={"report_only": True}), None)
+        author = seen.get("author")
+        assert callable(author), "MEMORY_CONSOLIDATE passes the host's summaries capability as the author"
+        result = author("world_model", "a card's evidence", {"pass": "world_model_pass", "fields": ["title"]})
+        assert result["title"] == TITLE and result["author"]["kind"] == "capability-model" and result["sources"]
+    finally:
+        ert.close()

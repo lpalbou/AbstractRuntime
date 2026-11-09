@@ -1068,7 +1068,7 @@ def test_night_passes_a_graceful_yield_predicate_to_the_engine(tmp_path: Path, m
     home_dir = _make_home(tmp_path)
     captured: Dict[str, Any] = {}
 
-    def fake_sleep_pass(ms, *, scopes, owner_id, should_continue=None):  # noqa: ANN001
+    def fake_sleep_pass(ms, *, scopes, owner_id, should_continue=None, author=None):  # noqa: ANN001
         captured["should_continue"] = should_continue
         return {"maintenance": {"created_count": 0}, "dream": {"created": False}}
 

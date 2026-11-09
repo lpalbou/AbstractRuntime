@@ -100,8 +100,13 @@ def build_entity_brain_effect_handlers(
     memory_system: Any,
     entity_id: str,
     home_dir: Path,
+    author: Any = None,
 ) -> Dict[EffectType, EffectHandler]:
     """Build the three entity-brain handlers over an OPEN home's facade.
+
+    ``author`` (AbstractMemory c46b4cd; Codex review 2 #10): the host's formation author for MEMORY_CONSOLIDATE's
+    sleep pass (identity/authoring.py); without one the pass's records form pending with the failure
+    no_author_supplied. Every failure the pass reports is written as an authoring-failure line.
 
     ``memory_system`` is the home's own MemorySystem (writes land in the
     home's memory.sqlite3); ``home_dir`` grounds the lease and the operator
@@ -194,6 +199,7 @@ def build_entity_brain_effect_handlers(
             "report_only": report_only,
             "include_dream": include_dream,
             "include_identity": include_identity,
+            "author": author,
         }
         for key in ("max_candidates", "scan_limit", "salience_floor"):
             if isinstance(payload.get(key), int):
@@ -246,6 +252,9 @@ def build_entity_brain_effect_handlers(
                     pass
 
         engine = engine if isinstance(engine, dict) else {"engine": engine}
+        from ...identity.authoring import log_pass_authoring_failures
+
+        log_pass_authoring_failures(engine, home_dir=home_dir, entity=entity_id)
         dream = engine.get("dream") if isinstance(engine.get("dream"), dict) else {}
         maint = engine.get("maintenance") if isinstance(engine.get("maintenance"), dict) else {}
         # The loop-facing translation (the consolidator's contract): read the

@@ -4628,6 +4628,13 @@ def build_consolidator(
         try:
             eid = home.entity_id
             scopes = [("self", eid), ("diary", eid), ("life", eid)]
+            # THE NIGHT'S RECORDS ARE AUTHORED WITH THEM (AbstractMemory c46b4cd; Codex review 2 #10): cards, dreams,
+            # candidates and consolidation summaries get their title and summary from the summaries capability as
+            # they form; a failure forms them pending and its line is written from the pass's receipt below.
+            from .authoring import capability_formation_author, log_pass_authoring_failures
+
+            author_seen: Dict[str, Any] = {}
+            formation_author = capability_formation_author(llm_for_capability, home.artifacts, author_seen)
             # ChatHome exposes the MemorySystem facade as `.ms` (not `.memory`).
             try:
                 from abstractmemory import sleep_pass
@@ -4637,8 +4644,8 @@ def build_consolidator(
                 from abstractmemory import dream_pass
 
                 out("#FALLBACK abstractmemory has no sleep_pass (older engine); dream-only night")
-                dream = dream_pass(home.ms, scopes=scopes, owner_id=eid)
-                engine: Dict[str, Any] = {"maintenance": None, "dream": dream}
+                dream = dream_pass(home.ms, scopes=scopes, owner_id=eid, author=formation_author)
+                engine: Dict[str, Any] = {"maintenance": None, "dream": dream, "authoring": dream.get("authoring")}
             else:
                 # Tunables stay engine-declared defaults (max_candidates=2,
                 # scan_limit=200) — inject from the function, never copy numbers.
@@ -4648,6 +4655,7 @@ def build_consolidator(
                         should_continue=_night_should_continue,
                         include_dream=include_dream,
                         include_identity=include_identity,
+                        author=formation_author,
                     )
                 except TypeError:
                     # Version skew ladder: engines predate include_identity
@@ -4661,6 +4669,7 @@ def build_consolidator(
                             home.ms, scopes=scopes, owner_id=eid,
                             should_continue=_night_should_continue,
                             include_dream=include_dream,
+                            author=formation_author,
                         )
                         if include_identity:
                             out("#FALLBACK engine sleep_pass has no include_identity; realizations hold for the engine half")
@@ -4669,6 +4678,7 @@ def build_consolidator(
                             engine = sleep_pass(
                                 home.ms, scopes=scopes, owner_id=eid,
                                 should_continue=_night_should_continue,
+                                author=formation_author,
                             )
                             if not include_dream:
                                 out("#FALLBACK engine sleep_pass has no include_dream; full night ran on a cycle window")
@@ -4678,6 +4688,8 @@ def build_consolidator(
             if engine.get("cancelled_after"):
                 out(f"(the night ended early - host transition after {engine['cancelled_after']}; "
                     "the next sleep resumes there)")
+            log_pass_authoring_failures(engine, home_dir=home_dir, entity=eid, reader=author_seen.get("reader"),
+                                        out=out)
             # METADATA REPAIR, one step among the night's work (operator 2026-11-09: "the sleep phase is just to
             # repair any issue that may still be there"): a record whose formation-time authoring failed (pending)
             # or a legacy record without a title or summary (declared pending here) is authored, bounded by the

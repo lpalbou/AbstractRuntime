@@ -178,6 +178,17 @@ def open_entity_runtime(
     ledger_store = SqliteLedgerStore(db)
 
     handlers = dict(home.handlers)
+    summaries_handler = dict(capability_handlers or {}).get("summaries")
+    if summaries_handler is not None:
+        # The flow-brain sleep pass (MEMORY_CONSOLIDATE) authors its records with the host's summaries capability
+        # (AbstractMemory c46b4cd; Codex review 2 #10).
+        from ..integrations.abstractmemory.brain_handlers import build_entity_brain_effect_handlers
+        from .authoring import handler_formation_author
+
+        handlers.update(build_entity_brain_effect_handlers(
+            memory_system=home.ms, entity_id=home.entity_id, home_dir=Path(home_dir),
+            author=handler_formation_author(summaries_handler, home.artifacts),
+        ))
     if extra_handlers:
         collisions = sorted(
             getattr(k, "value", str(k)) for k in extra_handlers.keys() & handlers.keys()

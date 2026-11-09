@@ -375,8 +375,8 @@ def read_day_gate(
 
 
 def work_enabled(home_dir: Path) -> bool:
-    """Whether Work is on for this home (the work toggle; contract-phases v2 §6.4). Default on."""
-    return True
+    """Whether Work is on for this home (the work toggle; contract-phases v2 §6.4, read_work_toggle)."""
+    return bool(read_work_toggle(home_dir).get("enabled"))
 
 
 def consult_gate_landing(
@@ -1705,6 +1705,224 @@ def write_personal_grant(
     return read_personal_grant(home_dir)
 
 
+# ------------------------------------------------- the work toggle and resume_to (contract-phases v2 §6.4)
+# Two more runtime-owned buckets of phases.yaml, each with ONE writer, field-merged like the personal grant:
+#
+#   work:      {enabled: bool, written_by, written_at}       the Work toggle (pressed = allowed; default on)
+#   resume_to: {phase: personal|work|null, written_by, written_at}
+#              the own-time phase an interruption (a visit, a sleep, a request, a Stop) took over, which its end
+#              returns to while the grant still stands (spec v23 OWN-TIME-IS-A-PRIVILEGE). The gateway decides it;
+#              the field names match its sidecar's (`work`, `resume_to`).
+#
+# Until a home's buckets exist, the reads fall back to the gateway's sidecar `<entities_dir>/.life_phase/<slug>.json`
+# (its `work` and `resume_to` keys), so a gateway that still writes the sidecar is read as it is.
+# `migrate_phase_sidecar` copies them once, idempotently; from then on the sidecar is a projection only and the
+# gateway writes through write_work_toggle / write_resume_to.
+WORK_BUCKET = "work"
+RESUME_TO_BUCKET = "resume_to"
+RESUME_TO_PHASES = ("personal", "work")
+GATEWAY_PHASE_SIDECAR_DIRNAME = ".life_phase"
+
+
+def gateway_phase_sidecar_path(home_dir: Path) -> Path:
+    """The gateway's per-home phase sidecar (`<entities_dir>/.life_phase/<slug>.json`, the home being
+    `<entities_dir>/<slug>`)."""
+    home = Path(home_dir)
+    return home.parent / GATEWAY_PHASE_SIDECAR_DIRNAME / f"{home.name}.json"
+
+
+def _read_gateway_phase_sidecar(home_dir: Path) -> Dict[str, Any]:
+    import json as _json
+
+    try:
+        raw = _json.loads(gateway_phase_sidecar_path(home_dir).read_text(encoding="utf-8"))
+        return raw if isinstance(raw, dict) else {}
+    except Exception:  # noqa: BLE001 - an absent/corrupt sidecar is no value
+        return {}
+
+
+def _phases_bucket(home_dir: Path, key: str) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+    """(bucket | None, problem | None) read from phases.yaml; a missing file or key is (None, None)."""
+    path = Path(home_dir) / PHASES_FILENAME
+    if not path.exists():
+        return None, None
+    try:
+        import yaml
+
+        data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except Exception as e:  # noqa: BLE001
+        return None, f"#FALLBACK unreadable {PHASES_FILENAME} ({e})"
+    if data is not None and not isinstance(data, dict):
+        return None, f"#FALLBACK {PHASES_FILENAME} is not a mapping"
+    bucket = (data or {}).get(key)
+    if bucket is None:
+        return None, None
+    if not isinstance(bucket, dict):
+        return None, f"#FALLBACK {PHASES_FILENAME} {key} is not a mapping"
+    return bucket, None
+
+
+def _write_phases_bucket(home_dir: Path, key: str, bucket: Dict[str, Any]) -> None:
+    """Replace ONLY `key` in phases.yaml (field-merge; every other key rides through), with the same refusals as
+    write_personal_grant: a corrupt file or a newer schema is never overwritten."""
+    import yaml
+
+    path = Path(home_dir) / PHASES_FILENAME
+    existing: Dict[str, Any] = {}
+    if path.exists():
+        try:
+            loaded = yaml.safe_load(path.read_text(encoding="utf-8"))
+        except Exception as e:  # noqa: BLE001
+            raise ValueError(
+                f"{PHASES_FILENAME} is unreadable ({e}) - repair or remove it before writing {key}; "
+                "overwriting it here could silently lose other phase sections"
+            ) from e
+        if loaded is not None and not isinstance(loaded, dict):
+            raise ValueError(f"{PHASES_FILENAME} is not a mapping - repair or remove it before writing {key}")
+        existing = dict(loaded or {})
+    try:
+        found_version = int(existing.get("schema_version") or PHASES_SCHEMA_VERSION)
+    except (TypeError, ValueError):
+        found_version = PHASES_SCHEMA_VERSION
+    if found_version > PHASES_SCHEMA_VERSION:
+        raise ValueError(
+            f"{PHASES_FILENAME} carries schema_version {found_version} but this writer "
+            f"knows {PHASES_SCHEMA_VERSION} - upgrade the runtime before writing"
+        )
+    existing["schema_version"] = PHASES_SCHEMA_VERSION
+    existing[key] = dict(bucket)
+    from ..utils.atomic_files import atomic_write_text
+
+    atomic_write_text(path, yaml.safe_dump(existing, sort_keys=False))
+
+
+def read_work_toggle(home_dir: Path) -> Dict[str, Any]:
+    """The Work toggle: {enabled, written_by, written_at, source} - source is "phases.yaml" (the runtime bucket),
+    "gateway-sidecar" (not migrated yet) or "default" (on). A malformed bucket fails CLOSED (enabled False, with a
+    labeled note), like the personal grant."""
+    bucket, problem = _phases_bucket(home_dir, WORK_BUCKET)
+    if problem:
+        return {"enabled": False, "written_by": None, "written_at": None, "source": "phases.yaml",
+                "note": f"{problem}; Work treated as off"}
+    if bucket is not None:
+        enabled = bucket.get("enabled")
+        if not isinstance(enabled, bool):
+            return {"enabled": False, "written_by": None, "written_at": None, "source": "phases.yaml",
+                    "note": f"#FALLBACK work.enabled={enabled!r} is not a bool; Work treated as off"}
+        return {"enabled": enabled, "written_by": str(bucket.get("written_by") or "") or None,
+                "written_at": str(bucket.get("written_at") or "") or None, "source": "phases.yaml"}
+    side = _read_gateway_phase_sidecar(home_dir)
+    if isinstance(side.get("work"), bool):
+        return {"enabled": bool(side["work"]), "written_by": None, "written_at": None, "source": "gateway-sidecar"}
+    return {"enabled": True, "written_by": None, "written_at": None, "source": "default"}
+
+
+def write_work_toggle(home_dir: Path, *, enabled: bool, written_by: str) -> Dict[str, Any]:
+    """THE one writer of the Work toggle bucket. Returns the toggle as read_work_toggle now answers it."""
+    if not isinstance(enabled, bool):
+        raise ValueError(f"enabled must be a bool, not {enabled!r}")
+    by = str(written_by or "").strip()
+    if not by:
+        raise ValueError("written_by is required - the toggle names who pressed it")
+    from datetime import datetime, timezone
+
+    _write_phases_bucket(home_dir, WORK_BUCKET, {
+        "enabled": enabled, "written_by": by, "written_at": datetime.now(timezone.utc).isoformat(),
+    })
+    return read_work_toggle(home_dir)
+
+
+def read_resume_to(home_dir: Path) -> Dict[str, Any]:
+    """The phase an interruption took over: {phase: personal|work|None, written_by, written_at, source}."""
+    bucket, problem = _phases_bucket(home_dir, RESUME_TO_BUCKET)
+    if problem:
+        return {"phase": None, "written_by": None, "written_at": None, "source": "phases.yaml", "note": problem}
+    if bucket is not None:
+        phase = bucket.get("phase")
+        return {"phase": phase if phase in RESUME_TO_PHASES else None,
+                "written_by": str(bucket.get("written_by") or "") or None,
+                "written_at": str(bucket.get("written_at") or "") or None, "source": "phases.yaml"}
+    side = _read_gateway_phase_sidecar(home_dir)
+    if "resume_to" in side:
+        phase = side.get("resume_to")
+        return {"phase": phase if phase in RESUME_TO_PHASES else None, "written_by": None, "written_at": None,
+                "source": "gateway-sidecar"}
+    return {"phase": None, "written_by": None, "written_at": None, "source": "default"}
+
+
+def write_resume_to(home_dir: Path, phase: Optional[str], *, written_by: str) -> Dict[str, Any]:
+    """THE one writer of the resume_to bucket (personal | work | None)."""
+    if phase is not None and phase not in RESUME_TO_PHASES:
+        raise ValueError(f"resume_to is one of {RESUME_TO_PHASES} or None, not {phase!r}")
+    by = str(written_by or "").strip()
+    if not by:
+        raise ValueError("written_by is required")
+    from datetime import datetime, timezone
+
+    _write_phases_bucket(home_dir, RESUME_TO_BUCKET, {
+        "phase": phase, "written_by": by, "written_at": datetime.now(timezone.utc).isoformat(),
+    })
+    return read_resume_to(home_dir)
+
+
+def migrate_phase_sidecar(home_dir: Path, *, migrated_by: str = "runtime:migration") -> Dict[str, Any]:
+    """Copy the gateway sidecar's `work` and `resume_to` into their phases.yaml buckets, ONCE (contract §6.4).
+    Idempotent: a bucket that exists is never touched (the sidecar is a projection from then on). Returns
+    {"work": "migrated"|"present"|"absent", "resume_to": ..., "sidecar": <path>}; the gateway records migrated_at."""
+    side = _read_gateway_phase_sidecar(home_dir)
+    out: Dict[str, Any] = {"sidecar": str(gateway_phase_sidecar_path(home_dir))}
+    by = f"{migrated_by} (from the gateway sidecar)"
+    bucket, problem = _phases_bucket(home_dir, WORK_BUCKET)
+    if problem:
+        raise ValueError(problem)
+    if bucket is not None:
+        out["work"] = "present"
+    elif isinstance(side.get("work"), bool):
+        write_work_toggle(home_dir, enabled=bool(side["work"]), written_by=by)
+        out["work"] = "migrated"
+    else:
+        out["work"] = "absent"
+    bucket, problem = _phases_bucket(home_dir, RESUME_TO_BUCKET)
+    if problem:
+        raise ValueError(problem)
+    if bucket is not None:
+        out["resume_to"] = "present"
+    elif "resume_to" in side:
+        value = side.get("resume_to")
+        write_resume_to(home_dir, value if value in RESUME_TO_PHASES else None, written_by=by)
+        out["resume_to"] = "migrated"
+    else:
+        out["resume_to"] = "absent"
+    return out
+
+
+# The durable pause of a work day (contract-phases v2 §10.2): Work turned off while a work day runs -> the in-flight
+# call finishes, no new tool starts, the day closes at the tick boundary, the order stands. This record says so; the
+# next work day (Work back on) tells him his work resumes and marks it resumed.
+WORK_PAUSE_FILENAME = "work_pause.json"
+
+
+def read_work_pause(home_dir: Path) -> Optional[Dict[str, Any]]:
+    """The standing (not yet resumed) work pause, or None."""
+    import json as _json
+
+    try:
+        rec = _json.loads((Path(home_dir) / WORK_PAUSE_FILENAME).read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001
+        return None
+    if not isinstance(rec, dict) or rec.get("resumed_at"):
+        return None
+    return rec
+
+
+def _write_work_pause(home_dir: Path, rec: Dict[str, Any]) -> None:
+    import json as _json
+
+    from ..utils.atomic_files import atomic_write_text
+
+    atomic_write_text(Path(home_dir) / WORK_PAUSE_FILENAME, _json.dumps(rec) + "\n")
+
+
 def personal_grant_end_cause(grant: Dict[str, Any]) -> str:
     """The ruled cause word for a mid-life grant end (phase-vocabulary v3
     closed set): "grant_expired" when a timer genuinely lapsed, otherwise
@@ -2955,6 +3173,38 @@ class LifeLoop:
         except Exception as e:  # noqa: BLE001
             self.out(f"#FALLBACK could not clear self-sleep state: {e}")
 
+    def _record_work_pause(self, day: int, ticks: int, session: Any) -> None:
+        """Record the durable pause of a work day (contract-phases v2 §10.2) once: Work was turned off, the order
+        stands, the next work day (Work back on) resumes it."""
+        if self.state_home is None or read_work_pause(self.state_home) is not None:
+            return
+        from datetime import datetime, timezone
+
+        try:
+            _write_work_pause(self.state_home, {
+                "paused_at": datetime.now(timezone.utc).isoformat(),
+                "reason": "work_off",
+                "day": int(day),
+                "ticks": int(ticks),
+                "session_id": str(getattr(session, "session_id", "") or ""),
+            })
+            self.out("(Work was turned off - the work pauses here; the order stands)")
+        except Exception as e:  # noqa: BLE001 - the pause itself stands
+            self.out(f"#FALLBACK could not record the work pause: {e}")
+
+    def _yield_reason(self, session: Any) -> Any:
+        """The session's yield_check: a visitor at the door (True), or - on a work day - Work turned off ("Work
+        was turned off": the day pauses at its next effect boundary, contract-phases v2 §10.2). False otherwise."""
+        if visitor_waiting(self._operator_state()):
+            return True
+        if (
+            self.state_home is not None
+            and getattr(session, "phase", "") == PHASE_WORK
+            and not work_enabled(self.state_home)
+        ):
+            return "Work was turned off"
+        return False
+
     def _open_day_session(self) -> ChatSession:
         """Open the day's session in the phase the GATE decided (work or personal). A factory that takes `phase`
         (production: build_session_factory) is told; a zero-argument factory (harnesses) opens its own."""
@@ -3304,6 +3554,21 @@ class LifeLoop:
                 self._cue_drive_ids = drive_ids + standing_state_offered_ids()
                 # The maintenance signals feed his own sleep decision (contract-phases v2 §10.4): facts, offered.
                 maint_note = maintenance_signals_note(self.state_home)
+                # A paused work day resumes (contract §10.2): he is told, and the pause is marked resumed.
+                if (self._day_gate or {}).get("phase") == PHASE_WORK:
+                    _pause = read_work_pause(self.state_home)
+                    if _pause is not None:
+                        maint_note += (
+                            " Your work resumes: it was paused when Work was turned off; the task stands as it was."
+                        )
+                        try:
+                            from datetime import datetime, timezone
+
+                            _write_work_pause(self.state_home, {
+                                **_pause, "resumed_at": datetime.now(timezone.utc).isoformat(),
+                            })
+                        except Exception as e:  # noqa: BLE001
+                            self.out(f"#FALLBACK could not mark the work pause resumed: {e}")
                 base = (cue or "").strip()
                 if not base.lstrip().startswith("today is"):
                     cue = f"{_today_stamp()}{base}{standing}{drives_note}{maint_note}"
@@ -3339,7 +3604,7 @@ class LifeLoop:
                 # A VISITOR AT THE DOOR stops new work inside the tick
                 # (operator 2026-11-09: reachable within a minute or two): the
                 # session checks this before running the tools a reply elects.
-                session.yield_check = lambda: visitor_waiting(self._operator_state())
+                session.yield_check = lambda: self._yield_reason(session)
                 # F2 commit-exclusion half: drive ids the cue names must not
                 # be strengthened BY the cue turn (a day-open mention is the
                 # composer's act, not his use). First turn only; a later
@@ -3444,6 +3709,17 @@ class LifeLoop:
                         if mid_refusal is not None:
                             self.out(f"(personal ended mid-day: {mid_refusal} - the day closes)")
                             break
+                    # WORK OFF PAUSES A WORK DAY at this effect boundary (contract-phases v2 §10.2): the step that
+                    # ran finished, nothing new starts, the order stands, the pause is recorded durably; Work back
+                    # on resumes it at the next work day.
+                    if (
+                        self.state_home is not None
+                        and getattr(session, "phase", "") == PHASE_WORK
+                        and not work_enabled(self.state_home)
+                    ):
+                        self._record_work_pause(day, day_ticks, session)
+                        report.stopped_by = "work_paused"
+                        break
 
                     # TICK WINDOW (B1): the turn is a home writer, so it runs
                     # under the lease; a held lease is a YIELD at this
@@ -3713,6 +3989,13 @@ class LifeLoop:
                 # LLM call (and the salvage's, when one ran this summon).
                 self._write_loop_spend(session, day_ticks)
                 self._spend_base = None  # next day reloads the file as base
+                if (
+                    self.state_home is not None
+                    and getattr(session, "phase", "") == PHASE_WORK
+                    and read_work_order(self.state_home)
+                    and not work_enabled(self.state_home)
+                ):
+                    self._record_work_pause(day, day_ticks, session)
                 self.out(session.close_summary())
                 # Deliberately OUTSIDE the lease window: close_summary reads,
                 # and home.close() only checkpoints WAL + closes connections —
@@ -3739,6 +4022,11 @@ class LifeLoop:
                 self._sleep_elected = report.rest_reason or "no reason kept"
                 report.stopped_by = "max_ticks"  # the loop's continue-marker
                 report.rest_reason = None
+                continue
+            if report.stopped_by == "work_paused" and self.rest_minutes > 0:
+                # The gate chooses what follows: own time while the operator's grant stands (work->personal
+                # #operator: Work off over a standing order), else idle (the loop ends; he stays awake).
+                report.stopped_by = "max_ticks"
                 continue
             if report.stopped_by == "work_done" and self.rest_minutes > 0:
                 # The order is archived: the gate chooses what follows - another order with Work on (work->work),

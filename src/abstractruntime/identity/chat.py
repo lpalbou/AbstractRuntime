@@ -1106,9 +1106,10 @@ class ChatSession:
         self.out = out
         self.enable_tools = bool(enable_tools)
         self.web_search_fn = web_search_fn
-        # Set by the own-time loop only (life.py): True = a visitor is at the
-        # door, so the turn runs no new tools and ends on what he has said.
-        self.yield_check: Optional[Callable[[], bool]] = None
+        # Set by the own-time loop only (life.py): truthy = stop starting new work in this turn - it runs no new
+        # tools and ends on what he has said. True means a visitor is at the door; a string names the cause
+        # (e.g. "Work was turned off": a work day pauses at its next effect boundary, contract-phases v2 §10.2).
+        self.yield_check: Optional[Callable[[], Any]] = None
         # Which mind-substrate formed each memory (capability ≠ identity, but
         # provenance matters: "which model was I running on when I thought
         # this" is a legitimate question for him AND for the operator's
@@ -2035,10 +2036,20 @@ class ChatSession:
         tool_result_phases: List[str] = []
         visitor_cut = False
 
+        cut_reason = {"text": "a visitor arrived"}
+
         def _visitor_waiting() -> bool:
             # The own-time loop's yield_check (life.py): a visitor is at the
-            # door, so no new tool, correction call or nudge runs this turn.
-            return visitor_cut or (self.yield_check is not None and bool(self.yield_check()))
+            # door (or Work was turned off on a work day), so no new tool,
+            # correction call or nudge runs this turn.
+            if visitor_cut:
+                return True
+            if self.yield_check is None:
+                return False
+            answer = self.yield_check()
+            if isinstance(answer, str) and answer.strip():
+                cut_reason["text"] = answer.strip()
+            return bool(answer)
 
         if self.enable_tools:
             from .tools import MAX_TOOL_BLOCKS_PER_TURN, MAX_TOOL_ROUNDS_PER_TURN, native_tool_elections
@@ -2188,10 +2199,13 @@ class ChatSession:
                     visitor_cut = True
                     for name in sorted({e.name for e in tool_elections}):
                         tool_marked = tool_marked.replace(
-                            f"[used tool: {name}]", f"[tool call not run: {name} - a visitor arrived]"
+                            f"[used tool: {name}]", f"[tool call not run: {name} - {cut_reason['text']}]"
                         )
+                    _why = (
+                        "a visitor is at the door" if cut_reason["text"] == "a visitor arrived" else cut_reason["text"]
+                    )
                     report.notices.append(
-                        f"#NOTE a visitor is at the door: {len(tool_elections)} tool call(s) not run; "
+                        f"#NOTE {_why}: {len(tool_elections)} tool call(s) not run; "
                         "the turn ends here"
                     )
                     raw_reply = tool_marked

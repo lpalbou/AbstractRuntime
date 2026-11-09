@@ -72,9 +72,22 @@ def test_fallbacks_read_structured_fields_only():
     assert answer_author({"workflow_selection": {"name": "Basic Agent"}, "provider": "mlx", "model": "Qwen"})["name"] == "Basic Agent"
     # No selection: the workflow id's bundle id.
     assert answer_author({}, workflow_id="abstractassistant-orchestrator@0.0.17:7d177c93")["name"] == "abstractassistant-orchestrator"
-    # A summon run (signed entity stamp) is the entity's turn.
-    summon = answer_author({"_runtime": {"entity": {"entity_id": "entity:hypnos"}, "identity_ref": {"of": "entity:hypnos", "rev": 3}}})
+    # A summon run (a finalized, door-signed entity stamp) is the entity's turn.
+    signed = {"entity_id": "entity:hypnos", "channel": "summon", "session_id": "s1", "nonce": "n" * 32,
+              "run_id": "run-1", "sig": "f" * 64}
+    summon = answer_author({"_runtime": {"entity": signed, "identity_ref": {"of": "entity:hypnos", "rev": 3}}})
     assert summon["kind"] == "entity" and summon["entity_id"] == "entity:hypnos" and summon["identity_ref"] == "entity:hypnos#3"
+
+
+@pytest.mark.parametrize("missing", ["sig", "run_id", "nonce", "channel", "session_id"])
+def test_an_unsigned_or_provisional_entity_stamp_never_makes_an_entity_turn(missing):
+    """Review 2026-11-09 finding 3 (rt_probe PROBE_D): `{"_runtime": {"entity": {"entity_id":
+    "entity:castor"}}}`, which any client could send, labelled the agent's reply as castor's."""
+    probe = answer_author({"_runtime": {"entity": {"entity_id": "entity:castor"}}}, workflow_id="basic-agent@1:x")
+    assert probe["kind"] == "agent" and probe["name"] == "basic-agent" and probe["entity_id"] is None
+    stamp = {"entity_id": "entity:castor", "channel": "summon", "session_id": "s1", "nonce": "n", "run_id": "r", "sig": "s"}
+    stamp[missing] = None
+    assert answer_author({"_runtime": {"entity": stamp}}, workflow_id="basic-agent@1:x")["kind"] == "agent"
     # Person: the origin's actor; a run older than origins: name null.
     assert prompt_author({"_meta": {"origin": {"kind": "person", "actor": "default:bob"}}}) == author_for("person", "bob")
     assert prompt_author({}) == author_for("person", None)

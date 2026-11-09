@@ -15,8 +15,13 @@ One shape everywhere (every key present, nulls included, never omitted):
 Where the authors come from, first match wins (structured fields only, no text is parsed):
 
 - the ANSWER: `vars._meta.author` when the host stamped one (the gateway's mention door stamps
-  the entity); else an entity run (the signed entity stamp `vars._runtime.entity.entity_id`, a
-  summon) is kind `entity`; else kind `agent` named by the run's `vars.workflow_selection.name`
+  the entity); else an entity run (a FINALIZED entity stamp `vars._runtime.entity`, a summon:
+  `entity_id`, `channel`, `session_id`, `nonce`, `run_id` and `sig` all present, the shape the
+  host's door signs) is kind `entity`; an unsigned or provisional stamp never is (review
+  2026-11-09 finding 3: a client could label any run as an entity's). The runtime cannot check the
+  signature (the key is the host's); the host never lets a client write `_runtime.entity`
+  (AbstractGateway drops it at `/runs/start`). Else kind `agent` named by the run's
+  `vars.workflow_selection.name`
   (the entrypoint name the host resolved at start), then the workflow id's bundle id, flow id,
   or the id itself. `identity_ref` is the run's `vars._runtime.identity_ref` when it carries one.
 - the PROMPT: `vars._meta.prompt_author` when the host stamped one (the account's display name);
@@ -143,6 +148,22 @@ def _agent_name(vars_obj: Any, workflow_id: Any) -> Optional[str]:
     return wid
 
 
+# The fields a door-signed entity stamp carries once finalized (the host's verify refuses a stamp
+# missing any of them as "incomplete or provisional").
+_SIGNED_STAMP_FIELDS = ("entity_id", "channel", "session_id", "nonce", "run_id", "sig")
+
+
+def _signed_stamp_entity_id(stamp: Any) -> str:
+    """The entity id of a finalized (door-signed shape) entity stamp, else ""."""
+    if not isinstance(stamp, Mapping):
+        return ""
+    for field in _SIGNED_STAMP_FIELDS:
+        value = stamp.get(field)
+        if not isinstance(value, str) or not value.strip():
+            return ""
+    return str(stamp["entity_id"]).strip()
+
+
 def answer_author(vars_obj: Any, *, workflow_id: Any = None) -> Dict[str, Any]:
     """Who answered this turn (see the module doc)."""
     stored = read_author(_meta(vars_obj).get(AUTHOR_KEY))
@@ -150,7 +171,7 @@ def answer_author(vars_obj: Any, *, workflow_id: Any = None) -> Dict[str, Any]:
         return stored
     runtime_ns = vars_obj.get("_runtime") if isinstance(vars_obj, Mapping) else None
     stamp = runtime_ns.get("entity") if isinstance(runtime_ns, Mapping) else None
-    entity_id = str(stamp.get("entity_id") or "").strip() if isinstance(stamp, Mapping) else ""
+    entity_id = _signed_stamp_entity_id(stamp)
     if entity_id:
         name = entity_id.split(":", 1)[1] if ":" in entity_id else entity_id
         return author_for("entity", name, entity_id=entity_id, identity_ref=_identity_ref_text(vars_obj))

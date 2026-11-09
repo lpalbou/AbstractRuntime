@@ -16,6 +16,7 @@ never depended on refs:
 
 from __future__ import annotations
 
+from abstractruntime.identity.lifecycle_fence import LifecycleFence  # noqa: E402
 import copy as _copy
 import json
 from pathlib import Path
@@ -196,7 +197,7 @@ def test_visit_resumes_after_midturn_kill_without_reexecution(tmp_path: Path) ->
         "(thinking) I should re-read my note first.",  # turn 2, iteration 1
         # The reply that would follow the tool round never happens: killed.
     ])
-    ert = open_entity_runtime(home_dir, extra_handlers={EffectType.LLM_CALL: llm_a})
+    ert = open_entity_runtime(home_dir, extra_handlers={EffectType.LLM_CALL: llm_a}, fence=LifecycleFence.admit(home_dir))
     wf = _mid_wf(ert, cell)
     run_id = ert.runtime.start(workflow=wf, vars={}, session_id="visit-c7")
     state = ert.runtime.tick(workflow=wf, run_id=run_id, max_steps=50)
@@ -251,7 +252,7 @@ def test_visit_resumes_after_midturn_kill_without_reexecution(tmp_path: Path) ->
         "You asked about my note - I re-read it privately; it stays mine.",
         "Looking back: continuity held.\nGoodbye.",  # reflection at close
     ])
-    ert2 = open_entity_runtime(home_dir, extra_handlers={EffectType.LLM_CALL: llm_b})
+    ert2 = open_entity_runtime(home_dir, extra_handlers={EffectType.LLM_CALL: llm_b}, fence=LifecycleFence.admit(home_dir))
     wf2 = _mid_wf(ert2, cell)
     try:
         state = ert2.runtime.tick(workflow=wf2, run_id=run_id, max_steps=100)

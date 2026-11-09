@@ -156,6 +156,8 @@ def diary_authoring_payload(result: Any, *, need_title: bool, artifacts: Any, bo
     #10, review 3 #9): `authored_metadata` {summary, title (when he elected no gist), reader, sources (the call kept
     as a home artifact)}, or `authoring_failure` (reason, class, message, the capability's model when its result named
     it) - the projection then forms the missing fields pending and writes the failure line."""
+    from .chat import TurnCancelled
+
     res = result if isinstance(result, dict) else {}
     try:
         parsed = parse_authored_result(result)
@@ -164,6 +166,8 @@ def diary_authoring_payload(result: Any, *, need_title: bool, artifacts: Any, bo
         authored = {**parsed, "raw": json.dumps({"title": parsed["title"], "summary": parsed["summary"]})}
         sources = _source_artifact(artifacts, record_id="diary", kind="diary", body=body, authored=authored,
                                    reader=reader)
+    except TurnCancelled:
+        raise  # the operator's Stop (the fenced artifact store refused the call's record): no failure, nothing kept
     except Exception as e:  # noqa: BLE001
         why = authoring_failure_fields(e)
         return {"authoring_failure": {**why, "provider": res.get("provider"), "model": res.get("model"),
@@ -197,11 +201,15 @@ def author_metadata(llm: Any, *, kind: str, body: str) -> Dict[str, Any]:
     a title past TITLE_MAX_CHARS, a multi-line title or an empty field fails."""
     from .title_failures import TITLE_MAX_CHARS
 
+    from .chat import TurnCancelled
+
     if llm is None:
         raise AuthoringUnavailable("no summaries capability model in this process")
     model_cls = _model_class()
     try:
         resp = llm.generate(prompt=_prompt(kind, body), system_prompt=_SYSTEM, response_model=model_cls)
+    except TurnCancelled:
+        raise  # the operator's Stop (a fenced client refused the call): never an authoring failure
     except Exception as e:  # noqa: BLE001 - classified below, never swallowed
         if _unreachable(e):
             raise AuthoringUnavailable(f"{type(e).__name__}: {e}") from e

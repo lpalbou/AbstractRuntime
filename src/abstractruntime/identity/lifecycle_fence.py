@@ -278,6 +278,64 @@ def is_sentinel(fence: Any) -> bool:
     return fence is KILL_SWITCH or fence is RESUME
 
 
+# ------------------------------------------------------------------------------------------- the effect dispatch
+def stopped_outcome(effect: str, where: str) -> Any:
+    """What a fenced effect returns instead of running (or instead of its late reply): status `cancelled` - never
+    retried, never a failure; the Runtime ends the run CANCELLED with KILL_SWITCH_REASON as its error."""
+    from ..core.runtime import EffectOutcome
+
+    return EffectOutcome.cancelled({"reason": KILL_SWITCH_REASON, "cancelled_by": "operator", "where": where,
+                                    "effect": effect})
+
+
+def is_stopped_outcome(outcome: Any) -> bool:
+    result = getattr(outcome, "result", None)
+    return getattr(outcome, "status", None) == "cancelled" and isinstance(result, dict) \
+        and result.get("reason") == KILL_SWITCH_REASON
+
+
+def fence_handlers(handlers: Dict[Any, Any], fence: LifecycleFence) -> Dict[Any, Any]:
+    """THE EFFECT DISPATCH FENCE (STOP-LANE-DESIGN §2.2): every handler of a table, wrapped ONCE (a handler already
+    wrapped with this fence is kept). Before each effect: refused once the generation moved. An LLM_CALL whose reply
+    returned after the Stop is ABANDONED (§2.3: it lands nowhere). A handler that raised the operator's Stop (memory's
+    commit guard refusing inside the write) or failed after it reports the Stop. Every refusal is
+    `stopped_outcome` - cancelled, never failed. Cost: one fence compare per effect (two for a model call)."""
+    return {etype: _fence_handler(etype, handler, fence) for etype, handler in handlers.items()}
+
+
+def _fence_handler(etype: Any, inner: Callable[..., Any], fence: LifecycleFence) -> Callable[..., Any]:
+    if getattr(inner, "__lifecycle_fence__", None) is fence:
+        return inner
+    import inspect
+
+    from ..core.models import EffectType
+
+    try:
+        params = list(inspect.signature(inner).parameters.values())
+        three = any(p.kind == inspect.Parameter.VAR_POSITIONAL for p in params) or len(params) >= 3
+    except (TypeError, ValueError):
+        three = True
+    name = str(getattr(etype, "value", etype))
+    is_llm = etype == EffectType.LLM_CALL
+    before = f"before {name}"
+    after = f"after {name} returned"
+
+    def fenced(run: Any, effect: Any, default_next_node: Any = None) -> Any:
+        if fence.moved():
+            return stopped_outcome(name, before)
+        try:
+            out = inner(run, effect, default_next_node) if three else inner(run, effect)
+        except TurnCancelled as e:
+            return stopped_outcome(name, str(getattr(e, "where", "") or after))
+        if (is_llm or getattr(out, "status", None) != "completed") and fence.moved():
+            return stopped_outcome(name, after)
+        return out
+
+    fenced.__lifecycle_fence__ = fence  # type: ignore[attr-defined]
+    fenced.__lifecycle_inner__ = inner  # type: ignore[attr-defined]
+    return fenced
+
+
 __all__ = [
     "KILL_SWITCH",
     "KILL_SWITCH_REASON",
@@ -288,10 +346,13 @@ __all__ = [
     "LifecycleUnreadable",
     "StaleLifecycleGeneration",
     "StoppedByOperator",
+    "fence_handlers",
     "home_key",
     "is_sentinel",
+    "is_stopped_outcome",
     "publish_under_lock",
     "read_truth",
     "signal_bump",
+    "stopped_outcome",
     "verify",
 ]

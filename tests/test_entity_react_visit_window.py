@@ -34,6 +34,7 @@ from abstractcore.tools import ToolDefinition  # noqa: E402
 from abstractruntime.core.models import Effect, EffectType, RunStatus, StepPlan  # noqa: E402
 from abstractruntime.core.runtime import EffectOutcome  # noqa: E402
 from abstractruntime.identity.entity_runtime import open_entity_runtime  # noqa: E402
+from abstractruntime.identity.lifecycle_fence import LifecycleFence  # noqa: E402
 from abstractruntime.identity.visit_workflow import (  # noqa: E402
     HARVEST_NODE,
     VISITOR_WAIT_KEY,
@@ -93,7 +94,7 @@ def _poison_tools(run: Any, effect: Effect, dnn: Any = None) -> EffectOutcome:
 
 def _lane(tmp_path: Path, replies: List[Dict[str, Any]], *, middle: Any = None):
     ert = open_entity_runtime(
-        _make_home(tmp_path, "windowling"),
+        _hw := _make_home(tmp_path, "windowling"), fence=LifecycleFence.admit(_hw),
         extra_handlers={EffectType.LLM_CALL: (llm := _ScriptedLLM(replies)), EffectType.TOOL_CALLS: _poison_tools},
     )
     if middle is None:
@@ -189,7 +190,7 @@ def _midturn_lane(tmp_path: Path, replies: List[Dict[str, Any]], tools: Any):
     from abstractagent.logic.builtins import ASK_USER_TOOL
 
     ert = open_entity_runtime(
-        _make_home(tmp_path, "midturn"),
+        _hm := _make_home(tmp_path, "midturn"), fence=LifecycleFence.admit(_hm),
         extra_handlers={EffectType.LLM_CALL: (llm := _ScriptedLLM(replies)), EffectType.TOOL_CALLS: tools},
     )
     react = create_react_workflow(

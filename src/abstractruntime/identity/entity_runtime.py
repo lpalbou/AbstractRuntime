@@ -150,8 +150,16 @@ def open_entity_runtime(
     extra_handlers: Optional[dict] = None,
     workflow_registry: Any = None,
     capability_handlers: Optional[dict] = None,
+    fence: Any,
 ) -> EntityRuntime:
     """Open an existing home and bind its own Runtime to it.
+
+    `fence` (REQUIRED, a LifecycleFence: STOP-LANE-DESIGN §2.2): the generation the run is admitted at. The home opens
+    fenced (memory commit guard, diary, artifacts) and the FINAL handler table - the host's LLM/tool handlers and the
+    capability routing included - is wrapped once: after the operator's Stop every effect returns cancelled
+    (KILL_SWITCH_REASON; the Runtime ends the run CANCELLED, never failed) and a model reply that returned after it is
+    abandoned. The Runtime's own run ledger keeps an unguarded artifact store: the records of a Stop are written
+    after it.
 
     - Run store + ledger: `runtime_<slug>.sqlite3` INSIDE the home (one
       file, both tables — pending runs and waits travel on directory copy).
@@ -171,7 +179,11 @@ def open_entity_runtime(
       formation then forms pending and logs the failure; identity/authoring.py).
     """
     _refuse_moved_home(Path(home_dir))
-    home = open_home(home_dir, embedder=embedder, attention_window=attention_window)
+    from .lifecycle_fence import LifecycleFence, fence_handlers
+
+    if not isinstance(fence, LifecycleFence):
+        raise TypeError(f"open_entity_runtime: fence must be the run's LifecycleFence, not {fence!r}")
+    home = open_home(home_dir, embedder=embedder, attention_window=attention_window, fence=fence)
     store_path = entity_run_store_path(Path(home_dir))
     db = SqliteDatabase(store_path)
     run_store = SqliteRunStore(db)
@@ -260,7 +272,13 @@ def open_entity_runtime(
     # part of the life, inside the home directory like every other artifact.
     # The raw SqliteLedgerStore stays on the EntityRuntime handle (type-stable
     # for direct consumers); the Runtime writes through the offloading wrap.
+    from ..storage.artifacts import FileArtifactStore
     from ..storage.offloading import OffloadingLedgerStore
+
+    handlers = fence_handlers(handlers, fence)
+    # The run's own records (ledger offload, evidence, outputs) are not the entity's acts: an unguarded twin of the
+    # home's store (the same directory; writes are atomic renames, the catalog is SQLite).
+    run_artifacts = FileArtifactStore(str(Path(home_dir) / "artifacts"))
 
     # Optional workflow registry: composed (subflow-calling) workflows — the
     # entity-life master and its brain subflows — need START_SUBWORKFLOW to
@@ -270,9 +288,9 @@ def open_entity_runtime(
         _rt_kwargs["workflow_registry"] = workflow_registry
     runtime = Runtime(
         run_store=run_store,
-        ledger_store=OffloadingLedgerStore(ledger_store, artifact_store=home.artifacts),
+        ledger_store=OffloadingLedgerStore(ledger_store, artifact_store=run_artifacts),
         effect_handlers=handlers,
-        artifact_store=home.artifacts,
+        artifact_store=run_artifacts,
         **_rt_kwargs,
     )
     return EntityRuntime(

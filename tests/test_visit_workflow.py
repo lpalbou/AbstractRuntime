@@ -12,6 +12,7 @@ through a full workflow visit).
 
 from __future__ import annotations
 
+from abstractruntime.identity.lifecycle_fence import LifecycleFence  # noqa: E402
 import copy as _copy
 import json
 import time
@@ -74,7 +75,7 @@ class _ScriptedLLMHandler:
 
 
 def _open(home_dir: Path, llm: _ScriptedLLMHandler):
-    ert = open_entity_runtime(home_dir, extra_handlers={EffectType.LLM_CALL: llm})
+    ert = open_entity_runtime(home_dir, extra_handlers={EffectType.LLM_CALL: llm}, fence=LifecycleFence.admit(home_dir))
     wf = build_visit_workflow(
         ert.home,
         participants=["person:albou"],
@@ -338,7 +339,7 @@ def test_restart_mid_visit_resumes_in_a_fresh_process_context(tmp_path: Path) ->
 def test_idle_deadline_closes_the_visit_with_reflection(tmp_path: Path) -> None:
     home_dir = _make_home(tmp_path, slug="idleling")
     llm = _ScriptedLLMHandler(["A reply.", "A quiet goodbye."])
-    ert = open_entity_runtime(home_dir, extra_handlers={EffectType.LLM_CALL: llm})
+    ert = open_entity_runtime(home_dir, extra_handlers={EffectType.LLM_CALL: llm}, fence=LifecycleFence.admit(home_dir))
     wf = build_visit_workflow(ert.home, participants=["person:albou"], idle_seconds=0.01)
     try:
         run_id = ert.runtime.start(workflow=wf, vars={}, session_id="visit-1")
@@ -461,7 +462,7 @@ def test_react_middle_replaces_reason_and_downstream_runs_unchanged(tmp_path: Pa
         "It is good to be one loop now.",                                          # iteration 2: answers
         "Reflection: the merged turn held.",
     ])
-    ert = open_entity_runtime(home_dir, extra_handlers={EffectType.LLM_CALL: llm})
+    ert = open_entity_runtime(home_dir, extra_handlers={EffectType.LLM_CALL: llm}, fence=LifecycleFence.admit(home_dir))
     wf = build_visit_workflow(
         ert.home, participants=["person:albou"], idle_seconds=3600,
         visit_id="visit-mid01", react_middle=_stub_middle(),
@@ -548,7 +549,7 @@ def test_image_attachment_rides_the_turn_and_the_record_keeps_the_reference(tmp_
         "Looking at it now.",          # iteration 1
         "I see a tiny square image.",  # iteration 2: answers
     ])
-    ert = open_entity_runtime(home_dir, extra_handlers={EffectType.LLM_CALL: llm})
+    ert = open_entity_runtime(home_dir, extra_handlers={EffectType.LLM_CALL: llm}, fence=LifecycleFence.admit(home_dir))
     wf = build_visit_workflow(
         ert.home, participants=["person:albou"], idle_seconds=3600,
         visit_id="visit-img01", react_middle=_stub_middle(),
@@ -755,7 +756,7 @@ def test_react_middle_collision_refuses_loudly(tmp_path: Path) -> None:
     from abstractruntime.identity.visit_workflow import ReactMiddle, build_visit_workflow
 
     home_dir = _make_home(tmp_path, slug="collideling")
-    ert = open_entity_runtime(home_dir)
+    ert = open_entity_runtime(home_dir, fence=LifecycleFence.admit(home_dir))
     try:
         with pytest.raises(ValueError, match="collide"):
             build_visit_workflow(
@@ -784,7 +785,7 @@ def test_refused_prelude_completes_with_reasons_never_truncates(tmp_path: Path) 
         json.dumps({"entity_id": "entity:ghost@home-test"}), encoding="utf-8"
     )
     llm = _ScriptedLLMHandler([])
-    ert = open_entity_runtime(home_dir, extra_handlers={EffectType.LLM_CALL: llm})
+    ert = open_entity_runtime(home_dir, extra_handlers={EffectType.LLM_CALL: llm}, fence=LifecycleFence.admit(home_dir))
     wf = build_visit_workflow(ert.home, participants=["person:albou"])
     try:
         run_id = ert.runtime.start(workflow=wf, vars={}, session_id="visit-1")

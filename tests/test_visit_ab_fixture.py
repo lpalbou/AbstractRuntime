@@ -15,6 +15,7 @@ on top of exactly this shape.
 
 from __future__ import annotations
 
+from abstractruntime.identity.lifecycle_fence import LifecycleFence  # noqa: E402
 import copy as _copy
 import json
 from pathlib import Path
@@ -166,7 +167,7 @@ def _run_arm_a(home_dir: Path) -> None:
 
 def _run_arm_b(home_dir: Path) -> Tuple[Path, str]:
     llm = _ScriptedLLMHandler(list(REPLIES))
-    ert = open_entity_runtime(home_dir, extra_handlers={EffectType.LLM_CALL: llm})
+    ert = open_entity_runtime(home_dir, extra_handlers={EffectType.LLM_CALL: llm}, fence=LifecycleFence.admit(home_dir))
     wf = build_visit_workflow(ert.home, participants=["person:albou"], idle_seconds=3600)
     run_id = ert.runtime.start(workflow=wf, vars={}, session_id="ab-visit")
     ert.runtime.tick(workflow=wf, run_id=run_id, max_steps=50)

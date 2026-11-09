@@ -20,6 +20,7 @@ The chain pinned here:
 
 from __future__ import annotations
 
+from abstractruntime.identity.lifecycle_fence import LifecycleFence  # noqa: E402
 import copy as _copy
 import json as _json
 import tempfile
@@ -332,7 +333,7 @@ def test_visit_reflection_folds_topics_onto_summary(tmp_path: Path) -> None:
         # Reflection: one topic election + prose.
         "That mattered.\n```topic\nwhat survives restarts\n```\nGoodbye.",
     ])
-    ert = open_entity_runtime(home_dir, extra_handlers={EffectType.LLM_CALL: llm})
+    ert = open_entity_runtime(home_dir, extra_handlers={EffectType.LLM_CALL: llm}, fence=LifecycleFence.admit(home_dir))
     wf = build_visit_workflow(
         ert.home, participants=["person:albou"], idle_seconds=3600,
     )

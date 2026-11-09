@@ -16,6 +16,7 @@ recorded as a claim in attributes, never engraved into digest prose.
 
 from __future__ import annotations
 
+from abstractruntime.identity.lifecycle_fence import LifecycleFence  # noqa: E402
 import copy as _copy
 import json
 from pathlib import Path
@@ -78,7 +79,7 @@ class _ScriptedHandler:
 def _drive_visit(home_dir: Path, replies: List[str], turns: List[Dict[str, Any]]):
     """Open a visit, run the given turns, close it. Returns (ert, run_id)."""
     ert = open_entity_runtime(
-        home_dir, extra_handlers={EffectType.LLM_CALL: _ScriptedHandler(replies)}
+        home_dir, extra_handlers={EffectType.LLM_CALL: _ScriptedHandler(replies)}, fence=LifecycleFence.admit(home_dir)
     )
     wf = build_visit_workflow(
         ert.home,

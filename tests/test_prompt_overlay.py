@@ -300,7 +300,7 @@ class TestSessionComposition:
             def __call__(self, run, effect, dnn=None):  # pragma: no cover
                 raise AssertionError("OPEN must not reach the LLM")
 
-        ert = open_entity_runtime(castor_home, extra_handlers={EffectType.LLM_CALL: _NeverCalledLLM()})
+        ert = open_entity_runtime(castor_home, extra_handlers={EffectType.LLM_CALL: _NeverCalledLLM()}, fence=LifecycleFence.admit(castor_home))
         try:
             wf = build_visit_workflow(ert.home, participants=["person:albou"], idle_seconds=3600)
             run_id = ert.runtime.start(workflow=wf, vars={}, session_id="visit-overlay")

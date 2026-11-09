@@ -4,6 +4,7 @@ visited entity's whole visit run). Both arms: the v0 single call and the ReAct m
 
 from __future__ import annotations
 
+from abstractruntime.identity.lifecycle_fence import LifecycleFence  # noqa: E402
 import sys
 from pathlib import Path
 from typing import Any, Dict, List
@@ -72,7 +73,7 @@ def test_a_failed_model_call_answers_that_turn_and_the_visit_continues(tmp_path:
     home_dir = _make_home(tmp_path)
     llm = _FlakyLLM(["First answer.", RuntimeError("provider timed out after 1800 s"), "Third answer.",
                      "Goodbye reflection."])
-    ert = open_entity_runtime(home_dir, extra_handlers={EffectType.LLM_CALL: llm})
+    ert = open_entity_runtime(home_dir, extra_handlers={EffectType.LLM_CALL: llm}, fence=LifecycleFence.admit(home_dir))
     try:
         wf = build_visit_workflow(
             ert.home, participants=["person:admin"], idle_seconds=3600,
@@ -127,7 +128,7 @@ def test_a_failed_react_turn_keeps_what_it_already_did(tmp_path: Path) -> None:
         RuntimeError("provider timed out after 1800 s"),
         {"content": "Back now.", "tool_calls": []},
     ])
-    ert = open_entity_runtime(home_dir, extra_handlers={EffectType.LLM_CALL: llm, EffectType.TOOL_CALLS: tools})
+    ert = open_entity_runtime(home_dir, extra_handlers={EffectType.LLM_CALL: llm, EffectType.TOOL_CALLS: tools}, fence=LifecycleFence.admit(home_dir))
     try:
         pytest.importorskip("abstractagent")
         from abstractagent.adapters.react_runtime import create_react_workflow, reset_react_turn

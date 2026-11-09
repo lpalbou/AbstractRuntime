@@ -649,6 +649,9 @@ class ChatHome:
     diary: DiaryStore
     handlers: Dict[EffectType, Any]
     artifacts: Any = None  # the home's verbatim store (read_memory fetches)
+    # The lifecycle fence the home was opened with (STOP-LANE-DESIGN §2.2): its memory commit guard, diary and artifact
+    # guards and the fenced handler table all check it. None = an unfenced opener (a read, a test).
+    fence: Any = None
 
     def close(self) -> None:
         for obj in (self.store, self.journal):
@@ -660,8 +663,15 @@ class ChatHome:
                     pass
 
 
-def open_home(home_dir: Path, *, embedder: Any = None, attention_window: Optional[int] = None) -> ChatHome:
+def open_home(home_dir: Path, *, embedder: Any = None, attention_window: Optional[int] = None,
+              fence: Any = None) -> ChatHome:
     """Open an EXISTING entity home (the keystone/gateway composition).
+
+    `fence` (a LifecycleFence, STOP-LANE-DESIGN §2.2): every lane that ACTS passes the fence its work was admitted
+    with. The home then refuses everything after the operator's Stop: memory's commit guard (`fence.check` inside every
+    write transaction, before COMMIT: rolled back, nothing lands), the diary book and the artifact store (checked before
+    each write), and the effect handler table, wrapped once (lifecycle_fence.fence_handlers: refused before an effect,
+    a model reply that returned after the Stop abandoned - cancelled, never failed). None: an unfenced opener.
 
     The driver is a summon, never a create: no engram, no lint — a virgin
     home refuses at the prelude ("the seed is planted by the operator").
@@ -709,6 +719,9 @@ def open_home(home_dir: Path, *, embedder: Any = None, attention_window: Optiona
     # task_queue=True (AbstractMemory c4ffc45): a record formed with a title or summary still to be authored queues
     # its authoring task in the same call, and memory refuses a pending record on a home without a queue.
     ms_kwargs: Dict[str, Any] = {"store": store, "journal": journal, "embedder": embedder, "task_queue": True}
+    guard = fence.check if fence is not None else None
+    guard_kwargs: Dict[str, Any] = {"commit_guard": guard} if guard is not None else {}
+    ms_kwargs.update(guard_kwargs)
     if attention_window:
         try:
             from abstractmemory import AttentionConfig
@@ -718,12 +731,12 @@ def open_home(home_dir: Path, *, embedder: Any = None, attention_window: Optiona
             print(f"#FALLBACK attention_window={attention_window} unsupported by this engine; default window")
     try:
         ms = MemorySystem(**ms_kwargs)
-    except TypeError:  # older facade without embedder/attention kwargs
-        ms = MemorySystem(store=store, journal=journal, task_queue=True)
+    except TypeError:  # older facade without embedder/attention kwargs (the commit guard is never dropped)
+        ms = MemorySystem(store=store, journal=journal, task_queue=True, **guard_kwargs)
     ledger = SqliteLedgerStore(SqliteDatabase(str(home_dir / "home.sqlite3")))
-    diary = DiaryStore(entity_id=entity_id, ledger_store=ledger)
+    diary = DiaryStore(entity_id=entity_id, ledger_store=ledger, guard=guard)
     # Verbatims live IN the home (copy-the-home keeps the life whole).
-    artifacts = FileArtifactStore(str(home_dir / "artifacts"))
+    artifacts = FileArtifactStore(str(home_dir / "artifacts"), guard=guard)
 
     handlers = {
         **build_memory_seam_effect_handlers(
@@ -759,6 +772,7 @@ def open_home(home_dir: Path, *, embedder: Any = None, attention_window: Optiona
         diary=diary,
         handlers=handlers,
         artifacts=artifacts,
+        fence=fence,
     )
     # Entity tool surface (flow c5285 ask 3): grant query + one-batch
     # execution as effects, so the flow-brain turn's tool LOOP stays in the
@@ -767,6 +781,10 @@ def open_home(home_dir: Path, *, embedder: Any = None, attention_window: Optiona
     from .tool_effects import build_entity_tool_effect_handlers
 
     handlers.update(build_entity_tool_effect_handlers(home=home))
+    if fence is not None:
+        from .lifecycle_fence import fence_handlers
+
+        handlers.update(fence_handlers(handlers, fence))  # in place: the tool executors read home.handlers
     return home
 
 
@@ -2021,6 +2039,12 @@ class ChatSession:
         elif etype == EffectType.DIARY_WRITE:
             payload = self._author_diary_entry(payload)
         out = self.home.handlers[etype](self.run, Effect(type=etype, payload=payload), None)
+        from .lifecycle_fence import StoppedByOperator, is_stopped_outcome
+
+        if is_stopped_outcome(out):
+            # THE OPERATOR'S STOP (the fenced handler table refused it, or its memory commit was rolled back): a
+            # cancellation of the turn, never an engine failure.
+            raise StoppedByOperator(str((out.result or {}).get("where") or f"before {etype.value}"))
         if out.status != "completed":
             # strict entity posture: the engine failing is an identity failure —
             # end the session honestly rather than continue as someone else.
@@ -3460,6 +3484,8 @@ class ChatSession:
                 attrs = authored_digest_attributes(attrs, need)
                 rec["attributes"] = attrs
                 outcomes.append({"authored": authored})
+            except TurnCancelled:
+                raise  # the operator's Stop (a fenced artifact or heartbeat refused): the turn stops, nothing formed
             except Exception as e:  # noqa: BLE001 - the record forms pending; the failure is logged with its id
                 why = authoring_failure_fields(e, llm)
                 outcomes.append({"failure": {
@@ -3522,6 +3548,8 @@ class ChatSession:
             if need_title:
                 meta["title"] = authored["title"]
             return {**payload, "authored_metadata": meta}
+        except TurnCancelled:
+            raise  # the operator's Stop: no entry, no failure line
         except Exception as e:  # noqa: BLE001 - the entry is written; its record forms pending with the failure line
             why = authoring_failure_fields(e, llm)
             return {**payload, "authoring_failure": {**why, "error": f"{type(e).__name__}: {e}"}}

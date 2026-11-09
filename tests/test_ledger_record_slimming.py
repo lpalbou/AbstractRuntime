@@ -19,6 +19,7 @@ tests pin the slimming discipline end to end:
 
 from __future__ import annotations
 
+from abstractruntime.identity.lifecycle_fence import LifecycleFence  # noqa: E402
 import json
 from typing import Any, Dict, Optional
 
@@ -506,7 +507,7 @@ def test_entity_runtime_writes_through_offloading(tmp_path) -> None:
     store.close()
     journal.close()
 
-    ert = open_entity_runtime(home_dir)
+    ert = open_entity_runtime(home_dir, fence=LifecycleFence.admit(home_dir))
     try:
         assert isinstance(ert.runtime._ledger_store, OffloadingLedgerStore)
         assert ert.runtime._ledger_store.inner is ert.ledger_store

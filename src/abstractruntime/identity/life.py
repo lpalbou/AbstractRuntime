@@ -3649,11 +3649,17 @@ class LifeLoop:
                             "#FALLBACK sleep hook takes no flags; the identity pass "
                             "waits for the engine half (proposals hold in the graph)"
                         )
+            if isinstance(result, dict) and result.get("stopped_by") == "kill_switch":
+                self._stopped_by_operator()  # the night ended on the operator's Stop (said once by the night)
+                return result
             if isinstance(result, dict) and result.get("formed"):
                 self.out("(a dream formed - candidate connections for waking evidence)")
             else:
                 self.out("(a quiet night - nothing new surfaced)")
             return result
+        except TurnCancelled:
+            self._stopped_by_operator()  # a fenced write of the night refused: the operator's Stop, never a failure
+            return None
         except Exception as e:  # noqa: BLE001 - a failed dream never breaks the loop
             self.out(f"#FALLBACK consolidation pass failed ({e}); sleeping without a dream")
             return None
@@ -4943,7 +4949,7 @@ def build_consolidator(
             except Exception as e:  # noqa: BLE001
                 out(f"#FALLBACK dream embeddings unavailable ({e}); vectorless bridges only")
 
-        home = open_home(home_dir, embedder=embedder)
+        home = open_home(home_dir, embedder=embedder, fence=fence)
         try:
             eid = home.entity_id
             scopes = [("self", eid), ("diary", eid), ("life", eid)]
@@ -4956,55 +4962,60 @@ def build_consolidator(
             formation_author = capability_formation_author(llm_for_capability, home.artifacts, author_seen)
             # ChatHome exposes the MemorySystem facade as `.ms` (not `.memory`).
             try:
-                from abstractmemory import sleep_pass
-            except ImportError:
-                # Version skew (older engine without phase-1 tending):
-                # dream-only night, labeled — never a blocked sleep.
-                from abstractmemory import dream_pass
-
-                out("#FALLBACK abstractmemory has no sleep_pass (older engine); dream-only night")
-                dream = dream_pass(home.ms, scopes=scopes, owner_id=eid, author=formation_author)
-                engine: Dict[str, Any] = {"maintenance": None, "dream": dream, "authoring": dream.get("authoring")}
-            else:
-                # Tunables stay engine-declared defaults (max_candidates=2,
-                # scan_limit=200) — inject from the function, never copy numbers.
                 try:
-                    engine = sleep_pass(
-                        home.ms, scopes=scopes, owner_id=eid,
-                        should_continue=_night_should_continue,
-                        include_dream=include_dream,
-                        include_identity=include_identity,
-                        author=formation_author,
-                        cancelled=fence.moved,
-                    )
-                except TypeError:
-                    # Version skew ladder: engines predate include_identity
-                    # (the identity-pass spine, cti#399/c4779 — memory's
-                    # half lands in the same wave), include_dream (memory
-                    # c379), and/or should_continue (c1462). Degrade one
-                    # step at a time, labeled — never a blocked sleep; the
-                    # proposal queue HOLDS in the graph, nothing is lost.
+                    from abstractmemory import sleep_pass
+                except ImportError:
+                    # Version skew (older engine without phase-1 tending):
+                    # dream-only night, labeled — never a blocked sleep.
+                    from abstractmemory import dream_pass
+
+                    out("#FALLBACK abstractmemory has no sleep_pass (older engine); dream-only night")
+                    dream = dream_pass(home.ms, scopes=scopes, owner_id=eid, author=formation_author)
+                    engine: Dict[str, Any] = {"maintenance": None, "dream": dream, "authoring": dream.get("authoring")}
+                else:
+                    # Tunables stay engine-declared defaults (max_candidates=2,
+                    # scan_limit=200) — inject from the function, never copy numbers.
                     try:
                         engine = sleep_pass(
                             home.ms, scopes=scopes, owner_id=eid,
                             should_continue=_night_should_continue,
                             include_dream=include_dream,
+                            include_identity=include_identity,
                             author=formation_author,
+                            cancelled=fence.moved,
                         )
-                        if include_identity:
-                            out("#FALLBACK engine sleep_pass has no include_identity; realizations hold for the engine half")
                     except TypeError:
+                        # Version skew ladder: engines predate include_identity
+                        # (the identity-pass spine, cti#399/c4779 — memory's
+                        # half lands in the same wave), include_dream (memory
+                        # c379), and/or should_continue (c1462). Degrade one
+                        # step at a time, labeled — never a blocked sleep; the
+                        # proposal queue HOLDS in the graph, nothing is lost.
                         try:
                             engine = sleep_pass(
                                 home.ms, scopes=scopes, owner_id=eid,
                                 should_continue=_night_should_continue,
+                                include_dream=include_dream,
                                 author=formation_author,
                             )
-                            if not include_dream:
-                                out("#FALLBACK engine sleep_pass has no include_dream; full night ran on a cycle window")
+                            if include_identity:
+                                out("#FALLBACK engine sleep_pass has no include_identity; realizations hold for the engine half")
                         except TypeError:
-                            out("#FALLBACK engine sleep_pass has no should_continue; full night runs")
-                            engine = sleep_pass(home.ms, scopes=scopes, owner_id=eid)
+                            try:
+                                engine = sleep_pass(
+                                    home.ms, scopes=scopes, owner_id=eid,
+                                    should_continue=_night_should_continue,
+                                    author=formation_author,
+                                )
+                                if not include_dream:
+                                    out("#FALLBACK engine sleep_pass has no include_dream; full night ran on a cycle window")
+                            except TypeError:
+                                out("#FALLBACK engine sleep_pass has no should_continue; full night runs")
+                                engine = sleep_pass(home.ms, scopes=scopes, owner_id=eid)
+            except TurnCancelled as stopped:
+                # THE OPERATOR'S STOP inside the engine: memory's commit guard refused a write of the night
+                # (rolled back - nothing of it landed, no completion recorded).
+                engine = {"maintenance": {}, "dream": {}, "cancelled_after": f"the operator's Stop ({stopped.where})"}
             if fence.moved():
                 # THE OPERATOR'S STOP: the night ends here - no repair, no voice, no failure lines (a refusal the
                 # Stop caused is no failure); memory recorded no completion (cancelled=).
@@ -5279,6 +5290,7 @@ def build_session_factory(
         home = open_home(
             home_dir, embedder=embedder,
             attention_window=int(_tun["window_limit"]),
+            fence=fence,
         )
 
         from abstractcore import create_llm

@@ -152,11 +152,15 @@ class DiaryStore:
     property of the type, not a policy check.
     """
 
-    def __init__(self, *, entity_id: str, ledger_store: LedgerStore):
+    def __init__(self, *, entity_id: str, ledger_store: LedgerStore,
+                 guard: Optional[Callable[[str], None]] = None):
         eid = str(entity_id or "").strip()
         if not eid:
             raise ValueError("DiaryStore requires a non-empty entity_id")
         self._entity_id = eid
+        # THE STOP FENCE's diary half (STOP-LANE-DESIGN §2.2): the home's lifecycle fence `check`, called immediately
+        # before an entry is appended - after the operator's Stop the book takes nothing (it raises; nothing written).
+        self._guard = guard
         self._chain_id = diary_chain_id(eid)
         if isinstance(ledger_store, HashChainedLedgerStore):
             self._ledger = ledger_store
@@ -203,6 +207,8 @@ class DiaryStore:
             session_id=str(entry.origin.get("session_id")) if entry.origin.get("session_id") else None,
             idempotency_key=entry.entry_id,
         )
+        if self._guard is not None:
+            self._guard("before a diary entry was appended")
         self._ledger.append(record)
         return {"entry": entry.to_dict(), "replayed": False, "record_hash": record.record_hash}
 

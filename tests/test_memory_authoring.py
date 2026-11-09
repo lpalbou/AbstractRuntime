@@ -250,7 +250,7 @@ def _visit(tmp_path: Path, capability_handlers: Any):
 
     home_dir = _visit_home(tmp_path)
     ert = open_entity_runtime(home_dir, extra_handlers={EffectType.LLM_CALL: _ScriptedHandler(["A plain reply."])},
-                              capability_handlers=capability_handlers)
+                              capability_handlers=capability_handlers, fence=LifecycleFence.admit(home_dir))
     wf = build_visit_workflow(ert.home, participants=["person:admin"], idle_seconds=3600,
                               model_info={"provider": "test", "model": "scripted"}, visit_id="visit-authoring")
     run_id = ert.runtime.start(workflow=wf, vars={}, session_id="visit-authoring")
@@ -328,7 +328,7 @@ def _close_visit(tmp_path: Path, capability_handlers: Any, *, diary: bool = Fals
 
     home_dir = _visit_home(tmp_path)
     ert = open_entity_runtime(home_dir, extra_handlers={
-        EffectType.LLM_CALL: _ScriptedHandler(["A plain reply.", look_back])}, capability_handlers=capability_handlers)
+        EffectType.LLM_CALL: _ScriptedHandler(["A plain reply.", look_back])}, capability_handlers=capability_handlers, fence=LifecycleFence.admit(home_dir))
     wf = build_visit_workflow(ert.home, participants=["person:admin"], idle_seconds=3600,
                               model_info={"provider": "test", "model": "scripted"}, visit_id="visit-close")
     run_id = ert.runtime.start(workflow=wf, vars={}, session_id="visit-close")
@@ -734,7 +734,7 @@ def test_the_flow_brain_sleep_pass_is_authored_by_the_hosts_summaries_handler(tm
         return EffectOutcome.completed({"content": json.dumps({"title": TITLE, "summary": SUMMARY})})
 
     monkeypatch.setattr(abstractmemory, "sleep_pass", spy)
-    ert = open_entity_runtime(home_dir, capability_handlers={"summaries": summaries})
+    ert = open_entity_runtime(home_dir, capability_handlers={"summaries": summaries}, fence=LifecycleFence.admit(home_dir))
     try:
         from types import SimpleNamespace
 

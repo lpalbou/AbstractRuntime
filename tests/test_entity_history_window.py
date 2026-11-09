@@ -12,6 +12,7 @@ in the run; chat: `TurnReport.history_window`).
 """
 from __future__ import annotations
 
+from abstractruntime.identity.lifecycle_fence import LifecycleFence  # noqa: E402
 import copy as _copy
 import inspect
 import json
@@ -101,7 +102,7 @@ def _drive_visit(tmp_path: Path, slug: str, texts: List[str], *, react_middle=No
         calls.append(dict(effect.payload))
         return EffectOutcome.completed({"content": f"reply {len(calls)}"})
 
-    ert = open_entity_runtime(home_dir, extra_handlers={EffectType.LLM_CALL: llm})
+    ert = open_entity_runtime(home_dir, extra_handlers={EffectType.LLM_CALL: llm}, fence=LifecycleFence.admit(home_dir))
     try:
         wf = build_visit_workflow(
             ert.home,

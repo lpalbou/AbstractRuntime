@@ -10,6 +10,7 @@ may extend but never shadow the home's own.
 
 from __future__ import annotations
 
+from abstractruntime.identity.lifecycle_fence import LifecycleFence  # noqa: E402
 import copy as _copy
 import json
 import shutil
@@ -121,7 +122,7 @@ def _visit_like_workflow(entity_id: str) -> WorkflowSpec:
 
 def test_run_store_lives_inside_the_home_named_by_slug(tmp_path: Path) -> None:
     home_dir = _make_home(tmp_path, slug="runling")
-    ert = open_entity_runtime(home_dir)
+    ert = open_entity_runtime(home_dir, fence=LifecycleFence.admit(home_dir))
     try:
         assert ert.store_path == home_dir / "runtime_runling.sqlite3"
         wf = _visit_like_workflow(ert.entity_id)
@@ -144,7 +145,7 @@ def test_effects_land_in_the_homes_own_stores(tmp_path: Path) -> None:
     from abstractmemory import TripleQuery
 
     home_dir = _make_home(tmp_path, slug="graphling")
-    ert = open_entity_runtime(home_dir)
+    ert = open_entity_runtime(home_dir, fence=LifecycleFence.admit(home_dir))
     try:
         wf = _visit_like_workflow(ert.entity_id)
         run_id = ert.runtime.start(workflow=wf, vars={}, session_id="visit-1")
@@ -169,7 +170,7 @@ def test_pending_waits_travel_when_the_home_is_copied(tmp_path: Path) -> None:
     """Item 8's payoff line: copying the home moves pending runs, waits,
     and commitments too. A parked visit resumes in the COPY."""
     origin = _make_home(tmp_path, slug="mover")
-    ert = open_entity_runtime(origin)
+    ert = open_entity_runtime(origin, fence=LifecycleFence.admit(origin))
     wf = _visit_like_workflow(ert.entity_id)
     run_id = ert.runtime.start(workflow=wf, vars={}, session_id="visit-1")
     state = ert.runtime.tick(workflow=wf, run_id=run_id, max_steps=10)
@@ -183,7 +184,7 @@ def test_pending_waits_travel_when_the_home_is_copied(tmp_path: Path) -> None:
     moved = new_root / "mover"
     shutil.copytree(origin, moved)
 
-    ert2 = open_entity_runtime(moved)
+    ert2 = open_entity_runtime(moved, fence=LifecycleFence.admit(moved))
     try:
         parked = ert2.runtime.get_state(run_id)
         assert parked.status == RunStatus.WAITING
@@ -199,8 +200,8 @@ def test_pending_waits_travel_when_the_home_is_copied(tmp_path: Path) -> None:
 
 
 def test_two_homes_two_isolated_run_stores(tmp_path: Path) -> None:
-    a = open_entity_runtime(_make_home(tmp_path, slug="alpha"))
-    b = open_entity_runtime(_make_home(tmp_path, slug="beta"))
+    a = open_entity_runtime(_ha := _make_home(tmp_path, slug="alpha"), fence=LifecycleFence.admit(_ha))
+    b = open_entity_runtime(_hb := _make_home(tmp_path, slug="beta"), fence=LifecycleFence.admit(_hb))
     try:
         wf = _visit_like_workflow(a.entity_id)
         run_id = a.runtime.start(workflow=wf, vars={}, session_id="visit-a")
@@ -222,10 +223,10 @@ def test_moved_home_refuses_before_minting_a_stray_store(tmp_path: Path) -> None
     stray = tmp_path / "entities" / "wrongname"
     shutil.copytree(origin, stray)
     with pytest.raises(ValueError, match="moved-home collision"):
-        open_entity_runtime(stray)
+        open_entity_runtime(stray, fence=LifecycleFence.admit(stray))
     assert not (stray / "runtime_wrongname.sqlite3").exists()
     # The true home still opens.
-    ert = open_entity_runtime(origin)
+    ert = open_entity_runtime(origin, fence=LifecycleFence.admit(origin))
     ert.close()
 
 
@@ -238,8 +239,8 @@ def test_extra_handlers_extend_but_never_shadow(tmp_path: Path) -> None:
         return EffectOutcome.completed({"content": "ok"})
 
     # Extending with a host LLM handler is the intended composition.
-    ert = open_entity_runtime(home_dir, extra_handlers={EffectType.LLM_CALL: fake_llm})
+    ert = open_entity_runtime(home_dir, extra_handlers={EffectType.LLM_CALL: fake_llm}, fence=LifecycleFence.admit(home_dir))
     ert.close()
     # Shadowing a HOME handler is wiring drift and refuses loudly.
     with pytest.raises(ValueError, match="shadow"):
-        open_entity_runtime(home_dir, extra_handlers={EffectType.MEMORY_FORM: fake_llm})
+        open_entity_runtime(home_dir, extra_handlers={EffectType.MEMORY_FORM: fake_llm}, fence=LifecycleFence.admit(home_dir))

@@ -96,7 +96,7 @@ def test_entity_runtime_inherits_brain_handlers(tmp_path: Path) -> None:
     runtime gets the three effects with zero extra wiring."""
     from abstractruntime.identity.entity_runtime import open_entity_runtime
 
-    ert = open_entity_runtime(_make_home(tmp_path))
+    ert = open_entity_runtime(_h := _make_home(tmp_path), fence=LifecycleFence.admit(_h))
     try:
         # The FULL canonical set (adversary F9: pinning three of thirteen
         # left the tool pair's inheritance unproven).

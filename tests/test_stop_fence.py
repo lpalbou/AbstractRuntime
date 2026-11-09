@@ -67,6 +67,8 @@ COMMIT_POINTS = (
     "_reserve_loop_start", "_record_spawned_child", "_release_failed_reservation",
     "build_consolidator", "build_session_factory", "build_capability_llm_factory",
 )
+# The lane openers a fence enters through (open_home's fence is optional for readers; every runtime call passes it).
+OPENERS = ("open_home", "open_entity_runtime")
 # Modules whose unfenced calls are still to be fenced in a later step of this lane (chat.py is another worker's file
 # until the lead frees it). The scan below fails when such a module is clean, so the exemption cannot outlive its fix.
 PENDING_FENCE = {"identity/chat.py"}
@@ -140,6 +142,10 @@ def test_every_commit_point_requires_a_fence_and_none_has_a_default() -> None:
         assert params["fence"].kind is inspect.Parameter.KEYWORD_ONLY, name
         assert params["fence"].default is inspect.Parameter.empty, f"{name}'s fence has a default"
         assert "expected_generation" not in params, f"{name} still takes the optional expected_generation"
+    from abstractruntime.identity.entity_runtime import open_entity_runtime
+
+    runtime_fence = inspect.signature(open_entity_runtime).parameters["fence"]
+    assert runtime_fence.kind is inspect.Parameter.KEYWORD_ONLY and runtime_fence.default is inspect.Parameter.empty
     should_stop = inspect.signature(life._sleep_authoring).parameters["should_stop"]
     assert should_stop.kind is inspect.Parameter.KEYWORD_ONLY and should_stop.default is inspect.Parameter.empty
 
@@ -151,7 +157,7 @@ def _unfenced_calls(path: Path) -> List[int]:
         if isinstance(node, ast.Call):
             fn = node.func
             name = fn.id if isinstance(fn, ast.Name) else fn.attr if isinstance(fn, ast.Attribute) else None
-            if name in COMMIT_POINTS and not any(k.arg in ("fence", None) for k in node.keywords):
+            if name in COMMIT_POINTS + OPENERS and not any(k.arg in ("fence", None) for k in node.keywords):
                 lines.append(node.lineno)
     return lines
 
@@ -822,3 +828,201 @@ def test_the_spawner_never_records_its_child_over_a_registration(tmp_path: Path)
     assert json.loads((home_dir / "loop_status").read_text(encoding="utf-8")) == claimed
     life._release_failed_reservation(home_dir, fence=fence)  # nor does a failed-start release touch it
     assert json.loads((home_dir / "loop_status").read_text(encoding="utf-8")) == claimed
+
+
+# ------------------------------------------------------------------ step 3: the home opened with its fence
+
+
+def _fenced_home(home_dir: Path):
+    from abstractruntime.identity.chat import open_home
+
+    fence = LifecycleFence.admit(home_dir)
+    return open_home(home_dir, fence=fence), fence
+
+
+def _artifact_files(home_dir: Path) -> List[str]:
+    return sorted(str(p.relative_to(home_dir)) for p in (home_dir / "artifacts").rglob("*") if p.is_file()
+                  and not p.name.startswith("artifact_catalog"))
+
+
+def test_stop_fence_formation_authoring(tmp_path: Path) -> None:
+    """T3 (Codex review 3 #1; design class B): `_effect(MEMORY_FORM)` authorized neither its authoring call nor the
+    write - a Stop while the summaries model answered still stored the call as an artifact and formed the record (or
+    formed it pending with a failure line). On a fenced home the authoring's artifact is refused, the write never
+    runs, no failure line, and the turn sees the operator's Stop."""
+    from abstractruntime.core.models import EffectType
+    from abstractruntime.identity.chat import ChatSession
+
+    home_dir = _make_home(tmp_path)
+    home, fence = _fenced_home(home_dir)
+    calls: List[str] = []
+
+    class _StopsWhileAnswering:
+        model_info = {"provider": "fake", "model": "summarizer"}
+
+        def generate(self, *, prompt: str, system_prompt: str, response_model: Any) -> Any:
+            calls.append(prompt)
+            _stop_here(home_dir)  # the operator's Stop lands while the summaries model answers
+            return response_model(title="An authored title", summary="An authored summary.")
+
+    s = ChatSession(home, _HookLLM([]), participants=["person:laurent"], context_window=20000, out=lambda _s: None,
+                    phase="visit", model_info={"provider": "lmstudio", "model": "qwen-test"})
+    s.llm_for_capability = lambda name: _StopsWhileAnswering()
+    inner = home.handlers[EffectType.MEMORY_FORM].__lifecycle_inner__  # the table is the fenced one
+    ran: List[Any] = []
+    home.handlers.update({EffectType.MEMORY_FORM: lf.fence_handlers(
+        {EffectType.MEMORY_FORM: lambda run, effect, nxt=None: ran.append(effect) or inner(run, effect, nxt)},
+        fence)[EffectType.MEMORY_FORM]})
+    before_rows = _snapshot(home_dir).get("memory.sqlite3")
+    before_artifacts = _artifact_files(home_dir)
+    payload = {"records": [{"kind": "lesson", "title": None, "pending": ["title", "summary"],
+                            "_authoring": {"body": "Waiting lets the other finish.", "raw_block": "Waiting.",
+                                           "template_id": "test.t3"},
+                            "digest": "Waiting lets the other finish.", "provenance": {"source": "test"}}],
+               "scope": "life", "owner_id": home.entity_id, "turn_id": "t3"}
+    try:
+        with pytest.raises(StoppedByOperator):
+            s._effect(EffectType.MEMORY_FORM, payload)
+    finally:
+        home.close()
+    assert len(calls) == 1 and ran == [], "the write ran after the Stop"
+    assert _artifact_files(home_dir) == before_artifacts, "the authoring call was kept as an artifact after the Stop"
+    assert _snapshot(home_dir).get("memory.sqlite3") == before_rows
+    assert not (tmp_path / "entities" / "untracked" / "authoring-failures").exists()
+
+
+def test_a_fenced_home_refuses_every_write_after_stop(tmp_path: Path) -> None:
+    """The home's three stores carry the fence: memory's commit guard (installed by open_home, rolled back inside the
+    transaction), the diary book and the artifact store - after a Stop each raises the operator's Stop and nothing
+    lands."""
+    from abstractmemory import MemoryRecordInput
+
+    from abstractruntime.identity.diary import DiaryEntry
+
+    home_dir = _make_home(tmp_path)
+    home, fence = _fenced_home(home_dir)
+    try:
+        assert home.store._commit_guard == fence.check and home.journal._commit_guard == fence.check
+        _stop_here(home_dir)
+        before = _snapshot(home_dir)
+        with pytest.raises(StoppedByOperator):
+            home.ms.remember_many([MemoryRecordInput(kind="lesson", title="Late", digest="A late lesson.")],
+                                  scope="life", owner_id=home.entity_id, idempotency_key="late-1")
+        with pytest.raises(StoppedByOperator):
+            home.diary.append_entry(DiaryEntry(entry_id="diary_late01", author=home.entity_id, kind="note",
+                                               gist="late", text="Written after the Stop.", visibility="self",
+                                               written_at="2026-11-09T21:00:00+00:00"))
+        with pytest.raises(StoppedByOperator):
+            home.artifacts.store(b"late bytes", content_type="text/plain")
+    finally:
+        home.close()
+    after = _snapshot(home_dir)
+    changed = sorted(k for k in set(after) | set(before) if after.get(k) != before.get(k))
+    assert not changed, changed
+
+
+def test_the_runtime_lane_ends_cancelled_never_failed(tmp_path: Path) -> None:
+    """The Runtime lane (a visit workflow, MEMORY_CONSOLIDATE...): the fenced table abandons a model reply that
+    returned after the Stop - cancelled (KILL_SWITCH_REASON), never failed, never retried - and refuses every
+    effect after it without calling its handler."""
+    from abstractruntime.core.models import Effect, EffectType, StepPlan
+    from abstractruntime.core.spec import WorkflowSpec
+    from abstractruntime.identity.entity_runtime import open_entity_runtime
+
+    home_dir = _make_home(tmp_path)
+    fence = LifecycleFence.admit(home_dir)
+    llm_calls: List[Any] = []
+
+    def llm_handler(run, effect, default_next_node=None):
+        from abstractruntime.core.runtime import EffectOutcome
+
+        llm_calls.append(effect)
+        _stop_here(home_dir)  # the operator's Stop while the model answers
+        return EffectOutcome.completed({"content": "a reply that returned after the Stop"})
+
+    ert = open_entity_runtime(home_dir, extra_handlers={EffectType.LLM_CALL: llm_handler}, fence=fence)
+    try:
+        wf = WorkflowSpec(workflow_id="fenced", entry_node="a", nodes={
+            "a": lambda r, c: StepPlan(node_id="a", effect=Effect(type=EffectType.LLM_CALL,
+                                                                    payload={"prompt": "hi"}, result_key="ans"),
+                                       next_node="b"),
+            "b": lambda r, c: StepPlan(node_id="b", complete_output={"a": r.vars.get("ans")}),
+        })
+        run_id = ert.runtime.start(workflow=wf, vars={})
+        state = ert.runtime.tick(workflow=wf, run_id=run_id)
+        records = list(ert.ledger_store.list(run_id))
+        inner_form = ert.runtime._handlers[EffectType.MEMORY_FORM]
+        late = inner_form(None, Effect(type=EffectType.MEMORY_FORM, payload={"records": []}), None)
+    finally:
+        ert.home.close()
+    assert len(llm_calls) == 1, "the model call was retried after the Stop"
+    assert state.status.value == "cancelled" and lf.KILL_SWITCH_REASON in str(state.error), (state.status, state.error)
+    assert not [r for r in records if str(r.get("status") or "").lower() == "failed"], records
+    assert lf.is_stopped_outcome(late)
+
+
+def test_fence_hot_path_budget_through_the_handler_table_and_the_commit_guard(tmp_path: Path, capsys) -> None:
+    """Design §7 (4), the effect half: N no-op effects through the wrapped table and N commit-guard calls (the memory
+    guard is `fence.check`). Bumper: zero I/O. Non-bumper: one stat per fenced call, nothing else."""
+    from abstractruntime.core.models import Effect, EffectType
+    from abstractruntime.core.runtime import EffectOutcome
+
+    done = EffectOutcome.completed({})
+
+    def bench(home_dir: Path) -> tuple:
+        fence = LifecycleFence.admit(home_dir)
+        table = lf.fence_handlers({EffectType.MEMORY_QUERY: lambda run, effect, nxt=None: done}, fence)
+        handler, guard = table[EffectType.MEMORY_QUERY], fence.check
+        effect = Effect(type=EffectType.MEMORY_QUERY, payload={})
+        with _counting() as counts:
+            t0 = time.perf_counter_ns()
+            for _ in range(N_EFFECTS):
+                handler(None, effect, None)
+                guard("SQLiteJournal._txn")
+            elapsed = time.perf_counter_ns() - t0
+        return dict(counts), elapsed / N_EFFECTS
+
+    bumper = _make_home(tmp_path / "bumper")
+    bump_lifecycle_generation(bumper, written_by="test:bench")
+    bumper_counts, bumper_ns = bench(bumper)
+    other_counts, other_ns = bench(_make_home(tmp_path / "other"))
+    assert sum(bumper_counts.values()) == 0, bumper_counts
+    assert other_counts.get("os.stat") == 2 * N_EFFECTS, other_counts
+    assert sum(v for k, v in other_counts.items() if k != "os.stat") == 0, other_counts
+    assert bumper_ns < BUDGET_CEILING_NS and other_ns < BUDGET_CEILING_NS, (bumper_ns, other_ns)
+    with capsys.disabled():
+        print(f"\n[fence effect + commit guard] bumper {bumper_ns / 1000:.3f} us, non-bumper {other_ns / 1000:.3f} us "
+              f"per (effect + guard) pair (N={N_EFFECTS}, budget 50 us per fenced effect)")
+
+
+def test_a_stop_inside_chat_effects_is_the_operators_stop_never_a_failure(tmp_path: Path) -> None:
+    """ChatSession's two halves of the effect fence: the fenced table's refusal raises the operator's Stop (never
+    "<effect> failed", which ended the loop's tick as a failure), and a Stop raised inside formation authoring (a
+    fenced artifact, a fenced heartbeat) propagates instead of forming the record pending with a failure line."""
+    from abstractruntime.core.models import EffectType
+    from abstractruntime.identity.chat import ChatSession
+
+    home_dir = _make_home(tmp_path)
+    home, fence = _fenced_home(home_dir)
+    s = ChatSession(home, _HookLLM([]), participants=["person:laurent"], context_window=20000, out=lambda _s: None,
+                    phase="visit", model_info={"provider": "lmstudio", "model": "qwen-test"})
+
+    class _RefusedMidCall:
+        model_info = {"provider": "fake", "model": "summarizer"}
+
+        def generate(self, **kw: Any) -> Any:
+            raise StoppedByOperator("before a model call (a fenced heartbeat)")
+
+    s.llm_for_capability = lambda name: _RefusedMidCall()
+    payload = {"records": [{"kind": "lesson", "title": None, "pending": ["title"],
+                            "_authoring": {"body": "b", "raw_block": "b", "template_id": "t"}, "digest": "d"}],
+               "scope": "life", "owner_id": home.entity_id, "turn_id": "t"}
+    try:
+        with pytest.raises(StoppedByOperator):
+            s._author_records(payload)
+        _stop_here(home_dir)
+        with pytest.raises(StoppedByOperator):
+            s._effect(EffectType.MEMORY_FORM, {"records": [], "scope": "life", "owner_id": home.entity_id,
+                                               "turn_id": "t"})
+    finally:
+        home.close()

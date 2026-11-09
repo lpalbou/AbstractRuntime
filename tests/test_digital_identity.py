@@ -707,7 +707,7 @@ def test_visit_summon_carries_the_cue_and_the_door_seed_wins(tmp_path: Path) -> 
     home_dir = _engrammed_home(tmp_path / "entities" / "castor")
     record_default_identity(home_dir, entity_id="entity:castor@home-test", gateway_default_voice=QWEN, provenance="birth")
     ert = open_entity_runtime(
-        home_dir, extra_handlers={EffectType.LLM_CALL: lambda *a, **k: EffectOutcome.completed({"content": "-"})}
+        home_dir, extra_handlers={EffectType.LLM_CALL: lambda *a, **k: EffectOutcome.completed({"content": "-"})}, fence=LifecycleFence.admit(home_dir)
     )
     try:
         wf = build_visit_workflow(ert.home, participants=["person:albou"], idle_seconds=3600)

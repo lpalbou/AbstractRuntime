@@ -107,6 +107,13 @@ class EntityRuntime:
     def entity_id(self) -> str:
         return self.home.entity_id
 
+    def readmit(self, fence: Any) -> None:
+        """THE GATEWAY'S RESUME PATH for a cached runtime (Fable F3): from now on every effect of this runtime, and
+        every write of its home, is checked against `fence` - the home's current admission, swapped inside the home
+        state lock (a fence decided before a Stop is refused: StaleLifecycleGeneration). Call it under the host's
+        per-slug lock once no run of the old generation is still acting (the Stop cancels them)."""
+        self.home.readmit(fence)
+
     def close(self) -> None:
         self.home.close()
         self.db.close()
@@ -277,7 +284,7 @@ def open_entity_runtime(
     from ..storage.artifacts import FileArtifactStore
     from ..storage.offloading import OffloadingLedgerStore
 
-    handlers = fence_handlers(handlers, fence)
+    handlers = fence_handlers(handlers, home.lifecycle)  # the home's holder: readmit reaches every wrapper
     # The run's own records (ledger offload, evidence, outputs) are not the entity's acts: an unguarded twin of the
     # home's store (the same directory; writes are atomic renames, the catalog is SQLite).
     run_artifacts = FileArtifactStore(str(Path(home_dir) / "artifacts"))
@@ -298,7 +305,7 @@ def open_entity_runtime(
     # The Runtime registers its own built-ins (START_SUBWORKFLOW, ASK_USER, ANSWER_USER, the waits, MEMORY_QUERY...)
     # beside the table it was given: they are effects of this run too, so the WHOLE table is fenced (Fable F2: a
     # parent whose child the Stop cancelled went on through the unfenced START_SUBWORKFLOW and ended completed).
-    runtime._handlers.update(fence_handlers(dict(runtime._handlers), fence))
+    runtime._handlers.update(fence_handlers(dict(runtime._handlers), home.lifecycle))
     return EntityRuntime(
         home=home,
         runtime=runtime,

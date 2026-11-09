@@ -903,7 +903,8 @@ def test_a_fenced_home_refuses_every_write_after_stop(tmp_path: Path) -> None:
     home_dir = _make_home(tmp_path)
     home, fence = _fenced_home(home_dir)
     try:
-        assert home.store._commit_guard == fence.check and home.journal._commit_guard == fence.check
+        guard = home.lifecycle.check  # the home's fence holder (readmit swaps the fence it reads)
+        assert home.store._commit_guard == guard and home.journal._commit_guard == guard and home.fence is fence
         _stop_here(home_dir)
         before = _snapshot(home_dir)
         with pytest.raises(StoppedByOperator):
@@ -1353,3 +1354,54 @@ def test_a_parent_run_ends_cancelled_when_its_child_was_stopped(tmp_path: Path) 
         ert.home.close()
     assert after_child == [], f"the parent went on after the Stop: {after_child}"
     assert state.status.value == "cancelled" and lf.KILL_SWITCH_REASON in str(state.error), (state.status, state.error)
+
+
+def test_a_cached_entity_runtime_is_readmitted_after_resume(tmp_path: Path) -> None:
+    """Fable F3 (seam): the gateway keeps ONE EntityRuntime per slug, and the fence was baked into its handler table
+    and stores at open - after Stop -> Resume it refused forever (or the home had to be reopened). The opened home
+    now acts under one fence HOLDER that `readmit(fence)` swaps under the home state lock (the gateway's Resume
+    path): a fresh admission runs again, a stale one is refused, and a second Stop refuses the readmitted runtime."""
+    from abstractmemory import MemoryRecordInput
+
+    from abstractruntime.core.models import Effect, EffectType, StepPlan
+    from abstractruntime.core.runtime import EffectOutcome
+    from abstractruntime.core.spec import WorkflowSpec
+    from abstractruntime.identity.entity_runtime import open_entity_runtime
+
+    home_dir = _make_home(tmp_path)
+    calls: List[Any] = []
+
+    def mind(run, effect, default_next_node=None):
+        calls.append(effect)
+        return EffectOutcome.completed({"content": "here"})
+
+    wf = WorkflowSpec(workflow_id="visit-ish", entry_node="a", nodes={
+        "a": lambda r, c: StepPlan(node_id="a", effect=Effect(type=EffectType.LLM_CALL, payload={"prompt": "hi"},
+                                                                result_key="ans"), next_node="b"),
+        "b": lambda r, c: StepPlan(node_id="b", complete_output={"a": r.vars.get("ans")}),
+    })
+    ert = open_entity_runtime(home_dir, extra_handlers={EffectType.LLM_CALL: mind}, fence=LifecycleFence.admit(home_dir))
+
+    def run_once() -> str:
+        return ert.runtime.tick(workflow=wf, run_id=ert.runtime.start(workflow=wf, vars={})).status.value
+
+    try:
+        assert run_once() == "completed" and len(calls) == 1
+        stale = LifecycleFence.admit(home_dir)
+        _stop_here(home_dir)
+        assert run_once() == "cancelled" and len(calls) == 1  # stopped: no model call
+        with pytest.raises(StaleLifecycleGeneration):
+            ert.readmit(stale)  # a fence admitted before the Stop is never readmitted
+        write_entity_state(home_dir, "awake", reason="resumed [by test]", fence=RESUME)
+        ert.readmit(LifecycleFence.admit(home_dir))  # the gateway's Resume path
+        assert ert.home.fence.generation == 1
+        assert run_once() == "completed" and len(calls) == 2
+        ert.home.ms.remember_many([MemoryRecordInput(kind="lesson", title="After resume", digest="It runs again.")],
+                                  scope="life", owner_id=ert.home.entity_id, idempotency_key="after-resume")
+        _stop_here(home_dir)  # a second Stop refuses the readmitted runtime too
+        assert run_once() == "cancelled" and len(calls) == 2
+        with pytest.raises(StoppedByOperator):
+            ert.home.ms.remember_many([MemoryRecordInput(kind="lesson", title="Late", digest="No.")],
+                                      scope="life", owner_id=ert.home.entity_id, idempotency_key="late-2")
+    finally:
+        ert.home.close()

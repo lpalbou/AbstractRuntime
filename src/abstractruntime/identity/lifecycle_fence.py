@@ -281,6 +281,41 @@ class LifecycleFence:
 Fence = Union[LifecycleFence, _Sentinel]
 
 
+class FenceHolder:
+    """THE FENCE A LONG-LIVED OPENED HOME ACTS UNDER (Fable F3, 2026-11-09): one object its handler table, memory
+    commit guard, diary and artifact guards read at every check, so a host that keeps the home open (the gateway's
+    cached EntityRuntime per slug) re-admits it after Resume with `readmit(fence)` instead of reopening it. The swap
+    happens inside the home state lock and refuses a fence that is not the home's current admission (a fence decided
+    before a Stop is never readmitted). Readmit only once no run of the old generation is still acting (the Stop
+    cancels them): a run's effects are checked against the holder's fence, whatever generation the run began at."""
+
+    __slots__ = ("fence",)
+
+    def __init__(self, fence: LifecycleFence) -> None:
+        if not isinstance(fence, LifecycleFence):
+            raise TypeError(f"a FenceHolder holds a LifecycleFence, not {fence!r}")
+        self.fence = fence
+
+    def moved(self) -> bool:
+        return self.fence.moved()
+
+    def check(self, where: str) -> None:
+        self.fence.check(where)
+
+    def readmit(self, fence: LifecycleFence) -> None:
+        from .life import home_state_lock
+
+        if not isinstance(fence, LifecycleFence):
+            raise TypeError(f"readmit takes a LifecycleFence, not {fence!r}")
+        if fence._key != self.fence._key:
+            raise ValueError(f"readmit: the fence belongs to {fence.home_dir}, not {self.fence.home_dir}")
+        with home_state_lock(fence.home_dir):
+            found = read_truth(fence.home_dir)
+            if found != fence.generation:
+                raise StaleLifecycleGeneration("readmitting the home", fence.generation, found)
+            self.fence = fence
+
+
 def verify(fence: Any, home_dir: Union[str, Path], what: str, found: int, *, sentinel_ok: bool) -> None:
     """THE commit points' check, called inside the home state lock with the generation just read there. A sentinel
     passes only where the writer allows it (`sentinel_ok`: what a Stop or a Resume writes)."""
@@ -316,18 +351,20 @@ def is_stopped_outcome(outcome: Any) -> bool:
         and result.get("reason") == KILL_SWITCH_REASON
 
 
-def fence_handlers(handlers: Dict[Any, Any], fence: LifecycleFence) -> Dict[Any, Any]:
+def fence_handlers(handlers: Dict[Any, Any], fence: Union[LifecycleFence, "FenceHolder"]) -> Dict[Any, Any]:
     """THE EFFECT DISPATCH FENCE (STOP-LANE-DESIGN §2.2): every handler of a table, wrapped ONCE (a handler already
     wrapped with this fence is kept). Before each effect: refused once the generation moved. After it, EVERY outcome
     is checked again (Fable F2: a subworkflow whose child the Stop cancelled answers `completed` with `cancelled: True`
     and the parent went on): a model reply that returned after the Stop is ABANDONED (§2.3: it lands nowhere), and any
     effect that returns after it reports the Stop - its run ends there. A handler that raised the operator's Stop
     (memory's commit guard refusing inside the write) reports it too. Every refusal is `stopped_outcome` - cancelled,
-    never failed. Cost: two fence checks per effect."""
-    return {etype: _fence_handler(etype, handler, fence) for etype, handler in handlers.items()}
+    never failed. Cost: two fence checks per effect. `fence` may be a FenceHolder (an opened home's): the wrappers then
+    read whatever fence it holds at each check (readmit)."""
+    holder = fence if isinstance(fence, FenceHolder) else FenceHolder(fence)
+    return {etype: _fence_handler(etype, handler, holder) for etype, handler in handlers.items()}
 
 
-def _fence_handler(etype: Any, inner: Callable[..., Any], fence: LifecycleFence) -> Callable[..., Any]:
+def _fence_handler(etype: Any, inner: Callable[..., Any], fence: "FenceHolder") -> Callable[..., Any]:
     if getattr(inner, "__lifecycle_fence__", None) is fence:
         return inner
     import inspect
@@ -363,6 +400,7 @@ __all__ = [
     "LIFECYCLE_SIGNAL_FILENAME",
     "RESUME",
     "Fence",
+    "FenceHolder",
     "LifecycleFence",
     "LifecycleUnreadable",
     "StaleLifecycleGeneration",

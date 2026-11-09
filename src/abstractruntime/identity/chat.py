@@ -649,9 +649,23 @@ class ChatHome:
     diary: DiaryStore
     handlers: Dict[EffectType, Any]
     artifacts: Any = None  # the home's verbatim store (read_memory fetches)
-    # The lifecycle fence the home was opened with (STOP-LANE-DESIGN §2.2): its memory commit guard, diary and artifact
-    # guards and the fenced handler table all check it. None = an unfenced opener (a read, a test).
-    fence: Any = None
+    # THE FENCE HOLDER the home acts under (STOP-LANE-DESIGN §2.2; Fable F3): its memory commit guard, diary and
+    # artifact guards and the fenced handler table all read it at each check; `readmit(fence)` swaps it after Resume.
+    # None = an unfenced opener (a read, a test).
+    lifecycle: Any = None
+
+    @property
+    def fence(self) -> Any:
+        """The LifecycleFence this home acts under now (None for an unfenced opener)."""
+        return self.lifecycle.fence if self.lifecycle is not None else None
+
+    def readmit(self, fence: Any) -> None:
+        """THE HOST'S RESUME PATH for a home it keeps open: act under `fence` (the home's current admission) from now
+        on - swapped inside the home state lock; a fence decided before a Stop is refused (StaleLifecycleGeneration).
+        Call it once no run of the old generation is still acting (the Stop cancels them)."""
+        if self.lifecycle is None:
+            raise TypeError("this home was opened without a fence: open it with one (open_home(..., fence=))")
+        self.lifecycle.readmit(fence)
 
     def close(self) -> None:
         for obj in (self.store, self.journal):
@@ -719,7 +733,10 @@ def open_home(home_dir: Path, *, embedder: Any = None, attention_window: Optiona
     # task_queue=True (AbstractMemory c4ffc45): a record formed with a title or summary still to be authored queues
     # its authoring task in the same call, and memory refuses a pending record on a home without a queue.
     ms_kwargs: Dict[str, Any] = {"store": store, "journal": journal, "embedder": embedder, "task_queue": True}
-    guard = fence.check if fence is not None else None
+    from .lifecycle_fence import FenceHolder
+
+    holder = FenceHolder(fence) if fence is not None else None
+    guard = holder.check if holder is not None else None
     guard_kwargs: Dict[str, Any] = {"commit_guard": guard} if guard is not None else {}
     ms_kwargs.update(guard_kwargs)
     if attention_window:
@@ -772,7 +789,7 @@ def open_home(home_dir: Path, *, embedder: Any = None, attention_window: Optiona
         diary=diary,
         handlers=handlers,
         artifacts=artifacts,
-        fence=fence,
+        lifecycle=holder,
     )
     # Entity tool surface (flow c5285 ask 3): grant query + one-batch
     # execution as effects, so the flow-brain turn's tool LOOP stays in the
@@ -784,7 +801,7 @@ def open_home(home_dir: Path, *, embedder: Any = None, attention_window: Optiona
     if fence is not None:
         from .lifecycle_fence import fence_handlers
 
-        handlers.update(fence_handlers(handlers, fence))  # in place: the tool executors read home.handlers
+        handlers.update(fence_handlers(handlers, holder))  # in place: the tool executors read home.handlers
     return home
 
 

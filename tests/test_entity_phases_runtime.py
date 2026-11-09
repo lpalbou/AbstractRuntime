@@ -1066,3 +1066,14 @@ def test_after_a_hard_stop_the_next_loop_works_its_job_and_restores_nothing(tmp_
     else:
         assert seen == [("work", "t1")] and report.stopped_by == "jobs_done", seen
         assert llm.replies == ["My own thread.", "Look-back.", "R2."]
+
+
+def test_a_task_status_appends_without_flock_where_there_is_none(tmp_path: Path, monkeypatch) -> None:
+    """Cross-OS: where fcntl does not exist the status is still appended (one line), as the gateway's writer does."""
+    from abstractruntime.identity.life import append_task_status
+
+    home_dir = _make_home(tmp_path)
+    _add_task(home_dir, "t1", "Label the boxes")
+    monkeypatch.setitem(sys.modules, "fcntl", None)  # `import fcntl` raises ImportError
+    append_task_status(home_dir, "t1", "done", by="entity:liveling", note="done: labelled")
+    assert _task_status(home_dir, "t1") == [("done", "done: labelled")]

@@ -263,16 +263,20 @@ def append_task_status(home_dir: Path, task_id: str, status: str, *, by: str, no
     if str(note or "").strip():
         event["note"] = str(note).strip()
     line = _json.dumps(event, ensure_ascii=False, separators=(",", ":")) + "\n"
-    with open(Path(home_dir) / TASK_INBOX_FILENAME, "a", encoding="utf-8") as fh:
+    try:
         import fcntl
-
-        fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+    except ImportError:  # non-POSIX: a plain single-line append, as the gateway's writer degrades
+        fcntl = None  # type: ignore[assignment]
+    with open(Path(home_dir) / TASK_INBOX_FILENAME, "a", encoding="utf-8") as fh:
+        if fcntl is not None:
+            fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
         try:
             fh.write(line)
             fh.flush()
             os.fsync(fh.fileno())
         finally:
-            fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+            if fcntl is not None:
+                fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
     return event
 
 

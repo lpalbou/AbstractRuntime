@@ -28,10 +28,12 @@ file halts the loop between ticks (touch <home>/STOP).
 from __future__ import annotations
 
 import re
+import threading
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple
 
 from .chat import (
     ENTITY_LLM_READ_IDLE_TIMEOUT_S,
@@ -1750,6 +1752,177 @@ def record_loop_substrate(home_dir: Path, provider: str, model: str) -> None:
 
 PHASES_FILENAME = "phases.yaml"
 PHASES_SCHEMA_VERSION = 1
+
+
+# ------------------------------------------------- THE home state lock and the lifecycle generation (Codex review 2
+# #1; agreed with the gateway 2026-11-09): every mutation of a home's phase state - phases.yaml (the personal grant,
+# resume_to, the generation) and the state file - happens inside `home_state_lock(home)`, re-reads and merges against
+# the CURRENT data inside it, and may be fenced by the lifecycle generation. Stop bumps the generation in the same
+# critical section as its revocation, so a write decided before a Stop (passing the generation it saw as
+# `expected_generation`) is refused after it instead of restoring what Stop took away.
+#
+# Lock order: the gateway's own per-home lock is the OUTER lock and this one the INNER; no runtime path calls the
+# gateway (or takes any other lock) while holding it. Re-entrant per thread (a nested `with` is a no-op), so a host
+# holds it across "check, then call the runtime writers". Cross-process by fcntl.flock on a dedicated file that is
+# never replaced (stable inode); where there is no fcntl, a per-home in-process lock only.
+HOME_STATE_LOCK_FILENAME = ".phase_state.lock"
+HOME_STATE_LOCK_TIMEOUT_S = 30.0
+LIFECYCLE_GENERATION_KEY = "lifecycle_generation"
+
+
+class HomeStateLockTimeout(TimeoutError):
+    """The home state lock was not acquired within `timeout_s`."""
+
+
+class StaleLifecycleGeneration(RuntimeError):
+    """A write fenced on a lifecycle generation that has moved (a Stop happened since the writer looked)."""
+
+    def __init__(self, what: str, expected: int, found: int) -> None:
+        super().__init__(f"{what} refused: it was decided at lifecycle generation {expected}, the home is at {found} "
+                         "(a Stop happened since)")
+        self.expected = int(expected)
+        self.found = int(found)
+
+
+_home_state_held = threading.local()
+_home_state_thread_locks: Dict[str, threading.Lock] = {}
+_home_state_registry = threading.Lock()
+
+
+@contextmanager
+def home_state_lock(home_dir: Path, *, timeout_s: Optional[float] = HOME_STATE_LOCK_TIMEOUT_S) -> Iterator[None]:
+    """Hold THE home state lock (see above). `timeout_s=None` waits without a limit (Stop, the visit doors);
+    otherwise HomeStateLockTimeout after that long."""
+    key = str(Path(home_dir).resolve())
+    depth: Dict[str, int] = getattr(_home_state_held, "depth", None) or {}
+    _home_state_held.depth = depth
+    if depth.get(key):
+        depth[key] += 1
+        try:
+            yield
+        finally:
+            depth[key] -= 1
+        return
+    deadline = None if timeout_s is None else time.monotonic() + float(timeout_s)
+    try:
+        import fcntl
+    except ImportError:  # non-POSIX: one in-process lock per home (no cross-process exclusion there)
+        fcntl = None  # type: ignore[assignment]
+    fh = None
+    thread_lock: Optional[threading.Lock] = None
+    if fcntl is not None:
+        fh = open(Path(home_dir) / HOME_STATE_LOCK_FILENAME, "a+", encoding="utf-8")
+        try:
+            if deadline is None:
+                fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+            else:
+                while True:
+                    try:
+                        fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                        break
+                    except BlockingIOError:
+                        if time.monotonic() >= deadline:
+                            raise HomeStateLockTimeout(
+                                f"the home state lock of {home_dir} was not acquired within {timeout_s} s") from None
+                        time.sleep(0.02)
+        except BaseException:
+            fh.close()
+            raise
+    else:
+        with _home_state_registry:
+            thread_lock = _home_state_thread_locks.setdefault(key, threading.Lock())
+        if not thread_lock.acquire(timeout=-1 if deadline is None else max(0.0, deadline - time.monotonic())):
+            raise HomeStateLockTimeout(f"the home state lock of {home_dir} was not acquired within {timeout_s} s")
+    depth[key] = 1
+    try:
+        yield
+    finally:
+        depth.pop(key, None)
+        if fh is not None:
+            try:
+                fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+            finally:
+                fh.close()
+        if thread_lock is not None:
+            thread_lock.release()
+
+
+def _load_phases_for_write(home_dir: Path, what: str) -> Dict[str, Any]:
+    """phases.yaml as a mapping for a writer, with the writers' refusals: a corrupt file or a newer schema is never
+    overwritten (it could silently lose other phase sections)."""
+    import yaml
+
+    path = Path(home_dir) / PHASES_FILENAME
+    existing: Dict[str, Any] = {}
+    if path.exists():
+        try:
+            loaded = yaml.safe_load(path.read_text(encoding="utf-8"))
+        except Exception as e:  # noqa: BLE001 - never silently clobber a broken file
+            raise ValueError(
+                f"{PHASES_FILENAME} is unreadable ({e}) - repair or remove it before {what}; "
+                "overwriting it here could silently lose other phase sections"
+            ) from e
+        if loaded is not None and not isinstance(loaded, dict):
+            raise ValueError(f"{PHASES_FILENAME} is not a mapping - repair or remove it before {what}")
+        existing = dict(loaded or {})
+    try:
+        found_version = int(existing.get("schema_version") or PHASES_SCHEMA_VERSION)
+    except (TypeError, ValueError):
+        found_version = PHASES_SCHEMA_VERSION
+    if found_version > PHASES_SCHEMA_VERSION:
+        raise ValueError(
+            f"{PHASES_FILENAME} carries schema_version {found_version} but this writer "
+            f"knows {PHASES_SCHEMA_VERSION} - upgrade the runtime before writing"
+        )
+    return existing
+
+
+def _generation_of(data: Dict[str, Any]) -> int:
+    try:
+        return int(data.get(LIFECYCLE_GENERATION_KEY) or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _mutate_phases(home_dir: Path, what: str, mutate: Callable[[Dict[str, Any]], None], *,
+                   expected_generation: Optional[int] = None,
+                   timeout_s: Optional[float] = HOME_STATE_LOCK_TIMEOUT_S) -> Dict[str, Any]:
+    """Read phases.yaml, check the fence, apply `mutate` to the CURRENT mapping and replace the file atomically -
+    all inside the home state lock. Returns the mapping written."""
+    import yaml
+
+    from ..utils.atomic_files import atomic_write_text
+
+    with home_state_lock(home_dir, timeout_s=timeout_s):
+        existing = _load_phases_for_write(home_dir, what)
+        if expected_generation is not None and _generation_of(existing) != int(expected_generation):
+            raise StaleLifecycleGeneration(what, int(expected_generation), _generation_of(existing))
+        mutate(existing)
+        existing["schema_version"] = PHASES_SCHEMA_VERSION
+        atomic_write_text(Path(home_dir) / PHASES_FILENAME, yaml.safe_dump(existing, sort_keys=False))
+        return existing
+
+
+def read_lifecycle_generation(home_dir: Path) -> int:
+    """The home's lifecycle generation (0 when never bumped). Stop bumps it; a fenced writer passes the value it
+    saw. A corrupt phases.yaml raises ValueError (no writer would write over it either)."""
+    return _generation_of(_load_phases_for_write(home_dir, "reading the lifecycle generation"))
+
+
+def bump_lifecycle_generation(home_dir: Path, *, written_by: str,
+                              timeout_s: Optional[float] = HOME_STATE_LOCK_TIMEOUT_S) -> int:
+    """Increment the lifecycle generation (Stop) and return the new value. Hold `home_state_lock` around it and
+    the other Stop writes to make them one critical section (hard_stop_loop does)."""
+    if not str(written_by or "").strip():
+        raise ValueError("written_by is required - the bump names who stopped him")
+    out: Dict[str, int] = {}
+
+    def _bump(data: Dict[str, Any]) -> None:
+        out["generation"] = _generation_of(data) + 1
+        data[LIFECYCLE_GENERATION_KEY] = out["generation"]
+
+    _mutate_phases(home_dir, "bumping the lifecycle generation", _bump, timeout_s=timeout_s)
+    return out["generation"]
 PERSONAL_GRANT_MODES = ("disabled", "timer", "until_revoked")
 _PERSONAL_ACTIVATION_FIELDS = ("mode", "expires_at", "granted_by", "granted_at")
 
@@ -1790,6 +1963,7 @@ def write_personal_grant(
     mode: str,
     granted_by: str = "",
     expires_at: Optional[str] = None,
+    expected_generation: Optional[int] = None,
 ) -> Dict[str, Any]:
     """The ONE writer of the personal activation bucket (runtime owns the
     format module — the tool_policy.py precedent, gateway's c1442 option (b);
@@ -1812,38 +1986,12 @@ def write_personal_grant(
     - A corrupt existing file refuses loudly (overwriting it would silently
       lose other sections; the operator repairs first).
 
-    Returns the bucket as read_personal_grant will now answer it."""
-    import yaml
-
+    Returns the bucket as read_personal_grant will now answer it. Written inside the home state lock against the
+    current file; `expected_generation` fences it (StaleLifecycleGeneration when a Stop happened since)."""
     name = str(mode or "").strip().lower()
     if name not in PERSONAL_GRANT_MODES:
         raise ValueError(
             f"unknown personal mode {mode!r}: modes are {'/'.join(PERSONAL_GRANT_MODES)}"
-        )
-
-    path = Path(home_dir) / PHASES_FILENAME
-    existing: Dict[str, Any] = {}
-    if path.exists():
-        try:
-            loaded = yaml.safe_load(path.read_text(encoding="utf-8"))
-        except Exception as e:  # noqa: BLE001 - never silently clobber a broken file
-            raise ValueError(
-                f"{PHASES_FILENAME} is unreadable ({e}) - repair or remove it before arming; "
-                "overwriting it here could silently lose other phase sections"
-            ) from e
-        if loaded is not None and not isinstance(loaded, dict):
-            raise ValueError(
-                f"{PHASES_FILENAME} is not a mapping - repair or remove it before arming"
-            )
-        existing = dict(loaded or {})
-    try:
-        found_version = int(existing.get("schema_version") or PHASES_SCHEMA_VERSION)
-    except (TypeError, ValueError):
-        found_version = PHASES_SCHEMA_VERSION
-    if found_version > PHASES_SCHEMA_VERSION:
-        raise ValueError(
-            f"{PHASES_FILENAME} carries schema_version {found_version} but this writer "
-            f"knows {PHASES_SCHEMA_VERSION} - upgrade the runtime before writing"
         )
 
     from datetime import datetime, timezone
@@ -1869,21 +2017,19 @@ def write_personal_grant(
         bucket["granted_by"] = by
         bucket["granted_at"] = datetime.now(timezone.utc).isoformat()
 
-    # Field-merge: replace ONLY the personal activation bucket, preserving
-    # any non-activation keys a future schema puts beside them (tools/skills
-    # per phase live in their own sections and are never touched here).
-    prior_personal = existing.get("personal")
-    merged_personal: Dict[str, Any] = dict(prior_personal) if isinstance(prior_personal, dict) else {}
-    for key in _PERSONAL_ACTIVATION_FIELDS:
-        merged_personal.pop(key, None)
-    merged_personal.update(bucket)
+    # Field-merge, INSIDE the home state lock against the current file (Codex review 2 #1): replace ONLY the
+    # personal activation bucket, preserving any non-activation keys a future schema puts beside them (tools/skills
+    # per phase live in their own sections and are never touched here); a fenced write refuses on a moved generation.
+    def _merge(existing: Dict[str, Any]) -> None:
+        prior_personal = existing.get("personal")
+        merged_personal: Dict[str, Any] = dict(prior_personal) if isinstance(prior_personal, dict) else {}
+        for key in _PERSONAL_ACTIVATION_FIELDS:
+            merged_personal.pop(key, None)
+        merged_personal.update(bucket)
+        existing["personal"] = merged_personal
 
-    existing["schema_version"] = PHASES_SCHEMA_VERSION
-    existing["personal"] = merged_personal
-
-    from ..utils.atomic_files import atomic_write_text
-
-    atomic_write_text(path, yaml.safe_dump(existing, sort_keys=False))
+    _mutate_phases(home_dir, "arming" if name != "disabled" else "revoking personal", _merge,
+                   expected_generation=expected_generation)
     return read_personal_grant(home_dir)
 
 
@@ -1946,38 +2092,16 @@ def _phases_bucket(home_dir: Path, key: str) -> Tuple[Optional[Dict[str, Any]], 
     return bucket, None
 
 
-def _write_phases_bucket(home_dir: Path, key: str, bucket: Dict[str, Any]) -> None:
-    """Replace ONLY `key` in phases.yaml (field-merge; every other key rides through), with the same refusals as
-    write_personal_grant: a corrupt file or a newer schema is never overwritten."""
-    import yaml
+def _write_phases_bucket(home_dir: Path, key: str, bucket: Dict[str, Any], *,
+                         expected_generation: Optional[int] = None) -> None:
+    """Replace ONLY `key` in phases.yaml (field-merge against the CURRENT file inside the home state lock; every
+    other key rides through), with the writers' refusals: a corrupt file or a newer schema is never overwritten, and
+    a fenced write refuses on a moved lifecycle generation."""
 
-    path = Path(home_dir) / PHASES_FILENAME
-    existing: Dict[str, Any] = {}
-    if path.exists():
-        try:
-            loaded = yaml.safe_load(path.read_text(encoding="utf-8"))
-        except Exception as e:  # noqa: BLE001
-            raise ValueError(
-                f"{PHASES_FILENAME} is unreadable ({e}) - repair or remove it before writing {key}; "
-                "overwriting it here could silently lose other phase sections"
-            ) from e
-        if loaded is not None and not isinstance(loaded, dict):
-            raise ValueError(f"{PHASES_FILENAME} is not a mapping - repair or remove it before writing {key}")
-        existing = dict(loaded or {})
-    try:
-        found_version = int(existing.get("schema_version") or PHASES_SCHEMA_VERSION)
-    except (TypeError, ValueError):
-        found_version = PHASES_SCHEMA_VERSION
-    if found_version > PHASES_SCHEMA_VERSION:
-        raise ValueError(
-            f"{PHASES_FILENAME} carries schema_version {found_version} but this writer "
-            f"knows {PHASES_SCHEMA_VERSION} - upgrade the runtime before writing"
-        )
-    existing["schema_version"] = PHASES_SCHEMA_VERSION
-    existing[key] = dict(bucket)
-    from ..utils.atomic_files import atomic_write_text
+    def _set(existing: Dict[str, Any]) -> None:
+        existing[key] = dict(bucket)
 
-    atomic_write_text(path, yaml.safe_dump(existing, sort_keys=False))
+    _mutate_phases(home_dir, f"writing {key}", _set, expected_generation=expected_generation)
 
 
 def read_resume_to(home_dir: Path) -> Dict[str, Any]:
@@ -1998,8 +2122,9 @@ def read_resume_to(home_dir: Path) -> Dict[str, Any]:
     return {"phase": None, "written_by": None, "written_at": None, "source": "default"}
 
 
-def write_resume_to(home_dir: Path, phase: Optional[str], *, written_by: str) -> Dict[str, Any]:
-    """THE one writer of the resume_to bucket (personal | work | None)."""
+def write_resume_to(home_dir: Path, phase: Optional[str], *, written_by: str,
+                    expected_generation: Optional[int] = None) -> Dict[str, Any]:
+    """THE one writer of the resume_to bucket (personal | work | None); fenced by `expected_generation` when given."""
     if phase is not None and phase not in RESUME_TO_PHASES:
         raise ValueError(f"resume_to is one of {RESUME_TO_PHASES} or None, not {phase!r}")
     by = str(written_by or "").strip()
@@ -2009,7 +2134,7 @@ def write_resume_to(home_dir: Path, phase: Optional[str], *, written_by: str) ->
 
     _write_phases_bucket(home_dir, RESUME_TO_BUCKET, {
         "phase": phase, "written_by": by, "written_at": datetime.now(timezone.utc).isoformat(),
-    })
+    }, expected_generation=expected_generation)
     return read_resume_to(home_dir)
 
 
@@ -2247,6 +2372,31 @@ def hard_stop_loop(home_dir: Path, *, reason: str = "", requested_by: str = "adm
         pid = 0
     stamped_token = str(status.get("pid_started_at") or "")
 
+    # STOP, ONE CRITICAL SECTION, BEFORE ANY SIGNAL (CONTRACT v3 D3; Codex review 2 #1/#7): own time revoked (the
+    # gateway Stop's own write, mode disabled by kill_switch; skipped when already off), the remembered return
+    # cancelled, and the lifecycle generation bumped - under the home state lock, waiting without a limit (a Stop never
+    # fails on a busy lock). A writer that decided before this moment (the dying loop included) is refused after it.
+    personal_note: Optional[str] = None
+    personal_revoked = False
+    resume_to_note: Optional[str] = None
+    generation: Optional[int] = None
+    generation_note: Optional[str] = None
+    with home_state_lock(home_dir, timeout_s=None):
+        try:
+            if read_personal_grant(home_dir).get("mode") != "disabled":
+                write_personal_grant(home_dir, mode="disabled", granted_by="kill_switch")
+                personal_revoked = True
+        except Exception as e:  # noqa: BLE001 - the stop itself stands; the result says what failed
+            personal_note = f"personal not revoked: {e}"
+        try:
+            write_resume_to(home_dir, None, written_by="kill_switch")
+        except Exception as e:  # noqa: BLE001
+            resume_to_note = f"resume_to not cleared: {e}"
+        try:
+            generation = bump_lifecycle_generation(home_dir, written_by="kill_switch", timeout_s=None)
+        except Exception as e:  # noqa: BLE001
+            generation_note = f"lifecycle generation not bumped: {e}"
+
     # SIGNAL ONLY A VERIFIED OWN-TIME LOOP OF THIS HOME (gateway slice 2026-11-09; Codex review 2026-11-09 #4/#7):
     # the incarnation is verified (alive, not the caller, the recorded start-time token equal to the OS's) AND the
     # process is this home's loop invocation (`<python> -m abstractruntime.identity.life --home <this home>`).
@@ -2293,24 +2443,6 @@ def hard_stop_loop(home_dir: Path, *, reason: str = "", requested_by: str = "adm
         if killed:
             outcome = "killed"
 
-    # STOP REVOKES OWN TIME AND CANCELS THE REMEMBERED RETURN (CONTRACT v3 D3; Codex review 2 #7): nothing the
-    # stopped loop was doing is restored - Resume lands in idle, a queued job then moves him to work, and own time
-    # only comes back with the operator's new grant. Both are written whatever the loop's fate; the revocation is
-    # the same write the gateway's Stop makes (mode disabled, by kill_switch) and is skipped when already disabled.
-    personal_note: Optional[str] = None
-    personal_revoked = False
-    try:
-        if read_personal_grant(home_dir).get("mode") != "disabled":
-            write_personal_grant(home_dir, mode="disabled", granted_by="kill_switch")
-            personal_revoked = True
-    except Exception as e:  # noqa: BLE001 - the stop itself stands; the result says what failed
-        personal_note = f"personal not revoked: {e}"
-    resume_to_note: Optional[str] = None
-    try:
-        write_resume_to(home_dir, None, written_by="kill_switch")
-    except Exception as e:  # noqa: BLE001 - the stop itself stands; the result says what failed
-        resume_to_note = f"resume_to not cleared: {e}"
-
     # The status file must read stopped immediately (the dead process can no longer write its own transition) -
     # naming the loop it is about (its pid and token when it was verified), never this caller.
     try:
@@ -2336,6 +2468,9 @@ def hard_stop_loop(home_dir: Path, *, reason: str = "", requested_by: str = "adm
         # Own time revoked by this stop (False when it was already off, or when the write failed: personal_note).
         "personal_revoked": personal_revoked,
         **({"personal_note": personal_note} if personal_note else {}),
+        # The lifecycle generation this Stop moved to (None + generation_note when the bump failed).
+        "lifecycle_generation": generation,
+        **({"generation_note": generation_note} if generation_note else {}),
         # Legacy keys (kept for existing callers).
         "frozen": True,
         "was_running": bool(verified and signal_name),
@@ -2879,8 +3014,13 @@ def write_entity_state(
     mode: str = "",
     written_by: str = "operator",
     wake_at: str = "",
+    expected_generation: Optional[int] = None,
+    timeout_s: Optional[float] = HOME_STATE_LOCK_TIMEOUT_S,
 ) -> Dict[str, Any]:
     """Write the operator (or SELF) state (the CLI/gateway surface calls this).
+
+    Inside the home state lock (Codex review 2 #1); `expected_generation` fences it: a state decided before a Stop
+    is refused after it (StaleLifecycleGeneration, nothing written).
 
     The write is normally the OPERATOR'S act and is stamped as such - the
     honest-waking rule needs changed_at to tell the entity how long it was
@@ -2926,12 +3066,17 @@ def write_entity_state(
     # to every gate that polls this file). Same helper the grant writer uses.
     from ..utils.atomic_files import atomic_write_text
 
-    atomic_write_text(path, json.dumps(payload, indent=1) + "\n")
-    try:
-        with (Path(home_dir) / "state_history.jsonl").open("a", encoding="utf-8") as fh:
-            fh.write(json.dumps(payload) + "\n")
-    except OSError as e:  # history is best-effort; the state itself is the control
-        payload["warning"] = f"#FALLBACK state history append failed: {e}"
+    with home_state_lock(home_dir, timeout_s=timeout_s):
+        if expected_generation is not None:
+            found = read_lifecycle_generation(home_dir)
+            if found != int(expected_generation):
+                raise StaleLifecycleGeneration(f"writing state {state}", int(expected_generation), found)
+        atomic_write_text(path, json.dumps(payload, indent=1) + "\n")
+        try:
+            with (Path(home_dir) / "state_history.jsonl").open("a", encoding="utf-8") as fh:
+                fh.write(json.dumps(payload) + "\n")
+        except OSError as e:  # history is best-effort; the state itself is the control
+            payload["warning"] = f"#FALLBACK state history append failed: {e}"
     return payload
 
 
@@ -3047,6 +3192,9 @@ class LifeLoop:
         # The job a work day opens on (the head of read_job_queue at its gate; CONTRACT v3 D1): the work order or a
         # task of the inbox. His ```work verdict settles THIS job, whatever was queued meanwhile.
         self._day_job: Optional[Dict[str, Any]] = None
+        # The home's lifecycle generation when this loop started (Codex review 2 #1): every state / phases.yaml write
+        # of the loop is fenced on it, and a moved generation (the operator's Stop) ends the loop at its next check.
+        self._generation: Optional[int] = None
         self._cue_drive_ids: List[str] = []
         # THE GATE'S INPUTS (contract-phases v2 §10.3-§10.5, spec v23):
         # - his own sleep decision, taken from a ```rest block at a day's close and consumed by the next gate;
@@ -3131,6 +3279,15 @@ class LifeLoop:
         if self.stop_file and self.stop_file.exists():
             self.stop_cause = "stop_file"
             return True
+        if self.state_home is not None and self._generation is not None:
+            try:
+                moved = read_lifecycle_generation(self.state_home) != self._generation
+            except Exception:  # noqa: BLE001 - an unreadable file is no Stop (its writers refuse anyway)
+                moved = False
+            if moved:
+                self.stop_cause = "kill_switch"
+                self.out("(the operator's Stop moved the lifecycle generation - this loop ends here)")
+                return True
         stop_cmd = self._consume_stop_command()
         if stop_cmd is not None:
             who = str(stop_cmd.get("requested_by") or "operator")
@@ -3202,6 +3359,7 @@ class LifeLoop:
                     write_entity_state(
                         self.state_home, "asleep",
                         reason=f"self-elected sleep: {reason}", mode="dreaming", written_by="self",
+                        expected_generation=self._generation,
                     )
                 except Exception as e:  # noqa: BLE001 - sleep must not die over its own marker
                     self.out(f"#FALLBACK could not mark self-sleep state: {e}")
@@ -3285,6 +3443,7 @@ class LifeLoop:
                 write_entity_state(
                     self.state_home, "asleep",
                     reason=f"self-elected sleep: {reason}", mode="resting", written_by="self",
+                    expected_generation=self._generation,
                 )
         except Exception as e:  # noqa: BLE001 - a badge fix must never break the nap
             self.out(f"#FALLBACK could not clear the dreaming badge: {e}")
@@ -3350,6 +3509,7 @@ class LifeLoop:
                 write_entity_state(
                     self.state_home, "asleep",
                     reason=f"self-elected sleep: {reason}", mode="dreaming", written_by="self",
+                    expected_generation=self._generation,
                 )
                 # F7c: the marker rides the SUCCESSFUL state write.
                 if from_phase in (PHASE_PERSONAL, PHASE_WORK):
@@ -3457,6 +3617,7 @@ class LifeLoop:
             if current.get("state") == "asleep" and writer in ("self", "personal-cycle"):
                 write_entity_state(
                     self.state_home, "awake",
+                    expected_generation=self._generation,
                     reason=(
                         "woke from self-elected sleep - own time resumes"
                         if writer == "self"
@@ -3486,7 +3647,8 @@ class LifeLoop:
             and read_resume_to(self.state_home).get("phase") != PHASE_PERSONAL
         ):
             try:
-                write_resume_to(self.state_home, PHASE_PERSONAL, written_by="loop:job-interrupts-own-time")
+                write_resume_to(self.state_home, PHASE_PERSONAL, written_by="loop:job-interrupts-own-time",
+                                expected_generation=self._generation)
                 self.out("(a job interrupts his own time - he returns to it when every job is done, if still granted)")
             except Exception as e:  # noqa: BLE001 - the in-process return still holds for this loop
                 self.out(f"#FALLBACK could not remember the return to his own time: {e}")
@@ -3515,7 +3677,7 @@ class LifeLoop:
         try:
             current = read_resume_to(self.state_home)
             if current.get("source") == "phases.yaml" and current.get("phase") is not None:
-                write_resume_to(self.state_home, None, written_by=by)
+                write_resume_to(self.state_home, None, written_by=by, expected_generation=self._generation)
         except Exception as e:  # noqa: BLE001 - the exit itself stands
             self.out(f"#FALLBACK could not cancel the remembered return: {e}")
 
@@ -3546,7 +3708,8 @@ class LifeLoop:
             and str(current.get("mode") or "") != "visiting"
             and str(current.get("written_by") or "") in LOOP_OWN_SLEEP_WRITERS
         ):
-            write_entity_state(self.state_home, "awake", reason=reason, written_by="loop")
+            write_entity_state(self.state_home, "awake", reason=reason, written_by="loop",
+                               expected_generation=self._generation)
             return True
         return False
 
@@ -3636,6 +3799,12 @@ class LifeLoop:
         report = LifeReport()
         cue = self.first_cue
         day = 0
+        if self.state_home is not None:
+            try:
+                self._generation = read_lifecycle_generation(self.state_home)
+            except Exception as e:  # noqa: BLE001 - a corrupt phases.yaml: the loop's writes are refused anyway
+                self._generation = None
+                self.out(f"#FALLBACK lifecycle generation unreadable ({e}); this loop's writes are not fenced")
         # NOTHING IS RESTORED AFTER A HARD STOP (CONTRACT v3 D3): a loop that follows the operator's kill switch
         # never returns to the own time the stopped loop was living, whatever its host passed - it works the queued
         # jobs and ends idle. Only the operator's own act (a grant or start: first_day_unconditional) opens own time.

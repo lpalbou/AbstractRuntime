@@ -1141,3 +1141,106 @@ def test_the_kill_switch_revokes_own_time_once(tmp_path: Path) -> None:
 
     assert yaml.safe_load((home_dir / "phases.yaml").read_text(encoding="utf-8"))["personal"] == \
         yaml.safe_load(before)["personal"], "idempotent"
+
+
+# ---------------------------------------------------------------- Codex-2 #1: one home state lock + lifecycle generation
+
+
+def test_a_bucket_write_racing_stop_never_restores_what_stop_took(tmp_path: Path, monkeypatch) -> None:
+    """Codex-2 #1: a resume_to write read phases.yaml, Stop revoked personal and cleared the return, then the write
+    replaced the whole file with its stale copy - personal until_revoked and resume_to personal were back after Stop.
+    Every phases.yaml write now reads and merges inside the home state lock, so Stop waits for the write and lands
+    after it."""
+    import threading
+
+    import abstractruntime.utils.atomic_files as atomic_files
+    from abstractruntime.identity.life import hard_stop_loop, read_resume_to, write_resume_to
+
+    home_dir = _make_home(tmp_path)  # personal until_revoked
+    real_write = atomic_files.atomic_write_text
+    writer = {"thread": None, "fired": False}
+    stopper = threading.Thread(target=lambda: hard_stop_loop(home_dir, reason="operator stop"))
+
+    def racing_write(path, text, *a, **k):
+        if threading.current_thread() is writer["thread"] and not writer["fired"]:
+            writer["fired"] = True  # the writer has read the file and is about to replace it: Stop arrives now
+            stopper.start()
+            stopper.join(timeout=1.0)
+        return real_write(path, text, *a, **k)
+
+    monkeypatch.setattr(atomic_files, "atomic_write_text", racing_write)
+    t = threading.Thread(target=lambda: write_resume_to(home_dir, "personal", written_by="loop:test"))
+    writer["thread"] = t
+    t.start()
+    t.join(timeout=10)
+    stopper.join(timeout=10)
+    assert writer["fired"] and not stopper.is_alive()
+    assert read_personal_grant(home_dir)["mode"] == "disabled", "Stop's revocation survived the racing write"
+    assert read_resume_to(home_dir)["phase"] is None, "Stop's cleared return survived the racing write"
+
+
+def test_a_write_decided_before_stop_is_refused_after_it(tmp_path: Path) -> None:
+    from abstractruntime.identity.life import (
+        StaleLifecycleGeneration,
+        bump_lifecycle_generation,
+        hard_stop_loop,
+        read_lifecycle_generation,
+        read_resume_to,
+        write_resume_to,
+    )
+
+    home_dir = _make_home(tmp_path)
+    seen = read_lifecycle_generation(home_dir)
+    assert seen == 0
+    out = hard_stop_loop(home_dir, reason="operator stop")
+    assert out["lifecycle_generation"] == 1 == read_lifecycle_generation(home_dir)
+    before = (home_dir / "phases.yaml").read_text(encoding="utf-8")
+    for late in (
+        lambda: write_personal_grant(home_dir, mode="until_revoked", granted_by="person:x", expected_generation=seen),
+        lambda: write_resume_to(home_dir, "personal", written_by="loop:late", expected_generation=seen),
+        lambda: write_entity_state(home_dir, "awake", reason="late wake", expected_generation=seen),
+    ):
+        with pytest.raises(StaleLifecycleGeneration):
+            late()
+    assert (home_dir / "phases.yaml").read_text(encoding="utf-8") == before, "nothing written"
+    assert not [h for h in _history(home_dir) if h.get("reason") == "late wake"], "no late state written"
+    # Current-generation writers pass; the bump returns the new value.
+    write_resume_to(home_dir, None, written_by="gateway:test", expected_generation=1)
+    assert bump_lifecycle_generation(home_dir, written_by="gateway:test") == 2 and read_resume_to(home_dir)["phase"] is None
+
+
+def test_the_home_state_lock_is_reentrant_in_a_thread_and_times_out_across_threads(tmp_path: Path) -> None:
+    import threading
+
+    from abstractruntime.identity.life import HomeStateLockTimeout, home_state_lock, write_resume_to
+
+    home_dir = _make_home(tmp_path)
+    with home_state_lock(home_dir):
+        with home_state_lock(home_dir):  # a host holds it across "check, then call the writers"
+            write_resume_to(home_dir, "personal", written_by="gateway:test")
+        failures: List[BaseException] = []
+
+        def other() -> None:
+            try:
+                with home_state_lock(home_dir, timeout_s=0.2):
+                    pass
+            except BaseException as e:  # noqa: BLE001
+                failures.append(e)
+
+        t = threading.Thread(target=other)
+        t.start()
+        t.join(timeout=5)
+        assert len(failures) == 1 and isinstance(failures[0], HomeStateLockTimeout)
+
+
+def test_a_loop_ends_when_stop_moves_the_generation_and_its_own_late_writes_are_refused(tmp_path: Path) -> None:
+    from abstractruntime.identity.life import bump_lifecycle_generation
+
+    home_dir = _make_home(tmp_path)
+    llm = _HookLLM(["One - the operator stops him now.", "The look-back.", "R1.", "NEVER - a tick after Stop"],
+                   hooks={0: lambda: bump_lifecycle_generation(home_dir, written_by="kill_switch")})
+    report = LifeLoop(_factory_for(home_dir, llm), tick_seconds=1, ticks_per_day=3, max_ticks=5, rest_minutes=30,
+                      stop_file=home_dir / "STOP", state_home=home_dir, sleep_fn=lambda s: None,
+                      out=lambda s: None).run()
+    assert report.stopped_by == "kill_switch" and report.ticks == 1, report
+    assert "NEVER - a tick after Stop" in llm.replies

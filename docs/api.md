@@ -459,7 +459,7 @@ Implementation: `src/abstractruntime/replay/` (ADR 0010). Guide: [replay.md](rep
 
 ### AbstractCore (LLM + tools)
 
-Requires: `pip install abstractruntime` (AbstractCore 2.34.0 or newer is part of the base install).
+Requires: `pip install abstractruntime` (AbstractCore 2.35.0 or newer is part of the base install).
 
 Implementation: `src/abstractruntime/integrations/abstractcore/*`.
 
@@ -551,7 +551,7 @@ VisualFlow node type `memory_revise`. Payload and result: [MEMORY_REVISE](integr
 ### AbstractMemory facade (host surface)
 
 `abstractruntime.integrations.abstractmemory.memory_facade` is the only way a host reaches AbstractMemory (ADR 0011;
-AbstractMemory 0.4.0+):
+AbstractMemory 0.5.0+):
 
 - `MemoryFacade.open_mind(path, *, embedder=None, **stores)`; `MemoryFacade(graph=, ledger_store=, run_store=,
   artifact_store=, diary_store=, event_inbox=, runtime_id=)`; `.graph`, `.store`, `.journal`

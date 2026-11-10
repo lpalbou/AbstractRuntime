@@ -54,15 +54,56 @@ See llms.txt for the linked index.
 
 # AbstractRuntime
 
-**Release 0.18.4:** Entity LLM calls wait at least 30 minutes (1800 seconds) before timing out. See [release notes](CHANGELOG.md).
+**Release 0.19.0:** an unreachable model endpoint parks the run instead of failing it, entity homes gain a cognition
+profile and the five-state life cycle, and nothing an entity's runtime writes lands after the operator's Stop.
+Requires AbstractCore 2.35.0 and AbstractMemory 0.5.0. See [release notes](CHANGELOG.md).
 
 **AbstractRuntime** is a durable workflow runtime (interrupt → checkpoint → resume) with an append-only execution ledger.
 
 It is designed for long-running workflows that must survive restarts and explicitly model blocking (human input, timers, external events, subworkflows) without keeping Python stacks alive.
 
-**Version:** 0.18.4 • **Python:** 3.10+
+**Version:** 0.19.0 • **Python:** 3.10+
 
 **Status:** pre-1.0 (API may evolve). For production use, pin versions and follow `CHANGELOG.md`.
+
+## What's new in 0.19.0
+
+- **An unreachable model endpoint parks the run**: when AbstractCore raises `EndpointUnreachableError` (the machine
+  serving the model is off, asleep or unreachable), the LLM call becomes a durable wait on that endpoint and the run
+  continues from the same node once it answers, instead of failing.
+- **An entity's cognition profile**: a home's `cognition.yaml` names a model per part of its thinking (`summaries`,
+  `understanding`, `extraction`), how many memories a turn brings to mind, how readily it revisits what it
+  understood, what its look-back sees, and the sleep thresholds of an idle entity. See
+  [docs/entity-runtime.md](docs/entity-runtime.md).
+- **The five-state life cycle** (phase spec v25): visit, idle, work, personal and sleep, plus stopped. Work starts
+  when a job is queued (there is no work toggle), own time needs the operator's grant, turning personal time off
+  leaves the entity awake, and no clock drives a sleep.
+- **A Stop is final**: every state write of an entity's runtime carries a `LifecycleFence`. After the operator's
+  Stop no model call starts and no diary, artifact, memory or status write lands, in any process.
+- **Every memory's title and summary are authored**: the `summaries` model writes them with the record; when that
+  fails, the record is pending and the sleep's repair authors it, records stored before included. Stored text is
+  never cut.
+- **Topics**: the night forms the entity's topics from AbstractMemory's community records, and its `topics` tool
+  lists and searches them. See [docs/entity-topics.md](docs/entity-topics.md).
+- **Default iteration budget 50**, one exported constant (`DEFAULT_MAX_ITERATIONS`), and the requested budget is the
+  one the agent obeys.
+- **Who spoke**: session turns, replayed history and the replay view carry the turn's `author`; an unsigned entity
+  stamp never makes a turn an entity's.
+- **Tool results and visit images**: every tool result during entity activity is kept whole as an artifact of the
+  home, and an image attached in a visit reaches the entity's model as an image.
+
+Upgrade notes:
+
+- Requires AbstractCore 2.35.0 and AbstractMemory 0.5.0 or newer (both are dependency floors).
+- Hosts that open entity homes pass the fence: `open_home(..., fence=)`, `open_entity_runtime(..., fence=)`,
+  `ChatSession(..., fence=)` (it replaces `cancel_check`), `spawn_loop_process(..., fence=)` and
+  `build_consolidator(..., fence=)` take it keyword-only, with no default. A `DiaryStore` or `FileArtifactStore`
+  given a callable guard also takes `barrier_home=`.
+- A host that serves skill files registers its skill roots once per process with `register_skill_roots([...])`;
+  a folder outside a registered root is not served.
+- `identity.communities.memory_communities` raises `CommunitiesRetired`; serve `memory_facade.communities` instead.
+
+Full list: [CHANGELOG.md](CHANGELOG.md).
 
 ## What's new in 0.18.4
 
@@ -209,8 +250,9 @@ Remote-light runtime:
 pip install abstractruntime
 ```
 
-The base install includes AbstractCore 2.34.0 or newer (its light install:
-remote providers, tools, vision, voice, audio, music, and decision integration), plus the
+The base install includes AbstractCore 2.35.0 or newer (its light install:
+remote providers, tools, vision, voice, audio, music, and decision integration) and AbstractMemory 0.5.0 or
+newer, plus the
 `abstractruntime-mcp-worker` entry point. It keeps inference remote/light by
 default: local engines such as MLX, vLLM, HuggingFace/Torch, Diffusers, and
 sentence-transformer embeddings are not selected unless you choose a hardware
@@ -425,7 +467,7 @@ Remote-light runtime:
 pip install abstractruntime
 ```
 
-This installs AbstractCore 2.34.0 or newer with remote provider, vision,
+This installs AbstractCore 2.35.0 or newer with remote provider, vision,
 voice, audio, music, decision, tool, and MCP-worker support. The base install is
 remote-light: it can route multimodal workflows to hosted or OpenAI-compatible
 endpoints, but it does not select local inferencer stacks such as MLX, vLLM,
@@ -1615,7 +1657,7 @@ Implementation: `src/abstractruntime/replay/` (ADR 0010). Guide: [replay.md](rep
 
 ### AbstractCore (LLM + tools)
 
-Requires: `pip install abstractruntime` (AbstractCore 2.34.0 or newer is part of the base install).
+Requires: `pip install abstractruntime` (AbstractCore 2.35.0 or newer is part of the base install).
 
 Implementation: `src/abstractruntime/integrations/abstractcore/*`.
 
@@ -1707,7 +1749,7 @@ VisualFlow node type `memory_revise`. Payload and result: [MEMORY_REVISE](integr
 ### AbstractMemory facade (host surface)
 
 `abstractruntime.integrations.abstractmemory.memory_facade` is the only way a host reaches AbstractMemory (ADR 0011;
-AbstractMemory 0.4.0+):
+AbstractMemory 0.5.0+):
 
 - `MemoryFacade.open_mind(path, *, embedder=None, **stores)`; `MemoryFacade(graph=, ledger_store=, run_store=,
   artifact_store=, diary_store=, event_inbox=, runtime_id=)`; `.graph`, `.store`, `.journal`
@@ -2197,7 +2239,8 @@ Fix:
 - Install or upgrade the base Runtime package. LLM/tools integration, common
   remote-light multimodal dependencies, and the MCP worker entry point are part
   of the base install.
-- The current AbstractCore integration expects `abstractcore>=2.34.0`.
+- The current AbstractCore integration expects `abstractcore>=2.35.0`.
+- Entity homes (`open_home`) expect `AbstractMemory>=0.5.0`; an older AbstractMemory fails when a home opens.
 
 Verify:
 
@@ -2613,7 +2656,7 @@ Implementation pointers (this repo):
 pip install abstractruntime
 ```
 
-The base install includes AbstractCore 2.34.0 or newer. That is the supported baseline for the idle unload (`set_model_idle_unload`, residency rows with `last_used_at`, `in_use`, `locked_by`, `idle_unload_at`), the `decision` output modality (the `output.decision` route and `/v1/decisions`), the current server auth split (`Authorization` for server auth, `X-AbstractCore-Provider-API-Key` for provider overrides), generated-media contracts, image upscaling, capability catalog, prompt-cache control-plane endpoints (including session attribution via `/acore/prompt_cache/key_meta`), host memory snapshots, the host-wide loaded-model sweep used by residency listings, the process-wide MLX residency report and eject used by model unload, durable bloc prompt-cache helpers, bindings and lifecycle operations, task-aware model residency for text/image/video/TTS/STT, current tool catalog, AbstractCore's public output-selector contract, async/sync text-generation output-selector parity, video generation endpoints, the public local vision-cache catalog helper used by Runtime discovery, vision adapter discovery plus batch/LoRA media controls, and the released shared workspace/file-filter utility surface used by Runtime packaging and integration checks.
+The base install includes AbstractCore 2.35.0 or newer. That is the supported baseline for the endpoint wait (the typed `EndpointUnreachableError`: an unreachable endpoint parks the run), the idle unload (`set_model_idle_unload`, residency rows with `last_used_at`, `in_use`, `locked_by`, `idle_unload_at`), the `decision` output modality (the `output.decision` route and `/v1/decisions`), the current server auth split (`Authorization` for server auth, `X-AbstractCore-Provider-API-Key` for provider overrides), generated-media contracts, image upscaling, capability catalog, prompt-cache control-plane endpoints (including session attribution via `/acore/prompt_cache/key_meta`), host memory snapshots, the host-wide loaded-model sweep used by residency listings, the process-wide MLX residency report and eject used by model unload, durable bloc prompt-cache helpers, bindings and lifecycle operations, task-aware model residency for text/image/video/TTS/STT, current tool catalog, AbstractCore's public output-selector contract, async/sync text-generation output-selector parity, video generation endpoints, the public local vision-cache catalog helper used by Runtime discovery, vision adapter discovery plus batch/LoRA media controls, and the released shared workspace/file-filter utility surface used by Runtime packaging and integration checks.
 
 The base install also includes the remote-light media/capability plugins needed
 for AbstractCore's multimodal `generate(..., output=...)` path. Local
@@ -4035,7 +4078,8 @@ AbstractRuntime is the only way a host (AbstractGateway, AbstractNote, an entity
 A name or capability a host needs and cannot reach here is a runtime defect: it is added here in a patch release; a
 host never imports `abstractmemory` to work around it.
 
-Requires AbstractMemory 0.4.0 or newer (`abstractmemory.graph`). AbstractMemory is imported lazily everywhere:
+Requires AbstractMemory 0.5.0 or newer (`abstractmemory.graph`; for entity homes, the task queue, the commit guard and
+write barrier the Stop fence holds, authored titles and summaries, and the community records behind topics). AbstractMemory is imported lazily everywhere:
 `import abstractruntime` and `import abstractruntime.integrations.abstractmemory.memory_facade` never import it.
 
 ## The ledger row address

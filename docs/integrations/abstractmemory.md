@@ -13,7 +13,8 @@ AbstractRuntime is the only way a host (AbstractGateway, AbstractNote, an entity
 A name or capability a host needs and cannot reach here is a runtime defect: it is added here in a patch release; a
 host never imports `abstractmemory` to work around it.
 
-Requires AbstractMemory 0.4.0 or newer (`abstractmemory.graph`). AbstractMemory is imported lazily everywhere:
+Requires AbstractMemory 0.5.0 or newer (`abstractmemory.graph`; for entity homes, the task queue, the commit guard and
+write barrier the Stop fence holds, authored titles and summaries, and the community records behind topics). AbstractMemory is imported lazily everywhere:
 `import abstractruntime` and `import abstractruntime.integrations.abstractmemory.memory_facade` never import it.
 
 ## The ledger row address

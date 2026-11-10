@@ -1,14 +1,55 @@
 # AbstractRuntime
 
-**Release 0.18.4:** Entity LLM calls wait at least 30 minutes (1800 seconds) before timing out. See [release notes](CHANGELOG.md).
+**Release 0.19.0:** an unreachable model endpoint parks the run instead of failing it, entity homes gain a cognition
+profile and the five-state life cycle, and nothing an entity's runtime writes lands after the operator's Stop.
+Requires AbstractCore 2.35.0 and AbstractMemory 0.5.0. See [release notes](CHANGELOG.md).
 
 **AbstractRuntime** is a durable workflow runtime (interrupt → checkpoint → resume) with an append-only execution ledger.
 
 It is designed for long-running workflows that must survive restarts and explicitly model blocking (human input, timers, external events, subworkflows) without keeping Python stacks alive.
 
-**Version:** 0.18.4 • **Python:** 3.10+
+**Version:** 0.19.0 • **Python:** 3.10+
 
 **Status:** pre-1.0 (API may evolve). For production use, pin versions and follow `CHANGELOG.md`.
+
+## What's new in 0.19.0
+
+- **An unreachable model endpoint parks the run**: when AbstractCore raises `EndpointUnreachableError` (the machine
+  serving the model is off, asleep or unreachable), the LLM call becomes a durable wait on that endpoint and the run
+  continues from the same node once it answers, instead of failing.
+- **An entity's cognition profile**: a home's `cognition.yaml` names a model per part of its thinking (`summaries`,
+  `understanding`, `extraction`), how many memories a turn brings to mind, how readily it revisits what it
+  understood, what its look-back sees, and the sleep thresholds of an idle entity. See
+  [docs/entity-runtime.md](docs/entity-runtime.md).
+- **The five-state life cycle** (phase spec v25): visit, idle, work, personal and sleep, plus stopped. Work starts
+  when a job is queued (there is no work toggle), own time needs the operator's grant, turning personal time off
+  leaves the entity awake, and no clock drives a sleep.
+- **A Stop is final**: every state write of an entity's runtime carries a `LifecycleFence`. After the operator's
+  Stop no model call starts and no diary, artifact, memory or status write lands, in any process.
+- **Every memory's title and summary are authored**: the `summaries` model writes them with the record; when that
+  fails, the record is pending and the sleep's repair authors it, records stored before included. Stored text is
+  never cut.
+- **Topics**: the night forms the entity's topics from AbstractMemory's community records, and its `topics` tool
+  lists and searches them. See [docs/entity-topics.md](docs/entity-topics.md).
+- **Default iteration budget 50**, one exported constant (`DEFAULT_MAX_ITERATIONS`), and the requested budget is the
+  one the agent obeys.
+- **Who spoke**: session turns, replayed history and the replay view carry the turn's `author`; an unsigned entity
+  stamp never makes a turn an entity's.
+- **Tool results and visit images**: every tool result during entity activity is kept whole as an artifact of the
+  home, and an image attached in a visit reaches the entity's model as an image.
+
+Upgrade notes:
+
+- Requires AbstractCore 2.35.0 and AbstractMemory 0.5.0 or newer (both are dependency floors).
+- Hosts that open entity homes pass the fence: `open_home(..., fence=)`, `open_entity_runtime(..., fence=)`,
+  `ChatSession(..., fence=)` (it replaces `cancel_check`), `spawn_loop_process(..., fence=)` and
+  `build_consolidator(..., fence=)` take it keyword-only, with no default. A `DiaryStore` or `FileArtifactStore`
+  given a callable guard also takes `barrier_home=`.
+- A host that serves skill files registers its skill roots once per process with `register_skill_roots([...])`;
+  a folder outside a registered root is not served.
+- `identity.communities.memory_communities` raises `CommunitiesRetired`; serve `memory_facade.communities` instead.
+
+Full list: [CHANGELOG.md](CHANGELOG.md).
 
 ## What's new in 0.18.4
 
@@ -155,8 +196,9 @@ Remote-light runtime:
 pip install abstractruntime
 ```
 
-The base install includes AbstractCore 2.34.0 or newer (its light install:
-remote providers, tools, vision, voice, audio, music, and decision integration), plus the
+The base install includes AbstractCore 2.35.0 or newer (its light install:
+remote providers, tools, vision, voice, audio, music, and decision integration) and AbstractMemory 0.5.0 or
+newer, plus the
 `abstractruntime-mcp-worker` entry point. It keeps inference remote/light by
 default: local engines such as MLX, vLLM, HuggingFace/Torch, Diffusers, and
 sentence-transformer embeddings are not selected unless you choose a hardware

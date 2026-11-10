@@ -779,7 +779,7 @@ def test_the_operators_start_reaches_the_spawned_loop(tmp_path: Path, monkeypatc
     for flag in (True, False):
         try:
             spawn_loop_process(home_dir, provider="lmstudio", model="m", first_day_unconditional=flag,
-                               return_to="personal" if flag else None)
+                               return_to="personal" if flag else None, fence=LifecycleFence.admit(home_dir))
         except Exception:  # noqa: BLE001 - only the argv handed to the child matters here
             pass
     assert len(seen) == 2, seen
@@ -1113,11 +1113,11 @@ def test_queued_work_is_admitted_at_the_spawn_door_with_own_time_off(tmp_path: P
     monkeypatch.setattr(subprocess, "Popen", lambda argv, *a, **k: (
         spawned.append(list(argv)) if "abstractruntime.identity.life" in list(argv) else None) or _Proc())
     with pytest.raises(RuntimeError, match="no personal time"):
-        spawn_loop_process(home_dir, provider="lmstudio", model="m")
+        spawn_loop_process(home_dir, provider="lmstudio", model="m", fence=LifecycleFence.admit(home_dir))
     assert spawned == []
     _add_task(home_dir, "t1", "Label the boxes")
     try:
-        spawn_loop_process(home_dir, provider="lmstudio", model="m")
+        spawn_loop_process(home_dir, provider="lmstudio", model="m", fence=LifecycleFence.admit(home_dir))
     except Exception:  # noqa: BLE001 - only whether the child was launched matters here
         pass
     assert len(spawned) == 1 and "--home" in spawned[0], spawned

@@ -65,7 +65,7 @@ COMMIT_POINTS = (
     "append_phase_changed", "_beat_before_each_call",
     # the spawn reservation (Codex review 3 #6) and the fenced builders of the loop process
     "_reserve_loop_start", "_record_spawned_child", "_release_failed_reservation", "_claim_loop_status",
-    "_reserve_hand_start",
+    "_reserve_hand_start", "spawn_loop_process",
     "build_consolidator", "build_session_factory", "build_capability_llm_factory",
 )
 # The lane openers a fence enters through (open_home's fence is optional for readers; every runtime call passes it).
@@ -544,7 +544,7 @@ def test_spawn_reservation_single_loop(tmp_path: Path, monkeypatch) -> None:
         def start() -> None:
             try:
                 results.append(spawn_loop_process(home_dir, provider="lmstudio", model="m",
-                                                  first_day_unconditional=True))
+                                                  first_day_unconditional=True, fence=LifecycleFence.admit(home_dir)))
             except Exception as e:  # noqa: BLE001
                 results.append(e)
 
@@ -560,7 +560,7 @@ def test_spawn_reservation_single_loop(tmp_path: Path, monkeypatch) -> None:
         assert status["pid"] == sleeper.pid and status["generation"] == 0, status
         # The first start returned; its child has not registered: a later start is refused too.
         with pytest.raises(RuntimeError, match="already starting"):
-            spawn_loop_process(home_dir, provider="lmstudio", model="m")
+            spawn_loop_process(home_dir, provider="lmstudio", model="m", fence=LifecycleFence.admit(home_dir))
         assert len(launched) == 1
         argv = launched[0]
         assert argv[argv.index("--generation") + 1] == "0"
@@ -589,7 +589,7 @@ def test_the_childs_boot_replaces_the_reservation_with_its_own_registration(tmp_
         # THIS process plays the child that boots (its pid is the one the reservation names; Fable F7: a claim over
         # a reservation naming another live child is refused).
         launched = _stub_loop_popen(monkeypatch, os.getpid())
-        spawn_loop_process(home_dir, provider="lmstudio", model="m", return_to="personal")
+        spawn_loop_process(home_dir, provider="lmstudio", model="m", return_to="personal", fence=LifecycleFence.admit(home_dir))
         assert read_loop_status(home_dir)["after_stopped_by"] == "kill_switch"
         g = int(launched[0][launched[0].index("--generation") + 1])
         lines: List[str] = []
@@ -742,7 +742,7 @@ def test_loop_process_refused_after_stop(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr(life, "_verified_loop_incarnation",
                         lambda pid, token, home: (False, "refused: the incarnation is unknown (test)"))
     started = spawn_loop_process(home_dir, provider="lmstudio", model="fake-model", tick_seconds=0.0,
-                                 ticks_per_day=3, rest_minutes=30.0, first_day_unconditional=True)
+                                 ticks_per_day=3, rest_minutes=30.0, first_day_unconditional=True, fence=LifecycleFence.admit(home_dir))
     pid = int(started["pid"])
     try:
         _wait_for(lambda: (talk / "called").exists(), "the child's first model call")
@@ -1472,7 +1472,7 @@ def test_a_start_the_stop_overtook_is_never_reported_started(tmp_path: Path, mon
     monkeypatch.setattr(subprocess, "Popen", popen)
     try:
         with pytest.raises(StoppedByOperator):
-            spawn_loop_process(home_dir, provider="lmstudio", model="m", first_day_unconditional=True)
+            spawn_loop_process(home_dir, provider="lmstudio", model="m", first_day_unconditional=True, fence=LifecycleFence.admit(home_dir))
     finally:
         sleeper.kill()
         sleeper.wait()
@@ -1523,7 +1523,7 @@ def test_a_hand_start_reserves_the_home_like_a_spawn(tmp_path: Path, monkeypatch
     assert status["phase"] == "starting" and status["pid"] == os.getpid() and status["running"] is True, status
     monkeypatch.setattr(subprocess, "Popen", lambda *a, **k: (_ for _ in ()).throw(AssertionError("no spawn")))
     with pytest.raises(RuntimeError, match="already starting"):
-        spawn_loop_process(home_dir, provider="lmstudio", model="m", first_day_unconditional=True)
+        spawn_loop_process(home_dir, provider="lmstudio", model="m", first_day_unconditional=True, fence=LifecycleFence.admit(home_dir))
     report = LifeLoop(lambda: (_ for _ in ()).throw(RuntimeError("enough")), tick_seconds=0, ticks_per_day=1,
                       max_ticks=0, rest_minutes=0, stop_file=home_dir / "STOP", state_home=home_dir,
                       sleep_fn=lambda s: None, out=lambda s: None, fence=fence).run()
@@ -1902,3 +1902,32 @@ def test_a_run_stamped_with_its_admission_never_acts_after_a_readmission(tmp_pat
         assert ert.runtime.tick(workflow=wf, run_id=new_run).status.value == "completed" and len(calls) == 1
     finally:
         ert.home.close()
+
+
+def test_a_stop_after_the_start_was_found_eligible_spawns_nothing(tmp_path: Path, monkeypatch) -> None:
+    """Codex review 4 #7 (P1): spawn checked eligibility, cleared STOP / fast-forwarded the inbox, and only THEN
+    admitted - a Stop in between became the spawn's own generation: reservation, log and child after the Stop. The
+    start is admitted at the start request now (the host's fence) and every later step is fenced against it."""
+    from abstractruntime.identity.life import spawn_loop_process
+
+    home_dir = _make_home(tmp_path)
+    (home_dir / "STOP").write_text("", encoding="utf-8")  # a stale manual brake the start would clear
+    decided = LifecycleFence.admit(home_dir)  # the host decided to start here
+    real_refusal = life.loop_start_refusal
+
+    def eligible_then_stop(h):
+        verdict = real_refusal(h)
+        _stop_here(home_dir)  # the operator's Stop right after the start was found eligible
+        return verdict
+
+    monkeypatch.setattr(life, "loop_start_refusal", eligible_then_stop)
+    launched: List[Any] = []
+    real_popen = subprocess.Popen
+    monkeypatch.setattr(subprocess, "Popen", lambda argv, *a, **k: launched.append(argv) or (
+        real_popen(argv, *a, **k) if life.LOOP_MODULE_ARGV.split()[-1] not in list(argv) else None))
+    with pytest.raises(StoppedByOperator):
+        spawn_loop_process(home_dir, provider="lmstudio", model="m", first_day_unconditional=True, fence=decided)
+    assert not [a for a in launched if life.LOOP_MODULE_ARGV.split()[-1] in list(a)], "a loop child was spawned"
+    status = json.loads((home_dir / "loop_status").read_text(encoding="utf-8"))
+    assert status["phase"] == "stopped" and status["stopped_by"] == "kill_switch", status  # no reservation over it
+    assert (home_dir / "STOP").exists(), "the start cleared a control file after the Stop"

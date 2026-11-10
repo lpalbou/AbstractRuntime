@@ -930,7 +930,7 @@ def test_spawn_refuses_unarmed_personal_and_substrate_divergence(tmp_path: Path)
     # (a) unarmed → refuse before any spawn.
     (home_dir / "phases.yaml").unlink()
     with pytest.raises(RuntimeError, match="no personal time"):
-        spawn_loop_process(home_dir, provider="lmstudio", model="ornith-1.0-35b")
+        spawn_loop_process(home_dir, provider="lmstudio", model="ornith-1.0-35b", fence=LifecycleFence.admit(home_dir))
 
     # (b) armed but argv diverges from substrate.yaml → refuse naming both.
     _arm_personal(home_dir)
@@ -938,7 +938,7 @@ def test_spawn_refuses_unarmed_personal_and_substrate_divergence(tmp_path: Path)
         yaml.safe_dump({"provider": "lmstudio", "model": "ornith-1.0-35b"}), encoding="utf-8"
     )
     with pytest.raises(RuntimeError, match="substrate divergence refused"):
-        spawn_loop_process(home_dir, provider="endpoint:ovh-provider", model="gpt-oss-120b")
+        spawn_loop_process(home_dir, provider="endpoint:ovh-provider", model="gpt-oss-120b", fence=LifecycleFence.admit(home_dir))
 
 
 def test_pid_identity_token_kills_the_recycled_pid_corpse(tmp_path: Path) -> None:

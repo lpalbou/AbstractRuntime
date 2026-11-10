@@ -2980,6 +2980,9 @@ def spawn_loop_process(
     # {capability: {"spec": <provider spec>, "profile": <the host's private resolution>}} for the capability clients
     # (summaries authors titles and summaries). May carry secrets: one env key, never logged.
     capability_endpoint_profiles: Optional[Dict[str, Dict[str, Any]]] = None,
+    # THE START'S ADMISSION (Codex review 4 #7; REQUIRED): the LifecycleFence the host decided to start at. Every step
+    # of the start is fenced against it - a Stop after that moment spawns nothing, whenever it lands.
+    fence: LifecycleFence,
 ) -> Dict[str, Any]:
     """Spawn the own-time loop, detached, logging to <home>/own_time.log.
     The RUNTIME owns the home's files (single-writer discipline): hosts
@@ -3011,6 +3014,10 @@ def spawn_loop_process(
             lock_fh.close()
             raise RuntimeError("another start is already in progress for this home")
 
+        if not isinstance(fence, LifecycleFence):
+            raise TypeError(f"spawn_loop_process: fence must be the start's LifecycleFence, not {fence!r}")
+        if fence.truth_moved():
+            raise StoppedByOperator("before his own time was started")
         status = loop_process_status(home_dir)
         if status.get("running"):
             if status.get("phase") == "starting":
@@ -3047,14 +3054,19 @@ def spawn_loop_process(
                 "the mind via the sanctioned substrate surface first (durable event), then start."
             )
 
+        # The control files (a stale STOP, the inbox's stale commands) change only while the start's admission
+        # stands - one fenced step (Codex review 4 #7): a Stop that landed since the start was decided leaves them.
         stop_file = home_dir / "STOP"
-        if stop_file.exists():
-            stop_file.unlink()
-        skipped = fast_forward_loop_commands(home_dir)
 
-        # THE RESERVATION (Codex review 3 #6): admitted at the current generation and written BEFORE the child
-        # exists; the child is told that generation and refuses to start (writing nothing) once it moved.
-        fence = LifecycleFence.admit(home_dir)
+        def _clear_control_files() -> int:
+            if stop_file.exists():
+                stop_file.unlink()
+            return fast_forward_loop_commands(home_dir)
+
+        skipped = fence.commit("clearing the start's control files", _clear_control_files)
+
+        # THE RESERVATION (Codex review 3 #6): written at the start's admission BEFORE the child exists (refused when
+        # it moved); the child is told that generation and refuses to start (writing nothing) once it moved.
         _reserve_loop_start(home_dir, fence=fence)
 
         argv = [

@@ -233,7 +233,7 @@ def test_the_spawn_hands_the_capability_profiles_to_the_child(tmp_path: Path, mo
     monkeypatch.setattr(subprocess, "Popen", fake_popen)
     try:
         spawn_loop_process(home_dir, provider="lmstudio", model="m", capability_endpoint_profiles={
-            "summaries": {"spec": "endpoint:theforge", "profile": {"base_url": "http://x", "api_key": "k"}}})
+            "summaries": {"spec": "endpoint:theforge", "profile": {"base_url": "http://x", "api_key": "k"}}}, fence=LifecycleFence.admit(home_dir))
     except Exception:  # noqa: BLE001 - only what the child would receive matters
         pass
     assert len(seen) == 1, seen  # exactly one loop child was spawned

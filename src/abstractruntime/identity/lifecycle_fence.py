@@ -532,13 +532,15 @@ def is_sentinel(fence: Any) -> bool:
 
 
 # ------------------------------------------------------------------------------------------- the effect dispatch
-def stopped_outcome(effect: str, where: str) -> Any:
+def stopped_outcome(effect: str, where: str, *, ran: bool = True) -> Any:
     """What a fenced effect returns instead of running (or instead of its late reply): status `cancelled` - never
-    retried, never a failure; the Runtime ends the run CANCELLED with KILL_SWITCH_REASON as its error."""
+    retried, never a failure; the Runtime ends the run CANCELLED with KILL_SWITCH_REASON as its error. `ran=False`
+    (refused before it started): the Runtime's node trace keeps no payload for it (castor E2E 2026-11-10: the prompt
+    of a call that never ran was saved as artifacts after the Stop)."""
     from ..core.runtime import EffectOutcome
 
     return EffectOutcome.cancelled({"reason": KILL_SWITCH_REASON, "cancelled_by": "operator", "where": where,
-                                    "effect": effect})
+                                    "effect": effect, "ran": bool(ran)})
 
 
 def is_stopped_outcome(outcome: Any) -> bool:
@@ -584,7 +586,7 @@ def _fence_handler(etype: Any, inner: Callable[..., Any], fence: "FenceHolder") 
             admission = LifecycleFence(fence.fence.home_dir, int(stamped)) if isinstance(stamped, int) \
                 else fence.fence
         if admission.moved():
-            return stopped_outcome(name, before)
+            return stopped_outcome(name, before, ran=False)
         with admitted(admission):
             try:
                 out = inner(run, effect, default_next_node) if three else inner(run, effect)

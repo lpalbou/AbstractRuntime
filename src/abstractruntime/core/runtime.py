@@ -925,6 +925,12 @@ def _record_node_trace(
             "details": w.details,
         }
 
+    # An effect cancelled BEFORE it ran (a cancelled outcome whose result says `ran: False`, e.g. the operator's Stop
+    # refusing it at dispatch) is traced without its payload: nothing of it happened, and its prompt must not be
+    # offloaded into artifacts after the cancellation (castor E2E 2026-11-10). The ledger keeps its own rows.
+    never_ran = (
+        outcome.status == "cancelled" and isinstance(outcome.result, dict) and outcome.result.get("ran") is False
+    )
     entry: Dict[str, Any] = {
         "ts": utc_now_iso(),
         "node_id": node_id,
@@ -933,10 +939,12 @@ def _record_node_trace(
         "reused_prior_result": reused_prior_result,
         "effect": {
             "type": effect.type.value,
-            "payload": effect.payload,
+            "payload": {"not_traced": "the effect never ran"} if never_ran else effect.payload,
             "result_key": effect.result_key,
         },
     }
+    if never_ran:
+        entry["cancelled"] = {k: outcome.result.get(k) for k in ("reason", "cancelled_by", "where")}
     if isinstance(duration_ms, (int, float)) and duration_ms >= 0:
         # UI/UX consumers use this for per-step timing badges (kept JSON-safe).
         entry["duration_ms"] = float(duration_ms)

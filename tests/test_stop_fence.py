@@ -2110,3 +2110,35 @@ def test_a_hosts_callable_guard_writes_under_the_barrier_or_is_refused(tmp_path:
 
     FileArtifactStore(str(tmp_path / "a"), guard=guard, barrier_home=home_dir).store(b"x", content_type="text/plain")
     assert held == [True], "the host's guard ran outside the home's write barrier"
+
+
+def test_a_model_call_refused_before_it_ran_saves_no_prompt_artifacts(tmp_path: Path) -> None:
+    """Castor's live E2E (2026-11-10, e2e-restart3 C1_07/C1_11): a Stop 1.7 s into a turn, and in the next 20-60 ms
+    the run still saved ~48 KB of the refused call's PROMPT (messages, system prompt, tools) as node-trace artifacts.
+    The ledger's records of the cancelled act stay (the cancelled row); a call the fence refused before it ran
+    traces no payload - nothing is offloaded for it."""
+    from abstractruntime.core.models import EffectType
+    from abstractruntime.core.runtime import EffectOutcome
+    from abstractruntime.identity.entity_runtime import open_entity_runtime
+
+    home_dir = _make_home(tmp_path)
+    calls: List[Any] = []
+    ert = open_entity_runtime(home_dir, extra_handlers={
+        EffectType.LLM_CALL: lambda run, effect, nxt=None: calls.append(effect) or EffectOutcome.completed({})},
+        fence=LifecycleFence.admit(home_dir))
+    big = "a long conversation so far " * 2000  # ~54 KB: over the node trace's inline cap
+    try:
+        wf = _one_effect_workflow("refused", EffectType.LLM_CALL, {
+            "messages": [{"role": "user", "content": big}], "system_prompt": big[:20000], "tools": [{"n": i}
+                                                                                                     for i in range(300)]})
+        run_id = ert.runtime.start(workflow=wf, vars={})
+        _stop_here(home_dir)
+        before = _artifact_files(home_dir)
+        state = ert.runtime.tick(workflow=wf, run_id=run_id)
+        after = _artifact_files(home_dir)
+        records = list(ert.ledger_store.list(run_id))
+    finally:
+        ert.home.close()
+    assert calls == [] and state.status.value == "cancelled", state.status
+    assert after == before, f"the refused call's prompt was saved: {sorted(set(after) - set(before))}"
+    assert any(str(r.get("status") or "").lower() == "cancelled" for r in records), records  # the row stays

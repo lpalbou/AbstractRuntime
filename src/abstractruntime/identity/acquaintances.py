@@ -16,7 +16,9 @@ Where an interaction is read (identifiers only — no text of any run, message o
 
 Runs read: turn roots that are not reserved runtime runs (`track_record.is_counted_candidate`), whatever
 their origin — a visit is an interaction even when no origin was recorded for it. Sub-runs are never read
-(they carry their root's stamp; counting them would count one visit many times).
+(they carry their root's stamp; counting them would count one visit many times). A visit in which no word was
+exchanged (`track_record.is_wordless_visit`: no turn) is no interaction (operator 2026-11-11 00:40): nobody is
+met by it.
 
 Not counted, and counted in `not_counted` so the answer says so: a participant of another namespace
 (`agent:<name>`, a shared-room agent: neither an entity nor a human), a participant with no namespace, and a
@@ -45,6 +47,7 @@ from .track_record import (
     _load,
     _note_ref,
     is_counted_candidate,
+    is_wordless_visit,
     read_manifest,
     read_task_events,
     task_kind_of,
@@ -164,6 +167,8 @@ def _fold_runs(fold: _Fold, run_store: Any, rows: List[Dict[str, Any]], refs: Li
             continue
         run = _load(run_store, str(row["run_id"]))
         _note_ref(refs, row, run)
+        if is_wordless_visit(run):
+            continue
         vars_obj = run.vars if isinstance(run.vars, Mapping) else {}
         who: List[Tuple[str, str]] = []
         runtime_ns = vars_obj.get("_runtime")

@@ -100,6 +100,27 @@ HARVEST_NODE = "HARVEST"  # the react middle's exit contract (final_next_node)
 MODEL_GATE_NODE = "VISIT_MODEL_GATE"
 TURN_FAILED_NODE = "VISIT_TURN_FAILED"
 
+
+def visit_without_words(run: Any) -> bool:
+    """True for a visit run in which no turn happened: opened and closed (or still open) with no word exchanged
+    either way. `_visit.turn_n` is the visit's turn count (ROUTE counts a turn when a message with words or files
+    arrives; an empty message is not a turn); absent = no turn yet, and a refused prelude never got one.
+
+    Operator 2026-11-11 00:40: "that should not create a memory if no word was shared" and "it should not even be
+    remembered". Such a visit forms nothing (REFLECT: no sheet, no look-back model call) and is not an interaction
+    of the entity's life: the track record and the acquaintances do not count it. Its ledger rows (open, close)
+    stay: the ledger is the record of the run. Any other workflow: False. A turn count that is not an integer
+    raises ValueError naming the run."""
+    if str(getattr(run, "workflow_id", "") or "") != VISIT_WORKFLOW_ID:
+        return False
+    vars_obj = getattr(run, "vars", None)
+    visit = vars_obj.get("_visit") if isinstance(vars_obj, dict) else None
+    turn_n = visit.get("turn_n", 0) if isinstance(visit, dict) else 0
+    if isinstance(turn_n, bool) or not isinstance(turn_n, int):
+        raise ValueError(f"visit run {getattr(run, 'run_id', '?')}: _visit.turn_n is not an integer ({turn_n!r})")
+    return turn_n == 0
+
+
 # HISTORY WINDOW (operator ruling 2026-09-28, ADR-0026): the visit's
 # history rides every prompt through THE runtime history window
 # (`session_history.window_transcript` over `fold_history_window`): the most
@@ -1213,6 +1234,9 @@ def build_visit_workflow(
             # honored by the door's pending-look-back at the next open.
             return StepPlan(node_id="REFLECT", next_node="DONE")
         if not sheet:
+            # Nothing formed in the turns, nothing to look back on: no model call, no record. A visit with no
+            # word exchanged (`visit_without_words`) has no sheet, so it ends here (or at the pause freeze above)
+            # and leaves no memory of any kind (operator 2026-11-11 00:40); its open/close rows stay in the ledger.
             return StepPlan(node_id="REFLECT", next_node="DONE")
         # The prompt lists the sheet folded visibly (an index beside the whole
         # history); the marker renderer in the apply node reads the whole lines.

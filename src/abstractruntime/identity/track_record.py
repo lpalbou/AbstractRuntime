@@ -12,6 +12,8 @@ Counted runs (ADR §5, ATTACK B6) — what a track record is made of:
 
 Sub-runs, controllers, owner runs and every run another run or the system started (origin `agent` or
 `system`, or no origin) are never counted; their tokens count only as part of the counted run above them.
+A visit in which no word was exchanged (`visit_workflow.visit_without_words`: no turn) is not counted either
+(operator 2026-11-11 00:40: it is not an interaction of the entity's life); it counts once its first turn lands.
 
 Outcome signals (one per counted unit; the signal is named on each evidence row):
 
@@ -252,6 +254,17 @@ def has_counted_origin(run: Any) -> bool:
     return origin is not None and origin["kind"] in COUNTED_ORIGIN_KINDS
 
 
+def is_wordless_visit(run: Any) -> bool:
+    """A visit run with no turn (`visit_workflow.visit_without_words`): never a counted run, never an interaction.
+    A malformed turn count raises TrackRecordError."""
+    from .visit_workflow import visit_without_words  # the visit graph's own rule; imported at read time
+
+    try:
+        return visit_without_words(run)
+    except ValueError as exc:
+        raise TrackRecordError(str(exc)) from exc
+
+
 def _innermost(store: Any) -> Any:
     cur = store
     for _ in range(8):
@@ -420,7 +433,7 @@ def _run_units(
             occurrence_groups.setdefault(key, []).append(row)
             continue
         run = _load(run_store, rid)
-        if not has_counted_origin(run):
+        if not has_counted_origin(run) or is_wordless_visit(run):
             continue
         _note_ref(refs, row, run)
         status = str(row.get("status") or "")
@@ -727,6 +740,7 @@ __all__ = [
     "entity_track_record",
     "has_counted_origin",
     "is_counted_candidate",
+    "is_wordless_visit",
     "ledger_token_counts",
     "session_track_record",
     "task_kind_of",

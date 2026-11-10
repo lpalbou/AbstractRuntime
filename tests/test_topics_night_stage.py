@@ -246,12 +246,14 @@ def test_the_topics_receipt_its_line_and_the_maintenance_note(tmp_path: Path, mo
     result = _night(home_dir, lines)
     receipt = result["communities"]
     v = receipt["version_seq"]
-    assert v is not None and receipt["cancelled"] is None and "stopped" not in receipt, receipt
+    assert v is not None and not receipt["cancelled"] and "stopped" not in receipt, receipt
     assert receipt["budget"] == 64 - result["authoring"]["considered"]
     assert set(receipt["embedding"]) == {"embedded", "skipped", "failed"}
     (line,) = _topic_lines(lines)
     assert line.startswith(f"(topics: version {v} - {receipt['communities']} topics: {receipt['new']} new, "), line
-    assert f"titles {receipt['authored']} authored" in line and "0 without a vector, 0 unplaced)" in line, line
+    assert f"titles {receipt['authored']} authored" in line, line
+    assert line.endswith(f"0 without a vector, 0 unplaced (0 with only closed neighbours); "
+                         f"{receipt['timings_ms']['rounds']} detection rounds)"), line
     row = _read(home_dir)["maintenance"]
     assert row["detail"] == {"include_identity": True, "communities_version": v}, row
     assert row["completed_at"] == "2026-11-10T03:00:00+00:00"
@@ -497,3 +499,27 @@ def test_what_could_not_be_embedded_is_a_night_note(tmp_path: Path, monkeypatch)
                      f"{receipt['embedding']['skipped']} no_embedder; the pass places them by their neighbours)"], lines
     assert not [ln for ln in lines if ln.startswith("#AUTHORING_FAILURE")], lines
     assert abstractmemory  # the import is the module under test's
+
+
+def test_a_receipt_that_says_cancelled_records_nothing_more(tmp_path: Path, monkeypatch) -> None:
+    """Memory's own word that its version did not land (`cancelled`, a reason; falsy when the pass completed) is
+    read as such, whatever the fence says: no line, no maintenance note. Scripted receipt: memory's real one with the
+    cancellation it reports."""
+    import abstractmemory.communities as mc
+
+    home_dir = _home(tmp_path)
+    _install(monkeypatch, [])
+    spied = mc.communities_pass
+
+    def cancelled(system, **kw):
+        out = spied(system, **kw)
+        out.update(version_seq=None, cancelled="cancelled before the write: the host stopped the night (nothing written)")
+        return out
+
+    monkeypatch.setattr(mc, "communities_pass", cancelled)
+    _asleep(home_dir)
+    lines: List[str] = []
+    result = _night(home_dir, lines)
+    assert result["communities"]["stopped"] == "the operator's Stop", result["communities"]
+    assert not _topic_lines(lines), lines
+    assert "communities_version" not in _read(home_dir)["maintenance"]["detail"]

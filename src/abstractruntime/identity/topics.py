@@ -67,7 +67,8 @@ def sleep_communities(ms: Any, *, entity_id: str, scopes: Sequence[Tuple[str, st
        night, one guarded transaction. The author is fenced here too (`fence.check` before every call: no model call
        starts after the operator's Stop, whatever client the host built). Memory's receipt is returned as memory
        gave it (`version_seq`, `communities`, `new`, `kept`, `renamed`, `dissolved`, `authored`, `pending`,
-       `failed`, `authoring.failures`, `unvectored_count`, `unplaced_count`, `cancelled`, `skipped`, ...), plus
+       `failed`, `authoring.failures`, `unvectored_count`, `unplaced_count`, `unplaced_closed`, `cancelled` (a
+       reason, falsy when the pass completed), `skipped`, `timings_ms.rounds`, ...), plus
        `embedding` and `budget`.
     3. A version written: `communities_version` (its `version_seq`) joins tonight's completed-maintenance detail
        (`maintenance_kind`: the memq_maintenance row tonight's `sleep_pass` completed, "night" or "cycle"; None =
@@ -156,7 +157,7 @@ def _embedding_note(embedded: Dict[str, Any]) -> str:
 def _after_the_pass(ms: Any, scopes: Sequence[Tuple[str, str]], receipt: Dict[str, Any], *,
                     maintenance_kind: Optional[str], fence: Any, note: str, out: Callable[[str], None]) -> Dict[str, Any]:
     """What a returned pass leaves: nothing after a Stop; else the maintenance note, then the night's lines."""
-    if receipt["cancelled"] is not None or fence.moved():
+    if receipt["cancelled"] or fence.moved():  # memory's reason string; falsy when the pass completed
         receipt["stopped"] = _STOPPED
         return receipt
     version_seq = receipt["version_seq"]
@@ -183,13 +184,15 @@ def _note_version(ms: Any, scopes: Sequence[Tuple[str, str]], kind: str, version
 def _receipt_line(r: Dict[str, Any]) -> str:
     e = r["embedding"]
     first = f"{e['embedded']} embedded first" if "embedded" in e else "embedding failed"
-    vectors = (f"{first}, {int(r['unvectored_count'])} without a vector, {int(r['unplaced_count'])} unplaced")
+    vectors = (f"{first}, {int(r['unvectored_count'])} without a vector, {int(r['unplaced_count'])} unplaced "
+               f"({len(r['unplaced_closed'])} with only closed neighbours)")
     if r["version_seq"] is None:
         return f"(topics: no new version - {r['skipped']}; {int(r['communities'])} topics; {vectors})"
     return (f"(topics: version {int(r['version_seq'])} - {int(r['communities'])} topics: {int(r['new'])} new, "
             f"{int(r['kept'])} kept, {int(r['dissolved'])} dissolved, {int(r['renamed'])} retitled, "
             f"{int(r['moved_out'])} memories moved; titles {int(r['authored'])} authored, {int(r['titles_kept'])} "
-            f"kept, {int(r['pending'])} pending, {int(r['failed'])} failed; {vectors})")
+            f"kept, {int(r['pending'])} pending, {int(r['failed'])} failed; {vectors}; "
+            f"{int(r['timings_ms']['rounds'])} detection rounds)")
 
 
 # ------------------------------------------------------------------------------------------------------ the read

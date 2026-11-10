@@ -11,7 +11,8 @@
 - The night's result carries memory's receipt under `communities` (`version_seq`, `communities`, `new`, `kept`,
   `renamed`, `dissolved`, `authored`, `pending`, `failed`, `skipped`, ...), plus the embedding counts
   (`embedding: {embedded, skipped, failed}`) and the `budget`.
-  - One own_time.log line says what formed, or why memory wrote no version (unchanged, empty, nothing vectored).
+  - One own_time.log line says what formed (including the unplaced records whose only neighbours are closed,
+    and the detection rounds), or why memory wrote no version (unchanged, empty, nothing vectored).
   - A title the pass could not author gets its authoring-failure line.
   - Records that were not embedded get one night note, by memory's reason codes; never a failure.
   - When a version is written, `communities_version` joins the completed-maintenance detail of that night

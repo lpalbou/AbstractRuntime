@@ -6657,8 +6657,8 @@ What the night records:
 
 | Where | What |
 |---|---|
-| the night's result, `communities` | memory's receipt (`version_seq`, `communities`, `new`, `kept`, `renamed`, `dissolved`, `authored`, `titles_kept`, `pending`, `failed`, `unvectored_count`, `unplaced_count`, `skipped`, `cancelled`, timings) plus `embedding: {embedded, skipped, failed}` and `budget` |
-| `own_time.log` | one line per sleep, for example `(topics: version 1287 - 14 topics: 2 new, 12 kept, 0 dissolved, 3 retitled, 41 memories moved; titles 5 authored, 9 kept, 0 pending, 0 failed; 136 embedded first, 0 without a vector, 0 unplaced)`, or `(topics: no new version - unchanged: every community stands as it is; ...)` |
+| the night's result, `communities` | memory's receipt (`version_seq`, `communities`, `new`, `kept`, `renamed`, `dissolved`, `authored`, `titles_kept`, `pending`, `failed`, `unvectored_count`, `unplaced_count`, `unplaced_closed`, `skipped`, `cancelled`, `timings_ms` with its detection `rounds`) plus `embedding: {embedded, skipped, failed}` and `budget` |
+| `own_time.log` | one line per sleep, for example `(topics: version 1287 - 14 topics: 2 new, 12 kept, 0 dissolved, 3 retitled, 41 memories moved; titles 5 authored, 9 kept, 0 pending, 0 failed; 136 embedded first, 0 without a vector, 2 unplaced (2 with only closed neighbours); 3 detection rounds)`, or `(topics: no new version - unchanged: every community stands as it is; ...)` |
 | memq_maintenance (memory's completed-maintenance row of that night) | `detail.communities_version`: the `version_seq` the night wrote |
 | the authoring-failures file | one line per topic whose title could not be authored (`template_id` `memory.communities_pass`) |
 

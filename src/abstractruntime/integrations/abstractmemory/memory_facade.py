@@ -36,8 +36,8 @@ from ...storage.base import coerce_ledger_seq
 # -- lazy AbstractMemory access ----------------------------------------------------------------------------------
 
 _INSTALL_HINT = (
-    "AbstractMemory is unavailable. Install a Runtime environment with AbstractMemory >= 0.4.0 "
-    "(`pip install \"AbstractMemory>=0.4.0\"`; the graph package `abstractmemory.graph` is required)."
+    "AbstractMemory is unavailable. Install a Runtime environment with AbstractMemory >= 0.5.0 "
+    "(`pip install \"AbstractMemory>=0.5.0\"`; the graph package `abstractmemory.graph` is required)."
 )
 
 

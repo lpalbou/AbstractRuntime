@@ -49,10 +49,11 @@ dependencies = [
   # 0.4.0: `abstractmemory.graph` (SourceRef, Provenance, Revision, MemoryGraph):
   # the memory facade, provenance stamping and MEMORY_REVISE (ADR 0011). The
   # runtime release waits for AbstractMemory 0.4.0 on PyPI (root ADR 0034).
-  # FLOOR (the Stop fence): the runtime needs AbstractMemory at or after commit 85ecf75 - MemorySystem(commit_guard=)
-  # (4074406), sleep_pass(cancelled=) (f310865) and MemorySystem.write_barrier() (85ecf75), which the Stop's bump
-  # holds. The version number is set at the memory release cut; raise this floor to it then.
-  "AbstractMemory>=0.4.0",
+  # 0.5.0 (HARD): `MemorySystem(task_queue=True, commit_guard=)`, `MemorySystem.write_barrier()` (the Stop's bump
+  # holds it), `sleep_pass(cancelled=)`, `engram(author=)` / `world_model_update(author=)`, the authoring verbs
+  # (`declare_pending`, `retitle`, `rewrite_digest`, `task_packet`, `pending_records`, `rearm_pending`) and the
+  # communities (`communities_pass`, `embed_missing`, `community_index`). 0.4.0 raises at every entity home open.
+  "AbstractMemory>=0.5.0",
   # Runtime's base install is the remote-light workflow host: LLM/tool effects,
   # MCP worker support, and multimodal routing come with AbstractCore's light
   # install (remote providers, built-in tools, media inputs, voice/vision/music
@@ -75,7 +76,9 @@ dependencies = [
   # 2.33.0: the release wave's Core (typed `ModelNotDownloadedError`, AbstractVoice 0.20.0 floor).
   # 2.34.0: the idle unload (ADR 0012): `process_residency.set_idle_unload` / `get_idle_unload` and
   # `resident_model_states()` rows with `last_used_at`, `in_use`, `locked_by`, `idle_unload_at`.
-  "abstractcore>=2.34.0",
+  # 2.35.0 (HARD): `abstractcore.exceptions.EndpointUnreachableError`, imported by name by the effect handlers and
+  # the LLM client (an unreachable endpoint parks the step instead of failing the run).
+  "abstractcore>=2.35.0",
   "openai<3.0.0,>=1.109.1",
   "httpx<1.0.0,>=0.28.1",
   "anyio<5.0.0,>=4.12.1",
@@ -92,12 +95,12 @@ dependencies = [
 
 [project.optional-dependencies]
 apple = [
-  "abstractcore[apple]>=2.34.0",
+  "abstractcore[apple]>=2.35.0",
   "setuptools<82.0.0,>=80.10.2",
 ]
 
 gpu = [
-  "abstractcore[gpu]>=2.34.0",
+  "abstractcore[gpu]>=2.35.0",
   # vLLM 0.9-0.19 caps setuptools below 80; 77.0.3 is still a modern floor.
   "setuptools<82.0.0,>=77.0.3",
 ]

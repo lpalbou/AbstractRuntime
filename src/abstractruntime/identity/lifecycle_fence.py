@@ -39,6 +39,10 @@ from typing import Any, Callable, Dict, Iterator, Optional, Tuple, TypeVar, Unio
 from .chat import TurnCancelled
 
 LIFECYCLE_SIGNAL_FILENAME = ".lifecycle_generation"
+# THE HOME'S WRITE BARRIER (Codex review 4 #2): writers of the runtime's own stores (the diary book, the artifact
+# store) hold it SHARED around their fence check AND their write; the bump holds it EXCLUSIVE around the generation
+# write - so a write whose check passed always lands before a bump, never after it. A dedicated file (stable inode).
+WRITE_BARRIER_FILENAME = ".write_barrier.lock"
 # The words a lane records for a fenced refusal (the gateway's KILL_SWITCH_REASON is the same sentence).
 KILL_SWITCH_REASON = "kill_switch: stopped by the operator"
 
@@ -380,6 +384,64 @@ _ADMITTED = threading.local()
 RUN_GENERATION_VAR = "_lifecycle_generation"
 
 
+_barrier_held = threading.local()
+
+
+@contextmanager
+def write_barrier(home_dir: Union[str, Path], *, exclusive: bool) -> Iterator[None]:
+    """Hold the home's write barrier (see WRITE_BARRIER_FILENAME): `exclusive` for the bump, shared for a write
+    section. Cross-process (fcntl.flock on a dedicated file), waiting without a limit - a Stop never fails, and a
+    write section is one fence check plus one store write. Re-entrant per thread; asking for it exclusive while this
+    thread holds it shared raises (it would wait on itself). Lock order: the home state lock OUTER, this barrier
+    inner, the stores' own locks innermost; a write section never takes the home state lock."""
+    key = home_key(home_dir)
+    held = getattr(_barrier_held, "by_key", None)
+    if held is None:
+        held = _barrier_held.by_key = {}
+    mode = held.get(key)
+    if mode is not None:
+        if exclusive and mode == "shared":
+            raise RuntimeError("the lifecycle generation cannot move from inside a fenced write section")
+        yield  # already held by this thread (shared in shared, anything in exclusive)
+        return
+    try:
+        import fcntl
+    except ImportError:  # non-POSIX: no cross-process barrier (the in-process fence still holds)
+        yield
+        return
+    fh = open(Path(home_dir) / WRITE_BARRIER_FILENAME, "a+", encoding="utf-8")
+    try:
+        fcntl.flock(fh.fileno(), fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH)
+        held[key] = "exclusive" if exclusive else "shared"
+        try:
+            yield
+        finally:
+            held.pop(key, None)
+            fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+    finally:
+        fh.close()
+
+
+def write_section(guard: Any, barrier_home: Any, store: str) -> Callable[[str], Any]:
+    """A store's `writing(where)` from its guard (Codex review 4 #2): the home's fence holder (its own `.writing`), or
+    a host's callable guard together with `barrier_home` - the home whose write barrier the write holds while the
+    guard is checked. A callable without `barrier_home` is refused (it would check outside the barrier)."""
+    if callable(getattr(guard, "writing", None)):
+        return guard.writing
+    if not callable(guard):
+        raise TypeError(f"{store}(guard=) takes the home's fence holder or a callable guard, not {guard!r}")
+    if barrier_home is None:
+        raise TypeError(f"{store}(guard=<callable>) needs barrier_home= (the home whose write barrier its writes hold)")
+
+    @contextmanager
+    def writing(where: str) -> Iterator[None]:
+        with write_barrier(barrier_home, exclusive=False):
+            guard(where)
+            yield
+
+    return writing
+
+
 @contextmanager
 def admitted(fence: LifecycleFence) -> Iterator[LifecycleFence]:
     """Act under `fence` (an operation's immutable admission) on this thread until the block ends."""
@@ -427,6 +489,14 @@ class FenceHolder:
 
     def check(self, where: str) -> None:
         self.current().check(where)
+
+    @contextmanager
+    def writing(self, where: str) -> Iterator[None]:
+        """A store write as ONE section with its check (Codex review 4 #2): the write barrier held shared, the fence
+        checked inside it, the write made inside it - a racing bump waits for the section to end."""
+        with write_barrier(self.fence.home_dir, exclusive=False):
+            self.check(where)
+            yield
 
     def readmit(self, fence: LifecycleFence) -> None:
         from .life import home_state_lock
@@ -534,7 +604,9 @@ __all__ = [
     "KILL_SWITCH_REASON",
     "LIFECYCLE_SIGNAL_FILENAME",
     "RUN_GENERATION_VAR",
+    "WRITE_BARRIER_FILENAME",
     "admitted",
+    "write_barrier",
     "RESUME",
     "Fence",
     "FenceHolder",

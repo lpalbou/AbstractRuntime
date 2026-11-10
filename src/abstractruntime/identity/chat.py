@@ -752,9 +752,9 @@ def open_home(home_dir: Path, *, embedder: Any = None, attention_window: Optiona
     except TypeError:  # older facade without embedder/attention kwargs (the commit guard is never dropped)
         ms = MemorySystem(store=store, journal=journal, task_queue=True, **guard_kwargs)
     ledger = SqliteLedgerStore(SqliteDatabase(str(home_dir / "home.sqlite3")))
-    diary = DiaryStore(entity_id=entity_id, ledger_store=ledger, guard=guard)
+    diary = DiaryStore(entity_id=entity_id, ledger_store=ledger, guard=holder)
     # Verbatims live IN the home (copy-the-home keeps the life whole).
-    artifacts = FileArtifactStore(str(home_dir / "artifacts"), guard=guard)
+    artifacts = FileArtifactStore(str(home_dir / "artifacts"), guard=holder)
 
     handlers = {
         **build_memory_seam_effect_handlers(

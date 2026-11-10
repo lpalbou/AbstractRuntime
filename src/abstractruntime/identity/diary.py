@@ -153,14 +153,20 @@ class DiaryStore:
     """
 
     def __init__(self, *, entity_id: str, ledger_store: LedgerStore,
-                 guard: Optional[Callable[[str], None]] = None):
+                 guard: Any = None, barrier_home: Any = None):
         eid = str(entity_id or "").strip()
         if not eid:
             raise ValueError("DiaryStore requires a non-empty entity_id")
         self._entity_id = eid
-        # THE STOP FENCE's diary half (STOP-LANE-DESIGN §2.2): the home's lifecycle fence `check`, called immediately
-        # before an entry is appended - after the operator's Stop the book takes nothing (it raises; nothing written).
-        self._guard = guard
+        # THE STOP FENCE's diary half (STOP-LANE-DESIGN §2.2; Codex review 4 #2): the home's fence holder - the
+        # append is one `guard.writing(where)` section (the home's write barrier held shared, the fence checked
+        # inside it): after the operator's Stop the book takes nothing, and a racing bump waits for the append.
+        # A host's callable guard comes with `barrier_home` (the home whose barrier the append holds).
+        self._writing = None
+        if guard is not None:
+            from .lifecycle_fence import write_section
+
+            self._writing = write_section(guard, barrier_home, "DiaryStore")
         self._chain_id = diary_chain_id(eid)
         if isinstance(ledger_store, HashChainedLedgerStore):
             self._ledger = ledger_store
@@ -207,9 +213,11 @@ class DiaryStore:
             session_id=str(entry.origin.get("session_id")) if entry.origin.get("session_id") else None,
             idempotency_key=entry.entry_id,
         )
-        if self._guard is not None:
-            self._guard("before a diary entry was appended")
-        self._ledger.append(record)
+        if self._writing is not None:
+            with self._writing("before a diary entry was appended"):
+                self._ledger.append(record)
+        else:
+            self._ledger.append(record)
         return {"entry": entry.to_dict(), "replayed": False, "record_hash": record.record_hash}
 
     def list_entries(

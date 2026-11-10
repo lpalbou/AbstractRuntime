@@ -56,6 +56,7 @@ from .lifecycle_fence import publish_under_lock as _publish_generation_under_loc
 from .lifecycle_fence import read_truth as _read_generation_truth
 from .lifecycle_fence import signal_bump as _signal_bump
 from .lifecycle_fence import verify as _verify_fence
+from .lifecycle_fence import write_barrier as _write_barrier
 from .tool_policy import PHASE_PERSONAL, PHASE_SLEEP, PHASE_WORK
 
 # The own-time note is INFORMATIONAL, never a mission. It describes the
@@ -2169,8 +2170,12 @@ def bump_lifecycle_generation(home_dir: Path, *, written_by: str,
         data[LIFECYCLE_GENERATION_KEY] = out["generation"]
 
     with home_state_lock(home_dir, timeout_s=timeout_s):
-        _mutate_phases(home_dir, "bumping the lifecycle generation", _bump, fence=KILL_SWITCH, timeout_s=timeout_s)
-        _signal_bump(home_dir, out["generation"])
+        # THE WRITE BARRIER, exclusive (Codex review 4 #2): every runtime store write whose fence check passed has
+        # landed before the generation moves; every later one sees the move. Inside the home state lock (outer).
+        with _write_barrier(home_dir, exclusive=True):
+            _mutate_phases(home_dir, "bumping the lifecycle generation", _bump, fence=KILL_SWITCH,
+                           timeout_s=timeout_s)
+            _signal_bump(home_dir, out["generation"])
     return out["generation"]
 PERSONAL_GRANT_MODES = ("disabled", "timer", "until_revoked")
 _PERSONAL_ACTIVATION_FIELDS = ("mode", "expires_at", "granted_by", "granted_at", "revoked_by")

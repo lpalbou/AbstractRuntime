@@ -30,7 +30,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Union
 
 
 # Valid artifact ID pattern: alphanumeric, hyphens, underscores
@@ -1325,13 +1325,18 @@ class FileArtifactStore(ArtifactStore):
                 {artifact_id}.meta
     """
 
-    def __init__(self, base_dir: Union[str, Path], *, guard: Optional[Callable[[str], None]] = None) -> None:
+    def __init__(self, base_dir: Union[str, Path], *, guard: Any = None, barrier_home: Any = None) -> None:
         self._base = Path(base_dir)
-        # THE STOP FENCE's artifact half (STOP-LANE-DESIGN §2.2; hygiene - blobs are inert): an entity home's store
-        # carries the home's lifecycle fence `check`, called before every write (store, metadata update, access
-        # record, delete); after the operator's Stop it raises and nothing is written. None = unguarded (the run
-        # ledger's own store: the records of a Stop are written after it).
-        self._guard = guard
+        # THE STOP FENCE's artifact half (STOP-LANE-DESIGN §2.2; Codex review 4 #2): an entity home's store carries the
+        # home's fence holder - every write (store, metadata update, access record, delete) is one `guard.writing`
+        # section (the write barrier shared, the fence checked inside it); after the operator's Stop it raises and
+        # nothing is written. None = unguarded (the run ledger's own store: the records of a Stop are written after it).
+        # A host's callable guard comes with `barrier_home` (the home whose barrier the writes hold).
+        self._writing = None
+        if guard is not None:
+            from ..identity.lifecycle_fence import write_section
+
+            self._writing = write_section(guard, barrier_home, "FileArtifactStore")
         self._artifacts_dir = self._base / "artifacts"
         self._blobs_dir = self._artifacts_dir / "blobs"
         self._refs_dir = self._artifacts_dir / "refs"
@@ -1626,8 +1631,7 @@ class FileArtifactStore(ArtifactStore):
             descriptor=descriptor0,
         )
 
-        self._check_guard("before an artifact was stored")
-        with self._lock:
+        with self._section("before an artifact was stored"), self._lock:
             # Write blob bytes (deduped across runs)
             self._write_blob(blob_id=blob_id, content=content)
             self._write_metadata(metadata)
@@ -1671,8 +1675,7 @@ class FileArtifactStore(ArtifactStore):
         replace_metadata: bool = False,
     ) -> Optional[ArtifactMetadata]:
         validate_artifact_id(artifact_id)
-        self._check_guard("before an artifact's metadata was updated")
-        with self._lock:
+        with self._section("before an artifact's metadata was updated"), self._lock:
             meta = self.get_metadata(artifact_id)
             if meta is None:
                 return None
@@ -1706,8 +1709,7 @@ class FileArtifactStore(ArtifactStore):
         at: Optional[str] = None,
     ) -> Optional[ArtifactMetadata]:
         validate_artifact_id(artifact_id)
-        self._check_guard("before an artifact access was recorded")
-        with self._lock:
+        with self._section("before an artifact access was recorded"), self._lock:
             meta = self.get_metadata(artifact_id)
             if meta is None:
                 return None
@@ -1727,13 +1729,17 @@ class FileArtifactStore(ArtifactStore):
             return False
         return self._content_path(artifact_id).exists()
 
-    def _check_guard(self, where: str) -> None:
-        if self._guard is not None:
-            self._guard(where)
+    def _section(self, where: str) -> Any:
+        import contextlib
+
+        return self._writing(where) if self._writing is not None else contextlib.nullcontext()
 
     def delete(self, artifact_id: str) -> bool:
         validate_artifact_id(artifact_id)
-        self._check_guard("before an artifact was deleted")
+        with self._section("before an artifact was deleted"):
+            return self._delete_unfenced(artifact_id)
+
+    def _delete_unfenced(self, artifact_id: str) -> bool:
         metadata_path = self._ref_metadata_path(artifact_id)
         legacy_meta = self._legacy_metadata_path(artifact_id)
         legacy_content = self._legacy_content_path(artifact_id)

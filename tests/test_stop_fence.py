@@ -2034,3 +2034,79 @@ def test_a_consolidator_given_an_embedder_uses_that_object(tmp_path: Path, monke
     build_consolidator(home_dir, embedding_model="text-embedding-x", embedder=host_embedder, out=lambda s: None,
                        fence=LifecycleFence.admit(home_dir))()
     assert seen["embedder"] is host_embedder
+
+
+@pytest.mark.parametrize("store", ["diary", "artifacts"])
+def test_a_write_whose_guard_passed_always_lands_before_a_racing_bump(tmp_path: Path, store: str) -> None:
+    """Codex review 4 #2 (P1), the runtime's stores: the diary's and the artifact store's guard ran BEFORE their write
+    and outside any lock the bump takes, so "guard passes -> another process bumps -> the write lands" was possible -
+    a write after the paused row. The check and the write are one section under the home's write barrier now
+    (shared); the bump takes it exclusive: a write whose guard passed completes before the bump can land."""
+    from abstractruntime.identity.diary import DiaryEntry
+
+    home_dir = _make_home(tmp_path)
+    home, fence = _fenced_home(home_dir)
+    entered, release = threading.Event(), threading.Event()
+
+    def pause_after_the_guard() -> None:
+        entered.set()
+        assert release.wait(30)
+
+    if store == "diary":
+        real_append = home.diary._ledger.append
+
+        def paused_append(record):
+            pause_after_the_guard()
+            return real_append(record)
+
+        home.diary._ledger.append = paused_append  # type: ignore[method-assign]
+        write = lambda: home.diary.append_entry(DiaryEntry(  # noqa: E731
+            entry_id="diary_race01", author=home.entity_id, kind="note", gist="race", text="Written in the race.",
+            visibility="self", written_at="2026-11-10T09:00:00+00:00"))
+    else:
+        real_blob = home.artifacts._write_blob
+
+        def paused_blob(**kw):
+            pause_after_the_guard()
+            return real_blob(**kw)
+
+        home.artifacts._write_blob = paused_blob  # type: ignore[method-assign]
+        write = lambda: home.artifacts.store(b"written in the race", content_type="text/plain")  # noqa: E731
+
+    writer = threading.Thread(target=write)
+    bumper = threading.Thread(target=lambda: _bump_in_another_process(home_dir))
+    try:
+        writer.start()
+        assert entered.wait(30)  # the guard passed; the write has not happened yet
+        bumper.start()
+        bumper.join(timeout=3.0)  # another process's Stop arrives now
+        waited = bumper.is_alive() and read_lifecycle_generation(home_dir) == 0
+        release.set()
+        writer.join(30)
+        bumper.join(60)
+        assert waited, "the bump landed between a passed guard and its write"
+        assert read_lifecycle_generation(home_dir) == 1 and not writer.is_alive() and not bumper.is_alive()
+    finally:
+        release.set()
+        home.close()
+
+
+def test_a_hosts_callable_guard_writes_under_the_barrier_or_is_refused(tmp_path: Path) -> None:
+    """A host that guards its own handle with a callable (the gateway's shared home) passes `barrier_home` - its
+    writes then hold the same barrier - and a callable without it is refused, never an unbarriered write."""
+    from abstractruntime.identity.diary import DiaryStore
+    from abstractruntime.storage.artifacts import FileArtifactStore
+    from abstractruntime.storage.in_memory import InMemoryLedgerStore
+
+    home_dir = _make_home(tmp_path)
+    with pytest.raises(TypeError, match="barrier_home"):
+        DiaryStore(entity_id="entity:x", ledger_store=InMemoryLedgerStore(), guard=lambda where: None)
+    with pytest.raises(TypeError, match="barrier_home"):
+        FileArtifactStore(str(tmp_path / "a"), guard=lambda where: None)
+    held: List[bool] = []
+
+    def guard(where: str) -> None:
+        held.append(bool((getattr(lf._barrier_held, "by_key", None) or {}).get(lf.home_key(home_dir))))
+
+    FileArtifactStore(str(tmp_path / "a"), guard=guard, barrier_home=home_dir).store(b"x", content_type="text/plain")
+    assert held == [True], "the host's guard ran outside the home's write barrier"

@@ -20,6 +20,7 @@ The profile lives in the home, beside the mind (`substrate.yaml`):
         sleep:
           after_hours: 24                   # idle -> sleep once this long since the last completed sleep; 1..720
           after_events: 500                 # ... or once this many new memories formed since it; >= 1
+          after_fragmented_share: 0.15      # ... or once more than this share of his memories is fragmented; 0 < x <= 1
 
 Rules:
 
@@ -39,10 +40,13 @@ Rules:
   time sees: "day" (the default) = the whole day so far, which a prefix cache
   keeps at a roughly constant cost of new tokens; "tick" = this tick's
   exchange plus a short recap of the day's earlier moments.
-- `sleep` holds the two thresholds after which an IDLE entity goes to sleep
+- `sleep` holds the thresholds after which an IDLE entity goes to sleep
   (CONTRACT v3 D2: hours since the last completed maintenance pass, memories
-  formed since it); the gateway's idle sweep reads them (`sleep_thresholds`).
-  Defaults 24 hours and 500 memories.
+  formed since it; operator 2026-11-10: the share of his live memories that are
+  FRAGMENTED - placed in a topic only provisionally, without a vector, or with
+  a title or summary pending, which memory's sleep-cadence read counts); the
+  gateway's idle sweep reads them (`sleep_thresholds`). Defaults 24 hours, 500
+  memories and 0.15 (sleep once more than 15% are fragmented).
 - Absent fields read as their defaults. A malformed file, or a malformed
   field, reads as unset and logs a warning naming the field; a read never
   raises. Writes are validated (`CognitionProfileInvalid`, with a sentence a
@@ -99,6 +103,9 @@ DEFAULT_SLEEP_AFTER_EVENTS = 500
 SLEEP_AFTER_HOURS_MIN = 1
 SLEEP_AFTER_HOURS_MAX = 720
 SLEEP_AFTER_EVENTS_MIN = 1
+# The share of the home's live records that are fragmented (provisional community placement, no vector, or a title /
+# summary pending) above which an idle entity goes to sleep: 0 < share <= 1 (operator 2026-11-10).
+DEFAULT_SLEEP_AFTER_FRAGMENTED_SHARE = 0.15
 
 SOURCE_PROFILE = "profile"
 SOURCE_DEFAULT = "default"
@@ -109,7 +116,7 @@ _TOP_KEYS = ("schema_version", "capabilities", "recall", "rebuild", "lookback", 
 _RECALL_KEYS = ("shelf_size",)
 _REBUILD_KEYS = ("sensitivity", "cap_per_turn")
 _LOOKBACK_KEYS = ("context",)
-_SLEEP_KEYS = ("after_hours", "after_events")
+_SLEEP_KEYS = ("after_hours", "after_events", "after_fragmented_share")
 
 
 class CognitionProfileInvalid(ValueError):
@@ -255,6 +262,22 @@ def validate_sleep_after_events(value: Any) -> int:
     return int(value)
 
 
+def validate_sleep_after_fragmented_share(value: Any) -> float:
+    ok = (_is_int(value) or isinstance(value, float)) and math.isfinite(float(value)) and 0.0 < float(value) <= 1.0
+    if not ok:
+        raise CognitionProfileInvalid(
+            "sleep.after_fragmented_share",
+            "The share of fragmented memories before he sleeps must be a number above 0 and at most 1 "
+            "(0.15 = 15%).",
+        )
+    return float(value)
+
+
+# The sleep block's checks, ONE table for the writer and the reader.
+_SLEEP_CHECKS = {"after_hours": validate_sleep_after_hours, "after_events": validate_sleep_after_events,
+                 "after_fragmented_share": validate_sleep_after_fragmented_share}
+
+
 def validate_cognition_profile(profile: Any) -> Dict[str, Any]:
     """The stored form of `profile`, strictly validated (raises `CognitionProfileInvalid`).
 
@@ -291,8 +314,7 @@ def validate_cognition_profile(profile: Any) -> Dict[str, Any]:
         ("recall", _RECALL_KEYS, {"shelf_size": validate_shelf_size}),
         ("rebuild", _REBUILD_KEYS, {"sensitivity": validate_sensitivity, "cap_per_turn": validate_cap_per_turn}),
         ("lookback", _LOOKBACK_KEYS, {"context": validate_lookback_context}),
-        ("sleep", _SLEEP_KEYS, {"after_hours": validate_sleep_after_hours,
-                                "after_events": validate_sleep_after_events}),
+        ("sleep", _SLEEP_KEYS, _SLEEP_CHECKS),
     ):
         raw = profile.get(block)
         if raw is None:
@@ -378,7 +400,7 @@ def _stored_with_warnings(home_dir: Path) -> Tuple[Dict[str, Any], List[str]]:
         ("recall", {"shelf_size": validate_shelf_size}),
         ("rebuild", {"sensitivity": validate_sensitivity, "cap_per_turn": validate_cap_per_turn}),
         ("lookback", {"context": validate_lookback_context}),
-        ("sleep", {"after_hours": validate_sleep_after_hours, "after_events": validate_sleep_after_events}),
+        ("sleep", _SLEEP_CHECKS),
     ):
         raw = data.get(block)
         if raw is None:
@@ -411,8 +433,8 @@ def read_cognition_profile(home_dir: Path) -> Dict[str, Any]:
          "rebuild": {"sensitivity": float, "cap_per_turn": int,
                      "sources": {"sensitivity": ..., "cap_per_turn": ...}},
          "lookback": {"context": "day" | "tick", "source": "profile" | "default"},
-         "sleep": {"after_hours": int, "after_events": int,
-                   "sources": {"after_hours": ..., "after_events": ...}},
+         "sleep": {"after_hours": int, "after_events": int, "after_fragmented_share": float,
+                   "sources": {"after_hours": ..., "after_events": ..., "after_fragmented_share": ...}},
          "warnings": [sentences about malformed fields]}
 
     `recall.shelf_size` is None when the profile does not choose one: the width
@@ -461,6 +483,8 @@ def read_cognition_profile(home_dir: Path) -> Dict[str, Any]:
         "sleep": {
             "after_hours": int(sleep_stored.get("after_hours", DEFAULT_SLEEP_AFTER_HOURS)),
             "after_events": int(sleep_stored.get("after_events", DEFAULT_SLEEP_AFTER_EVENTS)),
+            "after_fragmented_share": float(sleep_stored.get("after_fragmented_share",
+                                                             DEFAULT_SLEEP_AFTER_FRAGMENTED_SHARE)),
             "sources": {key: (SOURCE_PROFILE if key in sleep_stored else SOURCE_DEFAULT) for key in _SLEEP_KEYS},
         },
         "warnings": list(warnings),
@@ -560,11 +584,13 @@ def lookback_context(home_dir: Path) -> str:
     return str(read_cognition_profile(Path(home_dir))["lookback"]["context"])
 
 
-def sleep_thresholds(home_dir: Path) -> Dict[str, int]:
-    """`{after_hours, after_events}`: when an idle entity goes to sleep (CONTRACT v3 D2) - the profile's values,
-    else 24 hours and 500 new memories since the last completed sleep."""
+def sleep_thresholds(home_dir: Path) -> Dict[str, Any]:
+    """`{after_hours, after_events, after_fragmented_share}`: when an idle entity goes to sleep (CONTRACT v3 D2;
+    operator 2026-11-10) - the profile's values, else 24 hours, 500 new memories since the last completed sleep, or
+    more than 15% of his live memories fragmented (memory's sleep-cadence read counts them)."""
     sleep = read_cognition_profile(Path(home_dir))["sleep"]
-    return {"after_hours": int(sleep["after_hours"]), "after_events": int(sleep["after_events"])}
+    return {"after_hours": int(sleep["after_hours"]), "after_events": int(sleep["after_events"]),
+            "after_fragmented_share": float(sleep["after_fragmented_share"])}
 
 
 __all__ = [
@@ -578,6 +604,7 @@ __all__ = [
     "DEFAULT_REBUILD_CAP_PER_TURN",
     "DEFAULT_REBUILD_SENSITIVITY",
     "DEFAULT_SLEEP_AFTER_EVENTS",
+    "DEFAULT_SLEEP_AFTER_FRAGMENTED_SHARE",
     "DEFAULT_SLEEP_AFTER_HOURS",
     "MAX_INPUT_TOKENS_CEILING",
     "MAX_INPUT_TOKENS_FLOOR",
@@ -601,6 +628,7 @@ __all__ = [
     "validate_lookback_context",
     "validate_shelf_size",
     "validate_sleep_after_events",
+    "validate_sleep_after_fragmented_share",
     "validate_sleep_after_hours",
     "validate_sensitivity",
 ]

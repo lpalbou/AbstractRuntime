@@ -307,19 +307,39 @@ def test_the_lookback_default_test_turns_red_when_the_default_moves(tmp_path: Pa
 
 def test_the_sleep_thresholds_default_to_24_hours_and_500_memories_and_round_trip(tmp_path: Path) -> None:
     profile = cp.read_cognition_profile(tmp_path)
-    assert profile["sleep"] == {"after_hours": 24, "after_events": 500,
-                                "sources": {"after_hours": "default", "after_events": "default"}}
-    assert cp.sleep_thresholds(tmp_path) == {"after_hours": 24, "after_events": 500}
+    assert profile["sleep"] == {"after_hours": 24, "after_events": 500, "after_fragmented_share": 0.15,
+                                "sources": {"after_hours": "default", "after_events": "default",
+                                            "after_fragmented_share": "default"}}
+    assert cp.sleep_thresholds(tmp_path) == {"after_hours": 24, "after_events": 500, "after_fragmented_share": 0.15}
     stored = cp.write_cognition_profile(tmp_path, {"sleep": {"after_hours": 720, "after_events": 1}})
     assert stored == {"schema_version": 1, "sleep": {"after_hours": 720, "after_events": 1}}
     assert yaml.safe_load((tmp_path / "cognition.yaml").read_text(encoding="utf-8")) == stored
-    assert cp.sleep_thresholds(tmp_path) == {"after_hours": 720, "after_events": 1}
+    assert cp.sleep_thresholds(tmp_path) == {"after_hours": 720, "after_events": 1, "after_fragmented_share": 0.15}
     assert cp.read_cognition_profile(tmp_path)["sleep"]["sources"] == {"after_hours": "profile",
-                                                                       "after_events": "profile"}
+                                                                       "after_events": "profile",
+                                                                       "after_fragmented_share": "default"}
     # One field chosen, the other its default; null returns it to the default.
     stored = cp.write_cognition_profile(tmp_path, {"sleep": {"after_hours": 6, "after_events": None}})
     assert stored["sleep"] == {"after_hours": 6}
-    assert cp.sleep_thresholds(tmp_path) == {"after_hours": 6, "after_events": 500}
+    assert cp.sleep_thresholds(tmp_path) == {"after_hours": 6, "after_events": 500, "after_fragmented_share": 0.15}
+
+
+def test_the_fragmented_share_threshold_defaults_to_15_percent_and_round_trips(tmp_path: Path) -> None:
+    """Operator 2026-11-10: the idle sweep also sleeps him once more than this share of his live memories is
+    fragmented (provisional topic placement, no vector, a title or summary pending). 0 < share <= 1."""
+    assert cp.DEFAULT_SLEEP_AFTER_FRAGMENTED_SHARE == 0.15
+    stored = cp.write_cognition_profile(tmp_path, {"sleep": {"after_fragmented_share": 0.4}})
+    assert stored == {"schema_version": 1, "sleep": {"after_fragmented_share": 0.4}}
+    assert yaml.safe_load((tmp_path / "cognition.yaml").read_text(encoding="utf-8")) == stored
+    profile = cp.read_cognition_profile(tmp_path)
+    assert profile["sleep"]["after_fragmented_share"] == 0.4
+    assert profile["sleep"]["sources"]["after_fragmented_share"] == "profile"
+    assert cp.sleep_thresholds(tmp_path) == {"after_hours": 24, "after_events": 500, "after_fragmented_share": 0.4}
+    # The whole share is allowed (an int reads as the number it is); null returns it to the default.
+    assert cp.write_cognition_profile(tmp_path, {"sleep": {"after_fragmented_share": 1}})["sleep"] == {
+        "after_fragmented_share": 1.0}
+    assert cp.write_cognition_profile(tmp_path, {"sleep": {"after_fragmented_share": None}}) == {"schema_version": 1}
+    assert cp.sleep_thresholds(tmp_path)["after_fragmented_share"] == 0.15
 
 
 @pytest.mark.parametrize(
@@ -332,6 +352,13 @@ def test_the_sleep_thresholds_default_to_24_hours_and_500_memories_and_round_tri
         ({"after_events": 0}, "sleep.after_events", "New memories before he sleeps must be a whole number of at least 1."),
         ({"after_events": "500"}, "sleep.after_events", "at least 1"),
         ({"after_minutes": 5}, "sleep.after_minutes", "unknown field 'after_minutes'"),
+        ({"after_fragmented_share": 0}, "sleep.after_fragmented_share",
+         "The share of fragmented memories before he sleeps must be a number above 0 and at most 1 (0.15 = 15%)."),
+        ({"after_fragmented_share": 1.01}, "sleep.after_fragmented_share", "above 0 and at most 1"),
+        ({"after_fragmented_share": -0.1}, "sleep.after_fragmented_share", "above 0 and at most 1"),
+        ({"after_fragmented_share": float("nan")}, "sleep.after_fragmented_share", "above 0 and at most 1"),
+        ({"after_fragmented_share": True}, "sleep.after_fragmented_share", "above 0 and at most 1"),
+        ({"after_fragmented_share": "0.15"}, "sleep.after_fragmented_share", "above 0 and at most 1"),
     ],
 )
 def test_a_sleep_threshold_outside_the_schema_is_refused_with_its_field(tmp_path: Path, value: dict, field: str,
@@ -349,3 +376,13 @@ def test_a_bad_sleep_threshold_in_the_file_reads_as_its_default_with_a_warning(t
     profile = cp.read_cognition_profile(tmp_path)
     assert (profile["sleep"]["after_hours"], profile["sleep"]["after_events"]) == (24, 42)
     assert any("sleep.after_hours" in w for w in profile["warnings"])
+
+
+def test_a_bad_fragmented_share_in_the_file_reads_as_its_default_with_a_warning(tmp_path: Path) -> None:
+    (tmp_path / "cognition.yaml").write_text(
+        "schema_version: 1\nsleep: {after_fragmented_share: 2, after_events: 42}\n", encoding="utf-8"
+    )
+    profile = cp.read_cognition_profile(tmp_path)
+    assert (profile["sleep"]["after_fragmented_share"], profile["sleep"]["after_events"]) == (0.15, 42)
+    assert profile["sleep"]["sources"]["after_fragmented_share"] == "default"
+    assert any("sleep.after_fragmented_share" in w for w in profile["warnings"])

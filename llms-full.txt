@@ -54,17 +54,26 @@ See llms.txt for the linked index.
 
 # AbstractRuntime
 
-**Release 0.19.3:** turning an entity's own time off is final: the turn in flight finishes whole, then nothing runs,
-and the day's look-back waits for the next opening. Requires AbstractCore 2.35.0 and AbstractMemory 0.5.1. See
-[release notes](CHANGELOG.md).
+**Release 0.19.4:** a visit opened and closed without a word is not remembered: it forms no memory and no longer
+counts in the entity's track record or as a meeting with the visitor. Requires AbstractCore 2.35.0 and
+AbstractMemory 0.5.1. See [release notes](CHANGELOG.md).
 
 **AbstractRuntime** is a durable workflow runtime (interrupt → checkpoint → resume) with an append-only execution ledger.
 
 It is designed for long-running workflows that must survive restarts and explicitly model blocking (human input, timers, external events, subworkflows) without keeping Python stacks alive.
 
-**Version:** 0.19.3 • **Python:** 3.10+
+**Version:** 0.19.4 • **Python:** 3.10+
 
 **Status:** pre-1.0 (API may evolve). For production use, pin versions and follow `CHANGELOG.md`.
+
+## What's new in 0.19.4
+
+- **A visit opened and closed without a word is not remembered** (operator ruling 2026-11-11). Such a visit
+  already formed no memory and called no model; it no longer counts in the entity's track record (visits, the trust
+  rate) nor as a meeting with the visitor in its acquaintances. An open visit counts from its first line; a visit
+  with one line or more is unchanged. The ledger keeps the visit's open and close rows.
+
+No new floors (AbstractCore 2.35.0, AbstractMemory 0.5.1).
 
 ## What's new in 0.19.3
 
@@ -7241,7 +7250,9 @@ A track record counts **turn roots** — the runs a session shows as its turns �
 | | runs another run or the system started (origin `agent` or `system`), and runs with no recorded origin |
 
 This is what stops an entity from raising its own trust by starting easy runs: only work someone or
-something outside asked for counts.
+something outside asked for counts. A visit opened and closed without a word (`track_record.is_wordless_visit`:
+its `_visit.turn_n` is 0 or absent) is never counted, here or as an interaction in the acquaintances below (operator
+ruling 2026-11-11; since 0.19.4); an open visit counts from its first line.
 
 > An entity visit run carries an origin only when the gateway records one at visit open. Until it does,
 > visits do not appear in an entity's record — that is reported, never guessed.
@@ -7363,7 +7374,8 @@ Where an interaction is read (identifiers only; no text is ever read):
 | a task in `task_inbox.jsonl` | the `by` of its `added` event → humans (kind `work/task_inbox`) |
 
 Only turn roots are read (never sub-runs, which carry their root's stamp; never the reserved `__…__` runs),
-whatever their origin: a visit is an interaction even when no origin was recorded for it.
+whatever their origin: a visit is an interaction even when no origin was recorded for it (a visit without a word
+is not).
 
 Not counted, and counted in `not_counted` instead: a participant of another kind (`agent:<name>`, a
 shared-room agent, is neither an entity nor a human), a participant without a namespace, and a person-started

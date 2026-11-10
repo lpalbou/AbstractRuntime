@@ -44,7 +44,9 @@ A track record counts **turn roots** — the runs a session shows as its turns �
 | | runs another run or the system started (origin `agent` or `system`), and runs with no recorded origin |
 
 This is what stops an entity from raising its own trust by starting easy runs: only work someone or
-something outside asked for counts.
+something outside asked for counts. A visit opened and closed without a word (`track_record.is_wordless_visit`:
+its `_visit.turn_n` is 0 or absent) is never counted, here or as an interaction in the acquaintances below (operator
+ruling 2026-11-11; since 0.19.4); an open visit counts from its first line.
 
 > An entity visit run carries an origin only when the gateway records one at visit open. Until it does,
 > visits do not appear in an entity's record — that is reported, never guessed.
@@ -166,7 +168,8 @@ Where an interaction is read (identifiers only; no text is ever read):
 | a task in `task_inbox.jsonl` | the `by` of its `added` event → humans (kind `work/task_inbox`) |
 
 Only turn roots are read (never sub-runs, which carry their root's stamp; never the reserved `__…__` runs),
-whatever their origin: a visit is an interaction even when no origin was recorded for it.
+whatever their origin: a visit is an interaction even when no origin was recorded for it (a visit without a word
+is not).
 
 Not counted, and counted in `not_counted` instead: a participant of another kind (`agent:<name>`, a
 shared-room agent, is neither an entity nor a human), a participant without a namespace, and a person-started

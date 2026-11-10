@@ -23,8 +23,13 @@ entity's own sleep after a revoke still writes "own time resumes"), found by the
 Recounted from disk (every `.md` but `README.md`, as on 2026-10-28): planned 35 (was 34), proposed 21 (17 + 0865,
 0867, which did not update the count, + these two), completed 42 (was 39), deprecated 15.
 
+2026-11-11: +2 proposed, 0870 (a visit without a word is taken as the previous summon, so the next visit's identity
+cue can miss a look or voice change) and 0871 (a visit's sleep and wake entries count as sleeps in the life
+statistics), found by the visit-without-words fix (0.19.4). Recounted from disk: planned 35, proposed 23, completed
+42, deprecated 15.
+
 - Planned: 35
-- Proposed: 21
+- Proposed: 23
 - Completed: 42
 - Deprecated: 15
 - Recurrent: 0
@@ -197,6 +202,8 @@ four-digit space rather than the completed records.
 | 0850 | [Growing automations: keep the replayed history out of the controller ledger](proposed/0850_growing_automation_history_out_of_the_controller_ledger.md): proposed 2026-10-19; each occurrence copies its up-to-50k-token history into ~5 controller records (29.5 MB for 44 runs), so every automation read parses it (2.5 s for one result). Freeze it once as an artifact ref, like email bodies. |
 | 0868 | [Turning own time off also stops a loop that is doing work](proposed/0868_own_time_off_also_stops_a_loop_doing_work.md): proposed 2026-11-11; the toggle's stop command ends a work day too (there is no work switch); queued jobs wait for the next trigger. |
 | 0869 | [A wake after a revoke still says "own time resumes"](proposed/0869_wake_after_revoke_still_says_own_time_resumes.md): proposed 2026-11-11; `_wake_from_self_sleep` writes the resume reason without reading the grant. |
+| 0870 | [A visit without a word is taken as the previous summon](proposed/0870_a_wordless_visit_is_taken_as_the_previous_summon.md): proposed 2026-11-11; the gateway's `previous_summon_at` reads the newest `summon` marker, a wordless visit's included, so the next visit's identity cue may not tell a look or voice change made before it. |
+| 0871 | [A visit's sleep and wake entries count as sleeps](proposed/0871_visit_door_state_entries_count_as_sleeps.md): proposed 2026-11-11; `life_sleep_stats` counts the visit door's `state_history.jsonl` rows, so every visit (a wordless one included) adds a sleep; exclude `written_by: "visit-door"` structurally, gateway + runtime halves. |
 | 0036 | `proposed/0036_local_media_residency_bridge_to_core_residency.md` |
 | 0038 | `proposed/0038_core_server_pool_residency_affinity.md` |
 | 0056 | `proposed/runtime_systemic_reliability/0056_schema_version_and_quarantine_loading.md` |

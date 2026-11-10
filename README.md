@@ -1,16 +1,25 @@
 # AbstractRuntime
 
-**Release 0.19.3:** turning an entity's own time off is final: the turn in flight finishes whole, then nothing runs,
-and the day's look-back waits for the next opening. Requires AbstractCore 2.35.0 and AbstractMemory 0.5.1. See
-[release notes](CHANGELOG.md).
+**Release 0.19.4:** a visit opened and closed without a word is not remembered: it forms no memory and no longer
+counts in the entity's track record or as a meeting with the visitor. Requires AbstractCore 2.35.0 and
+AbstractMemory 0.5.1. See [release notes](CHANGELOG.md).
 
 **AbstractRuntime** is a durable workflow runtime (interrupt → checkpoint → resume) with an append-only execution ledger.
 
 It is designed for long-running workflows that must survive restarts and explicitly model blocking (human input, timers, external events, subworkflows) without keeping Python stacks alive.
 
-**Version:** 0.19.3 • **Python:** 3.10+
+**Version:** 0.19.4 • **Python:** 3.10+
 
 **Status:** pre-1.0 (API may evolve). For production use, pin versions and follow `CHANGELOG.md`.
+
+## What's new in 0.19.4
+
+- **A visit opened and closed without a word is not remembered** (operator ruling 2026-11-11). Such a visit
+  already formed no memory and called no model; it no longer counts in the entity's track record (visits, the trust
+  rate) nor as a meeting with the visitor in its acquaintances. An open visit counts from its first line; a visit
+  with one line or more is unchanged. The ledger keeps the visit's open and close rows.
+
+No new floors (AbstractCore 2.35.0, AbstractMemory 0.5.1).
 
 ## What's new in 0.19.3
 

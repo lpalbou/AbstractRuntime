@@ -158,8 +158,8 @@ Effect(type=EffectType.WAIT_EVENT, payload={
 The mind (`substrate.yaml`) is what the entity talks with. The cognition
 profile, `<home>/cognition.yaml`, says which model each other part of its
 thinking uses, how many memories a turn brings to mind, how readily it
-revisits what it already understood, and what the look-back at the end of a
-tick of its own time sees:
+revisits what it already understood, what the look-back at the end of a
+tick of its own time sees, and when an idle entity goes to sleep:
 
 ```yaml
 schema_version: 1
@@ -174,6 +174,10 @@ rebuild:
   cap_per_turn: 3                   # 0..10 memory tasks a turn may run at most; 0 = only while resting
 lookback:
   context: day                      # what the end-of-tick look-back sees: day or tick
+sleep:
+  after_hours: 24                   # an idle entity sleeps this long after its last completed sleep (1..720)
+  after_events: 500                 # ... or once this many memories formed since it (>= 1)
+  after_fragmented_share: 0.15      # ... or once more than this share of its memories is fragmented (0 < x <= 1)
 ```
 
 | Field | Absent means | Range |
@@ -182,11 +186,15 @@ lookback:
 | `recall.shelf_size` | the host's default (the gateway's is 50) | whole number 1..400 |
 | `rebuild.sensitivity` | 0.5 | number 0..1 |
 | `rebuild.cap_per_turn` | 3 | whole number 0..10 |
+| `sleep.after_hours` | 24 | whole number 1..720 |
+| `sleep.after_events` | 500 | whole number >= 1 |
+| `sleep.after_fragmented_share` | 0.15 | number above 0, at most 1: the share of the home's live memories that are fragmented (placed in a [topic](entity-topics.md) only provisionally, without a vector, or with a title or summary pending) |
 | `lookback.context` | `day` | `day`: the whole day so far (a prefix cache keeps the new tokens per look-back about constant, roughly 770); `tick`: this tick's exchange plus a recap of the day's 12 latest earlier moments |
 
 ```python
 from abstractruntime.identity.cognition_profile import (
     read_cognition_profile, resolve_capability, recall_shelf_size, rebuild_policy, lookback_context,
+    sleep_thresholds,
 )
 
 resolve_capability(home_dir, "summaries")
@@ -195,6 +203,7 @@ resolve_capability(home_dir, "summaries", mind={"provider": "lmstudio", "model":
 recall_shelf_size(home_dir, 50)      # the profile's width, else the default you pass
 rebuild_policy(home_dir)             # {"sensitivity": 0.5, "cap_per_turn": 3}
 lookback_context(home_dir)           # "day" (default) or "tick"
+sleep_thresholds(home_dir)           # {"after_hours": 24, "after_events": 500, "after_fragmented_share": 0.15}
 read_cognition_profile(home_dir)     # every field, each with its source: "profile" or "default"
 ```
 
@@ -217,6 +226,9 @@ read_cognition_profile(home_dir)     # every field, each with its source: "profi
   its default are left out. The gateway is its one caller
   (`PUT /api/gateway/entities/{name}/cognition-profile`), and it records a
   `cognition_profile_changed` marker in the entity's history first.
+- The `sleep` block holds the thresholds after which an idle entity goes to sleep; the gateway's idle sweep reads
+  them through `sleep_thresholds`. A sleep runs the entity's maintenance, the [topics](entity-topics.md) stage
+  included.
 - The own-time loop reads `recall.shelf_size` again at each day-open
   (`recall_shelf_size(home, <the loop's --shelf-size>)`), so a change takes
   effect at the next own-time day without restarting the loop; the loop's

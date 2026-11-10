@@ -124,11 +124,13 @@ runtime: give the facade the `runtime_id` of the ledger it reads (`MemoryFacade(
 carries that `runtime_id`; the handler builders take `runtime_id=` too (`build_memory_kg_effect_handlers`,
 `build_memory_seam_effect_handlers`).
 
-Re-exported AbstractMemory names (`facade.X is abstractmemory.X`, resolved on first use): `memory_facade.GATEWAY_NAMES`
-(budgets, replay stream, spark templates, stores and journal, queries, night passes, embeddings pin, drives, disposal,
-diary reads `open_questions` / `open_problems` / `open_ideas`,
-and the graph names `SourceRef`, `Provenance`, `ProvenanceRequired`, `InvalidSourceRef`, `Revision`, `RevisionOp`,
-`RevisionResult`, `MemoryGraph`).
+Re-exported AbstractMemory names (`facade.X` is AbstractMemory's own object from the module that defines it, resolved
+on first use): `memory_facade.GATEWAY_NAMES` (budgets, replay stream, spark templates, stores and journal, queries,
+night passes, embeddings pin, drives, disposal, diary reads `open_questions` / `open_problems` / `open_ideas`, the sleep
+cadence `records_since_maintenance`, the topic verbs `communities` / `community_of` (from
+`abstractmemory.community_index`) and `communities_pass` / `embed_missing` (from `abstractmemory.communities`; see
+[Entity topics](../entity-topics.md)), and the graph names `SourceRef`, `Provenance`, `ProvenanceRequired`,
+`InvalidSourceRef`, `Revision`, `RevisionOp`, `RevisionResult`, `MemoryGraph`).
 
 ## `MEMORY_REVISE`: memory reconsideration as a workflow step
 

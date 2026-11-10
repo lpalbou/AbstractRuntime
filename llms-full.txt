@@ -6709,7 +6709,9 @@ flowchart LR
 - **Titles are authored.** The summaries capability writes each changed topic's title and summary
   (`capabilities.summaries` in the [cognition profile](entity-runtime.md#cognition-profile-identitycognition_profilepy)),
   the same author that titles every record the night forms. The pass gets what the metadata repair left of the
-  night's authoring budget (`authoring_cap`, 64 model calls by default, minus the tasks the repair took). Topics past
+  night's authoring budget (`authoring_cap`, 64 model calls by default, minus the tasks the repair took). The repair
+  runs within the cap minus a reserved quarter (`TOPICS_AUTHORING_SHARE`, 16 calls of 64), so a home with hundreds of
+  fields to repair still has its topics titled the same night. Topics past
   that budget form *pending*, with their authoring tasks, and the drainer writes their titles at a later authoring
   window. A title the model could not write gets its authoring-failure line.
 - **It is fenced.** Both memory calls run with `cancelled=fence.moved`, the author is checked before every model call,
@@ -6720,8 +6722,8 @@ What the night records:
 
 | Where | What |
 |---|---|
-| the night's result, `communities` | memory's receipt (`version_seq`, `communities`, `new`, `kept`, `renamed`, `dissolved`, `authored`, `titles_kept`, `pending`, `failed`, `unvectored_count`, `unplaced_count`, `unplaced_closed`, `skipped`, `cancelled`, `timings_ms` with its detection `rounds`) plus `embedding: {embedded, skipped, failed}` and `budget` |
-| `own_time.log` | one line per sleep, for example `(topics: version 1287 - 14 topics: 2 new, 12 kept, 0 dissolved, 3 retitled, 41 memories moved; titles 5 authored, 9 kept, 0 pending, 0 failed; 136 embedded first, 0 without a vector, 2 unplaced (2 with only closed neighbours); 3 detection rounds)`, or `(topics: no new version - unchanged: every community stands as it is; ...)` |
+| the night's result, `communities` | memory's receipt (`version_seq`, `communities`, `new`, `kept`, `renamed`, `dissolved`, `authored`, `titles_kept`, `pending`, `failed`, `unvectored_count`, `unplaced_count`, `unplaced_closed`, `skipped`, `cancelled`, `timings_ms` with its detection `rounds`, `budget`: the calls the pass was given, `budget_spent`: the author calls it made) plus `embedding: {embedded, skipped, failed}` |
+| `own_time.log` | one line per sleep, for example `(topics: version 1287 - 14 topics: 2 new, 12 kept, 0 dissolved, 3 retitled, 41 memories moved; titles 5 authored, 9 kept, 0 pending, 0 failed; authoring budget 16 calls, 5 spent; 136 embedded first, 0 without a vector, 2 unplaced (2 with only closed neighbours); 3 detection rounds)`, or `(topics: no new version - unchanged: every community stands as it is; ...)` |
 | memq_maintenance (memory's completed-maintenance row of that night) | `detail.communities_version`: the `version_seq` the night wrote |
 | the authoring-failures file | one line per topic whose title could not be authored (`template_id` `memory.communities_pass`) |
 

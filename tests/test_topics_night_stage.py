@@ -523,3 +523,78 @@ def test_a_receipt_that_says_cancelled_records_nothing_more(tmp_path: Path, monk
     assert result["communities"]["stopped"] == "the operator's Stop", result["communities"]
     assert not _topic_lines(lines), lines
     assert "communities_version" not in _read(home_dir)["maintenance"]["detail"]
+
+
+# ------------------------------------------------------------------------------------------------- the budget
+
+#: Twelve subjects, six memories each, no word shared across subjects: the pass forms twelve topics.
+SUBJECTS = ("harbor", "violin", "orchard", "glacier", "pottery", "falcon", "lantern", "copper", "meadow", "canyon",
+            "tapestry", "beehive")
+
+
+class _ShortWordCapability:
+    """The summaries capability for the budget test: a record's authored words are all short (the hash embedder
+    reads no word of three letters or fewer), so the records the repair authors stay without a vector and out of the
+    topics; each topic's title is its own (no collision)."""
+
+    model_info = {"provider": "fake", "model": "summarizer"}
+
+    def __init__(self) -> None:
+        self.calls: List[str] = []
+
+    def generate(self, *, prompt: str, system_prompt: str, response_model: Any) -> Any:
+        n = len(self.calls)
+        community = "community" in prompt.lower()
+        self.calls.append("community" if community else "record")
+        if community:
+            return response_model(title=f"Topic number {n}", summary=f"The memories of topic number {n}.")
+        return response_model(title=f"Ok {n}", summary="It is ok.")
+
+
+def test_a_night_with_500_repair_tasks_still_authors_its_12_topic_titles(tmp_path: Path, monkeypatch) -> None:
+    """First topics night (2026-11-10): the repair of a large legacy home took the whole night's authoring budget
+    (64 calls on 645 declared fields) and the twelve new topics formed untitled. The topics step has its own reserved
+    share of the budget: the repair runs within the cap minus that share, the pass authors within the rest, so a
+    night with 500 repair tasks and 12 topics authors the 12 titles (the repair goes on over the next nights)."""
+    from abstractmemory import MemoryRecordInput
+
+    from abstractruntime.identity.chat import open_home
+    from abstractruntime.identity.life import TOPICS_AUTHORING_SHARE
+
+    home_dir = _make_home(tmp_path)
+    home = open_home(home_dir, fence=None)
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)
+            for s, subject in enumerate(SUBJECTS):
+                words = [f"{subject}{w}" for w in ("keeper", "season", "journal", "workshop", "morning", "story")]
+                home.ms.remember_many([MemoryRecordInput(  # an elected kind: his words, nothing to repair
+                    kind="lesson", title=f"{words[i].capitalize()} {words[(i + 1) % 6]}",
+                    digest=" ".join(words[j] for j in range(6) if j != i))
+                    for i in range(6)], scope="life", owner_id=home.entity_id, idempotency_key=f"subject-{s}",
+                    turn_id=f"subject-{s}")
+            # 500 legacy records stored before titles were mandatory: one title task each for the repair. Their
+            # words are all short, so they carry no vector and stay out of the topics.
+            home.ms.remember_many([MemoryRecordInput(
+                kind="lesson", title=f"no {n}", digest=f"it is {n}",
+                attributes={"title_missing": True, "title_failure_reason": "missing"}) for n in range(500)],
+                scope="life", owner_id=home.entity_id, idempotency_key="legacy", turn_id="legacy")
+    finally:
+        home.close()
+    _install(monkeypatch, [])
+    _asleep(home_dir)
+    cap = _ShortWordCapability()
+    lines: List[str] = []
+    result = _night(home_dir, lines, cap, authoring_cap=64)
+    repair, receipt = result["authoring"], result["communities"]
+    assert receipt["communities"] == receipt["new"] == 12, receipt
+    assert receipt["authored"] == 12 and receipt["pending"] == 0, receipt
+    assert cap.calls.count("community") == 12, cap.calls.count("community")
+    titled = [c for c in _read(home_dir)["communities"] if c.title]
+    assert len(titled) == 12, [c.title for c in _read(home_dir)["communities"]]
+    reserve = math.ceil(64 * TOPICS_AUTHORING_SHARE)  # 16: the repair took the rest, the topics 12 of their 16
+    assert repair["declared"] == 500 and repair["considered"] == repair["authored"] == 64 - reserve, repair
+    assert receipt["budget"] == 64 - repair["considered"] and receipt["budget_spent"] == 12, receipt
+    (line,) = _topic_lines(lines)
+    assert f"titles 12 authored, 0 kept, 0 pending, 0 failed; authoring budget {reserve} calls, 12 spent; " in line, \
+        line

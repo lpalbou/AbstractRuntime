@@ -67,9 +67,9 @@ def sleep_communities(ms: Any, *, entity_id: str, scopes: Sequence[Tuple[str, st
        night, one guarded transaction. The author is fenced here too (`fence.check` before every call: no model call
        starts after the operator's Stop, whatever client the host built). Memory's receipt is returned as memory
        gave it (`version_seq`, `communities`, `new`, `kept`, `renamed`, `dissolved`, `authored`, `pending`,
-       `failed`, `authoring.failures`, `unvectored_count`, `unplaced_count`, `unplaced_closed`, `cancelled` (a
-       reason, falsy when the pass completed), `skipped`, `timings_ms.rounds`, ...), plus
-       `embedding` and `budget`.
+       `failed`, `authoring.failures`, `budget` (the calls it was given), `budget_spent` (the author calls it made),
+       `unvectored_count`, `unplaced_count`, `unplaced_closed`, `cancelled` (a reason, falsy when the pass
+       completed), `skipped`, `timings_ms.rounds`, ...), plus `embedding`.
     3. A version written: `communities_version` (its `version_seq`) joins tonight's completed-maintenance detail
        (`maintenance_kind`: the memq_maintenance row tonight's `sleep_pass` completed, "night" or "cycle"; None =
        it completed none). Then one own_time.log line - or, when memory wrote no version (`skipped`: unchanged,
@@ -122,7 +122,6 @@ def sleep_communities(ms: Any, *, entity_id: str, scopes: Sequence[Tuple[str, st
         out(f"#FALLBACK the topics step did not run ({error})")
         return {"error": error, "embedding": embedding}
     receipt["embedding"] = embedding
-    receipt["budget"] = budget
     try:
         return _after_the_pass(ms, scopes, receipt, maintenance_kind=maintenance_kind, fence=fence, note=note,
                                out=out)
@@ -188,10 +187,13 @@ def _receipt_line(r: Dict[str, Any]) -> str:
                f"({len(r['unplaced_closed'])} with only closed neighbours)")
     if r["version_seq"] is None:
         return f"(topics: no new version - {r['skipped']}; {int(r['communities'])} topics; {vectors})"
+    # The night's share of the authoring budget the pass got, and the author calls it made (memory 0.5.0's receipt).
+    budget = (f"authoring budget {'unbounded' if r['budget'] is None else int(r['budget'])} calls, "
+              f"{int(r['budget_spent'])} spent")
     return (f"(topics: version {int(r['version_seq'])} - {int(r['communities'])} topics: {int(r['new'])} new, "
             f"{int(r['kept'])} kept, {int(r['dissolved'])} dissolved, {int(r['renamed'])} retitled, "
             f"{int(r['moved_out'])} memories moved; titles {int(r['authored'])} authored, {int(r['titles_kept'])} "
-            f"kept, {int(r['pending'])} pending, {int(r['failed'])} failed; {vectors}; "
+            f"kept, {int(r['pending'])} pending, {int(r['failed'])} failed; {budget}; {vectors}; "
             f"{int(r['timings_ms']['rounds'])} detection rounds)")
 
 

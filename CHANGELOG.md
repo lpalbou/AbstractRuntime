@@ -992,6 +992,11 @@ authored.
   declared its title and summary pending again, so a dream the summaries capability model had titled that way was
   re-authored night after night; the rule now applies only to a title with no authored stamp (the capability model,
   the operator or the entity).
+- **The night's topics keep their own share of the authoring budget** (`identity/life.py`, `identity/topics.py`). The
+  metadata repair ran first with the whole `authoring_cap` (64 calls), so on a home with hundreds of fields to repair
+  it spent every call and the night's new topics formed untitled; the repair now runs within the cap minus a reserved
+  quarter (`TOPICS_AUTHORING_SHARE`, 16 calls of 64), the communities pass authors within what it left, and the
+  night's topics line says the budget and the calls spent (`authoring budget 16 calls, 12 spent`).
 
 ### Security
 

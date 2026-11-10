@@ -5115,6 +5115,23 @@ class LifeLoop:
         return report
 
 
+#: The share of the night's authoring budget (`build_consolidator(authoring_cap=)`) held for the TOPICS step: the
+#: repair runs within the cap minus this slice, the communities pass authors within what the repair left (the slice
+#: and anything the repair did not spend). First topics night 2026-11-10: the repair of a large legacy home spent all
+#: 64 calls and the twelve new topics formed untitled. The pass makes one author call per changed topic (its title
+#: and summary together) and how many changed is known only once the pass has detected them, after the repair, so
+#: the slice is a fixed share of the cap: 16 calls of 64.
+TOPICS_AUTHORING_SHARE = 0.25
+
+
+def _topics_reserve(authoring_cap: int) -> int:
+    """The calls of the night's authoring budget the repair leaves for the topics step (`TOPICS_AUTHORING_SHARE`)."""
+    import math
+
+    cap = max(0, int(authoring_cap))
+    return min(cap, math.ceil(cap * TOPICS_AUTHORING_SHARE))
+
+
 def build_consolidator(
     home_dir: Path,
     *,
@@ -5284,15 +5301,19 @@ def build_consolidator(
             # repair any issue that may still be there"): a record whose formation-time authoring failed (pending)
             # or a legacy record without a title or summary (declared pending here) is authored, bounded by the
             # pass's cap; skipped when the night was ended (a visitor, a wake). Never a cut.
+            # The repair's allowance is the cap minus the topics step's reserved share (TOPICS_AUTHORING_SHARE), so a
+            # home with hundreds of fields to repair still leaves the night's topics their titles.
             authoring = (
-                _sleep_authoring(home, eid, scopes, llm_for_capability, authoring_cap, out, should_stop=fence.moved)
+                _sleep_authoring(home, eid, scopes, llm_for_capability,
+                                 int(authoring_cap) - _topics_reserve(authoring_cap), out, should_stop=fence.moved)
                 if _night_should_continue() else {"skipped": "the night ended before the repair step"}
             )
             # TOPICS, after the repair and before the night's closing voice (operator 2026-11-10: topics "must run
             # server side (runtime) ... in particular during sleep/maintenance phase ... so that it becomes part of
             # the knowledge of the entity"): memory embeds what has no vector, then forms the night's version of his
             # communities, titled by the same author as every record of the night, within what the repair step left
-            # of the night's authoring budget. Fenced; a stopped night records nothing for it (identity/topics.py).
+            # of the night's authoring budget (at least its reserved share). Fenced; a stopped night records nothing
+            # for it (identity/topics.py).
             from .topics import sleep_communities
 
             completed = None if (engine.get("cancelled_after") or engine.get("maintenance") is None) \

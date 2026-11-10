@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "AbstractRuntime"
-version = "0.19.1"
+version = "0.19.2"
 description = "AbstractRuntime: a durable graph runner designed to pair with AbstractCore."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -53,7 +53,9 @@ dependencies = [
   # holds it), `sleep_pass(cancelled=)`, `engram(author=)` / `world_model_update(author=)`, the authoring verbs
   # (`declare_pending`, `retitle`, `rewrite_digest`, `task_packet`, `pending_records`, `rearm_pending`) and the
   # communities (`communities_pass`, `embed_missing`, `community_index`). 0.4.0 raises at every entity home open.
-  "AbstractMemory>=0.5.0",
+  # 0.5.1: `community_index.community_keys_of`, the membership-only read behind the visit recall's topic stamp
+  # (seam_handlers._stamp_recall_topics: one call per recall instead of the whole communities payload).
+  "AbstractMemory>=0.5.1",
   # Runtime's base install is the remote-light workflow host: LLM/tool effects,
   # MCP worker support, and multimodal routing come with AbstractCore's light
   # install (remote providers, built-in tools, media inputs, voice/vision/music

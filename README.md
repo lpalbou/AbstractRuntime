@@ -1,15 +1,34 @@
 # AbstractRuntime
 
-**Release 0.19.1:** an entity writes a short brief of what it knows about in its sleep and carries it in every
-conversation's system prefix. Requires AbstractCore 2.35.0 and AbstractMemory 0.5.0. See [release notes](CHANGELOG.md).
+**Release 0.19.2:** a visit's ledger says which topic each recalled memory belongs to, which step of its reasoning
+loop each model call is, and how many matches a memory search found, for a live view of the turn. Requires
+AbstractCore 2.35.0 and AbstractMemory 0.5.1. See [release notes](CHANGELOG.md).
 
 **AbstractRuntime** is a durable workflow runtime (interrupt → checkpoint → resume) with an append-only execution ledger.
 
 It is designed for long-running workflows that must survive restarts and explicitly model blocking (human input, timers, external events, subworkflows) without keeping Python stacks alive.
 
-**Version:** 0.19.1 • **Python:** 3.10+
+**Version:** 0.19.2 • **Python:** 3.10+
 
 **Status:** pre-1.0 (API may evolve). For production use, pin versions and follow `CHANGELOG.md`.
+
+## What's new in 0.19.2
+
+- **Three visit ledger fields for a live view of the turn** (what the Entity app's live activity panel shows; all
+  additive, a reader without them shows what it showed before): `topic` on every recalled memory of a
+  `memory_recall` record (the key of the topic it is in now, or null), `iteration` and `max_iterations` on the
+  `reason` model-call record ("step 2 of 50"), and `hits` on a `search_memory` result. None of them reaches the
+  model's prompt. See [docs/entity-runtime.md](docs/entity-runtime.md).
+- **The topic stamp is a membership-only read**: one `community_keys_of` call per recall (AbstractMemory 0.5.1,
+  re-exported by the memory facade) with the recalled memories' ids, answered from memory's in-process community
+  index. About 50 µs for 44 memories at 2,000 and at 20,000 records on a synthetic home; the first call in a process
+  loads the index once (tens of ms). It never reads the whole topics payload, which grows with the home. A lookup
+  that fails leaves the recall whole and says why in its warnings.
+- **Plain loop notes**: an entity's own time that stopped because its process is gone now reads "His own time
+  stopped without a word (the process is gone: a crash or a reboot). His memory is intact."; one stopped after three
+  failed ticks reads "Stopped after three failed ticks: <the last failure>. His memory is intact."
+
+Upgrade note: requires AbstractMemory 0.5.1 or newer (new floor; AbstractCore stays at 2.35.0).
 
 ## What's new in 0.19.1
 
@@ -207,7 +226,7 @@ pip install abstractruntime
 ```
 
 The base install includes AbstractCore 2.35.0 or newer (its light install:
-remote providers, tools, vision, voice, audio, music, and decision integration) and AbstractMemory 0.5.0 or
+remote providers, tools, vision, voice, audio, music, and decision integration) and AbstractMemory 0.5.1 or
 newer, plus the
 `abstractruntime-mcp-worker` entry point. It keeps inference remote/light by
 default: local engines such as MLX, vLLM, HuggingFace/Torch, Diffusers, and

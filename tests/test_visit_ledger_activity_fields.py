@@ -2,7 +2,9 @@
 abstractentity a82aa10, root backlog 1196). Each is additive: a reader without it degrades to what it showed before.
 
 1. The RECALL record: every handle in `result.handles` carries `topic`, the stable key of the topic (memory
-   community) its record is in now, or None. One read of memory's communities payload per recall, never one per handle.
+   community) its record is in now, or None. ONE membership-only read per recall (memory's `community_keys_of`, over
+   the handles' graph ids): never memory's communities payload (it computes every topic's facts) and never one read
+   per handle.
 2. A search_memory result carries `hits` (int): the graph and book matches its text counts
    (`ToolElection.hits`; the ENTITY_TOOLS_EXECUTE result entry). The gateway's visit TOOL_CALLS executor builds the
    visit lane's entries itself and copies it from the election, as it copies `artifact_id`.
@@ -40,6 +42,45 @@ from abstractruntime.identity.visit_workflow import (  # noqa: E402
 )
 
 TOPIC_DAM = "ex:community-aaaa1111dam0"
+
+
+class _FakeKeys:
+    """memory's `community_keys_of` (frozen signature) answering from `_FakeCommunities`' scripted payload with
+    memory's rule (community_index.community_memberships_of): a member's topic, else a provisional record's, else None."""
+
+    def __init__(self, ids: Dict[str, str]) -> None:
+        self.calls: List[Dict[str, Any]] = []
+        self.topic_of: Dict[str, str] = {}
+        topics = _FakeCommunities(ids).payload["communities"]
+        for c in topics:
+            self.topic_of.update({m["id"]: c["key"] for m in c["members"]})
+        for c in topics:
+            for record_id in c["provisional_ids"]:
+                self.topic_of.setdefault(record_id, c["key"])
+
+    def community_keys_of(self, system: Any, record_ids: Any, *, scopes: Any, owner_id: str) -> Dict[str, Any]:
+        asked = list(record_ids)
+        self.calls.append({"record_ids": asked, "scopes": [tuple(s) for s in scopes], "owner_id": owner_id})
+        return {rid: self.topic_of.get(rid) for rid in asked}
+
+
+def _count_payload_reads(monkeypatch, community_index: Any) -> List[Dict[str, Any]]:
+    """Every call of memory's `communities` (the payload read the stamp must never make), still answered."""
+    calls: List[Dict[str, Any]] = []
+    real = community_index.communities
+
+    def _counted(system: Any, *, scopes: Any, owner_id: str, version: Any = None) -> Dict[str, Any]:
+        calls.append({"scopes": [tuple(s) for s in scopes], "owner_id": owner_id})
+        return real(system, scopes=scopes, owner_id=owner_id, version=version)
+
+    monkeypatch.setattr(community_index, "communities", _counted)
+    return calls
+
+
+def _graph_ids(handles: List[Dict[str, Any]]) -> List[str]:
+    """The handles' graph ids (`provenance.record_id`), once each, in order: what the stamp asks memory about."""
+    ids = (str((h.get("provenance") or {}).get("record_id") or "") for h in handles)
+    return [g for g in dict.fromkeys(ids) if g]
 
 
 class _ScriptedLLM:
@@ -96,14 +137,16 @@ def _records(ert, rid: str) -> List[Dict[str, Any]]:
 # ------------------------------------------------------------------------------------------- 1. topics on recall
 
 
-def test_the_recall_record_names_each_memory_s_topic_with_one_topics_read(tmp_path: Path, monkeypatch) -> None:
+def test_the_recall_record_names_each_memory_s_topic_with_one_membership_read(tmp_path: Path, monkeypatch) -> None:
     import abstractmemory.community_index as community_index
 
     home = _home(tmp_path)
     ids, home_dir = dict(home.test_ids), home.home_dir
     home.close()
-    fake = _FakeCommunities(ids)
-    monkeypatch.setattr(community_index, "communities", fake.communities)
+    fake = _FakeKeys(ids)
+    monkeypatch.setattr(community_index, "community_keys_of", fake.community_keys_of)
+    monkeypatch.setattr(community_index, "communities", _FakeCommunities(ids).communities)
+    payload_reads = _count_payload_reads(monkeypatch, community_index)
     ert, wf, rid, llm = _react_visit(home_dir, [{"content": "The gauges were fine.", "tool_calls": []}])
     try:
         _say(ert, wf, rid, "Do you remember the dam spillway gauges?")
@@ -121,12 +164,80 @@ def test_the_recall_record_names_each_memory_s_topic_with_one_topics_read(tmp_pa
         assert all("topic" in h for h in handles), [h for h in handles if "topic" not in h]
         assert {h["topic"] for h in handles} <= {TOPIC_DAM, "ex:community-bbbb2222gar0", None}
         assert any(h["topic"] is None for h in handles if h.get("admission") == "self")
-        # ONE topics read for the recall, over the entity's own ladder.
+        # ONE membership read for the recall, over the handles' graph ids and the entity's own ladder; no payload read.
         assert len(fake.calls) == 1, fake.calls
+        assert fake.calls[0]["record_ids"] == _graph_ids(handles)
         assert fake.calls[0]["owner_id"] == ert.entity_id
         assert sorted(fake.calls[0]["scopes"]) == sorted([("self", EID), ("diary", EID), ("life", EID)])
+        assert payload_reads == []
         # Display only: the model's prompt never sees a topic key.
         assert TOPIC_DAM not in json.dumps(llm.calls)
+    finally:
+        ert.close()
+
+
+def test_the_stamp_costs_one_membership_read_per_recall_on_memory_s_real_topics(tmp_path: Path, monkeypatch) -> None:
+    """Memory's REAL pass forms the topics and its REAL `community_keys_of` answers: over two turns (two recalls) the
+    stamp makes exactly one `community_keys_of` call per recall, with that recall's graph ids, and never reads the
+    communities payload; each handle's topic is the one that payload gives (members, then provisional ids)."""
+    import abstractmemory.community_index as community_index
+    from abstractmemory.communities import communities_pass
+
+    from abstractruntime.identity.authoring import capability_formation_author
+
+    pytest.importorskip("numpy")
+
+    class _Titler:
+        model_info = {"provider": "fake", "model": "summarizer"}
+
+        def generate(self, *, prompt: str, system_prompt: str, response_model: Any) -> Any:
+            return response_model(title="A topic", summary="What it holds.")
+
+    ladder = [("self", EID), ("diary", EID), ("life", EID)]
+    home = _home(tmp_path)
+    try:
+        receipt = communities_pass(home.ms, scopes=ladder, owner_id=EID,
+                                   author=capability_formation_author(lambda _n: _Titler(), home.artifacts,
+                                                                      should_stop=lambda: False,
+                                                                      entity_name=home.name),
+                                   cancelled=lambda: False)
+        assert receipt["version_seq"] is not None and receipt["communities"] >= 1, receipt
+        expected: Dict[str, str] = {}
+        served = community_index.communities(home.ms, scopes=ladder, owner_id=EID)["communities"]
+        for c in served:
+            expected.update({m["id"]: c["key"] for m in c["members"]})
+        for c in served:
+            for record_id in c["provisional_ids"]:
+                expected.setdefault(record_id, c["key"])
+        home_dir = home.home_dir
+    finally:
+        home.close()
+
+    keys_calls: List[List[str]] = []
+    real_keys_of = community_index.community_keys_of
+
+    def _counted_keys_of(system: Any, record_ids: Any, *, scopes: Any, owner_id: str) -> Dict[str, Any]:
+        asked = list(record_ids)
+        keys_calls.append(asked)
+        return real_keys_of(system, asked, scopes=scopes, owner_id=owner_id)
+
+    monkeypatch.setattr(community_index, "community_keys_of", _counted_keys_of)
+    payload_reads = _count_payload_reads(monkeypatch, community_index)
+    ert, wf, rid, _llm = _react_visit(home_dir, [{"content": "The gauges were fine.", "tool_calls": []},
+                                                 {"content": "The beds are wet.", "tool_calls": []}])
+    try:
+        _say(ert, wf, rid, "Do you remember the dam spillway gauges?")
+        _say(ert, wf, rid, "And the garden moisture sensors?")
+        recalls = [r["result"] for r in _records(ert, rid) if r["node_id"] == "RECALL" and r["status"] == "completed"]
+        assert len(recalls) == 2
+        assert keys_calls == [_graph_ids(r["handles"]) for r in recalls], keys_calls
+        assert payload_reads == [], "the stamp read memory's communities payload"
+        stamped = [h for r in recalls for h in r["handles"]]
+        assert any(h["topic"] is not None for h in stamped), stamped
+        for h in stamped:
+            graph_id = (h.get("provenance") or {}).get("record_id")
+            assert h["topic"] == (expected.get(graph_id) if graph_id else None), (h.get("title"), h["topic"])
+        assert not any("#FALLBACK recall topics" in w for r in recalls for w in r.get("warnings") or [])
     finally:
         ert.close()
 
@@ -141,7 +252,7 @@ def test_a_topics_read_that_fails_leaves_the_recall_whole_and_says_why(tmp_path:
     def _broken(*_a: Any, **_k: Any) -> Dict[str, Any]:
         raise community_index.CommunitySchemaError("community record ex:c1 carries no attributes.community_key")
 
-    monkeypatch.setattr(community_index, "communities", _broken)
+    monkeypatch.setattr(community_index, "community_keys_of", _broken)
     ert, wf, rid, _llm = _react_visit(home_dir, [{"content": "Yes.", "tool_calls": []}])
     try:
         _say(ert, wf, rid, "Do you remember the dam spillway gauges?")

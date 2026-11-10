@@ -613,7 +613,7 @@ def build_visit_workflow(
                     "participants": list(visit["participants"]),
                     "budget": dict(visit["budget"]),
                     # Each handle's `topic` (its memory community's key) rides the recorded result, for a
-                    # host's view of the turn; one topics read per recall (seam_handlers._stamp_recall_topics).
+                    # host's view of the turn; one membership read per recall (seam_handlers._stamp_recall_topics).
                     "with_topics": True,
                 },
                 result_key="_turn.recall",

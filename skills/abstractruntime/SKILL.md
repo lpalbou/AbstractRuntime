@@ -4,7 +4,7 @@ description: Operate AbstractRuntime through durable Python workflows, effect re
 license: MIT
 compatibility: Python 3.10+. Model execution needs a configured AbstractCore provider or server; local engines need the apple or gpu install profile. This skill uses the Python API rather than a Gateway HTTP API.
 metadata:
-  package-version: "0.19.1"
+  package-version: "0.19.2"
 ---
 
 # AbstractRuntime
@@ -22,7 +22,7 @@ folder when state must survive a restart.
 Install the version this skill describes (or newer):
 
 ```bash
-python -m pip install "abstractruntime>=0.19.1"
+python -m pip install "abstractruntime>=0.19.2"
 ```
 
 The base profile includes remote-light AbstractCore integration and the MCP

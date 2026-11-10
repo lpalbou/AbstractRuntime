@@ -54,16 +54,35 @@ See llms.txt for the linked index.
 
 # AbstractRuntime
 
-**Release 0.19.1:** an entity writes a short brief of what it knows about in its sleep and carries it in every
-conversation's system prefix. Requires AbstractCore 2.35.0 and AbstractMemory 0.5.0. See [release notes](CHANGELOG.md).
+**Release 0.19.2:** a visit's ledger says which topic each recalled memory belongs to, which step of its reasoning
+loop each model call is, and how many matches a memory search found, for a live view of the turn. Requires
+AbstractCore 2.35.0 and AbstractMemory 0.5.1. See [release notes](CHANGELOG.md).
 
 **AbstractRuntime** is a durable workflow runtime (interrupt → checkpoint → resume) with an append-only execution ledger.
 
 It is designed for long-running workflows that must survive restarts and explicitly model blocking (human input, timers, external events, subworkflows) without keeping Python stacks alive.
 
-**Version:** 0.19.1 • **Python:** 3.10+
+**Version:** 0.19.2 • **Python:** 3.10+
 
 **Status:** pre-1.0 (API may evolve). For production use, pin versions and follow `CHANGELOG.md`.
+
+## What's new in 0.19.2
+
+- **Three visit ledger fields for a live view of the turn** (what the Entity app's live activity panel shows; all
+  additive, a reader without them shows what it showed before): `topic` on every recalled memory of a
+  `memory_recall` record (the key of the topic it is in now, or null), `iteration` and `max_iterations` on the
+  `reason` model-call record ("step 2 of 50"), and `hits` on a `search_memory` result. None of them reaches the
+  model's prompt. See [docs/entity-runtime.md](docs/entity-runtime.md).
+- **The topic stamp is a membership-only read**: one `community_keys_of` call per recall (AbstractMemory 0.5.1,
+  re-exported by the memory facade) with the recalled memories' ids, answered from memory's in-process community
+  index. About 50 µs for 44 memories at 2,000 and at 20,000 records on a synthetic home; the first call in a process
+  loads the index once (tens of ms). It never reads the whole topics payload, which grows with the home. A lookup
+  that fails leaves the recall whole and says why in its warnings.
+- **Plain loop notes**: an entity's own time that stopped because its process is gone now reads "His own time
+  stopped without a word (the process is gone: a crash or a reboot). His memory is intact."; one stopped after three
+  failed ticks reads "Stopped after three failed ticks: <the last failure>. His memory is intact."
+
+Upgrade note: requires AbstractMemory 0.5.1 or newer (new floor; AbstractCore stays at 2.35.0).
 
 ## What's new in 0.19.1
 
@@ -261,7 +280,7 @@ pip install abstractruntime
 ```
 
 The base install includes AbstractCore 2.35.0 or newer (its light install:
-remote providers, tools, vision, voice, audio, music, and decision integration) and AbstractMemory 0.5.0 or
+remote providers, tools, vision, voice, audio, music, and decision integration) and AbstractMemory 0.5.1 or
 newer, plus the
 `abstractruntime-mcp-worker` entry point. It keeps inference remote/light by
 default: local engines such as MLX, vLLM, HuggingFace/Torch, Diffusers, and
@@ -1759,7 +1778,7 @@ VisualFlow node type `memory_revise`. Payload and result: [MEMORY_REVISE](integr
 ### AbstractMemory facade (host surface)
 
 `abstractruntime.integrations.abstractmemory.memory_facade` is the only way a host reaches AbstractMemory (ADR 0011;
-AbstractMemory 0.5.0+):
+AbstractMemory 0.5.1+):
 
 - `MemoryFacade.open_mind(path, *, embedder=None, **stores)`; `MemoryFacade(graph=, ledger_store=, run_store=,
   artifact_store=, diary_store=, event_inbox=, runtime_id=)`; `.graph`, `.store`, `.journal`
@@ -2250,7 +2269,8 @@ Fix:
   remote-light multimodal dependencies, and the MCP worker entry point are part
   of the base install.
 - The current AbstractCore integration expects `abstractcore>=2.35.0`.
-- Entity homes (`open_home`) expect `AbstractMemory>=0.5.0`; an older AbstractMemory fails when a home opens.
+- Entity homes (`open_home`) expect `AbstractMemory>=0.5.1`; 0.4.x fails when a home opens, and 0.5.0 has no
+  `community_keys_of`, so a visit's recalls carry no `topic` and say why in their warnings.
 
 Verify:
 
@@ -4088,8 +4108,9 @@ AbstractRuntime is the only way a host (AbstractGateway, AbstractNote, an entity
 A name or capability a host needs and cannot reach here is a runtime defect: it is added here in a patch release; a
 host never imports `abstractmemory` to work around it.
 
-Requires AbstractMemory 0.5.0 or newer (`abstractmemory.graph`; for entity homes, the task queue, the commit guard and
-write barrier the Stop fence holds, authored titles and summaries, and the community records behind topics). AbstractMemory is imported lazily everywhere:
+Requires AbstractMemory 0.5.1 or newer (`abstractmemory.graph`; for entity homes, the task queue, the commit guard and
+write barrier the Stop fence holds, authored titles and summaries, the community records behind topics, and the
+membership-only `community_keys_of` read behind the recall's topic stamp). AbstractMemory is imported lazily everywhere:
 `import abstractruntime` and `import abstractruntime.integrations.abstractmemory.memory_facade` never import it.
 
 ## The ledger row address
@@ -4203,7 +4224,7 @@ carries that `runtime_id`; the handler builders take `runtime_id=` too (`build_m
 Re-exported AbstractMemory names (`facade.X` is AbstractMemory's own object from the module that defines it, resolved
 on first use): `memory_facade.GATEWAY_NAMES` (budgets, replay stream, spark templates, stores and journal, queries,
 night passes, embeddings pin, drives, disposal, diary reads `open_questions` / `open_problems` / `open_ideas`, the sleep
-cadence `records_since_maintenance`, the topic verbs `communities` / `community_of` (from
+cadence `records_since_maintenance`, the topic verbs `communities` / `community_of` / `community_keys_of` (from
 `abstractmemory.community_index`) and `communities_pass` / `embed_missing` (from `abstractmemory.communities`; see
 [Entity topics](../entity-topics.md)), and the graph names `SourceRef`, `Provenance`, `ProvenanceRequired`,
 `InvalidSourceRef`, `Revision`, `RevisionOp`, `RevisionResult`, `MemoryGraph`).
@@ -6597,12 +6618,14 @@ for that view. Each is additive: a reader that does not find one shows what it s
 | `llm_call` step of node `reason`: `effect.payload` | `max_iterations` | int | The turn's cap on that loop (`_limits.max_iterations`; 50 unless the door sets another) |
 | a `search_memory` tool result | `hits` | int | How many memories and book entries the search matched (the count its text gives); absent for every other tool |
 
-- **Topics cost one read per recall.** The visit's recalls ask for them (`with_topics: true` in the `MEMORY_RECALL`
-  payload); the seam handler reads memory's communities payload once and looks each handle up by its graph id
-  (`provenance.record_id`). The read grows with the home (about 10 ms per 1,000 records on a synthetic home, because
-  memory computes each topic's facts with it). Never `community_of` per handle: 44 handles cost 17 to 24 times more that way. A
-  topics read that fails leaves the recall whole, without `topic`, and a `#FALLBACK recall topics unavailable` line in
-  its `warnings`.
+- **Topics cost one membership read per recall.** The visit's recalls ask for them (`with_topics: true` in the
+  `MEMORY_RECALL` payload); the seam handler makes one `community_keys_of` call (AbstractMemory 0.5.1, through the
+  memory facade) with the handles' graph ids (`provenance.record_id`), and memory answers each id from its in-process
+  community index. It does not grow with the home: about 50 µs for 44 handles at 2,000 and at 20,000 records on a
+  synthetic home (54 topics); the first call in a process loads memory's index once (28 ms and 39 ms there). The stamp
+  never reads the communities payload (memory computes every topic's facts with it: 19 ms and 190 ms on the same
+  homes) and never calls `community_of` per handle. A lookup that fails leaves the recall whole, without `topic`, and
+  a `#FALLBACK recall topics unavailable` line in its `warnings`.
 - **The loop position is metadata.** `iteration` and `max_iterations` are payload keys no handler sends to a
   provider: the prompt is unchanged. They are read from the runtime's `_limits` (`current_iteration`, which the
   reasoning loop sets when it plans the call, and `max_iterations`) and written on both the step's started and
@@ -6935,6 +6958,7 @@ Hosts reach memory's topic verbs through the runtime's memory facade
 |---|---|
 | `communities(system, *, scopes, owner_id, version=None)` | the payload version 2 a route serves: `version_seq`, `first_sleep_pending`, and per topic `id` (the version's record id), `key` (stable), `title`, `summary`, `pending`, `size`, `kinds`, `members`, `provisional_ids`, `layout`, `facts`; plus `links` |
 | `community_of(system, record_id)` | the topic one record is in now (`community_key`, `provisional`, `via`) |
+| `community_keys_of(system, record_ids, *, scopes, owner_id)` | `{record_id: topic key or None}` for many records in one call, from memory's in-process community index (AbstractMemory 0.5.1): the read for naming the topic of records a host already holds |
 | `communities_pass(...)`, `embed_missing(...)` | the night's verbs, for a host that runs its own sleep (prefer `sleep_communities` above) |
 
 ```python
@@ -6947,7 +6971,8 @@ payload = memory_facade.communities(home.ms, scopes=[("self", eid), ("diary", ei
 ### On recalled memories
 
 Every memory a visit recalls carries `topic` in the recall's ledger record: the key of the topic it is in now, or
-null. One communities read per recall, never one per memory; see
+null. One membership read per recall (`community_keys_of`), never the communities payload and never one read per
+memory; see
 [What a visit turn's ledger records say](entity-runtime.md#what-a-visit-turns-ledger-records-say).
 
 ### Migration from `abstractruntime.identity.communities`
@@ -8458,7 +8483,7 @@ In this repo, the AbstractCore wiring lives under `src/abstractruntime/integrati
 
 - `automations.md` — automations: a workflow run on a schedule, on an event or on request as a durable controller run; triggers (`schedule@1`, `schedule@2` calendar rules in a time zone, `manual@1`, `email.received@1`, `feed.item@1` RSS 2.0 / RSS 1.0 / Atom, `webhook.received@1` Standard Webhooks, entry-point sources), per-user trigger connections, the CloudEvents envelope (`input_data.event`), run origin (`_meta.origin`), wakes (`SCHEDULE_RUN`: work later in the same session, with at most the caller's tools), Publish to channel (`PUBLISH_EVENT`, alerts with `recipient` and `channels`), commands, independent or growing context, discussions forked at any occurrence (own writable workspace, the automation's workspace mounted read-only), tool approval, typed waits, notifications and retries, and the storage guarantees (create-if-absent, per-run lock, turn roots, session kinds, one writer process per store)
 - `entity-runtime.md` — per-entity runtimes for summoned entities: homes, the one-writer lease, act-only diary privacy (`$act_only` refs), durable visit waits with deadlines, the cognition profile (`cognition.yaml`: a model per capability, recall width, rebuild policy, idle-sleep thresholds)
-- `entity-topics.md` — an entity's topics (memory communities): the night's topics stage after the metadata repair (memory embeds vector-less records, then forms one version with authored titles, fenced), what it records, the entity's `topics` tool (the list, one topic's memories, the closest topic by meaning), and the memory facade names a host serves (`communities`, `community_of`)
+- `entity-topics.md` — an entity's topics (memory communities): the night's topics stage after the metadata repair (memory embeds vector-less records, then forms one version with authored titles, fenced), what it records, the entity's `topics` tool (the list, one topic's memories, the closest topic by meaning), and the memory facade names a host serves (`communities`, `community_of`, `community_keys_of`)
 - `digital-identity.md` — an entity's look and voice: `identity.json` in the home, the recorded default, the `identity_changed` biography row, the identity reference on runs, the fingerprint, the summon cue
 - `track-record.md` — an entity's or a session's track record (sessions, runs, successes, failures, tokens) and reputation (trust per task kind with its evidence), computed from existing records; completion rates until feedback exists; and its acquaintances (the entities and humans it met)
 - `evidence.md` — artifact-backed evidence capture for external-boundary tools

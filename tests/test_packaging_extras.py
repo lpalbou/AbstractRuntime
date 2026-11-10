@@ -46,7 +46,7 @@ def test_runtime_base_is_remote_light_with_multimodal_and_mcp_support() -> None:
     text = pyproject.read_text(encoding="utf-8")
 
     assert '"abstractsemantics>=0.0.5"' in text
-    assert '"AbstractMemory>=0.5.0"' in text
+    assert '"AbstractMemory>=0.5.1"' in text
     assert '"AbstractMemory[lancedb]' not in text
     assert "[project.optional-dependencies]" in text
     assert "abstractcore = [" not in text

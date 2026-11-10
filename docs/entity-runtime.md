@@ -185,12 +185,14 @@ for that view. Each is additive: a reader that does not find one shows what it s
 | `llm_call` step of node `reason`: `effect.payload` | `max_iterations` | int | The turn's cap on that loop (`_limits.max_iterations`; 50 unless the door sets another) |
 | a `search_memory` tool result | `hits` | int | How many memories and book entries the search matched (the count its text gives); absent for every other tool |
 
-- **Topics cost one read per recall.** The visit's recalls ask for them (`with_topics: true` in the `MEMORY_RECALL`
-  payload); the seam handler reads memory's communities payload once and looks each handle up by its graph id
-  (`provenance.record_id`). The read grows with the home (about 10 ms per 1,000 records on a synthetic home, because
-  memory computes each topic's facts with it). Never `community_of` per handle: 44 handles cost 17 to 24 times more that way. A
-  topics read that fails leaves the recall whole, without `topic`, and a `#FALLBACK recall topics unavailable` line in
-  its `warnings`.
+- **Topics cost one membership read per recall.** The visit's recalls ask for them (`with_topics: true` in the
+  `MEMORY_RECALL` payload); the seam handler makes one `community_keys_of` call (AbstractMemory 0.5.1, through the
+  memory facade) with the handles' graph ids (`provenance.record_id`), and memory answers each id from its in-process
+  community index. It does not grow with the home: about 50 µs for 44 handles at 2,000 and at 20,000 records on a
+  synthetic home (54 topics); the first call in a process loads memory's index once (28 ms and 39 ms there). The stamp
+  never reads the communities payload (memory computes every topic's facts with it: 19 ms and 190 ms on the same
+  homes) and never calls `community_of` per handle. A lookup that fails leaves the recall whole, without `topic`, and
+  a `#FALLBACK recall topics unavailable` line in its `warnings`.
 - **The loop position is metadata.** `iteration` and `max_iterations` are payload keys no handler sends to a
   provider: the prompt is unchanged. They are read from the runtime's `_limits` (`current_iteration`, which the
   reasoning loop sets when it plans the call, and `max_iterations`) and written on both the step's started and

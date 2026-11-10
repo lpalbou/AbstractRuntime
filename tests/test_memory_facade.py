@@ -55,7 +55,7 @@ EXPECTED_GATEWAY_NAMES = (
     "dream_pass", "reembed_store", "read_embedding_pin", "DRIVE_PRESSURE_BOUND", "drive_pressure",
     "promote_candidate", "reject_candidate", "open_questions", "open_problems", "open_ideas",
     "records_since_maintenance",
-    "communities_pass", "embed_missing", "communities", "community_of",
+    "communities_pass", "embed_missing", "communities", "community_of", "community_keys_of",
     "SourceRef", "Provenance", "ProvenanceRequired", "InvalidSourceRef", "Revision", "RevisionOp", "RevisionResult",
     "MemoryGraph",
 )
@@ -101,6 +101,7 @@ def test_the_topic_verbs_are_memorys_functions_never_its_module() -> None:
     import abstractmemory.community_index as reads
 
     assert mf.communities is reads.communities and mf.community_of is reads.community_of
+    assert mf.community_keys_of is reads.community_keys_of
     assert mf.communities_pass is passes.communities_pass and mf.embed_missing is passes.embed_missing
 
 

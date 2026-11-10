@@ -36,8 +36,8 @@ from ...storage.base import coerce_ledger_seq
 # -- lazy AbstractMemory access ----------------------------------------------------------------------------------
 
 _INSTALL_HINT = (
-    "AbstractMemory is unavailable. Install a Runtime environment with AbstractMemory >= 0.5.0 "
-    "(`pip install \"AbstractMemory>=0.5.0\"`; the graph package `abstractmemory.graph` is required)."
+    "AbstractMemory is unavailable. Install a Runtime environment with AbstractMemory >= 0.5.1 "
+    "(`pip install \"AbstractMemory>=0.5.1\"`; the graph package `abstractmemory.graph` is required)."
 )
 
 
@@ -112,6 +112,10 @@ _REEXPORTS: Dict[str, str] = {
     "embed_missing": "abstractmemory.communities",
     "communities": "abstractmemory.community_index",
     "community_of": "abstractmemory.community_index",
+    # The membership-only read (AbstractMemory 0.5.1, f66ef28): `{record_id: topic key | None}` for many records in
+    # one call, from memory's in-process community index (no payload, no facts). What the recall's topic stamp uses
+    # (seam_handlers._stamp_recall_topics), and what a host uses to name the topic of records it already holds.
+    "community_keys_of": "abstractmemory.community_index",
     # The graph (AbstractMemory 0.4.0+, ADR 0003): typed provenance, revisions, the one write path.
     "SourceRef": "abstractmemory.graph",
     "Provenance": "abstractmemory.graph",

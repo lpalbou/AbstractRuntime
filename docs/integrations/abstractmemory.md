@@ -13,8 +13,9 @@ AbstractRuntime is the only way a host (AbstractGateway, AbstractNote, an entity
 A name or capability a host needs and cannot reach here is a runtime defect: it is added here in a patch release; a
 host never imports `abstractmemory` to work around it.
 
-Requires AbstractMemory 0.5.0 or newer (`abstractmemory.graph`; for entity homes, the task queue, the commit guard and
-write barrier the Stop fence holds, authored titles and summaries, and the community records behind topics). AbstractMemory is imported lazily everywhere:
+Requires AbstractMemory 0.5.1 or newer (`abstractmemory.graph`; for entity homes, the task queue, the commit guard and
+write barrier the Stop fence holds, authored titles and summaries, the community records behind topics, and the
+membership-only `community_keys_of` read behind the recall's topic stamp). AbstractMemory is imported lazily everywhere:
 `import abstractruntime` and `import abstractruntime.integrations.abstractmemory.memory_facade` never import it.
 
 ## The ledger row address
@@ -128,7 +129,7 @@ carries that `runtime_id`; the handler builders take `runtime_id=` too (`build_m
 Re-exported AbstractMemory names (`facade.X` is AbstractMemory's own object from the module that defines it, resolved
 on first use): `memory_facade.GATEWAY_NAMES` (budgets, replay stream, spark templates, stores and journal, queries,
 night passes, embeddings pin, drives, disposal, diary reads `open_questions` / `open_problems` / `open_ideas`, the sleep
-cadence `records_since_maintenance`, the topic verbs `communities` / `community_of` (from
+cadence `records_since_maintenance`, the topic verbs `communities` / `community_of` / `community_keys_of` (from
 `abstractmemory.community_index`) and `communities_pass` / `embed_missing` (from `abstractmemory.communities`; see
 [Entity topics](../entity-topics.md)), and the graph names `SourceRef`, `Provenance`, `ProvenanceRequired`,
 `InvalidSourceRef`, `Revision`, `RevisionOp`, `RevisionResult`, `MemoryGraph`).

@@ -227,6 +227,7 @@ Hosts reach memory's topic verbs through the runtime's memory facade
 |---|---|
 | `communities(system, *, scopes, owner_id, version=None)` | the payload version 2 a route serves: `version_seq`, `first_sleep_pending`, and per topic `id` (the version's record id), `key` (stable), `title`, `summary`, `pending`, `size`, `kinds`, `members`, `provisional_ids`, `layout`, `facts`; plus `links` |
 | `community_of(system, record_id)` | the topic one record is in now (`community_key`, `provisional`, `via`) |
+| `community_keys_of(system, record_ids, *, scopes, owner_id)` | `{record_id: topic key or None}` for many records in one call, from memory's in-process community index (AbstractMemory 0.5.1): the read for naming the topic of records a host already holds |
 | `communities_pass(...)`, `embed_missing(...)` | the night's verbs, for a host that runs its own sleep (prefer `sleep_communities` above) |
 
 ```python
@@ -239,7 +240,8 @@ payload = memory_facade.communities(home.ms, scopes=[("self", eid), ("diary", ei
 ### On recalled memories
 
 Every memory a visit recalls carries `topic` in the recall's ledger record: the key of the topic it is in now, or
-null. One communities read per recall, never one per memory; see
+null. One membership read per recall (`community_keys_of`), never the communities payload and never one read per
+memory; see
 [What a visit turn's ledger records say](entity-runtime.md#what-a-visit-turns-ledger-records-say).
 
 ### Migration from `abstractruntime.identity.communities`

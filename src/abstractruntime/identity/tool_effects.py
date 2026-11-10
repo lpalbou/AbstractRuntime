@@ -172,6 +172,7 @@ def build_entity_tool_effect_handlers(*, home: Any) -> Dict[EffectType, EffectHa
                     read_memory_fn=reader.read_memory,
                     search_memory_fn=reader.search_memory,
                     recent_memories_fn=reader.recent_memories,
+                    topics_fn=reader.topics,
                     # Adversary F2: granted+declared but unwired = the exact
                     # incident class this surface closes. ONE implementation
                     # with the chat driver (memory_reader.feelings_about_text).

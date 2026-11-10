@@ -1445,6 +1445,9 @@ class ChatSession:
     def _recent_memories(self, window_text: str) -> str:
         return self._memory_reader.recent_memories(window_text)
 
+    def _topics(self, body: str) -> str:
+        return self._memory_reader.topics(body)
+
     def _feelings_about(self, target_text: str) -> str:
         """W4-render elect half: the why-walk for one target. ONE
         implementation shared with the entity-tools effect surface
@@ -2461,6 +2464,7 @@ class ChatSession:
                     search_memory_fn=self._search_memory,
                     recent_memories_fn=self._recent_memories,
                     feelings_about_fn=self._feelings_about,
+                    topics_fn=self._topics,
                     # Root 1145 step 1: what the tools returned rests WHOLE as
                     # artifacts of the home, named in the result text.
                     artifact_store=self.home.artifacts,
@@ -2652,6 +2656,7 @@ class ChatSession:
                         search_memory_fn=self._search_memory,
                         recent_memories_fn=self._recent_memories,
                         feelings_about_fn=self._feelings_about,
+                        topics_fn=self._topics,
                         artifact_store=self.home.artifacts,
                         artifact_context=self._artifact_context(turn_id),
                     )

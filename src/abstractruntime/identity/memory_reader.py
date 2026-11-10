@@ -20,6 +20,7 @@ went stale the day this module shipped)::
         search_memory_fn=reader.search_memory,       # tool: search_memory
         read_memory_fn=reader.read_memory,           # tool: read_memory
         recent_memories_fn=reader.recent_memories,   # tool: recent_memories
+        topics_fn=reader.topics,                     # tool: topics
     )
 
 `home` needs only `.store`, `.diary`, `.entity_id`, `.journal` — the bare
@@ -51,6 +52,11 @@ def memory_tag(graph_record_id: str) -> str:
     """The short address a mind can quote: the graph id's 8-hex tail."""
     tail = str(graph_record_id or "").rsplit("-", 1)[-1]
     return tail[-8:] if len(tail) >= 8 else tail
+
+
+def _record_kind(assertion: Any) -> str:
+    attrs = assertion.attributes if isinstance(assertion.attributes, dict) else {}
+    return str(attrs.get("record_kind") or "")
 
 
 def default_ladder(entity_id: str) -> List[List[str]]:
@@ -105,8 +111,10 @@ class HomeMemoryReader:
         his home. Resolution stays deterministic and conservative: digest
         assertions in his own ladder scopes, matched on the graph-id tail;
         ambiguity or absence is an honest miss, never a guess. Returns
-        (graph_id or None, all matching graph ids)."""
+        (graph_id or None, all matching graph ids). A topic (memory's
+        `community` record) is not a memory: it never resolves here."""
         from abstractmemory import TripleQuery
+        from abstractmemory.communities import COMMUNITY_KIND
 
         matches: List[str] = []
         seen: set = set()
@@ -115,6 +123,8 @@ class HomeMemoryReader:
                 TripleQuery(predicate="dcterms:abstract", scope=scope, owner_id=owner, limit=0)
             ):
                 subject = str(a.subject or "")
+                if _record_kind(a) == COMMUNITY_KIND:
+                    continue
                 if subject and subject not in seen and memory_tag(subject) == tag:
                     seen.add(subject)
                     matches.append(subject)
@@ -135,9 +145,15 @@ class HomeMemoryReader:
         return None
 
     def digest_assertions_all(self) -> List[Any]:
-        """Every digest assertion in HIS ladder scopes (explicit scope +
-        owner on every query — the whole-store reach is a red-team NO-GO)."""
+        """Every digest assertion of a MEMORY in HIS ladder scopes (explicit
+        scope + owner on every query — the whole-store reach is a red-team
+        NO-GO). A topic (memory's `community` record: the grouping his sleep
+        forms over his memories) is not a memory and is skipped - search_memory
+        must never serve one as if it were (the `topics` tool reads them, from
+        memory's own read). Memory keeps them off recall, probes, vectors and
+        FTS; this direct abstracts read is the runtime's to filter."""
         from abstractmemory import TripleQuery
+        from abstractmemory.communities import COMMUNITY_KIND
 
         out: List[Any] = []
         seen: set = set()
@@ -146,6 +162,8 @@ class HomeMemoryReader:
                 TripleQuery(predicate="dcterms:abstract", scope=scope, owner_id=owner, limit=0)
             ):
                 sid = str(a.subject or "")
+                if _record_kind(a) == COMMUNITY_KIND:
+                    continue
                 if sid and sid not in seen:
                     seen.add(sid)
                     out.append(a)
@@ -648,6 +666,14 @@ class HomeMemoryReader:
             lines.append("\nThe dream also kept open question(s):")
             lines.extend(f"- {q}" for q in questions[:12])
         return "\n".join(lines)
+
+    # ------------------------------------------------------------- topics
+    def topics(self, body: str) -> str:
+        """His topics (the `topics` tool): the communities memory forms while he sleeps, read as memory serves them
+        (identity/topics.py `topics_text`). Pure read; the #tags shown are registered for read_memory."""
+        from .topics import topics_text
+
+        return topics_text(self, body)
 
     # --------------------------------------------------------------- read
     def read_memory(self, tag_text: str) -> str:

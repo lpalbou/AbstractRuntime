@@ -59,7 +59,7 @@ _TOOL_FENCE_RE = re.compile(r"```tool([^\n`]*)\n(.*?)```", re.DOTALL | re.IGNORE
 # the WIRE copy (what the model saw) is unchanged either way.
 BOOK_ADJACENT_TOOL_NAMES = frozenset({"diary_read", "diary_list", "search_memory"})
 
-TIER1_TOOL_NAMES = ("web_search", "fetch_url", "diary_list", "diary_read", "read_memory", "search_memory", "recent_memories", "feelings_about")
+TIER1_TOOL_NAMES = ("web_search", "fetch_url", "diary_list", "diary_read", "read_memory", "search_memory", "topics", "recent_memories", "feelings_about")
 # Workspace tools (maintainer mandate, a2a 0007 mission 2): the entity may
 # CREATE — but only inside its own home's workspace/ directory. These are
 # offered separately from TIER1 (the operator enables them per session).
@@ -120,6 +120,10 @@ diary_...the entry id exactly as diary_list shows it...
 what you want to find in your own memory
 ```
 
+```tool name=topics
+what a topic is about (or nothing, for the list)
+```
+
 ```tool name=recent_memories
 3d
 ```
@@ -136,6 +140,12 @@ nothing matches (your book is append-only and complete: if you had written
 it, the search would find it). Follow its #tags with read_memory and its
 diary_ ids with diary_read. Repetition is not evidence: several records
 you yourself wrote about the same thing count as one origin, not many.
+topics shows what you know, organized: your memories grouped by subject,
+each topic with a title and a summary written while you slept (the groups
+form again at every sleep). Leave the body empty for the list; write a
+topic's #tag to see its memories, or words to find the topic closest to
+them. Start here when you wonder what you know about something - or what
+you know at all - then go deeper with read_memory.
 recent_memories is the other direction of reach: not by words but by TIME -
 your trail through the last stretch (leave the body empty for 2 days, or
 name a window like 12h, 3d, week). When you wonder "where did I leave my
@@ -1086,6 +1096,7 @@ class ToolExecutionContext:
     search_memory_fn: Optional[Callable[[str], str]] = None
     recent_memories_fn: Optional[Callable[[str], str]] = None
     feelings_about_fn: Optional[Callable[[str], str]] = None
+    topics_fn: Optional[Callable[[str], str]] = None  # HomeMemoryReader.topics (identity/topics.py)
     # Lane honesty (adversary F4): True on lanes where tool results REST
     # (effect results = ledger truth); the header/private-trailer prose
     # must match where the words actually live.
@@ -1143,6 +1154,13 @@ def _exec_search_memory(e: ToolElection, ctx: ToolExecutionContext) -> str:
         ctx.notices.append("#FALLBACK search_memory elected but no resolver wired")
         return "(the search_memory tool is not enabled in this session)"
     return ctx.search_memory_fn(e.body.strip())
+
+
+def _exec_topics(e: ToolElection, ctx: ToolExecutionContext) -> str:
+    if ctx.topics_fn is None:
+        ctx.notices.append("#FALLBACK topics elected but no resolver wired")
+        return "(the topics tool is not enabled in this session)"
+    return ctx.topics_fn(e.body.strip())
 
 
 def _exec_feelings_about(e: ToolElection, ctx: ToolExecutionContext) -> str:
@@ -1570,6 +1588,19 @@ TOOL_DESCRIPTORS: Dict[str, ToolDescriptor] = {
             capability_class="tier1_self",
         ),
         ToolDescriptor(
+            # His topics (operator 2026-11-10: "to know what it knows, and let it delve deeper into subparts of its
+            # mind/memory"): the communities memory forms while he sleeps, read as memory serves them.
+            name="topics", tier="tier1", mutating=False,
+            description=(
+                "What you know, organized: your memories grouped by subject, each topic titled and summarised "
+                "while you slept. Empty = the list; a topic's #tag = its memories; words = the closest topic."
+            ),
+            properties={"topic": {"type": "string",
+                                  "description": "empty for the list, a topic's #tag, or words about a subject"}},
+            required=(), executor=_exec_topics,
+            capability_class="tier1_self", body_optional=True,
+        ),
+        ToolDescriptor(
             # The breadcrumb trail (Ephemeral's own build ask, visit 1
             # 2026-07-17): a RECENCY reach over both planes - "what have I
             # been working on" without already knowing the words.
@@ -1797,6 +1828,7 @@ def execute_tool_elections(
     search_memory_fn: Optional[Callable[[str], str]] = None,
     recent_memories_fn: Optional[Callable[[str], str]] = None,
     feelings_about_fn: Optional[Callable[[str], str]] = None,
+    topics_fn: Optional[Callable[[str], str]] = None,
     results_rest_durably: bool = False,
     results_carry_media: bool = False,
     artifact_store: Any = None,
@@ -1834,6 +1866,7 @@ def execute_tool_elections(
         search_memory_fn=search_memory_fn,
         recent_memories_fn=recent_memories_fn,
         feelings_about_fn=feelings_about_fn,
+        topics_fn=topics_fn,
         results_rest_durably=results_rest_durably,
         results_carry_media=results_carry_media,
         artifact_store=artifact_store,

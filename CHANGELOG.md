@@ -987,6 +987,11 @@ authored.
   look-back), and a rest elected as the visitor knocks is not slept over the visit.
 - **`await_loop_quiescent(timeout_seconds=None)` waits without a limit** (root ADR-0027), and a `day` status that
   `read_loop_status` does not count as running (dead or recycled pid, stale heartbeat) is quiescent.
+- **A dream whose authored title starts with "Dream: " is no longer re-declared every night**
+  (`identity/authoring.py`). The sleep's repair read any dream titled "Dream: ..." as a legacy mechanical dream and
+  declared its title and summary pending again, so a dream the summaries capability model had titled that way was
+  re-authored night after night; the rule now applies only to a title with no authored stamp (the capability model,
+  the operator or the entity).
 
 ### Security
 

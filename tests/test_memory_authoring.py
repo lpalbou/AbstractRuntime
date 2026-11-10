@@ -460,6 +460,46 @@ def test_the_sleep_repairs_legacy_mechanical_cards_and_dreams(tmp_path: Path, mo
     assert _failures(tmp_path) == [], "no authoring failure, no memory_refused"
 
 
+def test_a_dream_the_capability_model_titled_dream_is_never_redeclared_the_next_night(
+        tmp_path: Path, monkeypatch) -> None:
+    """The "Dream: ..." legacy rule reads the label memory's mechanical dream wrote before 4f3a77e; a title the
+    capability model (or the operator, or the entity) AUTHORED is never that label, whatever its prefix. A legacy
+    dream repaired one night with an authored title that happens to start "Dream: " (first topics night 2026-11-10:
+    the model titled dreams so) is not declared pending again the next night - or every night would spend its budget
+    re-authoring the same dreams."""
+    import abstractmemory
+    from abstractmemory import MemoryRecordInput
+
+    from abstractruntime.identity.chat import open_home
+    from abstractruntime.identity.life import build_consolidator, write_entity_state
+
+    authored_title = "Dream: the river that waited"
+    home_dir = _workspace_home(tmp_path)
+    home = open_home(home_dir, fence=None)
+    rid = home.ms.remember_many([MemoryRecordInput(kind="dream", title="Dream: rivers beside patience",
+                                                   digest="mechanical dream body",
+                                                   attributes={"interpretation_required": True})],
+                                scope="self", owner_id=home.entity_id, idempotency_key="legacy-dream",
+                                turn_id="legacy-dream")[0]
+    home.close()
+    monkeypatch.setattr(abstractmemory, "sleep_pass", lambda *a, **k: {"maintenance": {}, "dream": {}})
+    write_entity_state(home_dir, "asleep", reason="self-elected sleep: full", mode="dreaming", written_by="self",
+                       fence=LifecycleFence.admit(home_dir))
+    night = lambda: build_consolidator(  # noqa: E731
+        home_dir, out=lambda s: None, llm_for_capability=lambda name: _Capability(title=authored_title),
+        fence=LifecycleFence.admit(home_dir))()["authoring"]
+    first = night()
+    assert first["declared"] >= 2 and first["failed"] == 0, first  # the legacy dream: title and summary
+    row = [r for r in _rows(home_dir, "dream") if str(r.subject) == str(rid)][-1]
+    assert row.attributes["title"] == authored_title, row.attributes
+    assert row.attributes["title_provenance"]["author"]["kind"] == "capability-model", row.attributes
+    second = night()
+    assert second["declared"] == 0 and second["authored"] == 0, second
+    row = [r for r in _rows(home_dir, "dream") if str(r.subject) == str(rid)][-1]
+    assert not isinstance(row.attributes.get("pending"), dict) and row.attributes["title"] == authored_title, \
+        row.attributes
+
+
 def _exhaust_title_task(home: Any, s: Any, target: str) -> Dict[str, Any]:
     """Fail the record's title.author task through its attempts (a capability client that raises, as the live
     gateway's did on 2026-11-09): it ends `failed`, the record stays marked pending with no live task."""

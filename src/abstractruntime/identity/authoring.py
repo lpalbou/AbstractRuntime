@@ -497,14 +497,16 @@ RUNTIME_REFLECTION_TITLE_PREFIX = "session reflection: "
 
 def _legacy_mechanical_title(kind: str, title: Any, attrs: Dict[str, Any]) -> bool:
     """A card or dream stored before memory formed them pending (4f3a77e) carries memory's own mechanical label:
-    "World model: <subject>" with no authored title provenance, or "Dream: ..."; a session summary stored before the
-    runtime formed it pending (4eefddb) carries the runtime's own template "session reflection: <session id>" with no
-    authored title provenance. Label formats of the code that wrote them, never text read for meaning."""
+    "World model: <subject>" with no authored title provenance, or "Dream: ..." with no authored title stamp; a session
+    summary stored before the runtime formed it pending (4eefddb) carries the runtime's own template "session
+    reflection: <session id>" with no authored title provenance. Label formats of the code that wrote them, never text
+    read for meaning: a title the capability model, the operator or the entity AUTHORED is never that label, whatever
+    its prefix (a model that titles a dream "Dream: ..." would otherwise see it re-declared every night)."""
     text = str(title or "")
     if kind == "world_model":
         return text.startswith("World model: ") and not attrs.get("title_provenance")
     if kind == "dream":
-        return text.startswith("Dream: ")
+        return text.startswith("Dream: ") and not _authored_title_stamp(attrs)
     if kind == "summary":
         return text.startswith(RUNTIME_REFLECTION_TITLE_PREFIX) and not _authored_title_stamp(attrs)
     return False
@@ -568,16 +570,17 @@ def _repair_fields(a: Any) -> List[str]:
             or attrs.get("title_missing") or _legacy_mechanical_title(kind, title, attrs)
             or _legacy_diary_title(kind, title, a)):
         fields.append("title")
-    if not str(a.object or "").strip() or _legacy_mechanical_summary(kind, title, method):
+    if not str(a.object or "").strip() or _legacy_mechanical_summary(kind, title, method, attrs):
         fields.append("summary")
     if _formed_never_authored(kind, a, attrs):
         fields.extend(f for f in ("title", "summary") if f not in fields)
     return [f for f in ("title", "summary") if f in fields]
 
 
-def _legacy_mechanical_summary(kind: str, title: Any, method: str) -> bool:
+def _legacy_mechanical_summary(kind: str, title: Any, method: str, attrs: Dict[str, Any]) -> bool:
     """A legacy card whose body is memory's mechanical card (or carries a mechanical delta), or a legacy dream (its
-    body is the night's mechanical composition)."""
+    body is the night's mechanical composition): a dream is legacy by `_legacy_mechanical_title`'s rule, so one whose
+    "Dream: ..." title was authored is not."""
     if kind == "world_model":
         try:
             from abstractmemory.understanding import MECHANICAL_CARD_METHODS
@@ -585,7 +588,7 @@ def _legacy_mechanical_summary(kind: str, title: Any, method: str) -> bool:
             MECHANICAL_CARD_METHODS = frozenset({"mechanical-card-v2"})
         return method in MECHANICAL_CARD_METHODS or method.endswith("+delta")
     if kind == "dream":
-        return str(title or "").startswith("Dream: ")
+        return _legacy_mechanical_title(kind, title, attrs)
     return False
 
 

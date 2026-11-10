@@ -5067,7 +5067,13 @@ def build_consolidator(
     THE OPERATOR'S STOP (Codex review 3 #2; STOP-LANE-DESIGN §2.2, class H): `fence` is the loop's. A moved
     generation ends the night at the engine's next stage (`should_continue`), stops the completion marker
     (`sleep_pass(cancelled=fence.moved)`: a stopped night records no completed maintenance), the repair step's
-    authoring (`should_stop`) and the night voice; nothing is logged after it but one line."""
+    authoring (`should_stop`), the topics step (`cancelled=fence.moved`: no version, no note) and the night voice;
+    nothing is logged after it but one line.
+
+    THE NIGHT'S ORDER: memory's `sleep_pass` (resolution, consolidation, world models, mining, identity, dream) -> its
+    authoring-failure lines -> METADATA REPAIR (`_sleep_authoring`) -> TOPICS (`topics.sleep_communities`: embed what
+    has no vector, then memory's `communities_pass`; its receipt rides the result as `communities`) -> the night
+    voice."""
     def _night_should_continue() -> bool:
         # The night keeps its window while the entity still SLEEPS by its
         # own election and nobody pulled the manual brake. Any other state
@@ -5188,6 +5194,31 @@ def build_consolidator(
                 _sleep_authoring(home, eid, scopes, llm_for_capability, authoring_cap, out, should_stop=fence.moved)
                 if _night_should_continue() else {"skipped": "the night ended before the repair step"}
             )
+            # TOPICS, after the repair and before the night's closing voice (operator 2026-11-10: topics "must run
+            # server side (runtime) ... in particular during sleep/maintenance phase ... so that it becomes part of
+            # the knowledge of the entity"): memory embeds what has no vector, then forms the night's version of his
+            # communities, titled by the same author as every record of the night, within what the repair step left
+            # of the night's authoring budget. Fenced; a stopped night records nothing for it (identity/topics.py).
+            from .topics import sleep_communities
+
+            completed = None if (engine.get("cancelled_after") or engine.get("maintenance") is None) \
+                else ("night" if include_dream else "cycle")
+            communities = (
+                sleep_communities(home.ms, entity_id=eid, scopes=scopes, author=formation_author, fence=fence,
+                                  budget=max(0, int(authoring_cap) - int(authoring.get("considered") or 0)),
+                                  maintenance_kind=completed, out=out)
+                if _night_should_continue() else {"skipped": "the night ended before the topics step"}
+            )
+            if fence.moved():
+                # THE OPERATOR'S STOP during the repair or the topics step: the night ends here, as above.
+                out("(the operator's Stop - the night ends here; nothing more is written)")
+                dream_seen = engine.get("dream") or {}
+                return {"authoring": authoring, "communities": communities,
+                        "formed": bool(dream_seen.get("created")), "dream_record_id": dream_seen.get("dream_record_id"),
+                        "maintenance_candidates": 0, "signals": [], "narration": None, "engine": engine,
+                        "stopped_by": "kill_switch"}
+            log_pass_authoring_failures(communities, home_dir=home_dir, entity=eid, reader=author_seen.get("reader"),
+                                        out=out)
             dream = engine.get("dream") or {}
             maintenance = engine.get("maintenance") or {}
             # WAVE-5 NARRATOR HALF (dm#75 ratified; frozen shape c3708):
@@ -5227,6 +5258,7 @@ def build_consolidator(
                     out(f"#FALLBACK night voice errored ({e}); the night stays mechanical")
             return {
                 "authoring": authoring,
+                "communities": communities,
                 "formed": bool(dream.get("created")),
                 "dream_record_id": dream.get("dream_record_id"),
                 "maintenance_candidates": int(maintenance.get("created_count") or 0),
@@ -5247,12 +5279,14 @@ def _sleep_authoring(home: Any, eid: str, scopes: List[Tuple[str, str]],
                      llm_for_capability: Optional[Callable[[str], Any]], cap: int,
                      out: Callable[[str], None], *, should_stop: Callable[[], bool]) -> Dict[str, Any]:
     """The sleep's metadata work (operator 2026-11-09): declare what lacks a title or summary, then author what is
-    pending. Returns {declared, refused, authored, deferred, failed} for the pass's receipt; never raises.
+    pending. Returns {declared, refused, rearmed, authored, deferred, failed, considered (the authoring tasks the
+    drainer took: what the night's budget spent)} for the pass's receipt; never raises.
     `should_stop` (the loop's fence) is checked before each step and handed to the drainer, which checks it per task
     and after each capability answer: nothing is declared, re-armed or authored after the operator's Stop."""
     from .authoring import declare_missing_metadata, drain_authoring, rearm_exhausted_authoring
 
-    receipt: Dict[str, Any] = {"declared": 0, "refused": 0, "rearmed": 0, "authored": 0, "deferred": 0, "failed": 0}
+    receipt: Dict[str, Any] = {"declared": 0, "refused": 0, "rearmed": 0, "authored": 0, "deferred": 0, "failed": 0,
+                               "considered": 0}
     try:
         if should_stop():
             receipt["cancelled"] = "the operator's Stop"
@@ -5276,7 +5310,7 @@ def _sleep_authoring(home: Any, eid: str, scopes: List[Tuple[str, str]],
         drained = drain_authoring(home.ms, llm_for_capability=llm_for_capability, artifacts=home.artifacts,
                                   home_dir=home.home_dir, entity=eid, holder="sleep", cap=int(cap), window="nap",
                                   diary_text=_diary_text, out=out, should_stop=should_stop)
-        for key in ("authored", "deferred", "failed"):
+        for key in ("authored", "deferred", "failed", "considered"):  # considered: the night's authoring budget spent
             receipt[key] = int(drained.get(key) or 0)
     except Exception as e:  # noqa: BLE001 - the night's other work still runs
         receipt["error"] = f"{type(e).__name__}: {e}"

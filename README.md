@@ -1,16 +1,27 @@
 # AbstractRuntime
 
-**Release 0.19.2:** a visit's ledger says which topic each recalled memory belongs to, which step of its reasoning
-loop each model call is, and how many matches a memory search found, for a live view of the turn. Requires
-AbstractCore 2.35.0 and AbstractMemory 0.5.1. See [release notes](CHANGELOG.md).
+**Release 0.19.3:** turning an entity's own time off is final: the turn in flight finishes whole, then nothing runs,
+and the day's look-back waits for the next opening. Requires AbstractCore 2.35.0 and AbstractMemory 0.5.1. See
+[release notes](CHANGELOG.md).
 
 **AbstractRuntime** is a durable workflow runtime (interrupt → checkpoint → resume) with an append-only execution ledger.
 
 It is designed for long-running workflows that must survive restarts and explicitly model blocking (human input, timers, external events, subworkflows) without keeping Python stacks alive.
 
-**Version:** 0.19.2 • **Python:** 3.10+
+**Version:** 0.19.3 • **Python:** 3.10+
 
 **Status:** pre-1.0 (API may evolve). For production use, pin versions and follow `CHANGELOG.md`.
+
+## What's new in 0.19.3
+
+- **Own time withdrawn ends on the turn in flight.** When the operator turns an entity's own time off, the turn in
+  flight finishes whole, then nothing runs: no tick look-back, no authoring drain, no day look-back. A look-back
+  whose model call is running at the revoke keeps nothing of its reply. The day's look-back is not lost:
+  `pending_reflection.json` carries it to the next opening (a visit, the next own-time day). "Withdrawn" means the
+  operator's stop (the stop command, the STOP file, the kill switch) or, on a personal day, the grant revoked or
+  expired; a work day responds only to a stop. A normal close (rest, the day's last tick) still runs its look-back.
+
+No new floors (AbstractCore 2.35.0, AbstractMemory 0.5.1).
 
 ## What's new in 0.19.2
 

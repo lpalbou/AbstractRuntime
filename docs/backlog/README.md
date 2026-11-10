@@ -18,9 +18,14 @@ If you are new to the project, start with `../README.md` and `../architecture.md
 
 2026-10-28: recounted from disk (deprecated was 13 in this block, 14 on disk); +1 planned for 0858 (root 1063, typed runs); +1 planned for 0859 (ephemeral live-text deltas on the view stream, gateway 0954).
 
-- Planned: 34
-- Proposed: 17
-- Completed: 39
+2026-11-11: +2 proposed, 0868 (turning own time off also stops a loop that is doing work) and 0869 (a wake from the
+entity's own sleep after a revoke still writes "own time resumes"), found by the own-time-withdrawn fix (0.19.3).
+Recounted from disk (every `.md` but `README.md`, as on 2026-10-28): planned 35 (was 34), proposed 21 (17 + 0865,
+0867, which did not update the count, + these two), completed 42 (was 39), deprecated 15.
+
+- Planned: 35
+- Proposed: 21
+- Completed: 42
 - Deprecated: 15
 - Recurrent: 0
 
@@ -190,6 +195,8 @@ four-digit space rather than the completed records.
 | 0031 | `proposed/0031_runtime_tool_spec_adapters_for_gateway_and_mcp.md` |
 | 0849 | [Conversation search: tool usage, tool outputs and intermediate thinking](proposed/0849_conversation_search_tool_usage_outputs_and_thinking.md): proposed 2026-10-18; the sources left out of `ConversationSearch` on purpose, with costs and risks. |
 | 0850 | [Growing automations: keep the replayed history out of the controller ledger](proposed/0850_growing_automation_history_out_of_the_controller_ledger.md): proposed 2026-10-19; each occurrence copies its up-to-50k-token history into ~5 controller records (29.5 MB for 44 runs), so every automation read parses it (2.5 s for one result). Freeze it once as an artifact ref, like email bodies. |
+| 0868 | [Turning own time off also stops a loop that is doing work](proposed/0868_own_time_off_also_stops_a_loop_doing_work.md): proposed 2026-11-11; the toggle's stop command ends a work day too (there is no work switch); queued jobs wait for the next trigger. |
+| 0869 | [A wake after a revoke still says "own time resumes"](proposed/0869_wake_after_revoke_still_says_own_time_resumes.md): proposed 2026-11-11; `_wake_from_self_sleep` writes the resume reason without reading the grant. |
 | 0036 | `proposed/0036_local_media_residency_bridge_to_core_residency.md` |
 | 0038 | `proposed/0038_core_server_pool_residency_affinity.md` |
 | 0056 | `proposed/runtime_systemic_reliability/0056_schema_version_and_quarantine_loading.md` |

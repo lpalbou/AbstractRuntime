@@ -2142,6 +2142,8 @@ def _mutate_phases(home_dir: Path, what: str, mutate: Callable[[Dict[str, Any]],
         mutate(existing)
         existing["schema_version"] = PHASES_SCHEMA_VERSION
         atomic_write_text(Path(home_dir) / PHASES_FILENAME, yaml.safe_dump(existing, sort_keys=False))
+        # This process's table follows its own write (both signatures), so its fences never re-parse it.
+        _publish_generation_under_lock(home_dir, _generation_of(existing))
         return existing
 
 

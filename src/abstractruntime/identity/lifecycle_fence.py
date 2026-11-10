@@ -7,7 +7,7 @@ a `LifecycleFence` holding that number. Every commit point (the state writers in
 the diary and artifact stores, the effect handlers) takes the fence as a REQUIRED argument and refuses once the
 generation has moved: a write decided before a Stop never lands after it, whatever process holds it.
 
-The check is an int compare in process plus ONE stat. `_SIGNAL` is a process-wide table, home -> (signature of the
+The check is an int compare in process plus TWO stats (the signal and phases.yaml, Codex review 4 #9). `_SIGNAL` is a process-wide table, home -> (signature of the
 signal file when last read, the newest generation this process knows). The bumping process (the gateway in every
 operator Stop) updates it in the same critical section that writes phases.yaml, so its in-flight fences see its own
 Stop at their next compare. Every process - the bumper too - sees a Stop by ANY process through
@@ -100,7 +100,8 @@ RESUME = _Sentinel("resume")
 _SENTINELS = (KILL_SWITCH, RESUME)
 
 # ------------------------------------------------------------------------------------------- the process-wide table
-_SIGNAL: Dict[str, Tuple[_Signature, int]] = {}
+# home -> (signature of the signal file, signature of phases.yaml, the generation) as this process last read them.
+_SIGNAL: Dict[str, Tuple[_Signature, _Signature, int]] = {}
 _table_lock = threading.Lock()
 # home -> the threading.Events of the model calls in flight under a fence of that home (LifecycleFence.cancel_event):
 # the bump sets them in the bumping process, so a provider that honours `cancel_event=` stops within a token (§2.3).
@@ -116,8 +117,14 @@ def signal_path(home_dir: Union[str, Path]) -> Path:
     return Path(home_dir) / LIFECYCLE_SIGNAL_FILENAME
 
 
+def _phases_path(home_dir: Union[str, Path]) -> Path:
+    from .life import PHASES_FILENAME
+
+    return Path(home_dir) / PHASES_FILENAME
+
+
 def _stat_signature(path: str) -> _Signature:
-    """The signal file's signature; None when it does not exist. Any other OSError propagates (fail closed)."""
+    """A file's signature; None when it does not exist. Any other OSError propagates (fail closed)."""
     try:
         st = os.stat(path)
     except FileNotFoundError:
@@ -125,14 +132,21 @@ def _stat_signature(path: str) -> _Signature:
     return (st.st_mtime_ns, st.st_size, st.st_ino)
 
 
-def _publish(key: str, signature: _Signature, generation: int, *, authoritative: bool) -> None:
+def _publish(key: str, signal_sig: _Signature, phases_sig: _Signature, generation: int, *,
+             authoritative: bool) -> None:
     """Record what a read saw. A non-authoritative read never moves the table backwards (a slow reader that parsed
     phases.yaml before a Stop must not undo the Stop another thread already published); an authoritative one (read
     under the home state lock, where no bump can be in flight) is the truth and replaces it."""
     with _table_lock:
         current = _SIGNAL.get(key)
-        if authoritative or current is None or generation >= current[1]:
-            _SIGNAL[key] = (signature, int(generation))
+        if authoritative or current is None or generation >= current[2]:
+            _SIGNAL[key] = (signal_sig, phases_sig, int(generation))
+
+
+def _invalidate(key: str) -> None:
+    """A truth read failed: no cached generation stands for this home (every fence of it reads moved)."""
+    with _table_lock:
+        _SIGNAL.pop(key, None)
 
 
 def _holds_home_lock(key: str) -> bool:
@@ -142,60 +156,91 @@ def _holds_home_lock(key: str) -> bool:
 
 
 def read_truth(home_dir: Union[str, Path]) -> int:
-    """phases.yaml's lifecycle generation, published into the table. The signal file is stat-ed BEFORE phases.yaml
-    is parsed (the bump writes them in the other order), so a published (signature, generation) pair is never newer
-    on the signature side than on the generation side. Raises LifecycleUnreadable (a ValueError) when either cannot
-    be read."""
+    """phases.yaml's lifecycle generation, published into the table with both signatures. The two files are stat-ed
+    BEFORE phases.yaml is parsed (the bump writes them in the other order), so a published entry is never newer on
+    its signature side than on its generation side. Raises LifecycleUnreadable (a ValueError) when either cannot be
+    read - and drops this home's cached truth (Codex review 4 #9: a failed read must not leave the old one standing)."""
     from .life import _generation_of, _load_phases_for_write
 
     key = home_key(home_dir)
     try:
-        signature = _stat_signature(str(signal_path(home_dir)))
+        signal_sig = _stat_signature(str(signal_path(home_dir)))
+        phases_sig = _stat_signature(str(_phases_path(home_dir)))
     except OSError as e:
-        raise LifecycleUnreadable(f"the lifecycle signal of {home_dir} cannot be read ({e})") from e
+        _invalidate(key)
+        raise LifecycleUnreadable(f"the lifecycle files of {home_dir} cannot be read ({e})") from e
     try:
         generation = _generation_of(_load_phases_for_write(home_dir, "reading the lifecycle generation"))
     except ValueError as e:
+        _invalidate(key)
         raise LifecycleUnreadable(str(e)) from e
-    _publish(key, signature, generation, authoritative=_holds_home_lock(key))
+    _publish(key, signal_sig, phases_sig, generation, authoritative=_holds_home_lock(key))
     return generation
 
 
 def publish_under_lock(home_dir: Union[str, Path], generation: int) -> None:
-    """A writer holding the home state lock parsed phases.yaml and found `generation`: that is the truth now."""
+    """A writer holding the home state lock parsed (or just wrote) phases.yaml at `generation`: that is the truth."""
     key = home_key(home_dir)
     try:
-        signature = _stat_signature(str(signal_path(home_dir)))
+        signal_sig = _stat_signature(str(signal_path(home_dir)))
+        phases_sig = _stat_signature(str(_phases_path(home_dir)))
     except OSError:
-        with _table_lock:
-            _SIGNAL.pop(key, None)  # the signal cannot be seen: every fence of this home reads moved (fail closed)
+        _invalidate(key)  # the files cannot be seen: every fence of this home reads moved (fail closed)
         return
-    _publish(key, signature, generation, authoritative=True)
+    _publish(key, signal_sig, phases_sig, generation, authoritative=True)
+
+
+def _establish_signal(home_dir: Union[str, Path], generation: int) -> None:
+    """ADMISSION REQUIRES A VALID SIGNAL (Codex review 4 #9): under the home state lock, write the signal when it is
+    missing, unreadable or behind the truth (never lower one that is ahead: a fence admitted below it reads moved).
+    Raises LifecycleUnreadable when it cannot be established - nothing is admitted then."""
+    from ..utils.atomic_files import atomic_write_text
+
+    path = signal_path(home_dir)
+    try:
+        current: Optional[int] = int(path.read_text(encoding="utf-8").strip())
+    except FileNotFoundError:
+        current = None
+    except ValueError:
+        current = None
+    except OSError as e:
+        raise LifecycleUnreadable(f"the lifecycle signal of {home_dir} cannot be read ({e})") from e
+    if current is not None and current > int(generation):
+        # The signal is AHEAD of phases.yaml (a restored or hand-edited file): no admission below it (fail closed).
+        raise LifecycleUnreadable(f"the lifecycle signal of {home_dir} says generation {current} but phases.yaml says "
+                                  f"{generation} - repair phases.yaml before admitting anything")
+    if current is None or current < int(generation):
+        try:
+            atomic_write_text(path, f"{int(generation)}\n")
+        except OSError as e:
+            raise LifecycleUnreadable(f"the lifecycle signal of {home_dir} cannot be written ({e})") from e
+    publish_under_lock(home_dir, generation)
 
 
 def signal_bump(home_dir: Union[str, Path], generation: int) -> None:
     """THE bump's second half, under the home state lock and after phases.yaml was replaced: publish the new
     generation FIRST (Fable F9: this process's fences see the Stop at their next compare whatever the disk does), then
     write the signal file atomically. A failed write removes the stale signal (a process that saw it reads "vanished"
-    = moved) and raises LifecycleSignalUnwritten carrying the generation the Stop moved to."""
+    = moved) and raises LifecycleSignalUnwritten carrying the generation the Stop moved to; if even that removal fails,
+    every other process still sees the Stop through phases.yaml's own signature (Codex review 4 #9)."""
     from ..utils.atomic_files import atomic_write_text
 
     key = home_key(home_dir)
     path = signal_path(home_dir)
     with _table_lock:
         previous = _SIGNAL.get(key)
-    _publish(key, previous[0] if previous else None, generation, authoritative=True)
+    _publish(key, previous[0] if previous else None, previous[1] if previous else None, generation,
+             authoritative=True)
     try:
         try:
             atomic_write_text(path, f"{int(generation)}\n")
-            signature = _stat_signature(str(path))
         except OSError as e:
             try:
                 path.unlink()
             except OSError:
                 pass
             raise LifecycleSignalUnwritten(generation, e) from e
-        _publish(key, signature, generation, authoritative=True)
+        publish_under_lock(home_dir, generation)
     finally:
         with _table_lock:
             inflight = list(_INFLIGHT.get(key, ()))
@@ -203,33 +248,32 @@ def signal_bump(home_dir: Union[str, Path], generation: int) -> None:
             event.set()  # the operator's own act stops the decode in flight (not an arbitrary interrupt, §2.3)
 
 
-def _reread_signal(key: str, path: str, signature: _Signature) -> Optional[int]:
-    """The signal file changed since it was last read: read its int (the only open on the check's path, once per
-    Stop). None when it vanished after being seen or cannot be parsed (the caller reads that as moved)."""
-    if signature is None:
-        return None
+def _reread_signal(key: str, path: str, signal_sig: _Signature, phases_sig: _Signature) -> Optional[int]:
+    """The signal file changed since it was last read: read its int (once per Stop). None when it cannot be parsed
+    (the caller reads that as moved)."""
     try:
         with open(path, "r", encoding="utf-8") as fh:
             value = int(fh.read().strip())
     except (OSError, ValueError):
         return None
-    _publish(key, signature, value, authoritative=False)
+    _publish(key, signal_sig, phases_sig, value, authoritative=False)
     return value
 
 
 # ------------------------------------------------------------------------------------------------------ the fence
 class LifecycleFence:
     """The generation a piece of work was admitted at, for one home. `moved()` / `check()` are the hot path (an int
-    compare, plus one stat of the signal file in a process that did not bump); `commit()` re-reads the truth under
-    the home state lock for a host's own check-then-write."""
+    compare plus two stats: the signal and phases.yaml); `commit()` re-reads the truth under the home state lock for
+    a host's own check-then-write."""
 
-    __slots__ = ("home_dir", "generation", "_key", "_signal")
+    __slots__ = ("home_dir", "generation", "_key", "_signal", "_phases")
 
     def __init__(self, home_dir: Union[str, Path], generation: int) -> None:
         self.home_dir = Path(home_dir)
         self.generation = int(generation)
         self._key = home_key(home_dir)
         self._signal = str(signal_path(home_dir))
+        self._phases = str(_phases_path(home_dir))
         if self._key not in _SIGNAL:
             try:
                 read_truth(self.home_dir)  # first sight of this home in this process
@@ -238,36 +282,54 @@ class LifecycleFence:
 
     @classmethod
     def admit(cls, home_dir: Union[str, Path]) -> "LifecycleFence":
-        """Admit work at the home's CURRENT generation. Raises LifecycleUnreadable when it cannot be read (fail closed:
-        nothing is admitted on an unknown generation)."""
-        return cls(home_dir, read_truth(home_dir))
+        """Admit work at the home's CURRENT generation, inside the home state lock, with its signal established
+        (Codex review 4 #9). Raises LifecycleUnreadable when either cannot be read or written (fail closed: nothing
+        is admitted on an unknown generation)."""
+        from .life import home_state_lock
+
+        with home_state_lock(home_dir):
+            generation = read_truth(home_dir)
+            _establish_signal(home_dir, generation)
+            return cls(home_dir, generation)
 
     def moved(self) -> bool:
-        """True once the home's generation is no longer the admitted one - or cannot be known (fail closed)."""
-        entry = _SIGNAL.get(self._key)
-        if entry is None or entry[1] != self.generation:
+        """True once the home's generation is no longer the admitted one - or cannot be known (fail closed): a missing
+        signal, an unreadable or changed-and-unreadable phases.yaml."""
+        key = self._key
+        entry = _SIGNAL.get(key)
+        if entry is None or entry[2] != self.generation:
             return True
         try:
-            signature = _stat_signature(self._signal)
+            signal_sig = _stat_signature(self._signal)
+            phases_sig = _stat_signature(self._phases)
         except OSError:
             return True
-        if signature == entry[0]:
-            return False
-        return _reread_signal(self._key, self._signal, signature) != self.generation
+        if signal_sig is None:
+            return True  # admission established a signal: missing means removed or never published - refuse
+        if signal_sig != entry[0]:
+            if _reread_signal(key, self._signal, signal_sig, entry[1]) != self.generation:
+                return True
+        if phases_sig != entry[1]:
+            # phases.yaml changed without the signal saying so (a grant, a resume_to - or a bump whose signal failed,
+            # or a corruption): its truth is read once, here.
+            try:
+                return read_truth(self.home_dir) != self.generation
+            except LifecycleUnreadable:
+                return True
+        return False
 
     def check(self, where: str) -> None:
         """Raise StoppedByOperator(where) when the generation moved. Also the memory commit guard's callable."""
         if self.moved():
             entry = _SIGNAL.get(self._key)
-            raise StoppedByOperator(where, expected=self.generation, found=None if entry is None else entry[1])
+            raise StoppedByOperator(where, expected=self.generation, found=None if entry is None else entry[2])
 
     def truth_moved(self) -> bool:
         """The boundary check (a loop's poll): `moved()`, then phases.yaml itself re-read - the parse the loop has
-        always paid at its boundaries, which also sees a bump by a writer that predates the signal file. Raises
-        LifecycleUnreadable when phases.yaml cannot be read (the caller ends, fail closed)."""
-        if self.moved():
-            return True
-        return read_truth(self.home_dir) != self.generation
+        always paid at its boundaries. Raises LifecycleUnreadable when phases.yaml cannot be read (the caller ends,
+        fail closed)."""
+        truth = read_truth(self.home_dir)  # first: an unreadable file raises, never reads as a Stop
+        return truth != self.generation or self.moved()
 
     @contextmanager
     def cancel_event(self) -> Iterator[threading.Event]:

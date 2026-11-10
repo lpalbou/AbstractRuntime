@@ -310,7 +310,7 @@ def test_a_stop_in_another_process_is_seen_at_the_next_check(tmp_path: Path) -> 
     with _counting() as counts:
         assert fence.moved()
         assert fence.moved()
-    assert counts["yaml.safe_load"] == 0 and counts["os.stat"] == 1, counts  # the second compare needs no I/O
+    assert counts["yaml.safe_load"] == 0 and counts["os.stat"] == 2, counts  # the second compare needs no I/O
     assert counts["open"] == 1, counts  # the int is read once, when the stat changed
     with pytest.raises(StaleLifecycleGeneration):
         write_entity_state(home_dir, "awake", reason="late wake", fence=fence)
@@ -318,8 +318,10 @@ def test_a_stop_in_another_process_is_seen_at_the_next_check(tmp_path: Path) -> 
 
 
 def test_a_stale_reader_never_undoes_a_published_stop(tmp_path: Path, monkeypatch) -> None:
-    """An admission that parsed phases.yaml just BEFORE a Stop and publishes just AFTER it must not move this
-    process's table back (the Stop's own fences would read not-moved): its fence is the stale one, refused."""
+    """A reader (without the home lock) that parsed phases.yaml just BEFORE a Stop and publishes just AFTER it must not
+    move this process's table back (the Stop's own fences would read not-moved): a fence built on what it read is the
+    stale one, refused. (Admission itself reads under the home lock now, where no bump can interleave; a signal ahead
+    of phases.yaml refuses admission.)"""
     home_dir = _make_home(tmp_path)
     LifecycleFence.admit(home_dir)
     real_load = life._load_phases_for_write
@@ -333,11 +335,14 @@ def test_a_stale_reader_never_undoes_a_published_stop(tmp_path: Path, monkeypatc
         return data
 
     monkeypatch.setattr(life, "_load_phases_for_write", load_then_stop)
-    stale = LifecycleFence.admit(home_dir)
+    stale_generation = read_lifecycle_generation(home_dir)
     monkeypatch.setattr(life, "_load_phases_for_write", real_load)
-    assert raced["done"] and stale.generation == 0
-    assert stale.moved(), "the stale admission undid the Stop in this process's table"
+    assert raced["done"] and stale_generation == 0
+    assert LifecycleFence(home_dir, stale_generation).moved(), "the stale read undid the Stop in this process's table"
     assert not LifecycleFence.admit(home_dir).moved() and read_lifecycle_generation(home_dir) == 1
+    (home_dir / lf.LIFECYCLE_SIGNAL_FILENAME).write_text("9\n", encoding="utf-8")  # a signal ahead of phases.yaml
+    with pytest.raises(LifecycleUnreadable):
+        LifecycleFence.admit(home_dir)
 
 
 # ------------------------------------------------------------------ T8 / I7: fail closed
@@ -485,12 +490,12 @@ def test_fence_hot_path_budget(tmp_path: Path, capsys) -> None:
     bumper_home = _make_home(tmp_path / "bumper")
     bump_lifecycle_generation(bumper_home, written_by="test:bench")  # this process bumped this home
     bumper_counts, bumper_ns = _bench(LifecycleFence.admit(bumper_home))
-    assert bumper_counts.get("os.stat") == N_EFFECTS, bumper_counts
+    assert bumper_counts.get("os.stat") == 2 * N_EFFECTS, bumper_counts  # the signal + phases.yaml (Codex 4 #9)
     assert sum(v for k, v in bumper_counts.items() if k != "os.stat") == 0, bumper_counts
 
     other_home = _make_home(tmp_path / "other")
     other_counts, other_ns = _bench(LifecycleFence.admit(other_home))
-    assert other_counts.get("os.stat") == N_EFFECTS, other_counts
+    assert other_counts.get("os.stat") == 2 * N_EFFECTS, other_counts
     assert sum(v for k, v in other_counts.items() if k != "os.stat") == 0, other_counts
 
     assert bumper_ns < BUDGET_CEILING_NS and other_ns < BUDGET_CEILING_NS, (bumper_ns, other_ns)
@@ -993,9 +998,9 @@ def test_fence_hot_path_budget_through_the_handler_table_and_the_commit_guard(tm
     bump_lifecycle_generation(bumper, written_by="test:bench")
     bumper_counts, bumper_ns = bench(bumper)
     other_counts, other_ns = bench(_make_home(tmp_path / "other"))
-    assert bumper_counts.get("os.stat") == 3 * N_EFFECTS, bumper_counts
+    assert bumper_counts.get("os.stat") == 6 * N_EFFECTS, bumper_counts  # 3 checks x (signal + phases.yaml)
     assert sum(v for k, v in bumper_counts.items() if k != "os.stat") == 0, bumper_counts
-    assert other_counts.get("os.stat") == 3 * N_EFFECTS, other_counts  # before + after the effect, the guard
+    assert other_counts.get("os.stat") == 6 * N_EFFECTS, other_counts  # before + after the effect, the guard
     assert sum(v for k, v in other_counts.items() if k != "os.stat") == 0, other_counts
     assert bumper_ns < BUDGET_CEILING_NS and other_ns < BUDGET_CEILING_NS, (bumper_ns, other_ns)
     with capsys.disabled():
@@ -1931,3 +1936,71 @@ def test_a_stop_after_the_start_was_found_eligible_spawns_nothing(tmp_path: Path
     status = json.loads((home_dir / "loop_status").read_text(encoding="utf-8"))
     assert status["phase"] == "stopped" and status["stopped_by"] == "kill_switch", status  # no reservation over it
     assert (home_dir / "STOP").exists(), "the start cleared a control file after the Stop"
+
+
+def _bump_elsewhere_failing(home_dir: Path, *, fail_unlink: bool) -> None:
+    """Another process bumps while its signal write fails (a full disk) - and, with `fail_unlink`, its removal of the
+    stale signal fails too."""
+    code = (
+        "import sys, pathlib\n"
+        "import abstractruntime.utils.atomic_files as af\n"
+        "from abstractruntime.identity.life import bump_lifecycle_generation\n"
+        "real = af.atomic_write_text\n"
+        "def disk_full(path, text, *a, **k):\n"
+        "    if pathlib.Path(path).name == '.lifecycle_generation':\n"
+        "        raise OSError(28, 'No space left on device')\n"
+        "    return real(path, text, *a, **k)\n"
+        "af.atomic_write_text = disk_full\n"
+        + ("real_unlink = pathlib.Path.unlink\n"
+           "def no_unlink(self, *a, **k):\n"
+           "    if self.name == '.lifecycle_generation':\n"
+           "        raise OSError(30, 'Read-only file system')\n"
+           "    return real_unlink(self, *a, **k)\n"
+           "pathlib.Path.unlink = no_unlink\n" if fail_unlink else "")
+        + "try:\n"
+          "    bump_lifecycle_generation(pathlib.Path(sys.argv[1]), written_by='test:failing-signal')\n"
+          "except OSError as e:\n"
+          "    print('signal failed:', e)\n"
+    )
+    out = subprocess.run([sys.executable, "-P", "-c", code, str(home_dir)], capture_output=True, text=True,
+                         timeout=120, env={**os.environ, "PYTHONPATH": str(RUNTIME_SRC.parent)})
+    assert out.returncode == 0, out.stderr
+    assert "signal failed" in out.stdout, out.stdout
+
+
+def test_admission_establishes_the_signal_and_a_missing_one_refuses(tmp_path: Path) -> None:
+    """Codex review 4 #9 (P2): a home that was never stopped had no signal, and absent -> absent read as unchanged
+    in every process. Admission writes the signal now (the home's current generation) and a missing one refuses."""
+    home_dir = _make_home(tmp_path)
+    signal = home_dir / lf.LIFECYCLE_SIGNAL_FILENAME
+    signal.unlink()  # a home from before the signal (never stopped since)
+    fence = LifecycleFence.admit(home_dir)
+    assert signal.read_text(encoding="utf-8").strip() == "0" and not fence.moved()
+    signal.unlink()
+    assert fence.moved(), "a missing signal read as no Stop"
+
+
+@pytest.mark.parametrize("fail_unlink", [False, True])
+def test_a_failed_publication_in_another_process_is_still_seen(tmp_path: Path, fail_unlink: bool) -> None:
+    """Codex review 4 #9: another process's bump whose signal write fails (its FIRST publication on this home), and
+    whose removal of the stale signal may fail too, must still read as moved here - phases.yaml itself is observed
+    (a stat; parsed only when it changed)."""
+    home_dir = _make_home(tmp_path)
+    fence = LifecycleFence.admit(home_dir)
+    assert not fence.moved()
+    _bump_elsewhere_failing(home_dir, fail_unlink=fail_unlink)
+    assert fence.moved(), "another process's Stop was hidden by its failed signal publication"
+    assert read_lifecycle_generation(home_dir) == 1  # (after the check: a truth read here would refresh the table)
+
+
+def test_a_corrupted_phases_file_reads_moved_at_the_next_check(tmp_path: Path) -> None:
+    """Codex review 4 #9: corrupting phases.yaml left moved() False (the signal unchanged) and a failed truth read
+    kept the cached entry. The next check observes phases.yaml, fails to read it, drops the cached truth: moved."""
+    home_dir = _make_home(tmp_path)
+    fence = LifecycleFence.admit(home_dir)
+    assert not fence.moved()
+    (home_dir / "phases.yaml").write_text("personal: [unclosed\n", encoding="utf-8")
+    assert fence.moved(), "a corrupted phases.yaml read as no Stop"
+    with pytest.raises(LifecycleUnreadable):
+        read_lifecycle_generation(home_dir)
+    assert fence.moved() and LifecycleFence(home_dir, 0).moved(), "the failed read left the cached truth standing"

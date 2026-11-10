@@ -467,6 +467,33 @@
   
   
     <li class="md-nav__item">
+      <a href="../entity-topics/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Entity Topics
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../digital-identity/" class="md-nav__link">
         
   
@@ -1261,6 +1288,33 @@
   
   
     <li class="md-nav__item">
+      <a href="../replay/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Replay
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../limits/" class="md-nav__link">
         
   
@@ -1350,10 +1404,10 @@
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_23" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_25" >
         
           
-          <label class="md-nav__link" for="__nav_23" id="__nav_23_label" tabindex="0">
+          <label class="md-nav__link" for="__nav_25" id="__nav_25_label" tabindex="0">
             
   
   
@@ -1371,8 +1425,8 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_23_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_23">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_25_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_25">
             <span class="md-nav__icon md-icon"></span>
             
   
@@ -2152,7 +2206,7 @@ unknown fields are rejected at every level.</p>
 </tr>
 <tr>
 <td><code>title</code></td>
-<td>non-empty, at most 120 characters</td>
+<td>non-empty text, whitespace trimmed, any length (root ADR 0054: stored text is never capped; a client folds it for its screen)</td>
 </tr>
 <tr>
 <td><code>controller</code></td>
@@ -3043,10 +3097,10 @@ Waits on a person are live facts read from run state; they are not attention ite
 <h3 id="what-asks-for-attention">What asks for attention<a class="headerlink" href="#what-asks-for-attention" title="Permanent link">&para;</a></h3>
 <p>Automations are <strong>quiet by default</strong>. An occurrence creates an attention item only when:</p>
 <ul>
-<li>its output carries <code>notify: true</code>: the item's title is the automation title and its body is the answer, cut to 280
-  characters;</li>
-<li>its output carries <code>notify: {title, body}</code>: title at most 120 characters (the automation title when empty), body at
-  most 2,000 characters. A missing, <code>false</code> or empty <code>notify</code> stays quiet unless result email is enabled;</li>
+<li>its output carries <code>notify: true</code>: the item's title is the automation title and its body is the whole answer;</li>
+<li>its output carries <code>notify: {title, body}</code>: the title (the automation title when empty) and the body are stored
+  whole, never cut (root ADR 0054; a client folds them for its screen). A missing, <code>false</code> or empty <code>notify</code> stays
+  quiet unless result email is enabled;</li>
 <li>it <strong>failed after its last retry</strong>: the title is "<automation title> failed" and the body is the error. A failure
   that a retry fixed is quiet, and so is a cancelled occurrence.</li>
 </ul>

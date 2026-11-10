@@ -467,6 +467,33 @@
   
   
     <li class="md-nav__item">
+      <a href="../entity-topics/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Entity Topics
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../digital-identity/" class="md-nav__link">
         
   
@@ -883,6 +910,33 @@
   
   
     <li class="md-nav__item">
+      <a href="../replay/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Replay
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../limits/" class="md-nav__link">
         
   
@@ -972,10 +1026,10 @@
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_23" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_25" >
         
           
-          <label class="md-nav__link" for="__nav_23" id="__nav_23_label" tabindex="0">
+          <label class="md-nav__link" for="__nav_25" id="__nav_25_label" tabindex="0">
             
   
   
@@ -993,8 +1047,8 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_23_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_23">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_25_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_25">
             <span class="md-nav__icon md-icon"></span>
             
   
@@ -1309,8 +1363,10 @@ and other agents has a place in the model (below) but no way in yet: that is bac
 <h2 id="quick-start">Quick start<a class="headerlink" href="#quick-start" title="Permanent link">&para;</a></h2>
 <div class="highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">abstractruntime.identity</span><span class="w"> </span><span class="kn">import</span> <span class="n">compute_reputation</span><span class="p">,</span> <span class="n">entity_track_record</span><span class="p">,</span> <span class="n">session_track_record</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">abstractruntime.identity.entity_runtime</span><span class="w"> </span><span class="kn">import</span> <span class="n">open_entity_runtime</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">abstractruntime.identity.lifecycle_fence</span><span class="w"> </span><span class="kn">import</span> <span class="n">LifecycleFence</span>
 
-<span class="n">er</span> <span class="o">=</span> <span class="n">open_entity_runtime</span><span class="p">(</span><span class="n">home_dir</span><span class="p">)</span>          <span class="c1"># or the stores your host already holds</span>
+<span class="c1"># or the stores your host already holds; the fence is required (see docs/entity-runtime.md, "The Stop fence")</span>
+<span class="n">er</span> <span class="o">=</span> <span class="n">open_entity_runtime</span><span class="p">(</span><span class="n">home_dir</span><span class="p">,</span> <span class="n">fence</span><span class="o">=</span><span class="n">LifecycleFence</span><span class="o">.</span><span class="n">admit</span><span class="p">(</span><span class="n">home_dir</span><span class="p">))</span>
 <span class="n">record</span> <span class="o">=</span> <span class="n">entity_track_record</span><span class="p">(</span><span class="n">home_dir</span><span class="p">,</span> <span class="n">er</span><span class="o">.</span><span class="n">run_store</span><span class="p">,</span> <span class="n">er</span><span class="o">.</span><span class="n">ledger_store</span><span class="p">,</span> <span class="n">book_head</span><span class="o">=</span><span class="n">er</span><span class="o">.</span><span class="n">home</span><span class="o">.</span><span class="n">diary</span><span class="o">.</span><span class="n">head</span><span class="p">())</span>
 <span class="nb">print</span><span class="p">(</span><span class="n">record</span><span class="o">.</span><span class="n">runs</span><span class="p">,</span> <span class="n">record</span><span class="o">.</span><span class="n">successes</span><span class="p">,</span> <span class="n">record</span><span class="o">.</span><span class="n">failures</span><span class="p">,</span> <span class="n">record</span><span class="o">.</span><span class="n">tokens</span><span class="o">.</span><span class="n">total</span><span class="p">)</span>
 

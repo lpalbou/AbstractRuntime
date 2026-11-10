@@ -1,0 +1,1528 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Durable workflow execution, checkpoints, resumable waits, and AbstractCore integration.">
+      
+      
+      
+        <link rel="canonical" href="https://www.lpalbou.info/AbstractRuntime/entity-topics/">
+      
+      
+        <link rel="prev" href="../entity-runtime/">
+      
+      
+        <link rel="next" href="../digital-identity/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.8.1">
+    
+    
+      
+        <title>Entity Topics - AbstractRuntime</title>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/stylesheets/main.57a0d79d.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    <body dir="ltr">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#entity-topics-memory-communities" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href=".." title="AbstractRuntime" class="md-header__button md-logo" aria-label="AbstractRuntime" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            AbstractRuntime
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Entity Topics
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/lpalbou/abstractruntime" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    lpalbou/abstractruntime
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href=".." title="AbstractRuntime" class="md-nav__button md-logo" aria-label="AbstractRuntime" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    AbstractRuntime
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/lpalbou/abstractruntime" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    lpalbou/abstractruntime
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href=".." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../getting-started/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Getting Started
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    API Reference
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../architecture/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../integrations/abstractcore/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    AbstractCore Integration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../troubleshooting/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Troubleshooting
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../artifacts/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Artifacts
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../tool-approval/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tool Approval
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../entity-runtime/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Entity Runtime
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Entity Topics
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Entity Topics
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#when-topics-form-the-nights-topics-stage" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        When topics form: the night's topics stage
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-topics-tool" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The topics tool
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#serving-topics-from-a-host" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Serving topics from a host
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Serving topics from a host">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#migration-from-abstractruntimeidentitycommunities" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Migration from abstractruntime.identity.communities
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#tests" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Tests
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../digital-identity/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Digital Identity
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../track-record/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Track Record
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../tools-comms/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tools and Comms
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../email/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Email
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../automations/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Automations
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../mcp-worker/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    MCP Worker
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../workflow-bundles/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Workflow Bundles
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../snapshots/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Snapshots
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../provenance/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Provenance
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../evidence/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Evidence
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../replay/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Replay
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../limits/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Limits
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../faq/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    FAQ
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../manual_testing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Manual Testing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_25" >
+        
+          
+          <label class="md-nav__link" for="__nav_25" id="__nav_25_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Design
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_25_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_25">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Design
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../proposal/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR Index
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0001_layered_coupling_with_abstractcore/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Layered Coupling
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0002_execution_modes_local_remote_hybrid/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Execution Modes
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0003_provenance_tamper_evident_hash_chain/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Hash-Chained Ledger
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#when-topics-form-the-nights-topics-stage" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        When topics form: the night's topics stage
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-topics-tool" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The topics tool
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#serving-topics-from-a-host" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Serving topics from a host
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Serving topics from a host">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#migration-from-abstractruntimeidentitycommunities" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Migration from abstractruntime.identity.communities
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#tests" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Tests
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="entity-topics-memory-communities">Entity topics (memory communities)<a class="headerlink" href="#entity-topics-memory-communities" title="Permanent link">&para;</a></h1>
+<p>An entity's <strong>topics</strong> are its memories grouped by subject. Each topic has a title and a summary written by a model,
+and the grouping forms again at every sleep. They let the entity see what it knows, organized, and go deeper into
+one part of its memory.</p>
+<p>AbstractMemory owns the topics: it forms the <code>community</code> records (detection over the memory graph, stable keys across
+versions, authored titles, layout) and serves them. AbstractRuntime holds no community code. It runs the forming
+during the entity's sleep, gives the entity a tool to read its topics, and exposes memory's topic verbs to hosts.</p>
+<p>Related pages: <a href="../entity-runtime/">Entity runtime</a> (homes, the cognition profile, the idle-sleep thresholds) and
+<a href="../integrations/abstractmemory/">AbstractMemory integration</a> (the memory facade hosts import).</p>
+<h2 id="when-topics-form-the-nights-topics-stage">When topics form: the night's topics stage<a class="headerlink" href="#when-topics-form-the-nights-topics-stage" title="Permanent link">&para;</a></h2>
+<p>The own-time loop's sleep runs its maintenance in a fixed order (<code>life.build_consolidator</code>). The topics stage comes
+after the metadata repair and before the night voice:</p>
+<div class="highlight"><pre><span></span><code>flowchart LR
+    A["sleep_pass: resolution, consolidation,&lt;br/&gt;world models, mining, identity, dream"] --&gt; B["authoring-failure lines"]
+    B --&gt; C["metadata repair:&lt;br/&gt;pending titles and summaries"]
+    subgraph T ["topics stage: identity/topics.sleep_communities"]
+        D1["embed_missing:&lt;br/&gt;vector-less records"] --&gt; D2["communities_pass:&lt;br/&gt;one version, one transaction"]
+    end
+    C --&gt; D1
+    D2 --&gt; E["night voice"]
+</code></pre></div>
+<ul>
+<li><strong>Every sleep runs it</strong>, unless the night already ended before it: a visitor at the door, a wake, a pause or the
+  STOP brake end the night at its next stage. The receipt then says
+  <code>{"skipped": "the night ended before the topics step"}</code>.</li>
+<li><strong>Embedding comes first.</strong> Memory embeds every open record of the entity's scopes that has no vector yet
+  (<code>embed_missing</code>, with the night's embedding model, the loop's <code>--embedding-model</code>), so the pass's
+  nearest-neighbour edges see them. When records cannot be embedded (no embedding model, an unreachable one), the
+  night writes one note, and memory places those records by their engraved neighbours.</li>
+<li><strong>One version per sleep.</strong> <code>communities_pass</code> forms the night's version in one guarded transaction. A sleep that
+  changes no membership writes nothing (<code>skipped: "unchanged: ..."</code>).</li>
+<li><strong>Titles are authored.</strong> The summaries capability writes each changed topic's title and summary
+  (<code>capabilities.summaries</code> in the <a href="../entity-runtime/#cognition-profile-identitycognition_profilepy">cognition profile</a>),
+  the same author that titles every record the night forms. The pass gets what the metadata repair left of the
+  night's authoring budget (<code>authoring_cap</code>, 64 model calls by default, minus the tasks the repair took). The repair
+  runs within the cap minus a reserved quarter (<code>TOPICS_AUTHORING_SHARE</code>, 16 calls of 64), so a home with hundreds of
+  fields to repair still has its topics titled the same night. Topics past
+  that budget form <em>pending</em>, with their authoring tasks, and the drainer writes their titles at a later authoring
+  window. A title the model could not write gets its authoring-failure line.</li>
+<li><strong>It is fenced.</strong> Both memory calls run with <code>cancelled=fence.moved</code>, the author is checked before every model call,
+  and memory's commit guard refuses the version after the operator's Stop. A stopped night records nothing for its
+  topics: no version, no log line, no maintenance note. The receipt says <code>stopped</code>.</li>
+</ul>
+<p>What the night records:</p>
+<table>
+<thead>
+<tr>
+<th>Where</th>
+<th>What</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>the night's result, <code>communities</code></td>
+<td>memory's receipt (<code>version_seq</code>, <code>communities</code>, <code>new</code>, <code>kept</code>, <code>renamed</code>, <code>dissolved</code>, <code>authored</code>, <code>titles_kept</code>, <code>pending</code>, <code>failed</code>, <code>unvectored_count</code>, <code>unplaced_count</code>, <code>unplaced_closed</code>, <code>skipped</code>, <code>cancelled</code>, <code>timings_ms</code> with its detection <code>rounds</code>, <code>budget</code>: the calls the pass was given, <code>budget_spent</code>: the author calls it made) plus <code>embedding: {embedded, skipped, failed}</code></td>
+</tr>
+<tr>
+<td><code>own_time.log</code></td>
+<td>one line per sleep, for example <code>(topics: version 1287 - 14 topics: 2 new, 12 kept, 0 dissolved, 3 retitled, 41 memories moved; titles 5 authored, 9 kept, 0 pending, 0 failed; authoring budget 16 calls, 5 spent; 136 embedded first, 0 without a vector, 2 unplaced (2 with only closed neighbours); 3 detection rounds)</code>, or <code>(topics: no new version - unchanged: every community stands as it is; ...)</code></td>
+</tr>
+<tr>
+<td>memq_maintenance (memory's completed-maintenance row of that night)</td>
+<td><code>detail.communities_version</code>: the <code>version_seq</code> the night wrote</td>
+</tr>
+<tr>
+<td>the authoring-failures file</td>
+<td>one line per topic whose title could not be authored (<code>template_id</code> <code>memory.communities_pass</code>)</td>
+</tr>
+</tbody>
+</table>
+<p>A memory without the topic verbs produces one <code>#MISSING_VERB abstractmemory.embed_missing / communities_pass</code> line
+per sleep and the receipt <code>{"missing_verb": ...}</code>. The rest of the night stands.</p>
+<p>A host that runs its own sleep can run the same stage:</p>
+<div class="highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">abstractruntime.identity.topics</span><span class="w"> </span><span class="kn">import</span> <span class="n">sleep_communities</span>
+
+<span class="n">receipt</span> <span class="o">=</span> <span class="n">sleep_communities</span><span class="p">(</span>
+    <span class="n">home</span><span class="o">.</span><span class="n">ms</span><span class="p">,</span> <span class="n">entity_id</span><span class="o">=</span><span class="n">eid</span><span class="p">,</span> <span class="n">scopes</span><span class="o">=</span><span class="p">[(</span><span class="s2">"self"</span><span class="p">,</span> <span class="n">eid</span><span class="p">),</span> <span class="p">(</span><span class="s2">"diary"</span><span class="p">,</span> <span class="n">eid</span><span class="p">),</span> <span class="p">(</span><span class="s2">"life"</span><span class="p">,</span> <span class="n">eid</span><span class="p">)],</span>
+    <span class="n">author</span><span class="o">=</span><span class="n">formation_author</span><span class="p">,</span>          <span class="c1"># memory's author(kind, body, context) callable</span>
+    <span class="n">fence</span><span class="o">=</span><span class="n">fence</span><span class="p">,</span>                      <span class="c1"># the LifecycleFence the sleep was admitted at</span>
+    <span class="n">budget</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>                      <span class="c1"># most author calls; None = no bound</span>
+    <span class="n">maintenance_kind</span><span class="o">=</span><span class="s2">"night"</span><span class="p">,</span>         <span class="c1"># the maintenance row this sleep completed, or None</span>
+    <span class="n">out</span><span class="o">=</span><span class="nb">print</span><span class="p">,</span>
+<span class="p">)</span>
+</code></pre></div>
+<p><code>sleep_communities</code> never raises: a pass that raises, or a receipt the runtime cannot read, is one <code>#FALLBACK</code> line
+and a receipt carrying <code>error</code>.</p>
+<h2 id="the-topics-tool">The <code>topics</code> tool<a class="headerlink" href="#the-topics-tool" title="Permanent link">&para;</a></h2>
+<p><code>topics</code> is a tier-1 tool: read-only, granted by default in visit, work and personal time (the sleep phase's
+read-only default list does not include it), taught in the tools paragraph of the entity's prompt, and declared
+natively (property <code>topic</code>). Its body is optional:</p>
+<table>
+<thead>
+<tr>
+<th>Body</th>
+<th>Answer</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>empty</td>
+<td>the list: each topic's <code>#tag</code>, title, size, newest memory and one-line summary, largest first (40 at most)</td>
+</tr>
+<tr>
+<td>a topic's <code>#tag</code></td>
+<td>that topic's memories by title, newest first (20 at most); memories placed since the last sleep are marked</td>
+</tr>
+<tr>
+<td>a memory's <code>#tag</code></td>
+<td>the topic that memory belongs to, the same way</td>
+</tr>
+<tr>
+<td><code>#tag</code> and words</td>
+<td>that topic's memories ranked by meaning against the words</td>
+</tr>
+<tr>
+<td>words</td>
+<td>the topic closest to the words by meaning, its closest memories first, and the next closest topics</td>
+</tr>
+</tbody>
+</table>
+<div class="highlight"><pre><span></span><code>Your topics - your memories grouped by what they are about (2 topics over 5 memories, grouped and titled while you sleep):
+- #1111dam0 The dam and its gauges (3 memories, newest 2026-11-05) - How the dam's spillway was checked, and why its gauges drift.
+- #2222gar0 (untitled yet - 2 memories) - (its summary is not written yet - it is written while you sleep)
+topics #tag shows one topic's memories (or the topic of a memory); topics &lt;words&gt; finds the topic closest to them; read_memory #tag reads a memory.
+</code></pre></div>
+<ul>
+<li>The tool reads what memory serves (<code>abstractmemory.community_index.communities</code>, payload version 2) on every call,
+  never a cache of its own. The list is that one read. A drill-down also reads the entity's digests once, for the
+  members' titles.</li>
+<li>Meaning ranks through the store's vector query (memory's in-process vector matrix), one embedding of the words per
+  call. A home opened without an embedding model cannot rank by meaning. The tool then says so: words get the list,
+  and a topic's memories are shown newest first.</li>
+<li>A topic's <code>#tag</code> is the tail of its stable key, so it still names the same topic after a sleep. Every memory shown
+  carries its own <code>#tag</code>, which <code>read_memory</code> reads at once.</li>
+<li>A topic not titled yet shows as <code>(untitled yet - N memories)</code>. Before the first sleep, the tool says that topics
+  form during the next sleep.</li>
+<li><code>search_memory</code> and <code>read_memory</code> never serve a topic as a memory: the reader's direct abstracts reads skip
+  memory's <code>community</code> records.</li>
+</ul>
+<p>The chat lane (<code>ChatSession</code>) and the effect lane (<code>ENTITY_TOOLS_EXECUTE</code>) wire the tool. A host that executes tool
+elections itself passes the reader's method:</p>
+<div class="highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">abstractruntime.identity.memory_reader</span><span class="w"> </span><span class="kn">import</span> <span class="n">HomeMemoryReader</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">abstractruntime.identity.tools</span><span class="w"> </span><span class="kn">import</span> <span class="n">execute_tool_elections</span>
+
+<span class="n">reader</span> <span class="o">=</span> <span class="n">HomeMemoryReader</span><span class="p">(</span><span class="n">home</span><span class="p">,</span> <span class="n">tag_map</span><span class="o">=</span><span class="n">visit_tag_map</span><span class="p">)</span>
+<span class="n">execute_tool_elections</span><span class="p">(</span><span class="n">elections</span><span class="p">,</span> <span class="n">diary_store</span><span class="o">=</span><span class="n">home</span><span class="o">.</span><span class="n">diary</span><span class="p">,</span> <span class="n">diary_read_effect</span><span class="o">=</span><span class="n">read_entry</span><span class="p">,</span>
+                       <span class="n">search_memory_fn</span><span class="o">=</span><span class="n">reader</span><span class="o">.</span><span class="n">search_memory</span><span class="p">,</span> <span class="n">read_memory_fn</span><span class="o">=</span><span class="n">reader</span><span class="o">.</span><span class="n">read_memory</span><span class="p">,</span>
+                       <span class="n">recent_memories_fn</span><span class="o">=</span><span class="n">reader</span><span class="o">.</span><span class="n">recent_memories</span><span class="p">,</span> <span class="n">topics_fn</span><span class="o">=</span><span class="n">reader</span><span class="o">.</span><span class="n">topics</span><span class="p">)</span>
+</code></pre></div>
+<p>A lane that grants the tool without wiring it answers <code>(the topics tool is not enabled in this session)</code> with the
+notice <code>#FALLBACK topics elected but no resolver wired</code>.</p>
+<h2 id="serving-topics-from-a-host">Serving topics from a host<a class="headerlink" href="#serving-topics-from-a-host" title="Permanent link">&para;</a></h2>
+<p>Hosts reach memory's topic verbs through the runtime's memory facade
+(<code>abstractruntime.integrations.abstractmemory.memory_facade</code>), unchanged:</p>
+<table>
+<thead>
+<tr>
+<th>Name</th>
+<th>Use</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>communities(system, *, scopes, owner_id, version=None)</code></td>
+<td>the payload version 2 a route serves: <code>version_seq</code>, <code>first_sleep_pending</code>, and per topic <code>id</code> (the version's record id), <code>key</code> (stable), <code>title</code>, <code>summary</code>, <code>pending</code>, <code>size</code>, <code>kinds</code>, <code>members</code>, <code>provisional_ids</code>, <code>layout</code>, <code>facts</code>; plus <code>links</code></td>
+</tr>
+<tr>
+<td><code>community_of(system, record_id)</code></td>
+<td>the topic one record is in now (<code>community_key</code>, <code>provisional</code>, <code>via</code>)</td>
+</tr>
+<tr>
+<td><code>communities_pass(...)</code>, <code>embed_missing(...)</code></td>
+<td>the night's verbs, for a host that runs its own sleep (prefer <code>sleep_communities</code> above)</td>
+</tr>
+</tbody>
+</table>
+<div class="highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">abstractruntime.integrations.abstractmemory</span><span class="w"> </span><span class="kn">import</span> <span class="n">memory_facade</span>
+
+<span class="n">eid</span> <span class="o">=</span> <span class="n">home</span><span class="o">.</span><span class="n">entity_id</span>
+<span class="n">payload</span> <span class="o">=</span> <span class="n">memory_facade</span><span class="o">.</span><span class="n">communities</span><span class="p">(</span><span class="n">home</span><span class="o">.</span><span class="n">ms</span><span class="p">,</span> <span class="n">scopes</span><span class="o">=</span><span class="p">[(</span><span class="s2">"self"</span><span class="p">,</span> <span class="n">eid</span><span class="p">),</span> <span class="p">(</span><span class="s2">"diary"</span><span class="p">,</span> <span class="n">eid</span><span class="p">),</span> <span class="p">(</span><span class="s2">"life"</span><span class="p">,</span> <span class="n">eid</span><span class="p">)],</span> <span class="n">owner_id</span><span class="o">=</span><span class="n">eid</span><span class="p">)</span>
+</code></pre></div>
+<h3 id="migration-from-abstractruntimeidentitycommunities">Migration from <code>abstractruntime.identity.communities</code><a class="headerlink" href="#migration-from-abstractruntimeidentitycommunities" title="Permanent link">&para;</a></h3>
+<p>The runtime no longer computes communities or keyword labels. <code>memory_communities(store)</code> raises
+<code>CommunitiesRetired</code>, an <code>ImportError</code> naming <code>memory_facade.communities</code> as what to serve instead. Serve memory's
+payload version 2: it has authored titles and summaries in place of the keyword <code>label</code> and <code>keywords</code> fields.</p>
+<h2 id="tests">Tests<a class="headerlink" href="#tests" title="Permanent link">&para;</a></h2>
+<p><code>tests/test_topics_night_stage.py</code> (the stage, on memory's real pass), <code>tests/test_topics_tool.py</code> (the tool, on
+memory's real read), <code>tests/test_memory_facade.py</code> (the facade names), <code>tests/test_memory_communities.py</code> (the
+retired module fails loudly).</p>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.instant", "navigation.tracking", "navigation.top", "content.code.copy"], "search": "../assets/javascripts/workers/search.a7633da7.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../assets/javascripts/bundle.a5f9d56c.min.js"></script>
+      
+    
+  </body>
+</html>

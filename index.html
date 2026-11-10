@@ -567,6 +567,33 @@
   
   
     <li class="md-nav__item">
+      <a href="entity-topics/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Entity Topics
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="digital-identity/" class="md-nav__link">
         
   
@@ -837,6 +864,33 @@
   
   
     <li class="md-nav__item">
+      <a href="replay/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Replay
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="limits/" class="md-nav__link">
         
   
@@ -926,10 +980,10 @@
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_23" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_25" >
         
           
-          <label class="md-nav__link" for="__nav_23" id="__nav_23_label" tabindex="0">
+          <label class="md-nav__link" for="__nav_25" id="__nav_25_label" tabindex="0">
             
   
   
@@ -947,8 +1001,8 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_23_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_23">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_25_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_25">
             <span class="md-nav__icon md-icon"></span>
             
   
@@ -1248,7 +1302,8 @@
 <h2 id="features-reference">Features (reference)<a class="headerlink" href="#features-reference" title="Permanent link">&para;</a></h2>
 <ul>
 <li><code>automations.md</code> — automations: a workflow run on a schedule, on an event or on request as a durable controller run; triggers (<code>schedule@1</code>, <code>schedule@2</code> calendar rules in a time zone, <code>manual@1</code>, <code>email.received@1</code>, <code>feed.item@1</code> RSS 2.0 / RSS 1.0 / Atom, <code>webhook.received@1</code> Standard Webhooks, entry-point sources), per-user trigger connections, the CloudEvents envelope (<code>input_data.event</code>), run origin (<code>_meta.origin</code>), wakes (<code>SCHEDULE_RUN</code>: work later in the same session, with at most the caller's tools), Publish to channel (<code>PUBLISH_EVENT</code>, alerts with <code>recipient</code> and <code>channels</code>), commands, independent or growing context, discussions forked at any occurrence (own writable workspace, the automation's workspace mounted read-only), tool approval, typed waits, notifications and retries, and the storage guarantees (create-if-absent, per-run lock, turn roots, session kinds, one writer process per store)</li>
-<li><code>entity-runtime.md</code> — per-entity runtimes for summoned entities: homes, the one-writer lease, act-only diary privacy (<code>$act_only</code> refs), durable visit waits with deadlines</li>
+<li><code>entity-runtime.md</code> — per-entity runtimes for summoned entities: homes, the one-writer lease, act-only diary privacy (<code>$act_only</code> refs), durable visit waits with deadlines, the cognition profile (<code>cognition.yaml</code>: a model per capability, recall width, rebuild policy, idle-sleep thresholds)</li>
+<li><code>entity-topics.md</code> — an entity's topics (memory communities): the night's topics stage after the metadata repair (memory embeds vector-less records, then forms one version with authored titles, fenced), what it records, the entity's <code>topics</code> tool (the list, one topic's memories, the closest topic by meaning), and the memory facade names a host serves (<code>communities</code>, <code>community_of</code>)</li>
 <li><code>digital-identity.md</code> — an entity's look and voice: <code>identity.json</code> in the home, the recorded default, the <code>identity_changed</code> biography row, the identity reference on runs, the fingerprint, the summon cue</li>
 <li><code>track-record.md</code> — an entity's or a session's track record (sessions, runs, successes, failures, tokens) and reputation (trust per task kind with its evidence), computed from existing records; completion rates until feedback exists; and its acquaintances (the entities and humans it met)</li>
 <li><code>evidence.md</code> — artifact-backed evidence capture for external-boundary tools</li>

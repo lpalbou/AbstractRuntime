@@ -808,6 +808,33 @@
   
   
     <li class="md-nav__item">
+      <a href="../entity-topics/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Entity Topics
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../digital-identity/" class="md-nav__link">
         
   
@@ -1078,6 +1105,33 @@
   
   
     <li class="md-nav__item">
+      <a href="../replay/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Replay
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../limits/" class="md-nav__link">
         
   
@@ -1167,10 +1221,10 @@
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_23" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_25" >
         
           
-          <label class="md-nav__link" for="__nav_23" id="__nav_23_label" tabindex="0">
+          <label class="md-nav__link" for="__nav_25" id="__nav_25_label" tabindex="0">
             
   
   
@@ -1188,8 +1242,8 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_23_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_23">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_25_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_25">
             <span class="md-nav__icon md-icon"></span>
             
   
@@ -1931,6 +1985,16 @@ record exactly once), and no doubled side effects.</p>
 <li><code>Runtime.start(...)</code> creates a new <code>RunState</code> and initializes <code>_limits</code> from <code>RuntimeConfig</code> (<code>src/abstractruntime/core/config.py</code>).</li>
 <li><code>Runtime.tick(...)</code> executes nodes until the run becomes <code>WAITING</code>, <code>COMPLETED</code>, <code>FAILED</code>, or is <code>CANCELLED</code>.</li>
 <li><code>Runtime.resume(...)</code> validates the <code>wait_key</code>, writes the payload to <code>WaitState.result_key</code>, and continues execution <strong>from</strong> <code>WaitState.resume_to_node</code>.</li>
+<li>A model endpoint that cannot be reached does not fail the run. When the provider raises AbstractCore's
+  <code>EndpointUnreachableError</code> (the inference machine is off, asleep or unreachable — not a generation that ran and
+  failed), the <code>LLM_CALL</code> handler returns a durable EVENT wait: <code>wait_key = endpoint_unreachable:&lt;base_url&gt;</code>,
+  <code>resume_to_node</code> = the node that issued the call, no prompt (a <em>signal</em> wait, shown as "Waiting for …", never as a
+  question), and <code>details {kind: endpoint_unreachable, message, base_url, provider, cause, detail, errno, elapsed_s,
+  retryable, attempt, since, node_id}</code>. The ledger keeps one WAITING record per attempt. A <code>resume</code> with no payload
+  re-plans that node and re-issues the identical call as a new effect issuance (the parked attempt is never replayed
+  as a result); <code>cancel</code> ends the run as for any wait. The host decides when to resume (the gateway probes the
+  endpoint). Core never counts this error in its circuit breaker. Over the AbstractCore server, the condition
+  travels as a 503 envelope with every field; the remote client rebuilds the typed error from it.</li>
 </ul>
 <div class="highlight"><pre><span></span><code>sequenceDiagram
   participant Host

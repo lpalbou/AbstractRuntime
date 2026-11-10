@@ -16,7 +16,7 @@
         <link rel="prev" href="../tool-approval/">
       
       
-        <link rel="next" href="../digital-identity/">
+        <link rel="next" href="../entity-topics/">
       
       
         
@@ -533,6 +533,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#the-stop-fence-identitylifecycle_fencepy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The Stop fence (identity/lifecycle_fence.py)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#act-only-content-references-at-rest-words-only-in-flight-identityact_onlypy" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -566,6 +577,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#cognition-profile-identitycognition_profilepy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cognition profile (identity/cognition_profile.py)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#tests" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -580,6 +602,33 @@
   
 </nav>
       
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../entity-topics/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Entity Topics
+  
+
+    
+  </span>
+  
+  
+
+      </a>
     </li>
   
 
@@ -861,6 +910,33 @@
   
   
     <li class="md-nav__item">
+      <a href="../replay/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Replay
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../limits/" class="md-nav__link">
         
   
@@ -950,10 +1026,10 @@
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_23" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_25" >
         
           
-          <label class="md-nav__link" for="__nav_23" id="__nav_23_label" tabindex="0">
+          <label class="md-nav__link" for="__nav_25" id="__nav_25_label" tabindex="0">
             
   
   
@@ -971,8 +1047,8 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_23_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_23">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_25_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_25">
             <span class="md-nav__icon md-icon"></span>
             
   
@@ -1189,6 +1265,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#the-stop-fence-identitylifecycle_fencepy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The Stop fence (identity/lifecycle_fence.py)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#act-only-content-references-at-rest-words-only-in-flight-identityact_onlypy" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1215,6 +1302,17 @@
     <span class="md-ellipsis">
       
         Durable visit waits: event + deadline
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#cognition-profile-identitycognition_profilepy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cognition profile (identity/cognition_profile.py)
       
     </span>
   </a>
@@ -1264,6 +1362,7 @@ the door half (auth, stamps, serving) is AbstractGateway's.</p>
   manifest.json            # entity_id (birth marker — never a lookup key)
   spark.yaml               # the attested seed
   substrate.yaml           # operator's ONE mind choice (provider+model)
+  cognition.yaml           # the cognition profile: a model per capability, recall width, rebuild policy
   identity.json            # look and voice (digital-identity.md)
   .identity.lock           # one identity write at a time
   state_history.jsonl      # biography: state, phase_changed and identity_changed rows
@@ -1312,8 +1411,10 @@ directory at a time:</p>
 </ul>
 <h2 id="one-runtime-per-entity-identityentity_runtimepy">One Runtime per entity (<code>identity/entity_runtime.py</code>)<a class="headerlink" href="#one-runtime-per-entity-identityentity_runtimepy" title="Permanent link">&para;</a></h2>
 <div class="highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">abstractruntime.identity.entity_runtime</span><span class="w"> </span><span class="kn">import</span> <span class="n">open_entity_runtime</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">abstractruntime.identity.lifecycle_fence</span><span class="w"> </span><span class="kn">import</span> <span class="n">LifecycleFence</span>
 
-<span class="n">ert</span> <span class="o">=</span> <span class="n">open_entity_runtime</span><span class="p">(</span><span class="n">home_dir</span><span class="p">,</span> <span class="n">extra_handlers</span><span class="o">=</span><span class="p">{</span><span class="n">EffectType</span><span class="o">.</span><span class="n">LLM_CALL</span><span class="p">:</span> <span class="n">my_llm_handler</span><span class="p">})</span>
+<span class="n">fence</span> <span class="o">=</span> <span class="n">LifecycleFence</span><span class="o">.</span><span class="n">admit</span><span class="p">(</span><span class="n">home_dir</span><span class="p">)</span>   <span class="c1"># the generation this work is admitted at (see "The Stop fence" below)</span>
+<span class="n">ert</span> <span class="o">=</span> <span class="n">open_entity_runtime</span><span class="p">(</span><span class="n">home_dir</span><span class="p">,</span> <span class="n">extra_handlers</span><span class="o">=</span><span class="p">{</span><span class="n">EffectType</span><span class="o">.</span><span class="n">LLM_CALL</span><span class="p">:</span> <span class="n">my_llm_handler</span><span class="p">},</span> <span class="n">fence</span><span class="o">=</span><span class="n">fence</span><span class="p">)</span>
 <span class="n">run_id</span> <span class="o">=</span> <span class="n">ert</span><span class="o">.</span><span class="n">runtime</span><span class="o">.</span><span class="n">start</span><span class="p">(</span><span class="n">workflow</span><span class="o">=</span><span class="n">visit_workflow</span><span class="p">,</span> <span class="nb">vars</span><span class="o">=</span><span class="p">{},</span> <span class="n">session_id</span><span class="o">=</span><span class="s2">"visit-1"</span><span class="p">)</span>
 <span class="n">ert</span><span class="o">.</span><span class="n">runtime</span><span class="o">.</span><span class="n">tick</span><span class="p">(</span><span class="n">workflow</span><span class="o">=</span><span class="n">visit_workflow</span><span class="p">,</span> <span class="n">run_id</span><span class="o">=</span><span class="n">run_id</span><span class="p">)</span>
 <span class="n">ert</span><span class="o">.</span><span class="n">close</span><span class="p">()</span>   <span class="c1"># checkpoints WAL so the directory is copy-clean</span>
@@ -1332,6 +1433,21 @@ directory at a time:</p>
   <strong>act-only dereference</strong> (below) — the privacy boundary cannot be
   forgotten.</li>
 </ul>
+<h2 id="the-stop-fence-identitylifecycle_fencepy">The Stop fence (<code>identity/lifecycle_fence.py</code>)<a class="headerlink" href="#the-stop-fence-identitylifecycle_fencepy" title="Permanent link">&para;</a></h2>
+<p>The operator's Stop moves the home's lifecycle generation. Work is admitted at one generation and carries a
+<code>LifecycleFence</code> holding it: <code>LifecycleFence.admit(home_dir)</code> admits at the home's current generation, inside the
+home state lock, and raises <code>LifecycleUnreadable</code> when that generation cannot be read (nothing is admitted on an
+unknown generation). The openers and state writers take the fence keyword-only, with no default:
+<code>open_home(..., fence=)</code>, <code>open_entity_runtime(..., fence=)</code>, <code>ChatSession(..., fence=)</code>,
+<code>spawn_loop_process(..., fence=)</code> and <code>build_consolidator(..., fence=)</code>. Once the generation has moved, the home
+refuses everything decided before it: memory's commit guard rolls the write back, the diary and artifact stores
+refuse the write, every effect returns cancelled, and a model reply that returns after the Stop lands nowhere. The
+refusal is <code>StoppedByOperator</code> (a <code>TurnCancelled</code>), recorded as stopped by the operator, never as a failure. Only the
+Stop itself (<code>KILL_SWITCH</code>: paused, own time revoked, the return cleared, loop status stopped) and the Resume
+(<code>RESUME</code>: awake, nothing restored) write past the check. A host that keeps an opened runtime across a Resume calls
+<code>ert.readmit(LifecycleFence.admit(home_dir))</code> (<code>ChatHome.readmit</code> for a home) once no run of the old generation is
+still acting. A reader that acts on nothing opens a home with <code>open_home(home_dir, fence=None)</code>;
+<code>open_entity_runtime</code> always needs a fence.</p>
 <h2 id="act-only-content-references-at-rest-words-only-in-flight-identityact_onlypy">Act-only content: references at rest, words only in flight (<code>identity/act_only.py</code>)<a class="headerlink" href="#act-only-content-references-at-rest-words-only-in-flight-identityact_onlypy" title="Permanent link">&para;</a></h2>
 <p>Diary words must never rest outside the book. When an entity reads its own
 diary mid-visit, the <strong>durable transcript carries a typed reference</strong>, not
@@ -1384,9 +1500,126 @@ deadline (no reaper daemons):</p>
   together, so clients can render a chat composer for visit waits and the
   deadline without new transport.</li>
 </ul>
+<h2 id="cognition-profile-identitycognition_profilepy">Cognition profile (<code>identity/cognition_profile.py</code>)<a class="headerlink" href="#cognition-profile-identitycognition_profilepy" title="Permanent link">&para;</a></h2>
+<p>The mind (<code>substrate.yaml</code>) is what the entity talks with. The cognition
+profile, <code>&lt;home&gt;/cognition.yaml</code>, says which model each other part of its
+thinking uses, how many memories a turn brings to mind, how readily it
+revisits what it already understood, what the look-back at the end of a
+tick of its own time sees, and when an idle entity goes to sleep:</p>
+<div class="highlight"><pre><span></span><code><span class="nt">schema_version</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">1</span>
+<span class="nt">capabilities</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">summaries</span><span class="p">:</span><span class="w">     </span><span class="p p-Indicator">{</span><span class="nt">inherit</span><span class="p">:</span><span class="w"> </span><span class="nv">mind</span><span class="p p-Indicator">}</span><span class="w">    </span><span class="c1"># digests, titles, keywords, cards</span>
+<span class="w">  </span><span class="nt">understanding</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">{</span><span class="nt">provider</span><span class="p">:</span><span class="w"> </span><span class="s">"endpoint:compat-theforge-nvidia"</span><span class="p p-Indicator">,</span><span class="nt"> model</span><span class="p">:</span><span class="w"> </span><span class="s">"qwen/qwen3.8-27b"</span><span class="p p-Indicator">,</span><span class="nt"> thinking</span><span class="p">:</span><span class="w"> </span><span class="nv">low</span><span class="p p-Indicator">}</span>
+<span class="w">  </span><span class="nt">extraction</span><span class="p">:</span><span class="w">    </span><span class="p p-Indicator">{</span><span class="nt">inherit</span><span class="p">:</span><span class="w"> </span><span class="nv">mind</span><span class="p p-Indicator">}</span><span class="w">    </span><span class="c1"># the memory extraction lane</span>
+<span class="nt">recall</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">shelf_size</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">50</span><span class="w">                    </span><span class="c1"># memories retrieved per turn, in visits and own time (1..400)</span>
+<span class="nt">rebuild</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">sensitivity</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">0.5</span><span class="w">                  </span><span class="c1"># 0..1, how easily a new memory or a surprise re-opens what is understood</span>
+<span class="w">  </span><span class="nt">cap_per_turn</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">3</span><span class="w">                   </span><span class="c1"># 0..10 memory tasks a turn may run at most; 0 = only while resting</span>
+<span class="nt">lookback</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">context</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">day</span><span class="w">                      </span><span class="c1"># what the end-of-tick look-back sees: day or tick</span>
+<span class="nt">sleep</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">after_hours</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">24</span><span class="w">                   </span><span class="c1"># an idle entity sleeps this long after its last completed sleep (1..720)</span>
+<span class="w">  </span><span class="nt">after_events</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">500</span><span class="w">                 </span><span class="c1"># ... or once this many memories formed since it (&gt;= 1)</span>
+<span class="w">  </span><span class="nt">after_fragmented_share</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">0.15</span><span class="w">      </span><span class="c1"># ... or once more than this share of its memories is fragmented (0 &lt; x &lt;= 1)</span>
+</code></pre></div>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Absent means</th>
+<th>Range</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>capabilities.&lt;cap&gt;</code></td>
+<td><code>{inherit: mind}</code></td>
+<td><code>{inherit: mind}</code> or <code>{provider, model, thinking?, max_input_tokens?}</code>; <code>thinking</code> from <code>none, minimal, low, medium, high, xhigh, auto, on, off</code>; <code>max_input_tokens</code> 4096..140000 (140000 when absent)</td>
+</tr>
+<tr>
+<td><code>recall.shelf_size</code></td>
+<td>the host's default (the gateway's is 50)</td>
+<td>whole number 1..400</td>
+</tr>
+<tr>
+<td><code>rebuild.sensitivity</code></td>
+<td>0.5</td>
+<td>number 0..1</td>
+</tr>
+<tr>
+<td><code>rebuild.cap_per_turn</code></td>
+<td>3</td>
+<td>whole number 0..10</td>
+</tr>
+<tr>
+<td><code>sleep.after_hours</code></td>
+<td>24</td>
+<td>whole number 1..720</td>
+</tr>
+<tr>
+<td><code>sleep.after_events</code></td>
+<td>500</td>
+<td>whole number &gt;= 1</td>
+</tr>
+<tr>
+<td><code>sleep.after_fragmented_share</code></td>
+<td>0.15</td>
+<td>number above 0, at most 1: the share of the home's live memories that are fragmented (placed in a <a href="../entity-topics/">topic</a> only provisionally, without a vector, or with a title or summary pending)</td>
+</tr>
+<tr>
+<td><code>lookback.context</code></td>
+<td><code>day</code></td>
+<td><code>day</code>: the whole day so far (a prefix cache keeps the new tokens per look-back about constant, roughly 770); <code>tick</code>: this tick's exchange plus a recap of the day's 12 latest earlier moments</td>
+</tr>
+</tbody>
+</table>
+<div class="highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">abstractruntime.identity.cognition_profile</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>
+    <span class="n">read_cognition_profile</span><span class="p">,</span> <span class="n">resolve_capability</span><span class="p">,</span> <span class="n">recall_shelf_size</span><span class="p">,</span> <span class="n">rebuild_policy</span><span class="p">,</span> <span class="n">lookback_context</span><span class="p">,</span>
+    <span class="n">sleep_thresholds</span><span class="p">,</span>
+<span class="p">)</span>
+
+<span class="n">resolve_capability</span><span class="p">(</span><span class="n">home_dir</span><span class="p">,</span> <span class="s2">"summaries"</span><span class="p">)</span>
+<span class="c1"># {"provider": ..., "model": ..., "thinking": ..., "max_input_tokens": 140000, "source": "mind"}</span>
+<span class="n">resolve_capability</span><span class="p">(</span><span class="n">home_dir</span><span class="p">,</span> <span class="s2">"summaries"</span><span class="p">,</span> <span class="n">mind</span><span class="o">=</span><span class="p">{</span><span class="s2">"provider"</span><span class="p">:</span> <span class="s2">"lmstudio"</span><span class="p">,</span> <span class="s2">"model"</span><span class="p">:</span> <span class="s2">"qwen3-4b"</span><span class="p">})</span>
+<span class="n">recall_shelf_size</span><span class="p">(</span><span class="n">home_dir</span><span class="p">,</span> <span class="mi">50</span><span class="p">)</span>      <span class="c1"># the profile's width, else the default you pass</span>
+<span class="n">rebuild_policy</span><span class="p">(</span><span class="n">home_dir</span><span class="p">)</span>             <span class="c1"># {"sensitivity": 0.5, "cap_per_turn": 3}</span>
+<span class="n">lookback_context</span><span class="p">(</span><span class="n">home_dir</span><span class="p">)</span>           <span class="c1"># "day" (default) or "tick"</span>
+<span class="n">sleep_thresholds</span><span class="p">(</span><span class="n">home_dir</span><span class="p">)</span>           <span class="c1"># {"after_hours": 24, "after_events": 500, "after_fragmented_share": 0.15}</span>
+<span class="n">read_cognition_profile</span><span class="p">(</span><span class="n">home_dir</span><span class="p">)</span>     <span class="c1"># every field, each with its source: "profile" or "default"</span>
+</code></pre></div>
+<ul>
+<li>A capability that inherits resolves through <code>resolve_home_substrate</code>, so it
+  is exactly the mind; <code>mind=</code> passes a host's already-resolved mind as the
+  explicit rung (the gateway passes the mind its visits use). <code>source</code> is
+  <code>profile</code> or <code>mind</code>. When neither the profile nor the mind names a model,
+  <code>resolve_capability</code> raises <code>SubstrateUnset</code>: no model is ever chosen by
+  code.</li>
+<li>Reads never raise. A file that is not YAML, not a mapping or of another
+  <code>schema_version</code> reads as all defaults; a single malformed field reads as
+  its default while the others keep their values. Each case logs a warning
+  that names the field, and <code>read_cognition_profile(...)["warnings"]</code> lists
+  them.</li>
+<li><code>write_cognition_profile(home_dir, profile)</code> validates first and raises
+  <code>CognitionProfileInvalid</code> (<code>.field</code>, and a sentence such as "Memories per
+  turn must be a whole number from 1 to 400.") before the file moves, then
+  writes atomically (temporary file in the home, fsync, rename). It stores
+  only what was chosen: a capability that inherits and a field that follows
+  its default are left out. The gateway is its one caller
+  (<code>PUT /api/gateway/entities/{name}/cognition-profile</code>), and it records a
+  <code>cognition_profile_changed</code> marker in the entity's history first.</li>
+<li>The <code>sleep</code> block holds the thresholds after which an idle entity goes to sleep; the gateway's idle sweep reads
+  them through <code>sleep_thresholds</code>. A sleep runs the entity's maintenance, the <a href="../entity-topics/">topics</a> stage
+  included.</li>
+<li>The own-time loop reads <code>recall.shelf_size</code> again at each day-open
+  (<code>recall_shelf_size(home, &lt;the loop's --shelf-size&gt;)</code>), so a change takes
+  effect at the next own-time day without restarting the loop; the loop's
+  log names the change.</li>
+</ul>
 <h2 id="tests">Tests<a class="headerlink" href="#tests" title="Permanent link">&para;</a></h2>
 <p><code>tests/test_directory_lease.py</code>, <code>tests/test_entity_runtime.py</code>,
-<code>tests/test_act_only_dereference.py</code>, <code>tests/test_wait_event_deadline.py</code> —
+<code>tests/test_act_only_dereference.py</code>, <code>tests/test_wait_event_deadline.py</code>,
+<code>tests/test_cognition_profile.py</code> —
 including cross-process lease exclusion, waits-traveling-on-home-copy, the
 ledger-keeps-the-ref end-to-end pin, and the three-backend due-scan.</p>
 

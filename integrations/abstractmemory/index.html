@@ -463,6 +463,33 @@
   
   
     <li class="md-nav__item">
+      <a href="../../entity-topics/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Entity Topics
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../digital-identity/" class="md-nav__link">
         
   
@@ -733,6 +760,33 @@
   
   
     <li class="md-nav__item">
+      <a href="../../replay/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Replay
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../limits/" class="md-nav__link">
         
   
@@ -822,10 +876,10 @@
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_23" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_25" >
         
           
-          <label class="md-nav__link" for="__nav_23" id="__nav_23_label" tabindex="0">
+          <label class="md-nav__link" for="__nav_25" id="__nav_25_label" tabindex="0">
             
   
   
@@ -843,8 +897,8 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_23_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_23">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_25_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_25">
             <span class="md-nav__icon md-icon"></span>
             
   
@@ -1154,7 +1208,8 @@
 </ul>
 <p>A name or capability a host needs and cannot reach here is a runtime defect: it is added here in a patch release; a
 host never imports <code>abstractmemory</code> to work around it.</p>
-<p>Requires AbstractMemory 0.4.0 or newer (<code>abstractmemory.graph</code>). AbstractMemory is imported lazily everywhere:
+<p>Requires AbstractMemory 0.5.0 or newer (<code>abstractmemory.graph</code>; for entity homes, the task queue, the commit guard and
+write barrier the Stop fence holds, authored titles and summaries, and the community records behind topics). AbstractMemory is imported lazily everywhere:
 <code>import abstractruntime</code> and <code>import abstractruntime.integrations.abstractmemory.memory_facade</code> never import it.</p>
 <h2 id="the-ledger-row-address">The ledger row address<a class="headerlink" href="#the-ledger-row-address" title="Permanent link">&para;</a></h2>
 <p>Every memory the runtime writes can name the ledger row it came from. A row is addressed by <code>(run_id, seq)</code>:</p>
@@ -1301,11 +1356,13 @@ runtime: give the facade the <code>runtime_id</code> of the ledger it reads (<co
 <code>"ref names runtime &lt;x&gt;, this facade resolves &lt;y&gt;"</code>. Every ref the facade stamps (lifted legacy refs included)
 carries that <code>runtime_id</code>; the handler builders take <code>runtime_id=</code> too (<code>build_memory_kg_effect_handlers</code>,
 <code>build_memory_seam_effect_handlers</code>).</p>
-<p>Re-exported AbstractMemory names (<code>facade.X is abstractmemory.X</code>, resolved on first use): <code>memory_facade.GATEWAY_NAMES</code>
-(budgets, replay stream, spark templates, stores and journal, queries, night passes, embeddings pin, drives, disposal,
-diary reads <code>open_questions</code> / <code>open_problems</code> / <code>open_ideas</code>,
-and the graph names <code>SourceRef</code>, <code>Provenance</code>, <code>ProvenanceRequired</code>, <code>InvalidSourceRef</code>, <code>Revision</code>, <code>RevisionOp</code>,
-<code>RevisionResult</code>, <code>MemoryGraph</code>).</p>
+<p>Re-exported AbstractMemory names (<code>facade.X</code> is AbstractMemory's own object from the module that defines it, resolved
+on first use): <code>memory_facade.GATEWAY_NAMES</code> (budgets, replay stream, spark templates, stores and journal, queries,
+night passes, embeddings pin, drives, disposal, diary reads <code>open_questions</code> / <code>open_problems</code> / <code>open_ideas</code>, the sleep
+cadence <code>records_since_maintenance</code>, the topic verbs <code>communities</code> / <code>community_of</code> (from
+<code>abstractmemory.community_index</code>) and <code>communities_pass</code> / <code>embed_missing</code> (from <code>abstractmemory.communities</code>; see
+<a href="../../entity-topics/">Entity topics</a>), and the graph names <code>SourceRef</code>, <code>Provenance</code>, <code>ProvenanceRequired</code>,
+<code>InvalidSourceRef</code>, <code>Revision</code>, <code>RevisionOp</code>, <code>RevisionResult</code>, <code>MemoryGraph</code>).</p>
 <h2 id="memory_revise-memory-reconsideration-as-a-workflow-step"><code>MEMORY_REVISE</code>: memory reconsideration as a workflow step<a class="headerlink" href="#memory_revise-memory-reconsideration-as-a-workflow-step" title="Permanent link">&para;</a></h2>
 <p><code>EffectType.MEMORY_REVISE</code> applies ONE revision of a mind (AbstractMemory ADR 0003: assert / close / narrow ops,
 atomic, idempotent on <code>revision_id</code>) through <code>MemoryGraph.apply_revision</code>, with the step that applied it stamped as its

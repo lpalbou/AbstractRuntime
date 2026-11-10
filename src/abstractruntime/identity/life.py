@@ -2171,7 +2171,9 @@ def bump_lifecycle_generation(home_dir: Path, *, written_by: str,
         _signal_bump(home_dir, out["generation"])
     return out["generation"]
 PERSONAL_GRANT_MODES = ("disabled", "timer", "until_revoked")
-_PERSONAL_ACTIVATION_FIELDS = ("mode", "expires_at", "granted_by", "granted_at")
+_PERSONAL_ACTIVATION_FIELDS = ("mode", "expires_at", "granted_by", "granted_at", "revoked_by")
+# Who revoked own time (a revocation records it; the next grant clears it): the operator's Stop, or the operator.
+PERSONAL_REVOKERS = ("kill_switch", "operator")
 
 
 def read_personal_grant(home_dir: Path) -> Dict[str, Any]:
@@ -2201,6 +2203,8 @@ def read_personal_grant(home_dir: Path) -> Dict[str, Any]:
     if mode not in PERSONAL_GRANT_MODES:
         out["mode"] = "disabled"
         out["note"] = f"#FALLBACK unknown personal mode {mode!r}; treated as disabled"
+    if out["mode"] == "disabled" and bucket.get("revoked_by"):
+        out["revoked_by"] = str(bucket["revoked_by"])
     return out
 
 
@@ -2210,6 +2214,7 @@ def write_personal_grant(
     mode: str,
     granted_by: str = "",
     expires_at: Optional[str] = None,
+    revoked_by: Optional[str] = None,
     fence: Any,
 ) -> Dict[str, Any]:
     """The ONE writer of the personal activation bucket (runtime owns the
@@ -2225,7 +2230,10 @@ def write_personal_grant(
     - granted_at is clocked HERE (aware UTC), never caller-supplied.
     - disabled writes {mode: disabled} ALONE — nothing is granted, so no
       grant fields linger (the marker stream owns history, the file owns
-      current truth).
+      current truth) — plus `revoked_by` when the revoker is named (one of
+      PERSONAL_REVOKERS: "kill_switch" for the operator's Stop, "operator"
+      for his own revoke); the next grant clears it. Naming a revoker on an
+      arming write, or an unknown one, refuses.
     - FIELD-MERGE (gateway doc v8 contract): only the activation fields
       change; every other key and phase section in phases.yaml rides
       through untouched. schema_version stamps 1 when absent; a FILE from a
@@ -2247,6 +2255,14 @@ def write_personal_grant(
     from datetime import datetime, timezone
 
     bucket: Dict[str, Any] = {"mode": name}
+    if revoked_by is not None:
+        revoker = str(revoked_by).strip()
+        if name != "disabled":
+            raise ValueError(f"revoked_by={revoked_by!r} names who REVOKED own time - an arming write (mode {name}) "
+                             "revokes nothing")
+        if revoker not in PERSONAL_REVOKERS:
+            raise ValueError(f"unknown revoker {revoked_by!r}: own time is revoked by {' or '.join(PERSONAL_REVOKERS)}")
+        bucket["revoked_by"] = revoker
     if name != "disabled":
         if name == "timer":
             raw_expiry = str(expires_at or "").strip()
@@ -2648,7 +2664,7 @@ def hard_stop_loop(home_dir: Path, *, reason: str = "", requested_by: str = "adm
     with home_state_lock(home_dir, timeout_s=None):
         try:
             if read_personal_grant(home_dir).get("mode") != "disabled":
-                write_personal_grant(home_dir, mode="disabled", granted_by="kill_switch", fence=KILL_SWITCH)
+                write_personal_grant(home_dir, mode="disabled", revoked_by="kill_switch", fence=KILL_SWITCH)
                 personal_revoked = True
         except Exception as e:  # noqa: BLE001 - the stop itself stands; the result says what failed
             personal_note = f"personal not revoked: {e}"
@@ -5720,7 +5736,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         try:
             act_fence = LifecycleFence.admit(home_dir)  # the operator's act, admitted now
             if args.revoke_personal:
-                grant = write_personal_grant(home_dir, mode="disabled", fence=act_fence)
+                grant = write_personal_grant(home_dir, mode="disabled", revoked_by="operator", fence=act_fence)
             elif args.grant_personal_hours is not None:
                 hours = float(args.grant_personal_hours)
                 # Finite and positive (adversary finding 10: inf/nan pass a

@@ -68,7 +68,10 @@ def test_mid_day_revocation_closes_the_day_and_he_stays_awake(tmp_path: Path) ->
     report = LifeLoop(_factory_for(home_dir, llm), tick_seconds=5, ticks_per_day=4, max_ticks=4, rest_minutes=30,
                       state_home=home_dir, sleep_fn=sleeper, out=lambda s: None).run()
     assert report.ticks == 1 and report.stopped_by == "personal_off"
-    assert llm.replies == ["SURPLUS - never a tick 2"]  # the day closed with its look-back
+    # The day closes WITHOUT its look-back once own time is withdrawn (operator 2026-11-10 23:09): deferred to the
+    # next open by the pending marker, never run after the revoke.
+    assert llm.replies == ["Reflection.", "SURPLUS - never a tick 2"]
+    assert (home_dir / "pending_reflection.json").exists()
     assert read_entity_state(home_dir)["state"] == "awake"
 
 

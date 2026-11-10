@@ -1279,6 +1279,9 @@ class ChatSession:
         # Set by the own-time loop only (life.py): True = a visitor is at the
         # door, so the turn runs no new tools and ends on what he has said.
         self.yield_check: Optional[Callable[[], bool]] = None
+        # Set by the own-time loop only (life.py): True = the operator took his own time back. A tick's or the day's
+        # look-back whose model call was in flight then keeps nothing (the day's pending marker carries it).
+        self.withdrawn_check: Optional[Callable[[], bool]] = None
         # THE LIFECYCLE FENCE (STOP-LANE-DESIGN §2.2; replaces the host-set `cancel_check`): the generation the
         # session's work was admitted at - the home's own when it was opened with one, or set by the host. Checked
         # before EVERY model attempt (retries included) and after each reply returns (a late reply is abandoned,
@@ -3272,7 +3275,10 @@ class ChatSession:
             # path already derives t-reflect-salvage-<session>; this mirrors.
             list(self.session_sheet), session_id=self.session_id,
             turn_id=f"t-reflect-{self.session_id}",
+            abandon_if_withdrawn=True,
         )
+        if result is None and self.withdrawn_check is not None and self.withdrawn_check():
+            return None  # own time withdrawn: the marker stays (the next open runs it), nothing more runs here
         if result is not None:
             self.reflection_diary_entries += result["diary_entries"]
             self.feelings_applied += len(result["feelings_applied"])
@@ -3497,6 +3503,7 @@ class ChatSession:
             summary_only_if_kept=True,
             context_messages=context,
             preamble=preamble,
+            abandon_if_withdrawn=True,
         )
         if result is not None:
             self.reflection_diary_entries += result["diary_entries"]
@@ -3748,10 +3755,17 @@ class ChatSession:
         count_session_caps: bool = True,
         context_messages: Optional[List[Dict[str, str]]] = None,
         preamble: str = "",
+        abandon_if_withdrawn: bool = False,
     ) -> Optional[Dict[str, Any]]:
         """The look-back core over an explicit sheet (live session, a
         salvaged ended one, or one personal-time tick — same machinery,
         same honesty rules). `resolutions` defaults to the whole session's.
+
+        `abandon_if_withdrawn` (the own-time loop's tick and day look-backs,
+        never a salvage): when the loop's `withdrawn_check` says the operator
+        took his own time back while the model call ran, nothing of the reply
+        is kept and None is returned (operator 2026-11-10 23:09: own time
+        withdrawn is non-negotiable; only the turn in flight finishes).
 
         `summary_only_if_kept` (the tick look-back): the summary record is
         formed only when the look-back KEPT something - a feeling, interest,
@@ -3785,6 +3799,10 @@ class ChatSession:
             system_prompt=last_system or self.system_base,
         )
         raw_reply = clean_model_reply(getattr(resp, "content", None) or "")
+        if abandon_if_withdrawn and self.withdrawn_check is not None and self.withdrawn_check():
+            self.out("(own time was withdrawn while this look-back ran - nothing of it is kept; the day's look-back "
+                     "is deferred to the next open)")
+            return None
         if not raw_reply:
             self.out("#FALLBACK reflection returned empty; the session closes without feelings marked")
             return None

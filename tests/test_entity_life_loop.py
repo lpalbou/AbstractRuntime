@@ -821,8 +821,9 @@ def test_mid_day_revocation_ends_the_day_at_the_next_tick(tmp_path: Path) -> Non
     """Gateway audit (c) / my G9: consent must not wait for the day
     boundary — a grant revoked between ticks closes the day at the NEXT
     tick boundary, own time then ends awake (contract-phases v2 §10.1), and
-    no further tick runs. The reflection still runs (normal close, not a
-    fast-yield: nobody is waiting)."""
+    no further tick runs. The day's look-back does NOT run after the revoke
+    (operator 2026-11-10 23:09, superseding "the reflection still runs"):
+    the pending marker carries it to the next open."""
     from abstractruntime.identity.life import read_entity_state, write_personal_grant
 
     home_dir = _make_home(tmp_path)
@@ -842,7 +843,8 @@ def test_mid_day_revocation_ends_the_day_at_the_next_tick(tmp_path: Path) -> Non
     report = loop.run()
     assert report.ticks == 1  # tick 2 never ran
     assert report.stopped_by == "personal_off"
-    assert llm.replies == ["SURPLUS - never a tick 2"]  # reflection consumed, no tick 2
+    assert llm.replies == ["Reflection.", "SURPLUS - never a tick 2"]  # no look-back after the revoke, no tick 2
+    assert (home_dir / "pending_reflection.json").exists()  # deferred to the next open, never lost
     state = read_entity_state(home_dir)
     assert state["state"] == "awake"  # never asleep (root 1178)
 
@@ -2030,3 +2032,148 @@ def test_visit_preempts_the_gate(tmp_path: Path) -> None:
     state = read_entity_state(home_dir)
     assert state.get("mode") == "visiting"
     assert state.get("written_by") == "visit-door"
+
+
+# ------------------------------------------------ own time withdrawn (operator 2026-11-10 23:09)
+# "if I remove the personal time, it's non negotiable; but it's ok to let the entity finish its turn ... when removed
+# it should have switched to idle." The live case (aletheia, 22:03:28 UTC): the revoke landed while tick 12's look-back
+# model call was in flight; that look-back still formed a summary, an interest and a diary entry (22:07), then the day's
+# close ran a second look-back (summary 22:11, diary 22:12) and the loop exited at 22:12:09.
+
+_LOOKBACK_KEEPS = """Looking back, one thing stays with me.
+```interest
+how tides keep time without a clock
+```
+"""
+
+
+def _operator_revokes(home_dir: Path) -> None:
+    """The gateway's toggle off, in its order: the grant written disabled (revoked_by operator), then the durable stop
+    command the loop honors at its next boundary."""
+    from abstractruntime.identity.life import request_loop_stop, write_personal_grant
+
+    write_personal_grant(home_dir, mode="disabled", revoked_by="operator", fence=LifecycleFence.admit(home_dir))
+    request_loop_stop(home_dir, reason="personal turned off by person:admin", requested_by="operator")
+
+
+class _RevokingLLM(_ScriptedLLM):
+    """The scripted model; the operator turns own time off while call number `revoke_at` (1-based) is in flight."""
+
+    def __init__(self, replies: List[str], home_dir: Path, revoke_at: int) -> None:
+        super().__init__(replies)
+        self.home_dir = home_dir
+        self.revoke_at = revoke_at
+
+    def generate(self, *, messages, system_prompt):
+        if len(self.calls) + 1 == self.revoke_at:
+            _operator_revokes(self.home_dir)
+        return super().generate(messages=messages, system_prompt=system_prompt)
+
+
+def _personal_day_factory(home_dir: Path, llm: Any, out: Any = None):
+    def _open() -> ChatSession:
+        home = open_home(home_dir, fence=None)
+        session = ChatSession(
+            home, llm, participants=[home.entity_id], context_window=20000,
+            enable_workspace=True, out=out or (lambda s: None), phase="personal", fence=None,
+        )
+        session.system_base += "\n\n" + OWN_TIME_CONTRACT
+        return session
+    return _open
+
+
+def _kinds_formed(home_dir: Path) -> List[str]:
+    from abstractmemory import SQLiteJournal, SQLiteTripleStore, TripleQuery
+
+    db = home_dir / "memory.sqlite3"
+    store = SQLiteTripleStore(db)
+    journal = SQLiteJournal(db)
+    try:
+        return [str((a.attributes or {}).get("record_kind") or "")
+                for a in store.query(TripleQuery(predicate="dcterms:abstract", limit=0))]
+    finally:
+        store.close()
+        journal.close()
+
+
+def _revoke_run(tmp_path: Path, replies: List[str], revoke_at: int):
+    from abstractruntime.identity.life import read_entity_state, read_loop_status
+
+    home_dir = _make_home(tmp_path)
+    llm = _RevokingLLM(replies, home_dir, revoke_at)
+    lines: List[str] = []
+    loop = LifeLoop(
+        _personal_day_factory(home_dir, llm, out=lines.append), tick_seconds=0, ticks_per_day=4, max_ticks=4,
+        state_home=home_dir, sleep_fn=lambda _s: None, out=lines.append,
+    )
+    report = loop.run()
+    return home_dir, llm, lines, report, read_loop_status(home_dir), read_entity_state(home_dir)
+
+
+def test_revoke_during_the_turn_finishes_that_turn_then_ends_idle(tmp_path: Path) -> None:
+    """The revoke lands while tick 1's turn is in flight: that turn finishes whole (its tick is recorded, its episode
+    formed), then nothing more runs - no tick look-back, no tick 2, no day look-back - and the loop ends."""
+    home_dir, llm, lines, report, status, state = _revoke_run(
+        tmp_path, ["First thought.\nnext: more", _LOOKBACK_KEEPS, "SURPLUS tick 2", "SURPLUS close"], revoke_at=1)
+    assert report.ticks == 1 and len(report.records) == 1  # the turn in flight finished
+    assert len(llm.calls) == 1, [c["messages"][-1]["content"][:60] for c in llm.calls]  # nothing after it
+    assert report.stopped_by == "stop_command"
+    assert status["phase"] == "stopped" and status.get("stopped_by") == "stop_command"
+    assert state["state"] == "awake"  # idle: awake and reachable, never put to sleep
+    assert "episode" in _kinds_formed(home_dir)
+    assert (home_dir / "pending_reflection.json").exists()  # the day's look-back is deferred, never lost
+    assert any("own time was withdrawn during this tick" in ln for ln in lines), lines
+
+
+def test_revoke_during_the_tick_lookback_keeps_nothing_of_it(tmp_path: Path) -> None:
+    """The live 2026-11-10 case: the revoke lands while the tick's look-back model call is in flight. Its reply forms
+    nothing (no interest, no summary), the day's look-back never runs, and the loop ends after that one tick."""
+    home_dir, llm, lines, report, status, state = _revoke_run(
+        tmp_path, ["First thought.\nnext: more", _LOOKBACK_KEEPS, "SURPLUS tick 2", "SURPLUS close"], revoke_at=2)
+    assert report.ticks == 1
+    assert len(llm.calls) == 2  # the turn + the look-back in flight; no tick 2, no day look-back
+    kinds = _kinds_formed(home_dir)
+    assert "interest" not in kinds and "summary" not in kinds, kinds
+    assert report.stopped_by == "stop_command"
+    assert status["phase"] == "stopped" and state["state"] == "awake"
+    assert (home_dir / "pending_reflection.json").exists()
+    assert any("withdrawn while this look-back ran" in ln for ln in lines), lines
+
+
+def test_revoke_between_ticks_ends_idle_at_once(tmp_path: Path) -> None:
+    """The revoke lands between ticks (tick 1 and its look-back done): no tick 2 and no day look-back."""
+    from abstractruntime.identity.life import read_entity_state, read_loop_status
+
+    home_dir = _make_home(tmp_path)
+    llm = _ScriptedLLM(["First thought.\nnext: more", _LOOKBACK_KEEPS, "SURPLUS tick 2", "SURPLUS close"])
+    sleeps: Dict[str, int] = {"n": 0}
+
+    def sleeper(_s: float) -> None:
+        sleeps["n"] += 1
+        if sleeps["n"] == 1:
+            _operator_revokes(home_dir)
+
+    loop = LifeLoop(
+        _personal_day_factory(home_dir, llm), tick_seconds=5, ticks_per_day=4, max_ticks=4,
+        state_home=home_dir, sleep_fn=sleeper, out=lambda _s: None,
+    )
+    report = loop.run()
+    assert report.ticks == 1
+    assert llm.replies == ["SURPLUS tick 2", "SURPLUS close"]  # tick 1 + its look-back only
+    assert report.stopped_by == "stop_command"
+    assert read_loop_status(home_dir)["phase"] == "stopped"
+    assert read_entity_state(home_dir)["state"] == "awake"
+    assert (home_dir / "pending_reflection.json").exists()
+
+
+def test_a_normal_day_close_still_runs_its_lookback(tmp_path: Path) -> None:
+    """The control: with own time still granted the day's close runs its look-back and clears the marker."""
+    home_dir = _make_home(tmp_path)
+    llm = _ScriptedLLM(["First thought.\nnext: more", "Nothing to keep.", "The day, whole."])
+    loop = LifeLoop(
+        _personal_day_factory(home_dir, llm), tick_seconds=0, ticks_per_day=1, max_ticks=1,
+        state_home=home_dir, sleep_fn=lambda _s: None, out=lambda _s: None,
+    )
+    loop.run()
+    assert llm.replies == []  # tick, tick look-back, day look-back
+    assert not (home_dir / "pending_reflection.json").exists()

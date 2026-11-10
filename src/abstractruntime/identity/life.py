@@ -3756,8 +3756,10 @@ class LifeLoop:
                      f"repair {PHASES_FILENAME})")
 
     def _should_stop(self) -> bool:
-        if self.stop_cause in ("kill_switch", "generation_unreadable"):
-            return True  # sticky: a Stop seen anywhere (a refused write, the turn) ends the loop at this boundary
+        if self.stop_cause in ("kill_switch", "generation_unreadable", "stop_command"):
+            # Sticky: a Stop seen anywhere (a refused write, the turn) ends the loop at this boundary; a stop COMMAND
+            # is consumed on read, so once seen (a tick's end, a look-back) this is the only memory of it.
+            return True
         if self.stop_file and self.stop_file.exists():
             self.stop_cause = "stop_file"
             return True
@@ -3779,6 +3781,19 @@ class LifeLoop:
             self.stop_cause = "stop_command"
             self.out(f"(stop command from {who}{': ' + reason if reason else ''} - honoring at this boundary)")
             return True
+        return False
+
+    def _own_time_withdrawn(self, session: Any) -> bool:
+        """The operator took his own time back since this day opened: his stop (the command the gateway sends with a
+        revoke, the STOP file, the kill switch) or, on a personal day, the personal grant revoked or expired. The turn
+        in flight finishes whole; nothing after it runs - no tick look-back, no authoring drain, no day look-back
+        (operator 2026-11-10 23:09: "if I remove the personal time, it's non negotiable; but it's ok to let the entity
+        finish its turn"). The day's look-back is deferred, never lost: the pending marker carries the whole day to the
+        next open. A work day answers to his stop only (there is no work switch, CONTRACT v3 D1)."""
+        if self._should_stop():
+            return True
+        if self.state_home is not None and getattr(session, "phase", "") != PHASE_WORK:
+            return personal_grant_refusal(read_personal_grant(self.state_home)) is not None
         return False
 
     def _operator_state(self) -> Dict[str, Any]:
@@ -4672,6 +4687,9 @@ class LifeLoop:
                 # (operator 2026-11-09: reachable within a minute or two): the
                 # session checks this before running the tools a reply elects.
                 session.yield_check = lambda: visitor_waiting(self._operator_state())
+                # OWN TIME WITHDRAWN (operator 2026-11-10 23:09): a look-back whose model call was in flight when the
+                # operator took his own time back keeps nothing of it (the day's deferred look-back covers it).
+                session.withdrawn_check = lambda _s=session: self._own_time_withdrawn(_s)
                 # THE OPERATOR'S STOP cancels the turn at its next effect boundary (Codex review 2 #2; STOP-LANE-DESIGN
                 # §2.2): the session carries the loop's fence - no further model attempt, tool, effect, formation or
                 # authoring in this process once it moved; a reply that returns after it is abandoned.
@@ -4822,8 +4840,15 @@ class LifeLoop:
                             # (B1 fast-yield) and covers this tick.
                             if self._generation_moved():
                                 raise StoppedByOperator("after the tick's turn")
+                            # THE TURN FINISHED; OWN TIME MAY HAVE BEEN TAKEN BACK MEANWHILE (operator 2026-11-10
+                            # 23:09): the tick ends on its turn - no look-back, no drain; the boundary below exits.
+                            withdrawn = self._own_time_withdrawn(session)
+                            if withdrawn:
+                                self.out("(own time was withdrawn during this tick - it ends on its turn; the day's "
+                                         "look-back is deferred to the next open)")
                             if (
-                                getattr(session, "phase", "") == PHASE_PERSONAL
+                                not withdrawn
+                                and getattr(session, "phase", "") == PHASE_PERSONAL
                                 and parse_rest_block(reply)[1] is None
                                 and not visitor_waiting(self._operator_state())
                             ):
@@ -4839,7 +4864,7 @@ class LifeLoop:
                             # THE AUTHORING DRAINER at the tick boundary (operator 2026-11-09): pending titles and
                             # summaries, bounded by the profile's cap_per_turn, inside this tick's writer window;
                             # a visitor at the door goes first.
-                            if not visitor_waiting(self._operator_state()) and callable(
+                            if not withdrawn and not visitor_waiting(self._operator_state()) and callable(
                                 getattr(session, "drain_authoring", None)
                             ):
                                 session.drain_authoring(window="turn")
@@ -5007,12 +5032,20 @@ class LifeLoop:
                 # rest/verdict tick) never met the tick-boundary check: the
                 # close yields fast for him too.
                 visit_yield = visit_yield or visitor_waiting(self._operator_state())
+                # OWN TIME WITHDRAWN (operator 2026-11-10 23:09; the live 22:03 revoke whose day look-back then ran
+                # for four minutes and formed a summary and a diary entry): the day closes without its look-back,
+                # deferred to the next open by the pending marker - he goes idle as soon as the tick in flight ends.
+                _withdrawn = not _stopped and self._own_time_withdrawn(session)
                 try:
                     if _stopped:
                         # THE OPERATOR'S STOP: the day closes without its look-back (a model call and home writes).
                         self._stopped_by_operator()
                         if session.reports:
                             self.out("(the operator's Stop - the day closes without its look-back)")
+                    elif _withdrawn:
+                        if session.reports:
+                            self.out("(own time was withdrawn - the day closes without its look-back; the pending "
+                                     "marker carries it to the next open)")
                     elif visit_yield:
                         if session.reports:
                             # 0-tick yields have no marker to defer — the

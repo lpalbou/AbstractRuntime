@@ -419,7 +419,7 @@ def test_the_durable_visit_and_own_time_heads_carry_the_brief(tmp_path: Path, mo
 def test_the_topics_tool_teaches_the_brief() -> None:
     from abstractruntime.identity import tools as T
 
-    assert "Your at-a-glance brief lists your topics; use topics to dig in" in T.TOOL_DESCRIPTORS["topics"].description
+    assert "(your brief lists them)" in T.TOOL_DESCRIPTORS["topics"].description
     flat = " ".join(T.TOOLS_CONTRACT_PARAGRAPH.split())
     assert "Your at-a-glance brief (\"What I know about, at a glance\", written in your sleep) lists your topics and " \
            "trails of thought; use topics to dig in." in flat

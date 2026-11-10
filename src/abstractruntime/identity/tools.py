@@ -1594,9 +1594,9 @@ TOOL_DESCRIPTORS: Dict[str, ToolDescriptor] = {
             # mind/memory"): the communities memory forms while he sleeps, read as memory serves them.
             name="topics", tier="tier1", mutating=False,
             description=(
-                "What you know, organized: your memories grouped by subject, each topic titled and summarised "
-                "while you slept. Your at-a-glance brief lists your topics; use topics to dig in. Empty = the "
-                "list; a topic's #tag = its memories; words = the closest topic."
+                "What you know, organized: your memories grouped by subject, titled and summarised in your "
+                "sleep (your brief lists them). Empty = the list; #tag = that topic's memories; words = the "
+                "closest topic."
             ),
             properties={"topic": {"type": "string",
                                   "description": "empty for the list, a topic's #tag, or words about a subject"}},

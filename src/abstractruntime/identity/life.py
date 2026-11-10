@@ -5227,7 +5227,7 @@ def build_consolidator(
 
             author_seen: Dict[str, Any] = {}
             formation_author = capability_formation_author(llm_for_capability, home.artifacts, author_seen,
-                                                           should_stop=fence.moved)
+                                                           should_stop=fence.moved, entity_name=home.name)
             # ChatHome exposes the MemorySystem facade as `.ms` (not `.memory`).
             try:
                 try:

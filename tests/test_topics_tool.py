@@ -386,7 +386,8 @@ def test_a_topic_record_is_never_served_as_a_memory(tmp_path: Path, monkeypatch)
     try:
         cap = _TitledCapability()
         receipt = communities_pass(home.ms, scopes=LADDER, owner_id=EID,
-                                   author=capability_formation_author(lambda _n: cap, home.artifacts, should_stop=lambda: False),
+                                   author=capability_formation_author(lambda _n: cap, home.artifacts, should_stop=lambda: False,
+                                                                     entity_name=home.name),
                                    cancelled=lambda: False)
         assert receipt["version_seq"] is not None, receipt
         # (one author answer for every topic: the first keeps the title, a sibling's collision forms it pending)
@@ -426,7 +427,8 @@ def test_the_tool_end_to_end_on_memory_s_real_pass_and_read(tmp_path: Path) -> N
     try:
         cap = _Numbered()
         receipt = communities_pass(home.ms, scopes=LADDER, owner_id=EID,
-                                   author=capability_formation_author(lambda _n: cap, home.artifacts, should_stop=lambda: False),
+                                   author=capability_formation_author(lambda _n: cap, home.artifacts, should_stop=lambda: False,
+                                                                     entity_name=home.name),
                                    cancelled=lambda: False)
         assert receipt["version_seq"] is not None and receipt["authored"] == receipt["communities"] >= 1, receipt
         served = communities(home.ms, scopes=LADDER, owner_id=EID)["communities"]

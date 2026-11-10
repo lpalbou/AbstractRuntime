@@ -3583,7 +3583,7 @@ class ChatSession:
                 # Immediately before the model call (Codex review 4 #3): a Stop while the client was resolved sends it
                 # nothing.
                 self._check_cancelled("before the summaries model was called")
-                authored = author_metadata(llm, kind=kind, body=body)
+                authored = author_metadata(llm, kind=kind, body=body, entity_name=self.home.name)
                 self._check_cancelled("after the summaries model answered")  # a late reply is abandoned
                 reader = _reader_of(llm)
                 sources = _source_artifact(self.home.artifacts, record_id=str(meta.get("template_id") or ""),
@@ -3627,7 +3627,7 @@ class ChatSession:
         result = world_model_update(
             self.home.ms, scopes=[("life", self.home.entity_id)], owner_id=self.home.entity_id, targets=targets,
             author=capability_formation_author(self.llm_for_capability, self.home.artifacts, seen,
-                                               should_stop=self._cancelled),
+                                               should_stop=self._cancelled, entity_name=self.home.name),
         )
         log_pass_authoring_failures(result, home_dir=getattr(self.home, "home_dir", None),
                                     entity=self.home.entity_id, reader=seen.get("reader"), out=self.out)
@@ -3661,7 +3661,7 @@ class ChatSession:
             except Exception as e:  # noqa: BLE001
                 raise AuthoringUnavailable(f"{type(e).__name__}: {e}") from e
             self._check_cancelled("before the summaries model was called")  # Codex review 4 #3
-            authored = author_metadata(llm, kind="diary", body=body)
+            authored = author_metadata(llm, kind="diary", body=body, entity_name=self.home.name)
             self._check_cancelled("after the summaries model answered")  # a late reply is abandoned
             reader = _reader_of(llm)
             sources = _source_artifact(self.home.artifacts, record_id=f"diary:{payload.get('turn_id') or ''}",

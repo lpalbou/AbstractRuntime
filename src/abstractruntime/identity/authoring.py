@@ -35,6 +35,8 @@ __all__ = [
     "AuthoringUnavailable",
     "CapabilityUnrouted",
     "authoring_llm_call_payload",
+    "authoring_system_prompt",
+    "entity_name_of",
     "parse_authored_result",
     "author_metadata",
     "authoring_failure_fields",
@@ -51,7 +53,7 @@ __all__ = [
 AUTHORING_CAPABILITY = "summaries"
 AUTHORING_TASK_KINDS = ("title.author", "digest.author")
 AUTHORING_TEMPLATE_ID = "authoring.metadata"
-AUTHORING_TEMPLATE_VERSION = "2026-11-09"
+AUTHORING_TEMPLATE_VERSION = "2026-11-10"  # the briefing names the entity and sets the title style
 # An unreachable endpoint defers its task this long (no attempt spent; memory's `release(outcome="defer")`).
 DEFER_SECONDS = 600
 
@@ -77,6 +79,31 @@ _SYSTEM = (
     "You write the metadata of one memory: a TITLE (a short, complete, readable name for it - one line) and a "
     "SUMMARY (one to three plain sentences saying what it holds). Use only what the memory says; invent nothing."
 )
+#: The title style every authored record shares (a live home's second topics night 2026-11-10: titles came back in
+#: mixed Title Case).
+TITLE_STYLE = "Write the title in sentence case, with no trailing period and no quotes."
+
+
+def authoring_system_prompt(entity_name: str) -> str:
+    """The summaries author's briefing (every authored record: an episode, a summary, a diary entry, a dream, a card, a
+    topic, a birth record): the task, WHOSE memories these are and how to refer to the entity (by its name, in the
+    third person: the second night's summaries said "the agent" / "the assistant" / "the speaker"), and the title
+    style. `entity_name` is the entity's name as its home holds it (`ChatHome.name`); an empty one raises."""
+    name = " ".join(str(entity_name or "").split())
+    if not name:
+        raise ValueError("the authoring briefing needs the entity's name (ChatHome.name)")
+    return (f"{_SYSTEM} {name} is the entity whose memories these are: refer to {name} by name, never as "
+            f"\"the agent\", \"the assistant\" or \"the speaker\", and write in the third person. {TITLE_STYLE}")
+
+
+def entity_name_of(home_dir: Any, entity_id: str) -> str:
+    """The entity's name as its home holds it: open_home's rule (spark.yaml `name`, else the entity id)."""
+    from pathlib import Path
+
+    import yaml
+
+    spark = yaml.safe_load((Path(home_dir) / "spark.yaml").read_bytes()) or {}
+    return str(spark.get("name") or entity_id)
 
 
 def _prompt(kind: str, body: str) -> str:
@@ -85,7 +112,7 @@ def _prompt(kind: str, body: str) -> str:
 
 # THE DURABLE LANE (a visit workflow cannot call a model inside a node): the authoring call is an LLM_CALL effect
 # tagged with the capability. Payload shape (the gateway routes `payload.capability` to its capability client):
-#   {"capability": "summaries", "system_prompt": <_SYSTEM>, "messages": [{"role": "user", "content": <prompt>}],
+#   {"capability": "summaries", "system_prompt": <authoring_system_prompt(entity_name)>, "messages": [{"role": "user", "content": <prompt>}],
 #    "response_schema": AUTHORING_RESPONSE_SCHEMA, "response_schema_name": "AuthoredMetadata",
 #    "params": {"thinking": "off"}, "_absorb_failure": true}
 # The handler that serves it must ECHO the tag in its result (`result.capability == "summaries"`): an answer
@@ -101,11 +128,13 @@ AUTHORING_RESPONSE_SCHEMA: Dict[str, Any] = {
 }
 
 
-def authoring_llm_call_payload(kind: str, body: str) -> Dict[str, Any]:
-    """The LLM_CALL payload of one authoring call (see the shape above)."""
+def authoring_llm_call_payload(kind: str, body: str, *, entity_name: str) -> Dict[str, Any]:
+    """The LLM_CALL payload of one authoring call (see the shape above; the system prompt is
+    `authoring_system_prompt(entity_name)`)."""
     return {
         AUTHORING_CAPABILITY_KEY: AUTHORING_CAPABILITY,
-        "system_prompt": _SYSTEM + " Answer with exactly one JSON object: {\"title\": \"...\", \"summary\": \"...\"}.",
+        "system_prompt": authoring_system_prompt(entity_name)
+        + " Answer with exactly one JSON object: {\"title\": \"...\", \"summary\": \"...\"}.",
         "messages": [{"role": "user", "content": _prompt(kind, body)}],
         "response_schema": dict(AUTHORING_RESPONSE_SCHEMA),
         "response_schema_name": "AuthoredMetadata",
@@ -195,8 +224,9 @@ def _unreachable(exc: BaseException) -> bool:
     return any(word in name for word in ("connect", "timeout", "unavailable", "substrateunset"))
 
 
-def author_metadata(llm: Any, *, kind: str, body: str) -> Dict[str, Any]:
-    """One structured call: `{"title": str, "summary": str, "raw": <what the model returned, as JSON text>}`.
+def author_metadata(llm: Any, *, kind: str, body: str, entity_name: str) -> Dict[str, Any]:
+    """One structured call under `authoring_system_prompt(entity_name)`: `{"title": str, "summary": str, "raw": <what
+    the model returned, as JSON text>}`.
     Raises AuthoringUnavailable (unreachable endpoint) or AuthoringFailed (no usable fields). Nothing is repaired:
     a title past TITLE_MAX_CHARS, a multi-line title or an empty field fails."""
     from .title_failures import TITLE_MAX_CHARS
@@ -205,9 +235,10 @@ def author_metadata(llm: Any, *, kind: str, body: str) -> Dict[str, Any]:
 
     if llm is None:
         raise AuthoringUnavailable("no summaries capability model in this process")
+    system_prompt = authoring_system_prompt(entity_name)
     model_cls = _model_class()
     try:
-        resp = llm.generate(prompt=_prompt(kind, body), system_prompt=_SYSTEM, response_model=model_cls)
+        resp = llm.generate(prompt=_prompt(kind, body), system_prompt=system_prompt, response_model=model_cls)
     except TurnCancelled:
         raise  # the operator's Stop (a fenced client refused the call): never an authoring failure
     except Exception as e:  # noqa: BLE001 - classified below, never swallowed
@@ -343,7 +374,8 @@ def drain_authoring(
     """Run up to `cap` pending `title.author` / `digest.author` tasks (and no other kind): select, claim, read the
     target, one structured call, write through retitle / rewrite_digest (which settle the task). An unreachable
     endpoint (or no client) defers without spending an attempt; a reply without the fields releases for retry (an
-    attempt spent) and logs one authoring failure. Run it under the home's writer lease. Returns
+    attempt spent) and logs one authoring failure. Run it under the home's writer lease. The briefing names the
+    entity as its home does (`entity_name_of(home_dir, entity)`, read once a task reaches the model). Returns
     {authored, deferred, failed, considered}."""
     from .title_failures import record_authoring_failure
 
@@ -364,6 +396,7 @@ def drain_authoring(
         return receipt
     claimed = tasks.claim([t["task_id"] for t in picked], holder=holder, window=window).get("claimed") or []
     llm = None
+    entity_name: Optional[str] = None  # the home's own (entity_name_of), read once a task reaches the model
 
     def _cancelled(left: List[Dict[str, Any]]) -> bool:
         # CANCELLATION (Codex review 2 #2): the host's Stop - no further model call or write; the tasks still held go
@@ -434,7 +467,9 @@ def drain_authoring(
                     raise AuthoringUnavailable(f"{type(e).__name__}: {e}") from e
             if _cancelled(claimed[n:]):  # immediately before the model call (Codex review 4 #3)
                 break
-            authored = author_metadata(llm, kind=kind, body=body)
+            if entity_name is None:
+                entity_name = entity_name_of(home_dir, entity)
+            authored = author_metadata(llm, kind=kind, body=body, entity_name=entity_name)
             if _cancelled(claimed[n:]):  # the model answered after Stop: nothing is written
                 break
             authored_write(ms, artifacts, record_id=str(t["target_id"]), kind=kind, body=body, authored=authored,
@@ -728,14 +763,18 @@ def _formation_result(authored: Dict[str, Any], fields: Sequence[str], reader: D
 
 def capability_formation_author(llm_for_capability: Optional[Callable[[str], Any]], artifacts: Any,
                                 seen: Optional[Dict[str, Any]] = None, *,
-                                should_stop: Callable[[], bool]) -> Callable[[str, str, Any], Dict[str, Any]]:
+                                should_stop: Callable[[], bool],
+                                entity_name: str) -> Callable[[str, str, Any], Dict[str, Any]]:
     """Memory's `author` from the summaries capability client (the loop's sleep, a session's card updates): one
     structured call per record, the call kept as a home artifact (its `sources`); raises on any failure, which memory
     records as `author_raised` with the class and message. `seen` (optional) gets the client's reader, so the host's
     failure lines can name the model. `should_stop` (REQUIRED, the admission's fence: Codex review 4 #3) is checked
     immediately before each model call and after it returns - the operator's Stop raises StoppedByOperator, never a
-    call."""
+    call. `entity_name` (REQUIRED: the entity's name, `ChatHome.name`) goes into every call's briefing
+    (`authoring_system_prompt`)."""
     from .lifecycle_fence import StoppedByOperator
+
+    authoring_system_prompt(entity_name)  # an empty name is refused when the author is built, not at its first call
 
     def author(kind: str, body: str, context: Any) -> Dict[str, Any]:
         fields = list((context or {}).get("fields") or ("title", "summary"))
@@ -748,7 +787,7 @@ def capability_formation_author(llm_for_capability: Optional[Callable[[str], Any
         if should_stop():
             raise StoppedByOperator("before the authoring model was called")
         try:
-            authored = author_metadata(llm, kind=str(kind), body=str(body or ""))
+            authored = author_metadata(llm, kind=str(kind), body=str(body or ""), entity_name=entity_name)
         except (AuthoringFailed, AuthoringUnavailable) as e:
             # Memory records the class and message of what the author raised: the client's own exception when it
             # raised (never the wrapper), else the authoring failure itself (a reply that did not fit).
@@ -766,20 +805,24 @@ def capability_formation_author(llm_for_capability: Optional[Callable[[str], Any
 
 
 def handler_formation_author(handler: Any, artifacts: Any, *, run: Any = None,
-                             should_stop: Callable[[], bool]) -> Callable[[str, str, Any], Dict[str, Any]]:
+                             should_stop: Callable[[], bool],
+                             entity_name: str) -> Callable[[str, str, Any], Dict[str, Any]]:
     """Memory's `author` from a host's capability LLM_CALL handler (the durable lanes: open_entity_runtime's
     `capability_handlers["summaries"]`): the authoring payload goes to the handler directly, its result is read as
     the formation step reads one (`parse_authored_result`, the capability echo stamped), the call kept as an
     artifact; raises on any failure. `should_stop` (REQUIRED: Codex review 4 #3) is checked immediately before the
-    handler is called and after it returns."""
+    handler is called and after it returns. `entity_name` (REQUIRED, `ChatHome.name`): the briefing's entity."""
     from ..core.models import Effect, EffectType
     from .lifecycle_fence import StoppedByOperator
+
+    authoring_system_prompt(entity_name)  # an empty name is refused when the author is built
 
     def author(kind: str, body: str, context: Any) -> Dict[str, Any]:
         fields = list((context or {}).get("fields") or ("title", "summary"))
         if should_stop():
             raise StoppedByOperator("before the authoring model was called")
-        out = handler(run, Effect(type=EffectType.LLM_CALL, payload=authoring_llm_call_payload(str(kind), str(body or ""))),
+        out = handler(run, Effect(type=EffectType.LLM_CALL,
+                                  payload=authoring_llm_call_payload(str(kind), str(body or ""), entity_name=entity_name)),
                       None)
         if should_stop():
             raise StoppedByOperator("after the authoring model answered (the reply is abandoned)")

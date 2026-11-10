@@ -75,6 +75,7 @@ class _Capability:
 
     def __init__(self, *, raise_on_community: bool = False, on_community: Any = None) -> None:
         self.calls: List[str] = []
+        self.systems: List[str] = []  # each call's briefing
         self.raise_on_community = raise_on_community
         self.on_community = on_community
 
@@ -82,6 +83,7 @@ class _Capability:
         n = len(self.calls)
         community = "community" in prompt.lower()
         self.calls.append("community" if community else "record")
+        self.systems.append(system_prompt)
         if community and self.on_community is not None:
             self.on_community(sum(1 for c in self.calls if c == "community"))
         if community and self.raise_on_community:
@@ -232,6 +234,9 @@ def test_the_topics_stage_runs_after_the_repair_embeds_first_and_before_the_nigh
     assert receipt["version_seq"] is not None and receipt["communities"] >= 1, receipt
     assert receipt["authored"] >= 1 and cap.calls.count("community") == receipt["authored"], (receipt, cap.calls)
     assert len(_read(home_dir)["communities"]) == receipt["communities"]
+    # The night's author briefs every call - the topics' and the repair's - with the entity's name and the title style.
+    assert cap.systems and all("Liveling is the entity whose memories these are" in sp
+                               and "Write the title in sentence case" in sp for sp in cap.systems), cap.systems
 
 
 def test_the_topics_receipt_its_line_and_the_maintenance_note(tmp_path: Path, monkeypatch) -> None:

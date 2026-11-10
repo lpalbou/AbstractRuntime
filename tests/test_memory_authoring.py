@@ -35,9 +35,11 @@ class _Capability:
     def __init__(self, *, title: str = TITLE, summary: str = SUMMARY, exc: Exception | None = None) -> None:
         self.title, self.summary, self.exc = title, summary, exc
         self.prompts: List[str] = []
+        self.systems: List[str] = []  # the briefing of each call
 
     def generate(self, *, prompt: str, system_prompt: str, response_model: Any) -> Any:
         self.prompts.append(prompt)
+        self.systems.append(system_prompt)
         if self.exc is not None:
             raise self.exc
         return response_model(title=self.title, summary=self.summary)
@@ -745,7 +747,8 @@ def test_the_runtime_author_satisfies_memorys_formation_contract_for_every_pass_
 
     home = open_home(_workspace_home(tmp_path), fence=None)
     try:
-        author = capability_formation_author(lambda name: _Capability(), home.artifacts, should_stop=lambda: False)
+        author = capability_formation_author(lambda name: _Capability(), home.artifacts, should_stop=lambda: False,
+                                             entity_name=home.name)
         got = author_formation(author, kind=kind, body="what the pass composed",
                                context={"pass": f"{kind}_pass", "record_kind": kind}, fields=["title", "summary"])
     finally:
@@ -753,6 +756,92 @@ def test_the_runtime_author_satisfies_memorys_formation_contract_for_every_pass_
     assert got.failure is None and got.pending == (), got
     assert (got.title, got.summary) == (TITLE, SUMMARY)
     assert got.author["kind"] == "capability-model" and got.reader["model"] == "summarizer" and got.sources
+
+
+def _briefed(system_prompt: str, name: str) -> None:
+    """The summaries author's briefing names the entity, says how to refer to it, and sets the title style."""
+    assert f"{name} is the entity whose memories these are" in system_prompt, system_prompt
+    assert (f'refer to {name} by name, never as "the agent", "the assistant" or "the speaker", and write in the '
+            "third person") in system_prompt, system_prompt
+    assert "Write the title in sentence case, with no trailing period and no quotes." in system_prompt, system_prompt
+
+
+def test_every_authoring_briefing_names_the_entity_and_sets_the_title_style(tmp_path: Path) -> None:
+    """A live home's second topics night (2026-11-10): the summaries said "the agent" / "the assistant" / "the
+    speaker" and the titles came back in mixed Title Case - the author's briefing never named the entity. Every path
+    that briefs the summaries author now names it (its home's name, in the third person) and sets the title style:
+    a session's formation (an untitled lesson, the exchange's episode), the drainer (a pending record), memory's
+    passes through the capability author (a topic, a dream, a card), the durable lane's handler author and the visit
+    lane's LLM_CALL. Each stub author below receives the briefing the real call would carry."""
+    from abstractmemory.formation_authoring import author_formation
+
+    from abstractruntime.core.runtime import EffectOutcome
+    from abstractruntime.identity.authoring import (authoring_llm_call_payload, capability_formation_author,
+                                                    drain_authoring, handler_formation_author)
+
+    home_dir = _workspace_home(tmp_path / "session")
+    home, s = _session(home_dir, ["Back.\n```lesson\nWaiting lets the other finish.\n```\n", "A quiet close."])
+    name = home.name
+    assert name == "Liveling"
+    try:
+        formation = _Capability()
+        s.llm_for_capability = lambda n: formation
+        s.turn("hi")  # the untitled lesson and the episode, authored as they form
+        assert len(formation.systems) >= 2, formation.systems
+        for system in formation.systems:
+            _briefed(system, name)
+
+        s.llm_for_capability = None  # forms pending: the drainer has work
+        home_turn = _Capability()
+        s.turn("again")
+        receipt = drain_authoring(home.ms, llm_for_capability=lambda n: home_turn, artifacts=home.artifacts,
+                                  home_dir=home_dir, entity=home.entity_id, holder="test", cap=3, window="turn")
+        assert receipt["authored"] >= 1 and home_turn.systems, receipt
+        for system in home_turn.systems:
+            _briefed(system, name)
+
+        passes = _Capability()
+        author = capability_formation_author(lambda n: passes, home.artifacts, should_stop=lambda: False,
+                                             entity_name=name)
+        for kind in ("community", "dream", "world_model"):
+            got = author_formation(author, kind=kind, body="what the pass composed",
+                                   context={"pass": f"{kind}_pass", "record_kind": kind}, fields=["title", "summary"])
+            assert got.failure is None, got
+        assert len(passes.systems) == 3
+        for system in passes.systems:
+            _briefed(system, name)
+
+        payloads: List[Dict[str, Any]] = []
+
+        def summaries(run: Any, effect: Any, dnn: Any = None) -> Any:
+            payloads.append(dict(effect.payload))
+            return EffectOutcome.completed({"content": json.dumps({"title": TITLE, "summary": SUMMARY})})
+
+        handler_author = handler_formation_author(summaries, home.artifacts, should_stop=lambda: False,
+                                                  entity_name=name)
+        assert author_formation(handler_author, kind="dream", body="the night's words",
+                                context={"pass": "dream_pass", "record_kind": "dream"},
+                                fields=["title", "summary"]).failure is None
+        _briefed(payloads[-1]["system_prompt"], name)
+        _briefed(authoring_llm_call_payload("diary", "his words", entity_name=name)["system_prompt"], name)
+        with pytest.raises(ValueError):
+            capability_formation_author(lambda n: passes, home.artifacts, should_stop=lambda: False, entity_name=" ")
+    finally:
+        home.close()
+
+    visit_calls: List[Dict[str, Any]] = []
+
+    def visit_summaries(run: Any, effect: Any, dnn: Any = None) -> Any:
+        visit_calls.append(dict(effect.payload))
+        return EffectOutcome.completed({"content": json.dumps({"title": TITLE, "summary": SUMMARY})})
+
+    ert, _visit_dir, episodes = _visit(tmp_path / "visit", {"summaries": visit_summaries})
+    try:
+        assert len(episodes) == 1 and visit_calls
+        for payload in visit_calls:
+            _briefed(payload["system_prompt"], ert.home.name)
+    finally:
+        ert.close()
 
 
 def test_a_sessions_card_update_passes_the_author_and_writes_its_failures(tmp_path: Path, monkeypatch) -> None:

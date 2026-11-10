@@ -298,14 +298,17 @@ def _staged_notice(kind: str, body: str) -> Dict[str, Any]:
     return {"kind": kind, "record_id": None, "title": str(title or ""), "text": words, "staged": True}
 
 
-def _authoring_step(node_id: str, kind: str, body: str, *, result_key: str, next_node: str) -> StepPlan:
+def _authoring_step(node_id: str, kind: str, body: str, *, result_key: str, next_node: str,
+                    entity_name: str) -> StepPlan:
     """The formation's authoring call as a durable LLM_CALL effect tagged with the summaries capability
-    (identity/authoring.py: authoring_llm_call_payload; the host routes `payload.capability`)."""
+    (identity/authoring.py: authoring_llm_call_payload, its briefing naming the entity; the host routes
+    `payload.capability`)."""
     from .authoring import authoring_llm_call_payload
 
     return StepPlan(
         node_id=node_id,
-        effect=Effect(type=EffectType.LLM_CALL, payload=authoring_llm_call_payload(kind, body), result_key=result_key),
+        effect=Effect(type=EffectType.LLM_CALL, payload=authoring_llm_call_payload(kind, body, entity_name=entity_name),
+                      result_key=result_key),
         next_node=next_node,
     )
 
@@ -936,7 +939,8 @@ def build_visit_workflow(
         turn = _ns(run, "_turn")
         said = str(turn.get("text") or "") or "\n".join(turn.get("attachment_lines") or [])
         body = f"{turn.get('speaker') or 'visitor'}: {said}\n\n{home.name}: {turn.get('marked_reply') or ''}"
-        return _authoring_step(AUTHOR_EPISODE_NODE, "episode", body, result_key="_turn.authored", next_node="FORM")
+        return _authoring_step(AUTHOR_EPISODE_NODE, "episode", body, result_key="_turn.authored", next_node="FORM",
+                               entity_name=home.name)
 
     def form_node(run: RunState, ctx: Any) -> StepPlan:
         visit = _ns(run, "_visit")
@@ -1228,7 +1232,8 @@ def build_visit_workflow(
             if key in authored_ns:
                 return None
             authored_ns[key] = None  # requested; the call's result lands here
-            return _authoring_step("APPLY", kind, body, result_key=f"_reflect.authored.{key}", next_node="APPLY")
+            return _authoring_step("APPLY", kind, body, result_key=f"_reflect.authored.{key}", next_node="APPLY",
+                                   entity_name=home.name)
 
         def _fields_for(key: str, *, kind: str, need: List[str], raw: str, result_key: str, title: Optional[str] = None,
                         digest: str = "", block_reason: Optional[str] = None) -> Dict[str, Any]:

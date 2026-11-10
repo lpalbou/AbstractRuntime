@@ -206,7 +206,8 @@ def open_entity_runtime(
 
         handlers.update(build_entity_brain_effect_handlers(
             memory_system=home.ms, entity_id=home.entity_id, home_dir=Path(home_dir),
-            author=handler_formation_author(summaries_handler, home.artifacts, should_stop=home.lifecycle.moved),
+            author=handler_formation_author(summaries_handler, home.artifacts, should_stop=home.lifecycle.moved,
+                                            entity_name=home.name),
         ))
     if extra_handlers:
         collisions = sorted(
@@ -255,7 +256,8 @@ def open_entity_runtime(
         # started under; the opening fence would refuse every turn after a Resume readmitted the runtime.
         home.lifecycle.check("before the diary entry's authoring call")  # no model call after the operator's Stop
         try:
-            out = target(run, _Effect(type=_ET.LLM_CALL, payload=authoring_llm_call_payload("diary", text)), None)
+            out = target(run, _Effect(type=_ET.LLM_CALL,
+                                      payload=authoring_llm_call_payload("diary", text, entity_name=home.name)), None)
         except Exception as e:  # noqa: BLE001 - the entry is still written; its metadata forms pending, said
             return _payload({"ok": False, "absorbed_failure": f"{type(e).__name__}: {e}"})
         home.lifecycle.check("after the diary entry's authoring call returned")  # a late reply is abandoned

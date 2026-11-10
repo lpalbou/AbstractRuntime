@@ -530,6 +530,13 @@ Unreleased changes live in [`changelog.d/`](changelog.d/README.md), one file per
   the authored metadata (`attributes.metadata_authored`; a floored summary loses its mechanical-floor label once
   authored). Only a failed or unrouted call forms the record pending (memory's task), with its failure line written
   at the next APPLY once the record has its id. A visit never fails on it.
+- **The summaries author's briefing names the entity and sets the title style** (`identity/authoring.py`:
+  `authoring_system_prompt`). Every authored record (an episode, a summary, a diary entry, a dream, a card, a topic, a
+  birth record) is now briefed with "<name> is the entity whose memories these are: refer to <name> by name, never as
+  'the agent', 'the assistant' or 'the speaker', and write in the third person" and "Write the title in sentence
+  case, with no trailing period and no quotes."; `capability_formation_author`, `handler_formation_author`,
+  `author_metadata` and `authoring_llm_call_payload` take a required keyword `entity_name` (`ChatHome.name`; an empty
+  one raises), and `drain_authoring` reads it from the home's `spark.yaml` (`entity_name_of`).
 
 ### Removed
 

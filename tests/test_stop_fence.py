@@ -1743,7 +1743,8 @@ def test_a_stop_during_capability_resolution_calls_no_model(tmp_path: Path, path
             except StoppedByOperator:
                 pass
         else:
-            author = authoring.capability_formation_author(resolve, home.artifacts, should_stop=fence.moved)
+            author = authoring.capability_formation_author(resolve, home.artifacts, should_stop=fence.moved,
+                                                           entity_name=home.name)
             with pytest.raises(StoppedByOperator):
                 author("dream", "Noon tied the pool and the garden.", {"pass": "dream_pass"})
     finally:
@@ -1767,7 +1768,8 @@ def test_a_handler_author_never_calls_its_handler_after_stop(tmp_path: Path) -> 
         return EffectOutcome.completed({"content": json.dumps({"title": "T", "summary": "S"})})
 
     try:
-        author = authoring.handler_formation_author(summaries, home.artifacts, should_stop=fence.moved)
+        author = authoring.handler_formation_author(summaries, home.artifacts, should_stop=fence.moved,
+                                                    entity_name=home.name)
         with pytest.raises(StoppedByOperator):
             author("dream", "words", {"pass": "dream_pass"})  # the late reply is abandoned
         assert len(calls) == 1

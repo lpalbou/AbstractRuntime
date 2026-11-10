@@ -43,6 +43,22 @@ class _Capability:
         return response_model(title=self.title, summary=self.summary)
 
 
+def _birth_labelled(home_dir: Path) -> int:
+    """Records still titled with memory's birth label (an unnamed spark item: the default spark's identity records):
+    each is one more title the sleep's repair declares and the drainer authors (operator 2026-11-10)."""
+    from abstractmemory import SQLiteTripleStore, TripleQuery
+
+    from abstractruntime.identity.title_failures import _is_birth_label
+
+    store = SQLiteTripleStore(home_dir / "memory.sqlite3")
+    try:
+        return sum(1 for a in store.query(TripleQuery(predicate="dcterms:abstract", limit=0))
+                   if _is_birth_label(str((a.attributes or {}).get("title") or ""))
+                   and not isinstance((a.attributes or {}).get("pending"), dict))
+    finally:
+        store.close()
+
+
 def _rows(home_dir: Path, kind: str) -> List[Any]:
     from abstractmemory import SQLiteTripleStore, TripleQuery
 
@@ -201,8 +217,10 @@ def test_the_sleep_repairs_a_legacy_record_without_a_title(tmp_path: Path, monke
     from abstractruntime.identity.life import write_entity_state
 
     write_entity_state(home_dir, "asleep", reason="self-elected sleep: full", mode="dreaming", written_by="self", fence=LifecycleFence.admit(home_dir))
+    births = _birth_labelled(home_dir)  # the home's birth-labelled identity titles are repaired the same night
     result = build_consolidator(home_dir, out=lambda s: None, llm_for_capability=lambda name: _Capability(), fence=LifecycleFence.admit(home_dir))()
-    assert result["authoring"]["declared"] == 1 and result["authoring"]["authored"] == 1, result["authoring"]
+    assert result["authoring"]["declared"] == 1 + births and result["authoring"]["authored"] == 1 + births, \
+        result["authoring"]
     lesson = [r for r in _rows(home_dir, "lesson") if str(r.subject) == str(rid)][-1]
     assert lesson.attributes["title"] == TITLE
 
@@ -429,9 +447,10 @@ def test_the_sleep_repairs_legacy_mechanical_cards_and_dreams(tmp_path: Path, mo
     home.close()
     monkeypatch.setattr(abstractmemory, "sleep_pass", lambda *a, **k: {"maintenance": {}, "dream": {}})
     write_entity_state(home_dir, "asleep", reason="self-elected sleep: full", mode="dreaming", written_by="self", fence=LifecycleFence.admit(home_dir))
+    births = _birth_labelled(home_dir)  # + the home's birth-labelled identity titles
     result = build_consolidator(home_dir, out=lambda s: None, llm_for_capability=lambda name: _Capability(), fence=LifecycleFence.admit(home_dir))()
     receipt = result["authoring"]
-    assert receipt["declared"] == 4 and receipt["authored"] == 4, receipt  # both titles and both summaries
+    assert receipt["declared"] == 4 + births and receipt["authored"] == 4 + births, receipt  # both titles and summaries
     assert receipt["failed"] == 0 and receipt["refused"] == 0, receipt
     for kind, rid in ids.items():
         row = [r for r in _rows(home_dir, kind) if str(r.subject) == str(rid)][-1]
@@ -890,8 +909,9 @@ def test_the_sleep_repairs_a_legacy_public_diary_records_title_and_summary(tmp_p
         result = build_consolidator(home_dir, out=lines.append, llm_for_capability=lambda name: _Capability(), fence=LifecycleFence.admit(home_dir))()
         return result["authoring"], lines
 
+    births = _birth_labelled(home_dir)  # + the home's birth-labelled identity titles
     receipt, lines = night()
-    assert receipt["declared"] == 2 and receipt["authored"] == 2 and receipt["refused"] == 2, receipt
+    assert receipt["declared"] == 2 + births and receipt["authored"] == 2 + births and receipt["refused"] == 2, receipt
     row = [r for r in _rows(home_dir, "diary") if str(r.subject) == rid][-1]
     assert (row.attributes["title"], str(row.object)) == (TITLE, SUMMARY), (row.attributes.get("title"), row.object)
     assert "pending" not in row.attributes
@@ -1014,9 +1034,10 @@ def test_the_sleep_repairs_mechanical_episodes_and_session_reflections_by_stamp(
                                     fence=LifecycleFence.admit(home_dir))()
         return result["authoring"], lines
 
+    births = _birth_labelled(home_dir)  # + the home's birth-labelled identity titles
     receipt, lines = night()
     # 3 records x 2 fields + the authored-summary reflection's title.
-    assert (receipt["declared"], receipt["authored"]) == (7, 7), receipt
+    assert (receipt["declared"], receipt["authored"]) == (7 + births, 7 + births), receipt
     assert receipt["failed"] == 0 and receipt["refused"] == 0, receipt
     assert not [ln for ln in lines if ln.startswith("#REPAIR_REFUSED")], lines
     rows = {str(r.subject): r for k in ("episode", "summary") for r in _rows(home_dir, k)}

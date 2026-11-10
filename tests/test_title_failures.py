@@ -183,3 +183,47 @@ def test_a_legacy_placeholder_title_is_never_rendered_as_his() -> None:
     assert f"{GOOD}: Wait before answering." in shelf
     assert is_placeholder_title("untitled lesson [abc123]")
     assert not is_placeholder_title("untitled thoughts [abc123]") and not is_placeholder_title("Untitled song")
+
+
+def test_memorys_birth_labels_are_placeholders_never_words() -> None:
+    """Memory's birth labels for an unnamed spark item (`trait-N`, `value-N`, `purpose-N`, `limit-N`; castor's two
+    identity traits are both "trait-0", 2026-07-07) are template labels, not his words: exact formats only."""
+    from abstractruntime.identity.title_failures import is_placeholder_title
+
+    for label in ("trait-0", "trait-12", "value-3", "purpose-0", "limit-1"):
+        assert is_placeholder_title(label), label
+    for words in ("trait-0 of patience", "Trait-0", "trait-", "trait-x", "my trait-0", "values-1", "trait 0",
+                  "Ask before assuming", "limit-1a"):
+        assert not is_placeholder_title(words), words
+
+
+def test_the_sleep_repairs_birth_labelled_identity_records(tmp_path: Path) -> None:
+    """The sleep's repair declares a birth-labelled identity record pending and the drainer authors its title (castor's
+    shape: two `trait` records titled "trait-0", one an honesty limit)."""
+    from abstractmemory import MemoryRecordInput
+
+    from abstractruntime.identity.authoring import declare_missing_metadata, drain_authoring
+    from abstractruntime.identity.chat import open_home
+
+    sys.path.insert(0, str(Path(__file__).parent))
+    from test_memory_authoring import TITLE, _Capability, _rows
+
+    home_dir = _workspace_home(tmp_path)
+    home = open_home(home_dir, fence=None)
+    try:
+        eid = home.entity_id
+        for key, digest, attrs in (
+                ("t0", "Ask before assuming; verify before asserting.", {"precedence": 0, "spark_version": 1}),
+                ("l0", "Report failures and degradations as they happened.", {"precedence": 0, "spark_version": 1,
+                                                                             "trait_class": "limit"})):
+            home.ms.remember_many([MemoryRecordInput(kind="trait", title="trait-0", digest=digest, attributes=attrs)],
+                                  scope="self", owner_id=eid, idempotency_key=f"legacy-birth-{key}")
+        receipt = declare_missing_metadata(home.ms, scopes=[("self", eid)])
+        assert receipt["declared"] >= 2 and receipt["refused"] == 0, receipt
+        drained = drain_authoring(home.ms, llm_for_capability=lambda name: _Capability(), artifacts=home.artifacts,
+                                  home_dir=home_dir, entity=eid, holder="test", cap=8, window="nap")
+    finally:
+        home.close()
+    assert drained["authored"] >= 2, drained
+    traits = [r for r in _rows(home_dir, "trait")]
+    assert traits and all(r.attributes.get("title") == TITLE for r in traits), [r.attributes.get("title") for r in traits]

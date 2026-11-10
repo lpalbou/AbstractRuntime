@@ -48,13 +48,25 @@ AUTHORING_MISSING = ("title", "summary", "both")
 
 
 _PLACEHOLDER_KINDS = ("interest", "lesson", "realization", "diary", "digest", "card")
+# Memory's BIRTH LABELS (abstractmemory engram: a spark item with no `name` is titled `<section stem>-<ordinal>`;
+# before c5260 the honesty items got `trait-<n>` too - castor's two identity traits are both "trait-0"). Exact formats
+# only: the stem, one hyphen, the ordinal's digits - never words that merely contain them.
+_BIRTH_LABEL_STEMS = ("trait", "value", "purpose", "limit")
+
+
+def _is_birth_label(text: str) -> bool:
+    stem, sep, ordinal = text.partition("-")
+    return bool(sep) and stem in _BIRTH_LABEL_STEMS and ordinal.isdigit() and ordinal.isascii()
 
 
 def is_placeholder_title(title: Any) -> bool:
-    """True for the retired storage placeholder `untitled <kind> [<6 hex>]` (runtime 8e72975, before memory stored a
-    pending title as None): never his words. Renderers show no title for it, and the sleep's repair declares the
-    record pending so its title is authored."""
+    """True for a title that is a template label, never his words: the retired storage placeholder
+    `untitled <kind> [<6 hex>]` (runtime 8e72975, before memory stored a pending title as None), and memory's birth
+    labels `trait-N` / `value-N` / `purpose-N` / `limit-N` (an unnamed spark item; operator 2026-11-10). Renderers show
+    no title for it, and the sleep's repair declares the record pending so its title is authored."""
     text = str(title or "")
+    if _is_birth_label(text):
+        return True
     if not text.startswith("untitled ") or not text.endswith("]"):
         return False
     kind, sep, key = text[len("untitled "):-1].partition(" [")

@@ -11,7 +11,11 @@
   the brief without a model call. A failure keeps the previous brief and writes one authoring-failure line
   (`template_id` `runtime.self_brief`). Fenced: no call after the operator's Stop, a reply returning after it is
   abandoned, the write is a fenced write section. The night's result carries `self_brief`; `own_time.log` gets one
-  line per sleep.
+  line per sleep. Next step (operator refinement 2026-11-10, not yet in this change): each topic's line also gives
+  its memory-type counts from the payload's `kinds` ("12 episodes, 3 dreams, 2 interests"), its last formed memory
+  (`facts.span.last`) and its recent use (`facts.activity`, a count of recalls in the last 7 days: memory serves no
+  last-accessed date), then the main trails; under the 400-token cap the per-topic line is shortened, never the list
+  of topics (today an over-cap reply is refused and the previous brief kept).
 - **The brief sits in every lane's system prefix** (`compose_system_base(..., self_brief=)`, read at summon by
   `self_brief_for_prompt`): `ChatSession` (hosted chat, own time and work through the life factory's re-compose) and
   the durable visit's OPEN node place the section "What I know about, at a glance (updated in my sleep):" right after

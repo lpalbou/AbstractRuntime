@@ -594,7 +594,9 @@ Unreleased changes live in [`changelog.d/`](changelog.d/README.md), one file per
   sheet, the resolution notes and the visit capture metadata name the entry by its record's title (or say it is
   still being written), never by his first line. The sleep's repair declares a legacy public diary record's
   template title ("Diary entry (<kind>) — ...") pending and asks memory to declare its stand-in summary pending
-  (a `protected_kind` refusal is said once per pass). Private entries are unchanged
+  (AbstractMemory 0.5.0 declares it for a public book projection and the drainer authors it; an entry memory refuses
+  with `protected_kind`, such as one claiming a chain position, keeps its stored summary, and the refusals are said
+  once per pass). Private entries are unchanged
   (root backlog 1186).
 - **A public diary entry's record carries no template: his gist, else an authored title** (`integrations/abstractmemory/
   identity_support.py`, `identity/diary.py`, `identity/chat.py`, `identity/act_only.py`, `identity/entity_runtime.py`). The projection no

@@ -14,8 +14,10 @@ Module: `abstractruntime.identity.track_record` (ADR 0052 §5-§6, framework bac
 ```python
 from abstractruntime.identity import compute_reputation, entity_track_record, session_track_record
 from abstractruntime.identity.entity_runtime import open_entity_runtime
+from abstractruntime.identity.lifecycle_fence import LifecycleFence
 
-er = open_entity_runtime(home_dir)          # or the stores your host already holds
+# or the stores your host already holds; the fence is required (see docs/entity-runtime.md, "The Stop fence")
+er = open_entity_runtime(home_dir, fence=LifecycleFence.admit(home_dir))
 record = entity_track_record(home_dir, er.run_store, er.ledger_store, book_head=er.home.diary.head())
 print(record.runs, record.successes, record.failures, record.tokens.total)
 

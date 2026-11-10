@@ -72,8 +72,10 @@ read_directory_lease(home_dir)   # {"holder": ..., "pid": ..., "held": True/Fals
 
 ```python
 from abstractruntime.identity.entity_runtime import open_entity_runtime
+from abstractruntime.identity.lifecycle_fence import LifecycleFence
 
-ert = open_entity_runtime(home_dir, extra_handlers={EffectType.LLM_CALL: my_llm_handler})
+fence = LifecycleFence.admit(home_dir)   # the generation this work is admitted at (see "The Stop fence" below)
+ert = open_entity_runtime(home_dir, extra_handlers={EffectType.LLM_CALL: my_llm_handler}, fence=fence)
 run_id = ert.runtime.start(workflow=visit_workflow, vars={}, session_id="visit-1")
 ert.runtime.tick(workflow=visit_workflow, run_id=run_id)
 ert.close()   # checkpoints WAL so the directory is copy-clean
@@ -91,6 +93,23 @@ ert.close()   # checkpoints WAL so the directory is copy-clean
 - Every host `LLM_CALL` handler is automatically wrapped with the
   **act-only dereference** (below) — the privacy boundary cannot be
   forgotten.
+
+## The Stop fence (`identity/lifecycle_fence.py`)
+
+The operator's Stop moves the home's lifecycle generation. Work is admitted at one generation and carries a
+`LifecycleFence` holding it: `LifecycleFence.admit(home_dir)` admits at the home's current generation, inside the
+home state lock, and raises `LifecycleUnreadable` when that generation cannot be read (nothing is admitted on an
+unknown generation). The openers and state writers take the fence keyword-only, with no default:
+`open_home(..., fence=)`, `open_entity_runtime(..., fence=)`, `ChatSession(..., fence=)`,
+`spawn_loop_process(..., fence=)` and `build_consolidator(..., fence=)`. Once the generation has moved, the home
+refuses everything decided before it: memory's commit guard rolls the write back, the diary and artifact stores
+refuse the write, every effect returns cancelled, and a model reply that returns after the Stop lands nowhere. The
+refusal is `StoppedByOperator` (a `TurnCancelled`), recorded as stopped by the operator, never as a failure. Only the
+Stop itself (`KILL_SWITCH`: paused, own time revoked, the return cleared, loop status stopped) and the Resume
+(`RESUME`: awake, nothing restored) write past the check. A host that keeps an opened runtime across a Resume calls
+`ert.readmit(LifecycleFence.admit(home_dir))` (`ChatHome.readmit` for a home) once no run of the old generation is
+still acting. A reader that acts on nothing opens a home with `open_home(home_dir, fence=None)`;
+`open_entity_runtime` always needs a fence.
 
 ## Act-only content: references at rest, words only in flight (`identity/act_only.py`)
 

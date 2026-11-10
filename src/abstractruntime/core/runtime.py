@@ -927,7 +927,7 @@ def _record_node_trace(
 
     # An effect cancelled BEFORE it ran (a cancelled outcome whose result says `ran: False`, e.g. the operator's Stop
     # refusing it at dispatch) is traced without its payload: nothing of it happened, and its prompt must not be
-    # offloaded into artifacts after the cancellation (castor E2E 2026-11-10). The ledger keeps its own rows.
+    # offloaded into artifacts after the cancellation (live E2E 2026-11-10). The ledger keeps its own rows.
     never_ran = (
         outcome.status == "cancelled" and isinstance(outcome.result, dict) and outcome.result.get("ran") is False
     )

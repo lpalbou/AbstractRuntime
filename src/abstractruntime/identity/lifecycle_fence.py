@@ -535,7 +535,7 @@ def is_sentinel(fence: Any) -> bool:
 def stopped_outcome(effect: str, where: str, *, ran: bool = True) -> Any:
     """What a fenced effect returns instead of running (or instead of its late reply): status `cancelled` - never
     retried, never a failure; the Runtime ends the run CANCELLED with KILL_SWITCH_REASON as its error. `ran=False`
-    (refused before it started): the Runtime's node trace keeps no payload for it (castor E2E 2026-11-10: the prompt
+    (refused before it started): the Runtime's node trace keeps no payload for it (live E2E 2026-11-10: the prompt
     of a call that never ran was saved as artifacts after the Stop)."""
     from ..core.runtime import EffectOutcome
 

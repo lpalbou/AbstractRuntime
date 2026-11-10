@@ -49,7 +49,7 @@ AUTHORING_MISSING = ("title", "summary", "both")
 
 _PLACEHOLDER_KINDS = ("interest", "lesson", "realization", "diary", "digest", "card")
 # Memory's BIRTH LABELS (abstractmemory engram: a spark item with no `name` is titled `<section stem>-<ordinal>`;
-# before c5260 the honesty items got `trait-<n>` too - castor's two identity traits are both "trait-0"). Exact formats
+# before c5260 the honesty items got `trait-<n>` too - a live home's two identity traits were both "trait-0"). Exact formats
 # only: the stem, one hyphen, the ordinal's digits - never words that merely contain them.
 _BIRTH_LABEL_STEMS = ("trait", "value", "purpose", "limit")
 

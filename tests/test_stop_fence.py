@@ -2142,3 +2142,82 @@ def test_a_model_call_refused_before_it_ran_saves_no_prompt_artifacts(tmp_path: 
     assert calls == [] and state.status.value == "cancelled", state.status
     assert after == before, f"the refused call's prompt was saved: {sorted(set(after) - set(before))}"
     assert any(str(r.get("status") or "").lower() == "cancelled" for r in records), records  # the row stays
+
+
+def _pause_memory_after_its_guard(home: Any) -> tuple:
+    """Make the home's next memory write pause INSIDE its transaction, right after its commit guard passed."""
+    entered, release = threading.Event(), threading.Event()
+    real = home.store._commit_guard
+    fired = {"n": 0}
+
+    def guard_then_pause(where: str) -> None:
+        real(where)
+        if not fired["n"]:
+            fired["n"] += 1
+            entered.set()
+            assert release.wait(60)
+
+    home.store._commit_guard = guard_then_pause
+    home.journal._commit_guard = guard_then_pause
+    return entered, release
+
+
+def test_a_memory_commit_whose_guard_passed_lands_before_a_racing_bump(tmp_path: Path) -> None:
+    """Codex review 4 #2 (P1), memory's half (AbstractMemory 85ecf75 write_barrier): memory's guard runs under its
+    database lock, the bump under the home lock, so "guard passes -> another process bumps -> COMMIT lands" was
+    possible. The bump now holds memory's write barrier (home lock -> memory barrier -> the runtime barrier ->
+    generation write): a transaction whose guard passed commits before the bump."""
+    from abstractmemory import MemoryRecordInput
+
+    home_dir = _make_home(tmp_path)
+    home, fence = _fenced_home(home_dir)
+    entered, release = _pause_memory_after_its_guard(home)
+    writer = threading.Thread(target=lambda: home.ms.remember_many(
+        [MemoryRecordInput(kind="lesson", title="In the race", digest="Formed in the race.")],
+        scope="life", owner_id=home.entity_id, idempotency_key="race-1"))
+    bumper = threading.Thread(target=lambda: _bump_in_another_process(home_dir))
+    try:
+        writer.start()
+        assert entered.wait(30)  # the guard passed; COMMIT has not happened
+        bumper.start()
+        bumper.join(timeout=3.0)
+        waited = bumper.is_alive() and read_lifecycle_generation(home_dir) == 0
+        release.set()
+        writer.join(30)
+        bumper.join(60)
+        assert waited, "the bump landed between a passed memory guard and its COMMIT"
+        assert read_lifecycle_generation(home_dir) == 1 and not bumper.is_alive()
+    finally:
+        release.set()
+        home.close()
+
+
+def test_a_stuck_memory_writer_never_holds_up_the_stop(tmp_path: Path, monkeypatch) -> None:
+    """The Stop never hangs on a writer stuck inside a transaction: the bump waits for memory's barrier a bounded time,
+    then bumps anyway and says so in the Stop's receipt (`barrier timed out: <the lock>`)."""
+    from abstractmemory import MemoryRecordInput
+
+    monkeypatch.setattr(life, "MEMORY_BARRIER_TIMEOUT_S", 0.5)
+    home_dir = _make_home(tmp_path)
+    home, fence = _fenced_home(home_dir)
+    entered, release = _pause_memory_after_its_guard(home)
+    writer = threading.Thread(target=lambda: _swallow(lambda: home.ms.remember_many(
+        [MemoryRecordInput(kind="lesson", title="Stuck", digest="A stuck writer.")],
+        scope="life", owner_id=home.entity_id, idempotency_key="stuck-1")))
+    try:
+        writer.start()
+        assert entered.wait(30)
+        out = hard_stop_loop(home_dir, reason="operator stop")
+        assert out["lifecycle_generation"] == 1, out
+        assert str(out.get("barrier_note") or "").startswith("barrier timed out:"), out
+    finally:
+        release.set()
+        writer.join(30)
+        home.close()
+
+
+def _swallow(fn: Any) -> None:
+    try:
+        fn()
+    except Exception:  # noqa: BLE001 - the stuck writer's own fate is not under test
+        pass

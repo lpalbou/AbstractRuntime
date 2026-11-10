@@ -2155,12 +2155,62 @@ def read_lifecycle_generation(home_dir: Path) -> int:
     return _read_generation_truth(home_dir)
 
 
+# #[WARNING:TIMEOUT] How long the Stop's bump waits for memory's write barrier (coordinator 2026-11-10): a Stop never
+# hangs on a writer stuck inside a memory transaction - past this it bumps anyway and its receipt says so.
+MEMORY_BARRIER_TIMEOUT_S = 10.0
+
+
+@contextmanager
+def _memory_write_barrier(home_dir: Path, receipt: Optional[Dict[str, Any]]) -> Iterator[None]:
+    """Hold the home's MEMORY write barrier (AbstractMemory 85ecf75 `MemorySystem.write_barrier`: BEGIN IMMEDIATE on
+    the journal, graph and task-queue files in memory's fixed order, released in reverse) for the bump's block, over a
+    handle opened for it. A home with no memory file has no memory writer to wait for. A barrier that cannot be taken
+    within MEMORY_BARRIER_TIMEOUT_S (a stuck writer) does not stop the Stop: the block runs and `receipt` gets
+    `barrier_note` ("barrier timed out: <the held lock>")."""
+    from contextlib import ExitStack
+
+    db = Path(home_dir) / "memory.sqlite3"
+    if not db.exists():
+        yield
+        return
+    from abstractmemory import MemorySystem, SQLiteJournal, SQLiteTripleStore
+    from abstractmemory.write_barrier import WriteBarrierTimeout
+
+    store = SQLiteTripleStore(db)
+    journal = SQLiteJournal(db)
+    try:
+        with ExitStack() as stack:
+            try:
+                stack.enter_context(MemorySystem(store=store, journal=journal).write_barrier(
+                    timeout=MEMORY_BARRIER_TIMEOUT_S))
+            except WriteBarrierTimeout as e:
+                if receipt is not None:
+                    receipt["barrier_note"] = f"barrier timed out: {e.waiting_for}"
+            yield
+    finally:
+        for handle in (store, journal):
+            try:
+                handle.close()
+            except Exception:  # noqa: BLE001 - closing the barrier's own handle never fails the Stop
+                pass
+
+
 def bump_lifecycle_generation(home_dir: Path, *, written_by: str,
-                              timeout_s: Optional[float] = HOME_STATE_LOCK_TIMEOUT_S) -> int:
+                              timeout_s: Optional[float] = HOME_STATE_LOCK_TIMEOUT_S,
+                              receipt: Optional[Dict[str, Any]] = None) -> int:
     """Increment the lifecycle generation (Stop) and return the new value. Hold `home_state_lock` around it and
     the other Stop writes to make them one critical section (hard_stop_loop does). In the same critical section,
     AFTER phases.yaml, the signal file `.lifecycle_generation` is replaced and this process's fence table updated:
-    its own fences see the Stop at their next compare, every other process's at its next stat."""
+    its own fences see the Stop at their next compare, every other process's at its next stat.
+
+    THE BUMP SERIALIZES WITH EVERY COMMIT (Codex review 4 #2): home_state_lock (outer) -> memory's write barrier ->
+    the runtime's write barrier, exclusive -> the generation write -> released in reverse. A memory transaction, a
+    diary append or an artifact write whose fence check passed lands before the bump; every later one is refused.
+    Accepted residue: a LanceDB store takes no lock (memory cannot cover it), so ONE write per concurrent LanceDB
+    writer whose guard passed may land after the bump - its next write is refused; and memory's two SQLite
+    autocommit bookkeeping writes (`_write_pin` without a cursor, the off-file `mark_journal_applied`) are outside a
+    barrier taken through another handle (memory 0.5.1 items, not records). A memory barrier that times out
+    (MEMORY_BARRIER_TIMEOUT_S, a stuck writer) still bumps; `receipt` (a dict) then gets `barrier_note`."""
     if not str(written_by or "").strip():
         raise ValueError("written_by is required - the bump names who stopped him")
     out: Dict[str, int] = {}
@@ -2170,12 +2220,13 @@ def bump_lifecycle_generation(home_dir: Path, *, written_by: str,
         data[LIFECYCLE_GENERATION_KEY] = out["generation"]
 
     with home_state_lock(home_dir, timeout_s=timeout_s):
-        # THE WRITE BARRIER, exclusive (Codex review 4 #2): every runtime store write whose fence check passed has
-        # landed before the generation moves; every later one sees the move. Inside the home state lock (outer).
-        with _write_barrier(home_dir, exclusive=True):
-            _mutate_phases(home_dir, "bumping the lifecycle generation", _bump, fence=KILL_SWITCH,
-                           timeout_s=timeout_s)
-            _signal_bump(home_dir, out["generation"])
+        with _memory_write_barrier(home_dir, receipt):
+            # THE WRITE BARRIER, exclusive: every runtime store write whose fence check passed has landed before the
+            # generation moves; every later one sees the move.
+            with _write_barrier(home_dir, exclusive=True):
+                _mutate_phases(home_dir, "bumping the lifecycle generation", _bump, fence=KILL_SWITCH,
+                               timeout_s=timeout_s)
+                _signal_bump(home_dir, out["generation"])
     return out["generation"]
 PERSONAL_GRANT_MODES = ("disabled", "timer", "until_revoked")
 _PERSONAL_ACTIVATION_FIELDS = ("mode", "expires_at", "granted_by", "granted_at", "revoked_by")
@@ -2668,6 +2719,7 @@ def hard_stop_loop(home_dir: Path, *, reason: str = "", requested_by: str = "adm
     resume_to_note: Optional[str] = None
     generation: Optional[int] = None
     generation_note: Optional[str] = None
+    bump_receipt: Dict[str, Any] = {}
     with home_state_lock(home_dir, timeout_s=None):
         try:
             if read_personal_grant(home_dir).get("mode") != "disabled":
@@ -2680,7 +2732,8 @@ def hard_stop_loop(home_dir: Path, *, reason: str = "", requested_by: str = "adm
         except Exception as e:  # noqa: BLE001
             resume_to_note = f"resume_to not cleared: {e}"
         try:
-            generation = bump_lifecycle_generation(home_dir, written_by="kill_switch", timeout_s=None)
+            generation = bump_lifecycle_generation(home_dir, written_by="kill_switch", timeout_s=None,
+                                                   receipt=bump_receipt)
         except LifecycleSignalUnwritten as e:
             # The Stop stands (phases.yaml moved, this process's fences refuse); only its signal file is missing -
             # other processes see it at their next truth read (Fable F9). Said, never "not bumped".
@@ -2763,6 +2816,8 @@ def hard_stop_loop(home_dir: Path, *, reason: str = "", requested_by: str = "adm
         # The lifecycle generation this Stop moved to (None + generation_note when the bump failed).
         "lifecycle_generation": generation,
         **({"generation_note": generation_note} if generation_note else {}),
+        # The bump waited for memory's write barrier a bounded time and moved anyway (a stuck writer): said here.
+        **({"barrier_note": bump_receipt["barrier_note"]} if bump_receipt.get("barrier_note") else {}),
         # Legacy keys (kept for existing callers).
         "frozen": True,
         "was_running": bool(verified and signal_name),

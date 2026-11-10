@@ -2,10 +2,11 @@
 topics help the entity "to have its knowledge organized by topic, to know what it knows, and let it delve deeper into
 subparts of its mind/memory").
 
-It reads the records memory serves - `abstractmemory.communities(system, scopes=, owner_id=, version=None)` -
-never a cache of its own. Until memory's verb lands, `_FakeCommunities` serves the payload v2 shape
-(COMMUNITIES-DESIGN §3) over real records of a real home; ranking by meaning goes through the store's vector query
-with a deterministic test embedder. Each test goes red without the piece it names."""
+It reads what memory serves - `abstractmemory.community_index.communities(system, scopes=, owner_id=,
+version=None)` (AbstractMemory d550551) - never a cache of its own. The rendering cases use `_FakeCommunities`, a
+scripted payload v2 over the real records of a real home (two topics, one untitled, one provisional member), so each
+case is exact; the last tests run memory's REAL pass and REAL read end to end. Ranking by meaning goes through the
+store's vector query with a deterministic test embedder. Each test goes red without the piece it names."""
 
 from __future__ import annotations
 
@@ -93,12 +94,14 @@ class _FakeCommunities:
                  "summary": "How the dam's spillway was checked, and why its gauges drift.", "pending": [],
                  "verdict": None, "size": 3, "kinds": {"episode": 2, "lesson": 1},
                  "members": [{"id": ids["dam-1"], "via": "detected"}, {"id": ids["dam-2"], "via": "detected"}],
-                 "provisional_ids": [ids["dam-3"]], "cohesion": 0.7, "layout": {}},
+                 "provisional_ids": [ids["dam-3"]], "cohesion": 0.7, "layout": {},
+                 "facts": {"span": {"first": "2026-11-01T10:00:00+00:00", "last": "2026-11-05T10:00:00+00:00"}}},
                 {"id": "ex:community-r2v41", "key": "ex:community-bbbb2222gar0", "title": None,
                  "summary": None, "pending": ["title", "summary"], "verdict": None, "size": 2,
                  "kinds": {"episode": 2},
                  "members": [{"id": ids["gar-1"], "via": "detected"}, {"id": ids["gar-2"], "via": "attached"}],
-                 "provisional_ids": [], "cohesion": 0.6, "layout": {}},
+                 "provisional_ids": [], "cohesion": 0.6, "layout": {},
+                 "facts": {"span": {"first": "2026-11-02T10:00:00+00:00", "last": "2026-11-06T10:00:00+00:00"}}},
             ],
             "links": [],
         }
@@ -110,13 +113,13 @@ class _FakeCommunities:
 
 @pytest.fixture
 def served(tmp_path: Path, monkeypatch):
-    import abstractmemory
+    import abstractmemory.community_index as community_index
 
     from abstractruntime.identity.memory_reader import HomeMemoryReader
 
     home = _home(tmp_path)
     fake = _FakeCommunities(home.test_ids)
-    monkeypatch.setattr(abstractmemory, "communities", fake.communities, raising=False)
+    monkeypatch.setattr(community_index, "communities", fake.communities)
     try:
         yield home, HomeMemoryReader(home), fake
     finally:
@@ -128,7 +131,11 @@ def served(tmp_path: Path, monkeypatch):
 
 def test_the_list_shows_each_topic_title_summary_size_and_newest_memory(served) -> None:
     home, reader, fake = served
+    scans: List[int] = []
+    real_scan = reader.digest_assertions_all
+    reader.digest_assertions_all = lambda: scans.append(1) or real_scan()
     text = reader.topics("")
+    assert scans == [], "the list is memory's one read (its facts carry the newest date): no scan of his digests"
     assert fake.calls == [{"scopes": LADDER, "owner_id": EID, "version": None}], "his scopes, his owner, current"
     assert "2 topics over 5 memories" in text
     assert ("- #1111dam0 The dam and its gauges (3 memories, newest 2026-11-05) - How the dam's spillway was "
@@ -214,18 +221,18 @@ def test_the_tool_reads_what_memory_serves_every_time(served) -> None:
 
 
 def test_before_the_first_sleep_the_tool_says_when_topics_form(tmp_path: Path, monkeypatch) -> None:
-    import abstractmemory
+    import abstractmemory.community_index as community_index
 
     from abstractruntime.identity.memory_reader import HomeMemoryReader
 
     home = _home(tmp_path)
     try:
-        monkeypatch.setattr(abstractmemory, "communities",
-                            _FakeCommunities(home.test_ids, first_sleep_pending=True).communities, raising=False)
+        monkeypatch.setattr(community_index, "communities",
+                            _FakeCommunities(home.test_ids, first_sleep_pending=True).communities)
         assert "during your next sleep" in HomeMemoryReader(home).topics("")
         empty = _FakeCommunities(home.test_ids)
         empty.payload["communities"] = []
-        monkeypatch.setattr(abstractmemory, "communities", empty.communities, raising=False)
+        monkeypatch.setattr(community_index, "communities", empty.communities)
         assert HomeMemoryReader(home).topics("") == ("Your memory holds no topics: there is not yet enough in it to "
                                                      "group by subject.")
     finally:
@@ -233,13 +240,13 @@ def test_before_the_first_sleep_the_tool_says_when_topics_form(tmp_path: Path, m
 
 
 def test_without_an_embedder_words_get_the_list_and_tags_get_newest_first(tmp_path: Path, monkeypatch) -> None:
-    import abstractmemory
+    import abstractmemory.community_index as community_index
 
     from abstractruntime.identity.memory_reader import HomeMemoryReader
 
     home = _home(tmp_path, embedder=None)
     try:
-        monkeypatch.setattr(abstractmemory, "communities", _FakeCommunities(home.test_ids).communities, raising=False)
+        monkeypatch.setattr(community_index, "communities", _FakeCommunities(home.test_ids).communities)
         reader = HomeMemoryReader(home)
         text = reader.topics("spillway gauges")
         assert text.startswith("(no embedder serves this session, so your topics cannot be matched by meaning")
@@ -267,14 +274,14 @@ def test_the_tool_runs_through_the_descriptor_and_fails_loudly_on_a_payload_it_c
 
 
 def test_a_memory_without_the_communities_verb_fails_the_call_loudly(tmp_path: Path, monkeypatch) -> None:
-    import abstractmemory
+    import abstractmemory.community_index as community_index
 
     from abstractruntime.identity.memory_reader import HomeMemoryReader
     from abstractruntime.identity.tools import ToolElection, execute_tool_elections
 
     home = _home(tmp_path)
     try:
-        monkeypatch.delattr(abstractmemory, "communities", raising=False)
+        monkeypatch.delattr(community_index, "communities")
         e = ToolElection(name="topics", body="")
         _m, notices = execute_tool_elections([e], diary_store=None, diary_read_effect=lambda _i: {},
                                              topics_fn=HomeMemoryReader(home).topics)
@@ -317,7 +324,7 @@ def test_topics_is_a_tier1_read_tool_taught_in_the_prompt_and_declared_natively(
 
 def test_the_effect_lane_runs_topics_wired(tmp_path: Path, monkeypatch) -> None:
     """ENTITY_TOOLS_EXECUTE (the durable lanes): topics is granted AND wired - never "not enabled"."""
-    import abstractmemory
+    import abstractmemory.community_index as community_index
 
     from test_entity_brain_effects import _dispatch, _result
 
@@ -325,7 +332,7 @@ def test_the_effect_lane_runs_topics_wired(tmp_path: Path, monkeypatch) -> None:
 
     home = _home(tmp_path)
     try:
-        monkeypatch.setattr(abstractmemory, "communities", _FakeCommunities(home.test_ids).communities, raising=False)
+        monkeypatch.setattr(community_index, "communities", _FakeCommunities(home.test_ids).communities)
         out = _result(_dispatch(home.handlers, EffectType.ENTITY_TOOLS_EXECUTE, {
             "phase": "visit", "tool_calls": [{"name": "topics", "arguments": {}}]}))
         assert out["tools_ran"] == ["topics"]
@@ -336,14 +343,14 @@ def test_the_effect_lane_runs_topics_wired(tmp_path: Path, monkeypatch) -> None:
 
 def test_the_chat_lane_runs_topics_wired(tmp_path: Path, monkeypatch) -> None:
     """ChatSession (own time, hosted chat): a fenced topics block in a reply runs through the session's reader."""
-    import abstractmemory
+    import abstractmemory.community_index as community_index
 
     from test_entity_recent_memories import _ScriptedLLM
 
     from abstractruntime.identity.chat import ChatSession
 
     home = _home(tmp_path)
-    monkeypatch.setattr(abstractmemory, "communities", _FakeCommunities(home.test_ids).communities, raising=False)
+    monkeypatch.setattr(community_index, "communities", _FakeCommunities(home.test_ids).communities)
     s = ChatSession(home, _ScriptedLLM(["```tool name=topics\n```", "I know about the dam."]),
                     participants=["agent:tester"], context_window=20000, out=lambda _s: None, fence=None)
     try:
@@ -369,7 +376,6 @@ def test_a_topic_record_is_never_served_as_a_memory(tmp_path: Path, monkeypatch)
     """Memory's seam (AbstractMemory aac9476 keeps community records off recall, probes, vectors and FTS; the
     runtime's own abstracts read is its to filter): with a REAL community record in the home, search_memory never
     lists it and read_memory never resolves its tag - while the topics tool lists it."""
-    import abstractmemory
     from abstractmemory.communities import communities_pass, community_records
 
     from abstractruntime.identity.authoring import capability_formation_author
@@ -391,16 +397,49 @@ def test_a_topic_record_is_never_served_as_a_memory(tmp_path: Path, monkeypatch)
         found = reader.search_memory("Waterworks of the valley")
         assert "[community" not in found and "Nothing in your memory graph" in found, found
         assert "No memory with tag" in reader.read_memory(f"#{memory_tag(topic.record_id)}")
-        # The topics tool lists it (memory's communities() read is still being built: served here from memory's
-        # own community records, in the payload v2 shape).
-        served = {"version": 2, "version_seq": receipt["version_seq"], "first_sleep_pending": False,
-                  "algorithm": "louvain-warm-v1", "links": [],
-                  "communities": [{"id": topic.record_id, "key": topic.key, "title": topic.title,
-                                   "summary": topic.digest, "pending": [], "verdict": None,
-                                   "size": len(topic.members), "kinds": {}, "provisional_ids": [],
-                                   "members": [{"id": m, "via": v["via"]} for m, v in topic.members.items()],
-                                   "cohesion": None, "layout": {}}]}
-        monkeypatch.setattr(abstractmemory, "communities", lambda system, **kw: served, raising=False)
+        # The topics tool lists it, through memory's real read.
         assert f"#{memory_tag(topic.key)} Waterworks of the valley" in reader.topics("")
+    finally:
+        home.close()
+
+
+def test_the_tool_end_to_end_on_memory_s_real_pass_and_read(tmp_path: Path) -> None:
+    """Memory's real pass forms the topics, its real read serves them, the tool shows them: every authored title in
+    the list, and a topic's #tag lists exactly the memories memory placed in it, each with its read_memory #tag."""
+    from abstractmemory.communities import communities_pass
+    from abstractmemory.community_index import communities
+
+    from abstractruntime.identity.authoring import capability_formation_author
+    from abstractruntime.identity.memory_reader import HomeMemoryReader, memory_tag
+
+    pytest.importorskip("numpy")
+
+    class _Numbered:
+        model_info = {"provider": "fake", "model": "summarizer"}
+        n = 0
+
+        def generate(self, *, prompt: str, system_prompt: str, response_model: Any) -> Any:
+            _Numbered.n += 1
+            return response_model(title=f"Topic number {_Numbered.n}", summary=f"What topic {_Numbered.n} holds.")
+
+    home = _home(tmp_path)
+    try:
+        cap = _Numbered()
+        receipt = communities_pass(home.ms, scopes=LADDER, owner_id=EID,
+                                   author=capability_formation_author(lambda _n: cap, home.artifacts),
+                                   cancelled=lambda: False)
+        assert receipt["version_seq"] is not None and receipt["authored"] == receipt["communities"] >= 1, receipt
+        served = communities(home.ms, scopes=LADDER, owner_id=EID)["communities"]
+        reader = HomeMemoryReader(home)
+        listing = reader.topics("")
+        for c in served:
+            assert f"#{memory_tag(c['key'])} {c['title']} ({c['size']} memories, newest " in listing, listing
+        biggest = served[0]
+        drill = reader.topics(f"#{memory_tag(biggest['key'])}")
+        shown = {ln.split()[1].lstrip("#") for ln in drill.splitlines() if ln.startswith("- #")}
+        expected = {memory_tag(m["id"]) for m in biggest["members"]} | {memory_tag(p) for p in biggest["provisional_ids"]}
+        assert shown == {t for t in expected if t in shown} and shown, (shown, expected)
+        assert len(shown) == min(len(expected), 20)
+        assert all(reader.tag_map[t] for t in shown)
     finally:
         home.close()

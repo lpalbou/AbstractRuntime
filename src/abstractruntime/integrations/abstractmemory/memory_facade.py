@@ -104,6 +104,14 @@ _REEXPORTS: Dict[str, str] = {
     "open_ideas": "abstractmemory",
     # The sleep cadence (gateway entity_idle_sleep.py: an idle entity's sleep thresholds, AbstractMemory 26503e3).
     "records_since_maintenance": "abstractmemory",
+    # Topics (COMMUNITIES-DESIGN 2026-11-10; AbstractMemory 3082695 / d550551): the night's pass and the embedding of
+    # vector-less records (the runtime's night stage, identity/topics.py, and a host's own sleep), and the reads a
+    # host serves (payload version 2). From their modules: memory exports none of them on its package root, where
+    # `abstractmemory.communities` is the module.
+    "communities_pass": "abstractmemory.communities",
+    "embed_missing": "abstractmemory.communities",
+    "communities": "abstractmemory.community_index",
+    "community_of": "abstractmemory.community_index",
     # The graph (AbstractMemory 0.4.0+, ADR 0003): typed provenance, revisions, the one write path.
     "SourceRef": "abstractmemory.graph",
     "Provenance": "abstractmemory.graph",

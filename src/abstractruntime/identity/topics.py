@@ -16,8 +16,9 @@ with its layout) and the verbs. This module holds no graph code; it is the runti
   night's authoring budget left (`budget`, in model calls). It is FENCED: `cancelled=fence.moved` on both verbs, and
   memory's commit guard refuses any write after the operator's Stop. A stopped night records nothing for its topics.
 - THE ENTITY'S TOOL, `topics_text` (the tier-1 `topics` tool, through `HomeMemoryReader.topics`): the list, one
-  topic's memories, the topic closest to some words. It reads the records memory serves (`communities`), never a cache
-  of its own; meaning ranks through the store's vector query (memory's VectorMatrix).
+  topic's memories, the topic closest to some words. It reads what memory serves (`community_index.communities`),
+  never a cache of its own: the list is that one read; a drill-down adds one read of his digests (the members' titles);
+  meaning ranks through the store's vector query (memory's VectorMatrix).
 - `entity_communities(ms, scopes=, owner_id=)`: THE read the tool makes, and the one a host's route can make.
 
 The memory verbs are imported by name where they are used. A memory without them is a loud `#MISSING_VERB` line and
@@ -195,13 +196,11 @@ def _receipt_line(r: Dict[str, Any]) -> str:
 
 
 def entity_communities(ms: Any, *, scopes: Sequence[Tuple[str, str]], owner_id: str) -> Dict[str, Any]:
-    """Memory's communities payload for one entity (the current version, with members placed since it), checked for
-    the version this runtime reads. Raises ImportError when memory has no `communities` verb, ValueError on another
-    payload version."""
-    from abstractmemory import communities
+    """Memory's communities payload for one entity (`abstractmemory.community_index.communities`: the current
+    version, with the members placed since it folded in, and each topic's `facts`), checked for the version this
+    runtime reads. Raises ImportError when memory has no such verb, ValueError on another payload version."""
+    from abstractmemory.community_index import communities
 
-    if not callable(communities):  # the package's `communities` MODULE, without the verb exported
-        raise ImportError("abstractmemory exports no communities() verb (the topics read needs it)")
     payload = communities(ms, scopes=list(scopes), owner_id=owner_id)
     if payload.get("version") != PAYLOAD_VERSION:
         raise ValueError(f"memory served communities payload version {payload.get('version')!r}; this runtime reads "
@@ -252,7 +251,8 @@ def topics_text(reader: Any, body: str) -> str:
 
 
 class _TopicsView:
-    """One call's view: the served topics, the digest of every memory they hold (one read of his ladder), tags."""
+    """One call's view: the served topics and their tags; the digest of every memory they hold is read (one read of
+    his ladder) only when an answer shows members."""
 
     def __init__(self, reader: Any, topics: List[Dict[str, Any]]) -> None:
         from .memory_reader import memory_tag
@@ -271,7 +271,13 @@ class _TopicsView:
             for pid in c["provisional_ids"]:
                 self.topic_of[str(pid)] = c
                 self.provisional.add(str(pid))
-        self.digests = {str(a.subject): a for a in reader.digest_assertions_all()}
+        self._digests: Optional[Dict[str, Any]] = None
+
+    @property
+    def digests(self) -> Dict[str, Any]:
+        if self._digests is None:
+            self._digests = {str(a.subject): a for a in self.reader.digest_assertions_all()}
+        return self._digests
 
     # -------------------------------------------------------------------------------------------- pieces
     def members(self, c: Dict[str, Any]) -> List[str]:
@@ -349,8 +355,7 @@ class _TopicsView:
         lines = [f"Your topics - your memories grouped by what they are about ({len(self.topics)} topics over "
                  f"{total} memories, grouped and titled while you sleep):"]
         for c in self.topics[:TOPICS_SHOWN]:
-            ids = self.members(c)
-            newest = str(self.digests[self.newest(ids)[0]].observed_at or "")[:10] if ids else "?"
+            newest = str(c["facts"]["span"]["last"] or "?")[:10]  # memory's facts: no digest read for the list
             title = self.title_of(c)
             size = "" if title.startswith("(untitled yet") else f" ({int(c['size'])} memories, newest {newest})"
             lines.append(f"- #{self.tag[str(c['key'])]} {title}{size} - {self.summary_of(c, 140)}")

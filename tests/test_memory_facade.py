@@ -18,6 +18,7 @@ Mutants this file kills (each checked by hand when it was written):
 from __future__ import annotations
 
 import importlib
+import inspect
 import json
 import os
 import subprocess
@@ -54,6 +55,7 @@ EXPECTED_GATEWAY_NAMES = (
     "dream_pass", "reembed_store", "read_embedding_pin", "DRIVE_PRESSURE_BOUND", "drive_pressure",
     "promote_candidate", "reject_candidate", "open_questions", "open_problems", "open_ideas",
     "records_since_maintenance",
+    "communities_pass", "embed_missing", "communities", "community_of",
     "SourceRef", "Provenance", "ProvenanceRequired", "InvalidSourceRef", "Revision", "RevisionOp", "RevisionResult",
     "MemoryGraph",
 )
@@ -92,6 +94,16 @@ def _run_slimmed_step(run_store: Any, ledger: Any) -> str:
 # -- the boundary and the re-exports --------------------------------------------------------------------------------
 
 
+def test_the_topic_verbs_are_memorys_functions_never_its_module() -> None:
+    """The gateway serves topics through these names (COMMUNITIES-DESIGN §3): each is memory's own function, never
+    the `abstractmemory.communities` module the package root holds under the same name."""
+    import abstractmemory.communities as passes
+    import abstractmemory.community_index as reads
+
+    assert mf.communities is reads.communities and mf.community_of is reads.community_of
+    assert mf.communities_pass is passes.communities_pass and mf.embed_missing is passes.embed_missing
+
+
 def test_facade_import_does_not_import_abstractmemory() -> None:
     script = f"""
 import importlib.abc, sys
@@ -120,8 +132,9 @@ def test_gateway_names_are_abstractmemorys_own_objects() -> None:
         ours = getattr(mf, name)
         module = importlib.import_module(mf._REEXPORTS[name])
         assert ours is getattr(module, name), name
-        if hasattr(abstractmemory, name):  # names on the package root are the root's objects too
-            assert ours is getattr(abstractmemory, name), name
+        root = getattr(abstractmemory, name, None)
+        if root is not None and not inspect.ismodule(root):  # names on the package root are the root's objects too
+            assert ours is root, name  # (`abstractmemory.communities` on the root is the module, not the verb)
         assert name in mf.__all__
     # The gateway imports these from submodules today; the facade carries the same objects.
     import abstractmemory.records as records

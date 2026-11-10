@@ -538,6 +538,34 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#the-at-a-glance-brief" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The at-a-glance brief
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="The at-a-glance brief">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#in-the-system-prompt" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        In the system prompt
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#the-topics-tool" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1205,6 +1233,34 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#the-at-a-glance-brief" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The at-a-glance brief
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="The at-a-glance brief">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#in-the-system-prompt" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        In the system prompt
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#the-topics-tool" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1280,7 +1336,8 @@ and the grouping forms again at every sleep. They let the entity see what it kno
 one part of its memory.</p>
 <p>AbstractMemory owns the topics: it forms the <code>community</code> records (detection over the memory graph, stable keys across
 versions, authored titles, layout) and serves them. AbstractRuntime holds no community code. It runs the forming
-during the entity's sleep, gives the entity a tool to read its topics, and exposes memory's topic verbs to hosts.</p>
+during the entity's sleep, writes the entity's at-a-glance brief of its topics into its system prompt, gives the
+entity a tool to read its topics, and exposes memory's topic verbs to hosts.</p>
 <p>Related pages: <a href="../entity-runtime/">Entity runtime</a> (homes, the cognition profile, the idle-sleep thresholds) and
 <a href="../integrations/abstractmemory/">AbstractMemory integration</a> (the memory facade hosts import).</p>
 <h2 id="when-topics-form-the-nights-topics-stage">When topics form: the night's topics stage<a class="headerlink" href="#when-topics-form-the-nights-topics-stage" title="Permanent link">&para;</a></h2>
@@ -1293,7 +1350,8 @@ after the metadata repair and before the night voice:</p>
         D1["embed_missing:&lt;br/&gt;vector-less records"] --&gt; D2["communities_pass:&lt;br/&gt;one version, one transaction"]
     end
     C --&gt; D1
-    D2 --&gt; E["night voice"]
+    D2 --&gt; F["self brief:&lt;br/&gt;identity/self_brief.sleep_self_brief"]
+    F --&gt; E["night voice"]
 </code></pre></div>
 <ul>
 <li><strong>Every sleep runs it</strong>, unless the night already ended before it: a visitor at the door, a wake, a pause or the
@@ -1360,6 +1418,98 @@ per sleep and the receipt <code>{"missing_verb": ...}</code>. The rest of the ni
 </code></pre></div>
 <p><code>sleep_communities</code> never raises: a pass that raises, or a receipt the runtime cannot read, is one <code>#FALLBACK</code> line
 and a receipt carrying <code>error</code>.</p>
+<h2 id="the-at-a-glance-brief">The at-a-glance brief<a class="headerlink" href="#the-at-a-glance-brief" title="Permanent link">&para;</a></h2>
+<p>An entity cannot search for what it does not know it has. So at the end of every topics stage, the night writes a
+short <strong>self-knowledge brief</strong>: the entity's topics and its main trails of thought, at a glance. Every lane places it
+in the entity's system prompt. The entity then knows what its memory holds before it looks anything up, and goes
+deeper with <code>topics</code>, <code>search_memory</code> and <code>read_memory</code>.</p>
+<p>What the night does (<code>identity/self_brief.sleep_self_brief</code>, right after <code>sleep_communities</code>):</p>
+<ul>
+<li><strong>One author call.</strong> The night reads the topics as memory serves them (the same read as the <code>topics</code> tool) and
+  makes one call to the summaries capability. The body holds each topic's title, summary, size, newest memory and
+  recalls of the last 7 days, largest first. It holds the trails of thought: memory's <code>facts.paths</code>, two memories of
+  one topic recalled together, most often first, written <code>A → B (n times)</code> from the older memory to the newer. It
+  ends with what tonight's pass changed: new, dissolved and retitled topics, memories moved, the topics that grew
+  most. The briefing names the entity, as for every authored record.</li>
+<li><strong>A bounded reply.</strong> The brief is plain text: one line per topic, one <code>Trails of thought:</code> line, one
+  <code>Since the last sleep:</code> line. The prompt asks for 170 words at most. The hard cap is 400 tokens
+  (<code>SELF_BRIEF_MAX_TOKENS</code>) by the runtime's budget estimator (<code>digest.token_estimate</code>, memory's 4 characters per
+  token). A longer reply is refused, never cut. A castor-like home with 11 topics fits in about 350 tokens.</li>
+<li><strong>Unchanged topics, unchanged brief.</strong> A sleep whose topics did not change (memory wrote no new version) keeps the
+  brief written for the current version: no model call, no change to the prompt.</li>
+<li><strong>A failure keeps the previous brief.</strong> No summaries model, an unreachable or failing endpoint, a reply without a
+  brief or over the cap: the previous brief stays, one authoring-failure line is written (<code>kind</code> <code>self_brief</code>,
+  <code>template_id</code> <code>runtime.self_brief</code>, the refused reply as <code>raw_block</code>), and the night logs one line.</li>
+<li><strong>It is fenced.</strong> No model call starts after the operator's Stop, a reply that returns after it is abandoned, and
+  the file is written inside the home's write barrier with the fence checked there. A Stop writes nothing.</li>
+<li>A home with no topics yet gets no brief.</li>
+</ul>
+<p>The brief lives in <code>&lt;home&gt;/self_brief.md</code>, next to the home's <code>state</code> and <code>phases.yaml</code>, under a header:</p>
+<div class="highlight"><pre><span></span><code>---
+version_seq: 105702
+written_at: '2026-11-10T03:12:41+00:00'
+tokens: 348
+---
+Tending the twelve continuity bridges: the routines, scripts, checklists and audits Castor built to keep them alive.
+Open questions about continuity and presence: what persists across invocations, fidelity to values, meaning with no reader.
+...
+Trails of thought: Assessing cognitive continuity after a six-week gap → Receiving the context of my origin from Mnemosyne's creator (15 times); ...
+Since the last sleep: one topic retitled, 24 memories moved, the continuity questions grew by 8.
+</code></pre></div>
+<p>It is a projection of the topics, not a memory: it never enters the memory graph, so recall, search and the topics
+never serve it.</p>
+<table>
+<thead>
+<tr>
+<th>Where</th>
+<th>What</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>the night's result, <code>self_brief</code></td>
+<td><code>{written: true, version_seq, tokens, topics, trails}</code>, <code>{kept, version_seq}</code>, <code>{failed: &lt;reason&gt;, error, kept_previous}</code>, <code>{stopped}</code> or <code>{skipped}</code></td>
+</tr>
+<tr>
+<td><code>own_time.log</code></td>
+<td><code>(self brief: written - 348 tokens over 11 topics and 8 trails of thought)</code>, <code>(self brief: kept - the topics did not change since it was written)</code>, or <code>(self brief: not rewritten - &lt;reason&gt; (&lt;error&gt;); the previous brief stays)</code></td>
+</tr>
+<tr>
+<td>the authoring-failures file</td>
+<td>one line per failed brief</td>
+</tr>
+</tbody>
+</table>
+<h3 id="in-the-system-prompt">In the system prompt<a class="headerlink" href="#in-the-system-prompt" title="Permanent link">&para;</a></h3>
+<p><code>compose_system_base(..., self_brief=)</code> places the brief as a fixed section right after the identity block:</p>
+<div class="highlight"><pre><span></span><code>&lt;identity_prelude entity="..." spark="1" as_of_seq="..."&gt;
+...
+&lt;/identity_prelude&gt;
+
+What I know about, at a glance (updated in my sleep):
+&lt;the brief&gt;
+
+The block above is your identity. You are in a live conversation.
+...
+</code></pre></div>
+<ul>
+<li>Every lane reads it once, when it summons (<code>self_brief_for_prompt</code>): <code>ChatSession</code> (hosted chat, and own time and
+  work through the life factory's re-compose) and the durable visit's OPEN node, whose head lives in the run state.</li>
+<li>A home without a brief gets no section and no placeholder. An unreadable file gives one <code>#FALLBACK</code> warning and no
+  section.</li>
+<li>Why there: a provider's prompt cache reuses the longest common prefix of consecutive requests. The system base is
+  the same bytes on every turn of a session, and what changes per turn (presence, MEMORIES, feelings) comes after
+  it. Inside the base, the brief stays in the cached prefix on every turn. It changes only when a sleep rewrites it,
+  so the prefix is invalidated at most once per sleep, at the first summon after it.</li>
+<li>The <code>topics</code> tool's teaching points at it: "Your at-a-glance brief lists your topics; use topics to dig in."</li>
+</ul>
+<p>A host that composes the head itself passes the brief the same way:</p>
+<div class="highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">abstractruntime.identity.chat</span><span class="w"> </span><span class="kn">import</span> <span class="n">compose_system_base</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">abstractruntime.identity.self_brief</span><span class="w"> </span><span class="kn">import</span> <span class="n">self_brief_for_prompt</span>
+
+<span class="n">head</span> <span class="o">=</span> <span class="n">compose_system_base</span><span class="p">(</span><span class="n">prelude_text</span><span class="p">,</span> <span class="n">phase</span><span class="o">=</span><span class="s2">"visit"</span><span class="p">,</span> <span class="n">overlay</span><span class="o">=</span><span class="n">overlay</span><span class="p">,</span>
+                           <span class="n">self_brief</span><span class="o">=</span><span class="n">self_brief_for_prompt</span><span class="p">(</span><span class="n">home_dir</span><span class="p">,</span> <span class="n">warn</span><span class="o">=</span><span class="nb">print</span><span class="p">))</span>
+</code></pre></div>
 <h2 id="the-topics-tool">The <code>topics</code> tool<a class="headerlink" href="#the-topics-tool" title="Permanent link">&para;</a></h2>
 <p><code>topics</code> is a tier-1 tool: read-only, granted by default in visit, work and personal time (the sleep phase's
 read-only default list does not include it), taught in the tools paragraph of the entity's prompt, and declared
@@ -1460,8 +1610,9 @@ notice <code>#FALLBACK topics elected but no resolver wired</code>.</p>
 <code>CommunitiesRetired</code>, an <code>ImportError</code> naming <code>memory_facade.communities</code> as what to serve instead. Serve memory's
 payload version 2: it has authored titles and summaries in place of the keyword <code>label</code> and <code>keywords</code> fields.</p>
 <h2 id="tests">Tests<a class="headerlink" href="#tests" title="Permanent link">&para;</a></h2>
-<p><code>tests/test_topics_night_stage.py</code> (the stage, on memory's real pass), <code>tests/test_topics_tool.py</code> (the tool, on
-memory's real read), <code>tests/test_memory_facade.py</code> (the facade names), <code>tests/test_memory_communities.py</code> (the
+<p><code>tests/test_topics_night_stage.py</code> (the stage, on memory's real pass), <code>tests/test_self_brief.py</code> (the brief: the
+night's call, the cap, a kept brief, failures, the Stop, the prefix in every lane), <code>tests/test_topics_tool.py</code> (the
+tool, on memory's real read), <code>tests/test_memory_facade.py</code> (the facade names), <code>tests/test_memory_communities.py</code> (the
 retired module fails loudly).</p>
 
 

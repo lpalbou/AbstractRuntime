@@ -2,7 +2,7 @@
 
 > Package: AbstractRuntime (identity/life.py own-time loop; prompt composition for the tick), AbstractCore (endpoint context size, if it can be read)
 > Type: bug
-> Status: proposed
+> Status: proposed (TO PROMOTE to planned at the next runtime backlog sweep: the operator confirmed it 2026-11-10; the move is a git mv this seat may not run)
 > Created: 2026-11-10
 > Priority: P2
 > Labels: entities, own-time, context, honest-failure
@@ -14,6 +14,10 @@
 three failed ticks"). The operator pressed Retry twice; each retry failed the same way, because nothing changes between
 retries: the prompt is the same size and the endpoint's context is the same. The loop treated a deterministic refusal
 as a transient failure.
+
+Operator, 2026-11-10 18:45: "the problem was on me, I increased the context size. but indeed, it would have been nice to
+have a more informative message so I understand the issue." For the next runtime cut after 0.19.2. Until then the card
+shows the provider's own error sentence (runtime 0.19.2 loop note: "Stopped after three failed ticks: <reason>").
 
 ## Scope
 

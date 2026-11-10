@@ -589,6 +589,17 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
+  <a href="#on-recalled-memories" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        On recalled memories
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#migration-from-abstractruntimeidentitycommunities" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1284,6 +1295,17 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
+  <a href="#on-recalled-memories" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        On recalled memories
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#migration-from-abstractruntimeidentitycommunities" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1595,6 +1617,10 @@ notice <code>#FALLBACK topics elected but no resolver wired</code>.</p>
 <td>the topic one record is in now (<code>community_key</code>, <code>provisional</code>, <code>via</code>)</td>
 </tr>
 <tr>
+<td><code>community_keys_of(system, record_ids, *, scopes, owner_id)</code></td>
+<td><code>{record_id: topic key or None}</code> for many records in one call, from memory's in-process community index (AbstractMemory 0.5.1): the read for naming the topic of records a host already holds</td>
+</tr>
+<tr>
 <td><code>communities_pass(...)</code>, <code>embed_missing(...)</code></td>
 <td>the night's verbs, for a host that runs its own sleep (prefer <code>sleep_communities</code> above)</td>
 </tr>
@@ -1605,6 +1631,11 @@ notice <code>#FALLBACK topics elected but no resolver wired</code>.</p>
 <span class="n">eid</span> <span class="o">=</span> <span class="n">home</span><span class="o">.</span><span class="n">entity_id</span>
 <span class="n">payload</span> <span class="o">=</span> <span class="n">memory_facade</span><span class="o">.</span><span class="n">communities</span><span class="p">(</span><span class="n">home</span><span class="o">.</span><span class="n">ms</span><span class="p">,</span> <span class="n">scopes</span><span class="o">=</span><span class="p">[(</span><span class="s2">"self"</span><span class="p">,</span> <span class="n">eid</span><span class="p">),</span> <span class="p">(</span><span class="s2">"diary"</span><span class="p">,</span> <span class="n">eid</span><span class="p">),</span> <span class="p">(</span><span class="s2">"life"</span><span class="p">,</span> <span class="n">eid</span><span class="p">)],</span> <span class="n">owner_id</span><span class="o">=</span><span class="n">eid</span><span class="p">)</span>
 </code></pre></div>
+<h3 id="on-recalled-memories">On recalled memories<a class="headerlink" href="#on-recalled-memories" title="Permanent link">&para;</a></h3>
+<p>Every memory a visit recalls carries <code>topic</code> in the recall's ledger record: the key of the topic it is in now, or
+null. One membership read per recall (<code>community_keys_of</code>), never the communities payload and never one read per
+memory; see
+<a href="../entity-runtime/#what-a-visit-turns-ledger-records-say">What a visit turn's ledger records say</a>.</p>
 <h3 id="migration-from-abstractruntimeidentitycommunities">Migration from <code>abstractruntime.identity.communities</code><a class="headerlink" href="#migration-from-abstractruntimeidentitycommunities" title="Permanent link">&para;</a></h3>
 <p>The runtime no longer computes communities or keyword labels. <code>memory_communities(store)</code> raises
 <code>CommunitiesRetired</code>, an <code>ImportError</code> naming <code>memory_facade.communities</code> as what to serve instead. Serve memory's

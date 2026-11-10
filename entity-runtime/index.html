@@ -577,6 +577,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#what-a-visit-turns-ledger-records-say" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What a visit turn's ledger records say
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#cognition-profile-identitycognition_profilepy" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1309,6 +1320,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#what-a-visit-turns-ledger-records-say" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What a visit turn's ledger records say
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#cognition-profile-identitycognition_profilepy" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1499,6 +1521,64 @@ deadline (no reaper daemons):</p>
 <li>The ledger wait record carries <code>wait_key</code>, <code>until</code>, and <code>details</code>
   together, so clients can render a chat composer for visit waits and the
   deadline without new transport.</li>
+</ul>
+<h2 id="what-a-visit-turns-ledger-records-say">What a visit turn's ledger records say<a class="headerlink" href="#what-a-visit-turns-ledger-records-say" title="Permanent link">&para;</a></h2>
+<p>A host can show what the entity is doing during a turn by reading the visit run's ledger (AbstractGateway serves it
+at <code>GET /entities/{name}/visit/{run_id}/ledger</code>; the Entity app's live activity panel reads it). Three fields exist
+for that view. Each is additive: a reader that does not find one shows what it showed before.</p>
+<table>
+<thead>
+<tr>
+<th>Record</th>
+<th>Field</th>
+<th>Type</th>
+<th>What it says</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>memory_recall</code> step (node <code>RECALL</code>, and the recall of a live correction): <code>result.handles[]</code></td>
+<td><code>topic</code></td>
+<td>string or null</td>
+<td>The stable key of the topic (memory community, <a href="../entity-topics/">Entity topics</a>) the recalled memory is in now; null when it is in none (not placed yet, or before the first sleep with topics)</td>
+</tr>
+<tr>
+<td><code>llm_call</code> step of node <code>reason</code>: <code>effect.payload</code></td>
+<td><code>iteration</code></td>
+<td>int</td>
+<td>This model call's place in the turn's reasoning loop, from 1</td>
+</tr>
+<tr>
+<td><code>llm_call</code> step of node <code>reason</code>: <code>effect.payload</code></td>
+<td><code>max_iterations</code></td>
+<td>int</td>
+<td>The turn's cap on that loop (<code>_limits.max_iterations</code>; 50 unless the door sets another)</td>
+</tr>
+<tr>
+<td>a <code>search_memory</code> tool result</td>
+<td><code>hits</code></td>
+<td>int</td>
+<td>How many memories and book entries the search matched (the count its text gives); absent for every other tool</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li><strong>Topics cost one membership read per recall.</strong> The visit's recalls ask for them (<code>with_topics: true</code> in the
+  <code>MEMORY_RECALL</code> payload); the seam handler makes one <code>community_keys_of</code> call (AbstractMemory 0.5.1, through the
+  memory facade) with the handles' graph ids (<code>provenance.record_id</code>), and memory answers each id from its in-process
+  community index. It does not grow with the home: about 50 µs for 44 handles at 2,000 and at 20,000 records on a
+  synthetic home (54 topics); the first call in a process loads memory's index once (28 ms and 39 ms there). The stamp
+  never reads the communities payload (memory computes every topic's facts with it: 19 ms and 190 ms on the same
+  homes) and never calls <code>community_of</code> per handle. A lookup that fails leaves the recall whole, without <code>topic</code>, and
+  a <code>#FALLBACK recall topics unavailable</code> line in its <code>warnings</code>.</li>
+<li><strong>The loop position is metadata.</strong> <code>iteration</code> and <code>max_iterations</code> are payload keys no handler sends to a
+  provider: the prompt is unchanged. They are read from the runtime's <code>_limits</code> (<code>current_iteration</code>, which the
+  reasoning loop sets when it plans the call, and <code>max_iterations</code>) and written on both the step's started and
+  terminal records.</li>
+<li><strong><code>hits</code> comes from the tool executor.</strong> <code>HomeMemoryReader.search_memory</code> answers a <code>SearchMemoryText</code> (a <code>str</code>
+  with <code>hits</code>), and <code>execute_tool_elections</code> copies the count onto <code>ToolElection.hits</code>. The <code>ENTITY_TOOLS_EXECUTE</code>
+  result entries carry it. A host that builds its own tool result entries (the gateway's visit <code>TOOL_CALLS</code>
+  executor) copies <code>election.hits</code> the same way it copies <code>election.artifact_id</code>.</li>
 </ul>
 <h2 id="cognition-profile-identitycognition_profilepy">Cognition profile (<code>identity/cognition_profile.py</code>)<a class="headerlink" href="#cognition-profile-identitycognition_profilepy" title="Permanent link">&para;</a></h2>
 <p>The mind (<code>substrate.yaml</code>) is what the entity talks with. The cognition

@@ -1208,8 +1208,9 @@
 </ul>
 <p>A name or capability a host needs and cannot reach here is a runtime defect: it is added here in a patch release; a
 host never imports <code>abstractmemory</code> to work around it.</p>
-<p>Requires AbstractMemory 0.5.0 or newer (<code>abstractmemory.graph</code>; for entity homes, the task queue, the commit guard and
-write barrier the Stop fence holds, authored titles and summaries, and the community records behind topics). AbstractMemory is imported lazily everywhere:
+<p>Requires AbstractMemory 0.5.1 or newer (<code>abstractmemory.graph</code>; for entity homes, the task queue, the commit guard and
+write barrier the Stop fence holds, authored titles and summaries, the community records behind topics, and the
+membership-only <code>community_keys_of</code> read behind the recall's topic stamp). AbstractMemory is imported lazily everywhere:
 <code>import abstractruntime</code> and <code>import abstractruntime.integrations.abstractmemory.memory_facade</code> never import it.</p>
 <h2 id="the-ledger-row-address">The ledger row address<a class="headerlink" href="#the-ledger-row-address" title="Permanent link">&para;</a></h2>
 <p>Every memory the runtime writes can name the ledger row it came from. A row is addressed by <code>(run_id, seq)</code>:</p>
@@ -1359,7 +1360,7 @@ carries that <code>runtime_id</code>; the handler builders take <code>runtime_id
 <p>Re-exported AbstractMemory names (<code>facade.X</code> is AbstractMemory's own object from the module that defines it, resolved
 on first use): <code>memory_facade.GATEWAY_NAMES</code> (budgets, replay stream, spark templates, stores and journal, queries,
 night passes, embeddings pin, drives, disposal, diary reads <code>open_questions</code> / <code>open_problems</code> / <code>open_ideas</code>, the sleep
-cadence <code>records_since_maintenance</code>, the topic verbs <code>communities</code> / <code>community_of</code> (from
+cadence <code>records_since_maintenance</code>, the topic verbs <code>communities</code> / <code>community_of</code> / <code>community_keys_of</code> (from
 <code>abstractmemory.community_index</code>) and <code>communities_pass</code> / <code>embed_missing</code> (from <code>abstractmemory.communities</code>; see
 <a href="../../entity-topics/">Entity topics</a>), and the graph names <code>SourceRef</code>, <code>Provenance</code>, <code>ProvenanceRequired</code>,
 <code>InvalidSourceRef</code>, <code>Revision</code>, <code>RevisionOp</code>, <code>RevisionResult</code>, <code>MemoryGraph</code>).</p>

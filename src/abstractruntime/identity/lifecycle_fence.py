@@ -306,13 +306,48 @@ class LifecycleFence:
 Fence = Union[LifecycleFence, _Sentinel]
 
 
+# ------------------------------------------------------------------------- the operation's own admission (Codex 4 #5)
+# An operation keeps the admission it STARTED under, whatever the home's holder says later: the fenced handler table
+# pushes the effect's admission here for the effect's duration, a ChatSession pushes its own fence for each of its
+# entry points, and the holder's checks (the memory commit guard, the diary and artifact guards, the authoring
+# callbacks) resolve to it. Per thread, per home; a nested effect (a child run inside START_SUBWORKFLOW) inherits it.
+_ADMITTED = threading.local()
+
+# A host may stamp the generation a RUN was admitted at into its vars (an int): every effect of that run is then
+# checked against it, so a run admitted before a Stop never acts after a Resume readmitted the runtime.
+RUN_GENERATION_VAR = "_lifecycle_generation"
+
+
+@contextmanager
+def admitted(fence: LifecycleFence) -> Iterator[LifecycleFence]:
+    """Act under `fence` (an operation's immutable admission) on this thread until the block ends."""
+    by_key = getattr(_ADMITTED, "by_key", None)
+    if by_key is None:
+        by_key = _ADMITTED.by_key = {}
+    stack = by_key.setdefault(fence._key, [])
+    stack.append(fence)
+    try:
+        yield fence
+    finally:
+        stack.pop()
+
+
+def _operation_admission(key: str) -> Optional[LifecycleFence]:
+    by_key = getattr(_ADMITTED, "by_key", None)
+    stack = by_key.get(key) if by_key else None
+    return stack[-1] if stack else None
+
+
 class FenceHolder:
     """THE FENCE A LONG-LIVED OPENED HOME ACTS UNDER (Fable F3, 2026-11-09): one object its handler table, memory
     commit guard, diary and artifact guards read at every check, so a host that keeps the home open (the gateway's
     cached EntityRuntime per slug) re-admits it after Resume with `readmit(fence)` instead of reopening it. The swap
     happens inside the home state lock and refuses a fence that is not the home's current admission (a fence decided
-    before a Stop is never readmitted). Readmit only once no run of the old generation is still acting (the Stop
-    cancels them): a run's effects are checked against the holder's fence, whatever generation the run began at."""
+    before a Stop is never readmitted).
+
+    The swap serves NEW admissions only (Codex review 4 #5): every check resolves first to the admission of the
+    operation running on this thread (`admitted`: an effect keeps the fence it started under, a session its own), so
+    a write still in flight from before the Stop stays refused after a readmission."""
 
     __slots__ = ("fence",)
 
@@ -321,11 +356,15 @@ class FenceHolder:
             raise TypeError(f"a FenceHolder holds a LifecycleFence, not {fence!r}")
         self.fence = fence
 
+    def current(self) -> LifecycleFence:
+        """The admission a check made now is judged against: the running operation's, else the home's newest."""
+        return _operation_admission(self.fence._key) or self.fence
+
     def moved(self) -> bool:
-        return self.fence.moved()
+        return self.current().moved()
 
     def check(self, where: str) -> None:
-        self.fence.check(where)
+        self.current().check(where)
 
     def readmit(self, fence: LifecycleFence) -> None:
         from .life import home_state_lock
@@ -404,13 +443,22 @@ def _fence_handler(etype: Any, inner: Callable[..., Any], fence: "FenceHolder") 
     after = f"after {name} returned"
 
     def fenced(run: Any, effect: Any, default_next_node: Any = None) -> Any:
-        if fence.moved():
+        # THE EFFECT'S ADMISSION, fixed for its whole duration (Codex review 4 #5): the enclosing operation's, else
+        # the generation its run was admitted at (RUN_GENERATION_VAR, when the host stamped it), else the home's
+        # newest. A readmission during the effect never re-authorizes it.
+        admission = _operation_admission(fence.fence._key)
+        if admission is None:
+            stamped = (getattr(run, "vars", None) or {}).get(RUN_GENERATION_VAR) if run is not None else None
+            admission = LifecycleFence(fence.fence.home_dir, int(stamped)) if isinstance(stamped, int) \
+                else fence.fence
+        if admission.moved():
             return stopped_outcome(name, before)
-        try:
-            out = inner(run, effect, default_next_node) if three else inner(run, effect)
-        except TurnCancelled as e:
-            return stopped_outcome(name, str(getattr(e, "where", "") or after))
-        if fence.moved():
+        with admitted(admission):
+            try:
+                out = inner(run, effect, default_next_node) if three else inner(run, effect)
+            except TurnCancelled as e:
+                return stopped_outcome(name, str(getattr(e, "where", "") or after))
+        if admission.moved():
             return stopped_outcome(name, after)
         return out
 
@@ -423,6 +471,8 @@ __all__ = [
     "KILL_SWITCH",
     "KILL_SWITCH_REASON",
     "LIFECYCLE_SIGNAL_FILENAME",
+    "RUN_GENERATION_VAR",
+    "admitted",
     "RESUME",
     "Fence",
     "FenceHolder",

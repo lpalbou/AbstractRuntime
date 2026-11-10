@@ -1191,6 +1191,25 @@ class TurnReport:
     marked_reply: str = ""
 
 
+
+def _under_admission(method: Callable[..., Any]) -> Callable[..., Any]:
+    """A ChatSession entry point acts under the session's own fence (Codex review 4 #5): the home's guards (memory,
+    diary, artifacts) judge its writes against the admission the session was created with, never a newer one a
+    host readmitted meanwhile."""
+    import functools
+
+    @functools.wraps(method)
+    def wrapper(self: Any, *args: Any, **kwargs: Any) -> Any:
+        fence = getattr(self, "fence", None)
+        if fence is None:
+            return method(self, *args, **kwargs)
+        from .lifecycle_fence import admitted
+
+        with admitted(fence):
+            return method(self, *args, **kwargs)
+
+    return wrapper
+
 class ChatSession:
     """One summon: prelude once, then honest turns until /quit."""
 
@@ -2164,6 +2183,7 @@ class ChatSession:
             )
         raise StoppedByOperator(where, report=report)
 
+    @_under_admission
     def turn(self, user_text: str, *, speaker_label: Optional[str] = None) -> Tuple[str, TurnReport]:
         self.turn_n += 1
         turn_id = f"t-{self.turn_n:04d}"
@@ -3010,6 +3030,7 @@ class ChatSession:
         return reply, report
 
     # -------------------------------------------------------- open greeting
+    @_under_admission
     def open_greeting(self) -> Tuple[str, TurnReport]:
         """HE starts the conversation (maintainer's ruling): the visit
         announcement — who came, the time of day, the machine — is the
@@ -3091,6 +3112,7 @@ class ChatSession:
             return False
         return False
 
+    @_under_admission
     def run_pending_lookback(self) -> Optional[Dict[str, Any]]:
         """If a PREVIOUS session died unreflected, run its look-back now.
 
@@ -3191,6 +3213,7 @@ class ChatSession:
         return result
 
     # -------------------------------------------------------------- reflect
+    @_under_admission
     def reflect(self) -> Optional[Dict[str, Any]]:
         """Session-end reflection (v1.1): one look-back turn where the entity
         may mark feelings on this session's records (MEMORY_APPRAISE, routine
@@ -3244,6 +3267,7 @@ class ChatSession:
             result["authoring"] = receipt
         return result
 
+    @_under_admission
     def drain_authoring(self, *, window: str = "turn", cap: Optional[int] = None) -> Dict[str, Any]:
         """Run the title.author / digest.author drainer over this home (identity/authoring.py). Never raises."""
         from .authoring import drain_authoring
@@ -3384,6 +3408,7 @@ class ChatSession:
                 self.out(f"#FALLBACK card authoring for {target} refused: {e}")
         return authored
 
+    @_under_admission
     def tick_lookback(self) -> Optional[Dict[str, Any]]:
         """The look-back at the end of ONE personal-time tick (operator
         2026-11-08: "at every tick in personal time, the same thing should

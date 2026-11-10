@@ -1771,3 +1771,134 @@ def test_a_handler_author_never_calls_its_handler_after_stop(tmp_path: Path) -> 
         assert len(calls) == 1
     finally:
         home.close()
+
+
+def _one_effect_workflow(workflow_id: str, effect_type: Any, payload: Dict[str, Any]) -> Any:
+    from abstractruntime.core.models import Effect, StepPlan
+    from abstractruntime.core.spec import WorkflowSpec
+
+    return WorkflowSpec(workflow_id=workflow_id, entry_node="a", nodes={
+        "a": lambda r, c: StepPlan(node_id="a", effect=Effect(type=effect_type, payload=dict(payload),
+                                                                result_key="out"), next_node="b"),
+        "b": lambda r, c: StepPlan(node_id="b", complete_output={"out": r.vars.get("out")}),
+    })
+
+
+def test_a_cached_runtime_authors_public_diary_entries_again_after_resume(tmp_path: Path) -> None:
+    """Codex review 4 #4 (P1): open_entity_runtime's diary authoring closed over the fence it was OPENED with, so
+    after Stop -> Resume -> readmit a new turn carrying a public diary entry hit the old fence and was cancelled. It
+    checks the operation's current admission now."""
+    from abstractruntime.core.models import EffectType
+    from abstractruntime.core.runtime import EffectOutcome
+    from abstractruntime.identity.entity_runtime import open_entity_runtime
+
+    home_dir = _make_home(tmp_path)
+    summaries_calls: List[Any] = []
+
+    def mind(run, effect, default_next_node=None):
+        return EffectOutcome.completed({"content": "Here.\n```diary kind=note\ngist: a note\nMy words.\n```"})
+
+    def summaries(run, effect, default_next_node=None):
+        summaries_calls.append(effect)
+        return EffectOutcome.completed({"content": json.dumps({"title": "An authored title",
+                                                               "summary": "An authored summary."})})
+
+    ert = open_entity_runtime(home_dir, extra_handlers={EffectType.LLM_CALL: mind},
+                              capability_handlers={"summaries": summaries}, fence=LifecycleFence.admit(home_dir))
+
+    def turn(tid: str) -> str:
+        wf = _one_effect_workflow(f"turn-{tid}", EffectType.LLM_CALL, {"prompt": "hi", "turn_id": tid})
+        return ert.runtime.tick(workflow=wf, run_id=ert.runtime.start(workflow=wf, vars={})).status.value
+
+    try:
+        assert turn("t-1") == "completed" and len(summaries_calls) == 1
+        _stop_here(home_dir)
+        write_entity_state(home_dir, "awake", reason="resumed [by test]", fence=RESUME)
+        ert.readmit(LifecycleFence.admit(home_dir))
+        assert turn("t-2") == "completed", "a public diary entry after Resume was cancelled by the stale fence"
+        assert len(summaries_calls) == 2
+    finally:
+        ert.home.close()
+
+
+def test_readmission_never_reauthorizes_a_write_still_in_flight(tmp_path: Path) -> None:
+    """Codex review 4 #5 (P1): readmit swapped the one fence every guard read, so a memory write of an effect admitted
+    BEFORE the Stop - suspended inside its handler - passed its commit guard at the new generation once Resume had
+    readmitted the runtime. An effect keeps the admission it started under; readmission serves only new work."""
+    from abstractmemory import MemoryRecordInput  # noqa: F401 - the handler forms real records
+
+    from abstractruntime.core.models import EffectType
+    from abstractruntime.identity.entity_runtime import open_entity_runtime
+
+    home_dir = _make_home(tmp_path)
+    ert = open_entity_runtime(home_dir, fence=LifecycleFence.admit(home_dir))
+    entered, release = threading.Event(), threading.Event()
+    real_remember = ert.home.ms.remember_many
+    held = {"first": True}
+
+    def suspended_remember(*a, **k):
+        if held["first"]:
+            held["first"] = False
+            entered.set()
+            assert release.wait(30)  # the old write waits here, before it commits
+        return real_remember(*a, **k)
+
+    ert.home.ms.remember_many = suspended_remember  # type: ignore[method-assign]
+
+    def form(tid: str) -> Any:
+        return _one_effect_workflow(f"form-{tid}", EffectType.MEMORY_FORM, {
+            "records": [{"kind": "lesson", "title": f"Lesson {tid}", "digest": f"A lesson formed by {tid}."}],
+            "scope": "life", "owner_id": ert.home.entity_id, "turn_id": tid})
+
+    box: Dict[str, Any] = {}
+    old_wf = form("old")
+    old_run = ert.runtime.start(workflow=old_wf, vars={})
+    worker = threading.Thread(target=lambda: box.update(state=ert.runtime.tick(workflow=old_wf, run_id=old_run)))
+    try:
+        worker.start()
+        assert entered.wait(30)
+        _stop_here(home_dir)
+        write_entity_state(home_dir, "awake", reason="resumed [by test]", fence=RESUME)
+        ert.readmit(LifecycleFence.admit(home_dir))  # Resume: new work is admitted again
+        before = _snapshot(home_dir)["memory.sqlite3"]
+        release.set()  # the old write resumes AFTER the readmission
+        worker.join(30)
+        assert not worker.is_alive()
+        assert box["state"].status.value == "cancelled", box["state"].status
+        assert _snapshot(home_dir)["memory.sqlite3"] == before, "the old write landed after the Stop"
+        new_wf = form("new")
+        new_state = ert.runtime.tick(workflow=new_wf, run_id=ert.runtime.start(workflow=new_wf, vars={}))
+        assert new_state.status.value == "completed", (new_state.status, new_state.error)
+        assert _snapshot(home_dir)["memory.sqlite3"] != before, "new work after Resume formed nothing"
+    finally:
+        release.set()
+        ert.home.close()
+
+
+def test_a_run_stamped_with_its_admission_never_acts_after_a_readmission(tmp_path: Path) -> None:
+    """Codex review 4 #5, the run's half: a host that stamps the generation a run was admitted at
+    (`lifecycle_fence.RUN_GENERATION_VAR` in its vars) keeps that run's effects judged against it - a run parked
+    before a Stop is refused after Resume readmitted the runtime, while a fresh run acts."""
+    from abstractruntime.core.models import EffectType
+    from abstractruntime.core.runtime import EffectOutcome
+    from abstractruntime.identity.entity_runtime import open_entity_runtime
+
+    home_dir = _make_home(tmp_path)
+    calls: List[Any] = []
+
+    def mind(run, effect, default_next_node=None):
+        calls.append(effect)
+        return EffectOutcome.completed({"content": "here"})
+
+    ert = open_entity_runtime(home_dir, extra_handlers={EffectType.LLM_CALL: mind}, fence=LifecycleFence.admit(home_dir))
+    try:
+        wf = _one_effect_workflow("stamped", EffectType.LLM_CALL, {"prompt": "hi"})
+        old_run = ert.runtime.start(workflow=wf, vars={lf.RUN_GENERATION_VAR: 0})  # admitted at 0, not yet ticked
+        _stop_here(home_dir)
+        write_entity_state(home_dir, "awake", reason="resumed [by test]", fence=RESUME)
+        ert.readmit(LifecycleFence.admit(home_dir))
+        assert ert.runtime.tick(workflow=wf, run_id=old_run).status.value == "cancelled" and calls == []
+        new_run = ert.runtime.start(workflow=wf, vars={lf.RUN_GENERATION_VAR: 1})
+        assert ert.runtime.tick(workflow=wf, run_id=new_run).status.value == "completed" and len(calls) == 1
+    finally:
+        ert.home.close()

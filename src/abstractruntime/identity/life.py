@@ -5177,13 +5177,15 @@ def build_consolidator(
     THE OPERATOR'S STOP (Codex review 3 #2; STOP-LANE-DESIGN §2.2, class H): `fence` is the loop's. A moved
     generation ends the night at the engine's next stage (`should_continue`), stops the completion marker
     (`sleep_pass(cancelled=fence.moved)`: a stopped night records no completed maintenance), the repair step's
-    authoring (`should_stop`), the topics step (`cancelled=fence.moved`: no version, no note) and the night voice;
-    nothing is logged after it but one line.
+    authoring (`should_stop`), the topics step (`cancelled=fence.moved`: no version, no note), the self brief (checked
+    before and after its one model call and inside its write: nothing written) and the night voice; nothing is logged
+    after it but one line.
 
     THE NIGHT'S ORDER: memory's `sleep_pass` (resolution, consolidation, world models, mining, identity, dream) -> its
     authoring-failure lines -> METADATA REPAIR (`_sleep_authoring`) -> TOPICS (`topics.sleep_communities`: embed what
-    has no vector, then memory's `communities_pass`; its receipt rides the result as `communities`) -> the night
-    voice."""
+    has no vector, then memory's `communities_pass`; its receipt rides the result as `communities`) -> THE SELF BRIEF
+    (`self_brief.sleep_self_brief`: the entity's topics and trails at a glance, for its system prefix; its receipt
+    rides the result as `self_brief`) -> the night voice."""
     def _night_should_continue() -> bool:
         # The night keeps its window while the entity still SLEEPS by its
         # own election and nobody pulled the manual brake. Any other state
@@ -5324,11 +5326,22 @@ def build_consolidator(
                                   maintenance_kind=completed, out=out)
                 if _night_should_continue() else {"skipped": "the night ended before the topics step"}
             )
+            # THE SELF-KNOWLEDGE BRIEF, at the end of the topics stage (operator 2026-11-10: "we have to help the
+            # entities know what it knows, at least at a very high level"; identity/self_brief.py): one call of the
+            # summaries author over tonight's topics and trails of thought, kept as <home>/self_brief.md (never a
+            # memory) and placed in every lane's system prefix; a failure keeps the previous brief. Fenced.
+            from .self_brief import sleep_self_brief
+
+            self_brief = (
+                sleep_self_brief(home, entity_id=eid, scopes=scopes, receipt=communities,
+                                 llm_for_capability=llm_for_capability, fence=fence, out=out)
+                if _night_should_continue() else {"skipped": "the night ended before the brief"}
+            )
             if fence.moved():
-                # THE OPERATOR'S STOP during the repair or the topics step: the night ends here, as above.
+                # THE OPERATOR'S STOP during the repair, the topics step or the brief: the night ends here, as above.
                 out("(the operator's Stop - the night ends here; nothing more is written)")
                 dream_seen = engine.get("dream") or {}
-                return {"authoring": authoring, "communities": communities,
+                return {"authoring": authoring, "communities": communities, "self_brief": self_brief,
                         "formed": bool(dream_seen.get("created")), "dream_record_id": dream_seen.get("dream_record_id"),
                         "maintenance_candidates": 0, "signals": [], "narration": None, "engine": engine,
                         "stopped_by": "kill_switch"}
@@ -5374,6 +5387,7 @@ def build_consolidator(
             return {
                 "authoring": authoring,
                 "communities": communities,
+                "self_brief": self_brief,
                 "formed": bool(dream.get("created")),
                 "dream_record_id": dream.get("dream_record_id"),
                 "maintenance_candidates": int(maintenance.get("created_count") or 0),
@@ -5689,6 +5703,8 @@ def build_session_factory(
             # The memory-teaching layer rides the re-compose too (ChatSession
             # read it at construction; the re-compose must not drop it).
             capability_map=getattr(session, "capability_map", ""),
+            # So does the self-knowledge brief (read once at construction).
+            self_brief=session.self_brief,
         )
         # The capability clients (the summaries model authors titles and summaries; identity/authoring.py).
         session.llm_for_capability = llm_for_capability

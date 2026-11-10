@@ -234,9 +234,13 @@ def test_the_topics_stage_runs_after_the_repair_embeds_first_and_before_the_nigh
     assert receipt["version_seq"] is not None and receipt["communities"] >= 1, receipt
     assert receipt["authored"] >= 1 and cap.calls.count("community") == receipt["authored"], (receipt, cap.calls)
     assert len(_read(home_dir)["communities"]) == receipt["communities"]
-    # The night's author briefs every call - the topics' and the repair's - with the entity's name and the title style.
-    assert cap.systems and all("Liveling is the entity whose memories these are" in sp
-                               and "Write the title in sentence case" in sp for sp in cap.systems), cap.systems
+    # The night's author briefs every call - the topics' and the repair's - with the entity's name and the title style;
+    # the self brief's one call (its own briefing, test_self_brief) names the entity too.
+    records = [sp for sp in cap.systems if "at-a-glance brief" not in sp]
+    assert len(records) == len(cap.systems) - 1, cap.systems
+    assert records and all("Liveling is the entity whose memories these are" in sp
+                           and "Write the title in sentence case" in sp for sp in records), cap.systems
+    assert all("Liveling is the entity whose memories these are" in sp for sp in cap.systems)
 
 
 def test_the_topics_receipt_its_line_and_the_maintenance_note(tmp_path: Path, monkeypatch) -> None:

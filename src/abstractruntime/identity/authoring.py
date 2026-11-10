@@ -37,6 +37,7 @@ __all__ = [
     "authoring_llm_call_payload",
     "authoring_system_prompt",
     "entity_name_of",
+    "entity_naming_clause",
     "parse_authored_result",
     "author_metadata",
     "authoring_failure_fields",
@@ -84,16 +85,23 @@ _SYSTEM = (
 TITLE_STYLE = "Write the title in sentence case, with no trailing period and no quotes."
 
 
-def authoring_system_prompt(entity_name: str) -> str:
-    """The summaries author's briefing (every authored record: an episode, a summary, a diary entry, a dream, a card, a
-    topic, a birth record): the task, WHOSE memories these are and how to refer to the entity (by its name, in the
-    third person: the second night's summaries said "the agent" / "the assistant" / "the speaker"), and the title
-    style. `entity_name` is the entity's name as its home holds it (`ChatHome.name`); an empty one raises."""
+def entity_naming_clause(entity_name: str) -> str:
+    """WHOSE memories these are and how to refer to the entity: by its name, in the third person (the second night's
+    summaries said "the agent" / "the assistant" / "the speaker"). Shared by every briefing of the summaries author
+    (`authoring_system_prompt`, the self brief's `self_brief.self_brief_system_prompt`). `entity_name` is the
+    entity's name as its home holds it (`ChatHome.name`); an empty one raises."""
     name = " ".join(str(entity_name or "").split())
     if not name:
         raise ValueError("the authoring briefing needs the entity's name (ChatHome.name)")
-    return (f"{_SYSTEM} {name} is the entity whose memories these are: refer to {name} by name, never as "
-            f"\"the agent\", \"the assistant\" or \"the speaker\", and write in the third person. {TITLE_STYLE}")
+    return (f"{name} is the entity whose memories these are: refer to {name} by name, never as "
+            f"\"the agent\", \"the assistant\" or \"the speaker\", and write in the third person.")
+
+
+def authoring_system_prompt(entity_name: str) -> str:
+    """The summaries author's briefing (every authored record: an episode, a summary, a diary entry, a dream, a card, a
+    topic, a birth record): the task, the entity's naming clause (`entity_naming_clause`) and the title style.
+    `entity_name` is the entity's name as its home holds it (`ChatHome.name`); an empty one raises."""
+    return f"{_SYSTEM} {entity_naming_clause(entity_name)} {TITLE_STYLE}"
 
 
 def entity_name_of(home_dir: Any, entity_id: str) -> str:

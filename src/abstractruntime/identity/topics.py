@@ -19,7 +19,8 @@ with its layout) and the verbs. This module holds no graph code; it is the runti
   topic's memories, the topic closest to some words. It reads what memory serves (`community_index.communities`),
   never a cache of its own: the list is that one read; a drill-down adds one read of his digests (the members' titles);
   meaning ranks through the store's vector query (memory's VectorMatrix).
-- `entity_communities(ms, scopes=, owner_id=)`: THE read the tool makes, and the one a host's route can make.
+- `entity_communities(ms, scopes=, owner_id=)`: THE read the tool makes, and the one a host's route can make (and
+  the one the night's self-knowledge brief makes, identity/self_brief.py, right after this stage).
 
 The memory verbs are imported by name where they are used. A memory without them is a loud `#MISSING_VERB` line and
 a receipt that says so at night, and a failed tool call (its `#FALLBACK` notice) by day - never a second

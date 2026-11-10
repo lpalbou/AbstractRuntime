@@ -480,6 +480,7 @@ def compose_system_base(
     enable_tools: bool = True,
     own_time_text: Optional[str] = None,
     capability_map: Optional[str] = None,
+    self_brief: Optional[str] = None,
 ) -> str:
     """ONE composition authority for the entity system base (head layers).
 
@@ -507,12 +508,37 @@ def compose_system_base(
     tools block (it references granted tools) and before the phase text +
     operator block, so operator-last holds.
 
+    `self_brief` (operator 2026-11-10, identity/self_brief.py): the entity's
+    SELF-KNOWLEDGE BRIEF - its topics and trails of thought at a glance,
+    written in its sleep - so it knows what its memory holds before it
+    searches it. The section (SELF_BRIEF_HEADING, then the text) lands RIGHT
+    AFTER the identity block. THE CACHE REASONING: a provider's prompt cache
+    (the KV prefix) reuses the longest common prefix of consecutive
+    requests. This base is composed once per session (snapshot-at-summon,
+    like the overlay and the grant: every lane reads the brief with
+    self_brief.self_brief_for_prompt when it summons) and stays byte-
+    identical for every turn of it; what changes per turn (presence,
+    MEMORIES, recall, feelings) is appended AFTER it. Inside the base the
+    brief is therefore inside the reused prefix on every turn; after the
+    per-turn regions it would be re-read every turn; at the end of the base
+    it would break operator-last. The brief itself changes only when a
+    sleep rewrites it (a sleep whose topics did not change keeps it), so
+    the prefix invalidates at most once per sleep, at the first summon
+    after it - the cost the operator accepted. No brief (None, or empty) =
+    no section, no placeholder.
+
     Used by ChatSession, the durable visit workflow, the life factory's
     resident re-compose, and the gateway's prompt-preview endpoint — a
     second hand-rolled composition is the drift class the diary_type clamp
     already taught us.
     """
-    base = prelude_text + "\n\n" + (overlay.get("conversation") or CONTRACT_PARAGRAPH)
+    from .self_brief import self_brief_section
+
+    base = prelude_text
+    brief = self_brief_section(self_brief)
+    if brief:
+        base += "\n\n" + brief
+    base += "\n\n" + (overlay.get("conversation") or CONTRACT_PARAGRAPH)
     if phase == "visit":
         base += "\n\n" + (overlay.get("visit") or VISIT_OWN_TIME_PARAGRAPH)
     if enable_tools and allowed_tools:
@@ -1404,6 +1430,11 @@ class ChatSession:
         # like the overlay: skill authors it, gateway manages it, every
         # host presents it.
         self.capability_map = read_capability_map(home.home_dir)
+        # The self-knowledge brief (identity/self_brief.py), read at summon like the capability map: it sits in the
+        # base, so every turn of this session shares it in the provider's cached prefix.
+        from .self_brief import self_brief_for_prompt
+
+        self.self_brief = self_brief_for_prompt(home.home_dir, warn=self.out)
         self.system_base = compose_system_base(
             prelude["text"],
             phase=self.phase,
@@ -1412,6 +1443,7 @@ class ChatSession:
             workspace_enabled=self.workspace is not None,
             enable_tools=self.enable_tools,
             capability_map=self.capability_map,
+            self_brief=self.self_brief,
         )
         # THE DECLARE HALF of the native tool channel (agent's arm-N
         # measurement, 2026-07-11: tools DECLARED in the payload = 5/5

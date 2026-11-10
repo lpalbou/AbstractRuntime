@@ -145,7 +145,9 @@ each topic with a title and a summary written while you slept (the groups
 form again at every sleep). Leave the body empty for the list; write a
 topic's #tag to see its memories, or words to find the topic closest to
 them. Start here when you wonder what you know about something - or what
-you know at all - then go deeper with read_memory.
+you know at all - then go deeper with read_memory. Your at-a-glance brief
+("What I know about, at a glance", written in your sleep) lists your topics
+and trails of thought; use topics to dig in.
 recent_memories is the other direction of reach: not by words but by TIME -
 your trail through the last stretch (leave the body empty for 2 days, or
 name a window like 12h, 3d, week). When you wonder "where did I leave my
@@ -1593,7 +1595,8 @@ TOOL_DESCRIPTORS: Dict[str, ToolDescriptor] = {
             name="topics", tier="tier1", mutating=False,
             description=(
                 "What you know, organized: your memories grouped by subject, each topic titled and summarised "
-                "while you slept. Empty = the list; a topic's #tag = its memories; words = the closest topic."
+                "while you slept. Your at-a-glance brief lists your topics; use topics to dig in. Empty = the "
+                "list; a topic's #tag = its memories; words = the closest topic."
             ),
             properties={"topic": {"type": "string",
                                   "description": "empty for the list, a topic's #tag, or words about a subject"}},

@@ -482,12 +482,17 @@ def build_visit_workflow(
             # the react middle, not the head text (Phase 0 lane).
             overlay = read_prompt_overlay(home.home_dir)
             from .chat import read_capability_map
+            from .self_brief import self_brief_for_prompt
 
+            # The self-knowledge brief (identity/self_brief.py) enters the head here, once: the head lives in the
+            # run state, so every turn and every resume of the visit shares it in the cached prefix.
+            brief_warnings: List[str] = []
             visit["system_base"] = compose_system_base(
                 prelude["text"], phase="visit", overlay=overlay,
                 capability_map=read_capability_map(home.home_dir),
+                self_brief=self_brief_for_prompt(home.home_dir, warn=brief_warnings.append),
             )
-            visit["prelude_warnings"] = list(prelude.get("warnings", []))
+            visit["prelude_warnings"] = list(prelude.get("warnings", [])) + brief_warnings
             note = overlay_note(overlay)
             if note:
                 visit["prelude_warnings"].append(note)

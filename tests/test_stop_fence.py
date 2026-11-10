@@ -1677,3 +1677,97 @@ def test_the_loop_heartbeat_takes_no_parse_and_no_subprocess(tmp_path: Path, cap
     with capsys.disabled():
         print(f"\n[loop heartbeat] {elapsed / 1000:.1f} us per beat (lock + stat + one fsynced status write; two "
               f"per model call)")
+
+
+# ------------------------------------------------------------------ Codex review 4 (2026-11-10)
+
+
+class _CountingModel:
+    """A summaries model that counts every call - the authoring paths must not call it after a Stop."""
+
+    model_info = {"provider": "fake", "model": "summarizer"}
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def generate(self, *, prompt: str, system_prompt: str, response_model: Any) -> Any:
+        self.calls += 1
+        return response_model(title="An authored title", summary="An authored summary.")
+
+
+@pytest.mark.parametrize("path", ["chat_formation", "chat_diary", "drainer", "memory_author"])
+def test_a_stop_during_capability_resolution_calls_no_model(tmp_path: Path, path: str) -> None:
+    """Codex review 4 #3 (P1): every authoring path resolved its capability client and called it without another
+    check - a Stop landing while the client was being resolved (or anything between the outer check and the call)
+    still sent the model a call. Each path checks immediately before the model call (and after it) now."""
+    from abstractruntime.core.models import EffectType
+    from abstractruntime.identity import authoring
+
+    home_dir = _make_home(tmp_path)
+    model = _CountingModel()
+
+    def resolve(name: str) -> Any:
+        _stop_here(home_dir)  # the operator's Stop while the capability client is being resolved
+        return model
+
+    home, fence = _fenced_home(home_dir)
+    try:
+        if path in ("chat_formation", "chat_diary"):
+            s = life.ChatSession(home, _HookLLM([]), participants=["person:x"], context_window=20000,
+                                 out=lambda _s: None, fence=fence)
+            s.llm_for_capability = resolve
+            if path == "chat_formation":
+                payload = {"records": [{"kind": "lesson", "title": None, "pending": ["title"],
+                                        "_authoring": {"body": "b", "raw_block": "b", "template_id": "t"},
+                                        "digest": "d"}], "scope": "life", "owner_id": home.entity_id, "turn_id": "t"}
+                with pytest.raises(StoppedByOperator):
+                    s._effect(EffectType.MEMORY_FORM, payload)
+            else:
+                with pytest.raises(StoppedByOperator):
+                    s._effect(EffectType.DIARY_WRITE, {"text": "My words.", "kind": "note", "visibility": "self",
+                                                       "turn_id": "t"})
+        elif path == "drainer":
+            s = life.ChatSession(home, _HookLLM(["Back.\n```interest\nwhy rivers bend\n```\n"]),
+                                 participants=["person:x"], context_window=20000, out=lambda _s: None, fence=fence)
+            s.llm_for_capability = None  # the turn forms its record pending: the drainer has work
+            s.turn("hi")
+            try:
+                authoring.drain_authoring(home.ms, llm_for_capability=resolve, artifacts=home.artifacts,
+                                          home_dir=home_dir, entity=home.entity_id, holder="test", cap=3,
+                                          window="turn", should_stop=fence.moved)
+            except StoppedByOperator:
+                pass
+        else:
+            author = authoring.capability_formation_author(resolve, home.artifacts, should_stop=fence.moved)
+            with pytest.raises(StoppedByOperator):
+                author("dream", "Noon tied the pool and the garden.", {"pass": "dream_pass"})
+    finally:
+        home.close()
+    assert model.calls == 0, f"{path}: the model was called after the Stop"
+
+
+def test_a_handler_author_never_calls_its_handler_after_stop(tmp_path: Path) -> None:
+    """The durable lane's formation author (MEMORY_CONSOLIDATE's summaries handler): no handler call after a Stop,
+    and a reply that returned after one is abandoned."""
+    from abstractruntime.core.runtime import EffectOutcome
+    from abstractruntime.identity import authoring
+
+    home_dir = _make_home(tmp_path)
+    home, fence = _fenced_home(home_dir)
+    calls: List[Any] = []
+
+    def summaries(run, effect, default_next_node=None):
+        calls.append(effect)
+        _stop_here(home_dir)  # the Stop while the summaries model answers
+        return EffectOutcome.completed({"content": json.dumps({"title": "T", "summary": "S"})})
+
+    try:
+        author = authoring.handler_formation_author(summaries, home.artifacts, should_stop=fence.moved)
+        with pytest.raises(StoppedByOperator):
+            author("dream", "words", {"pass": "dream_pass"})  # the late reply is abandoned
+        assert len(calls) == 1
+        with pytest.raises(StoppedByOperator):
+            author("dream", "words", {"pass": "dream_pass"})  # after the Stop: never called
+        assert len(calls) == 1
+    finally:
+        home.close()

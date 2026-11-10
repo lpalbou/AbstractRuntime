@@ -427,7 +427,13 @@ def drain_authoring(
                 try:
                     llm = llm_for_capability(AUTHORING_CAPABILITY)
                 except Exception as e:  # noqa: BLE001 - no model resolves / builds: the task waits
+                    from .chat import TurnCancelled
+
+                    if isinstance(e, TurnCancelled):
+                        raise  # the operator's Stop while the client was resolved: never a deferral
                     raise AuthoringUnavailable(f"{type(e).__name__}: {e}") from e
+            if _cancelled(claimed[n:]):  # immediately before the model call (Codex review 4 #3)
+                break
             authored = author_metadata(llm, kind=kind, body=body)
             if _cancelled(claimed[n:]):  # the model answered after Stop: nothing is written
                 break
@@ -718,11 +724,15 @@ def _formation_result(authored: Dict[str, Any], fields: Sequence[str], reader: D
 
 
 def capability_formation_author(llm_for_capability: Optional[Callable[[str], Any]], artifacts: Any,
-                                seen: Optional[Dict[str, Any]] = None) -> Callable[[str, str, Any], Dict[str, Any]]:
+                                seen: Optional[Dict[str, Any]] = None, *,
+                                should_stop: Callable[[], bool]) -> Callable[[str, str, Any], Dict[str, Any]]:
     """Memory's `author` from the summaries capability client (the loop's sleep, a session's card updates): one
     structured call per record, the call kept as a home artifact (its `sources`); raises on any failure, which memory
     records as `author_raised` with the class and message. `seen` (optional) gets the client's reader, so the host's
-    failure lines can name the model."""
+    failure lines can name the model. `should_stop` (REQUIRED, the admission's fence: Codex review 4 #3) is checked
+    immediately before each model call and after it returns - the operator's Stop raises StoppedByOperator, never a
+    call."""
+    from .lifecycle_fence import StoppedByOperator
 
     def author(kind: str, body: str, context: Any) -> Dict[str, Any]:
         fields = list((context or {}).get("fields") or ("title", "summary"))
@@ -732,6 +742,8 @@ def capability_formation_author(llm_for_capability: Optional[Callable[[str], Any
         reader = _reader_of(llm)
         if seen is not None:
             seen["reader"] = reader
+        if should_stop():
+            raise StoppedByOperator("before the authoring model was called")
         try:
             authored = author_metadata(llm, kind=str(kind), body=str(body or ""))
         except (AuthoringFailed, AuthoringUnavailable) as e:
@@ -740,6 +752,8 @@ def capability_formation_author(llm_for_capability: Optional[Callable[[str], Any
             if e.__cause__ is not None:
                 raise e.__cause__ from None
             raise
+        if should_stop():
+            raise StoppedByOperator("after the authoring model answered (the reply is abandoned)")
         record = f"{(context or {}).get('pass') or 'memory'}:{(context or {}).get('record_kind') or kind}"
         sources = _source_artifact(artifacts, record_id=record, kind=str(kind), body=str(body or ""),
                                    authored=authored, reader=reader)
@@ -748,17 +762,24 @@ def capability_formation_author(llm_for_capability: Optional[Callable[[str], Any
     return author
 
 
-def handler_formation_author(handler: Any, artifacts: Any, *, run: Any = None) -> Callable[[str, str, Any], Dict[str, Any]]:
+def handler_formation_author(handler: Any, artifacts: Any, *, run: Any = None,
+                             should_stop: Callable[[], bool]) -> Callable[[str, str, Any], Dict[str, Any]]:
     """Memory's `author` from a host's capability LLM_CALL handler (the durable lanes: open_entity_runtime's
     `capability_handlers["summaries"]`): the authoring payload goes to the handler directly, its result is read as
     the formation step reads one (`parse_authored_result`, the capability echo stamped), the call kept as an
-    artifact; raises on any failure."""
+    artifact; raises on any failure. `should_stop` (REQUIRED: Codex review 4 #3) is checked immediately before the
+    handler is called and after it returns."""
     from ..core.models import Effect, EffectType
+    from .lifecycle_fence import StoppedByOperator
 
     def author(kind: str, body: str, context: Any) -> Dict[str, Any]:
         fields = list((context or {}).get("fields") or ("title", "summary"))
+        if should_stop():
+            raise StoppedByOperator("before the authoring model was called")
         out = handler(run, Effect(type=EffectType.LLM_CALL, payload=authoring_llm_call_payload(str(kind), str(body or ""))),
                       None)
+        if should_stop():
+            raise StoppedByOperator("after the authoring model answered (the reply is abandoned)")
         if getattr(out, "status", None) != "completed" or not isinstance(getattr(out, "result", None), dict):
             raise AuthoringUnavailable(str(getattr(out, "error", "") or "the authoring call failed"))
         result = {**out.result, AUTHORING_CAPABILITY_KEY: AUTHORING_CAPABILITY}

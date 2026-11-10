@@ -686,7 +686,7 @@ def test_the_runtime_author_satisfies_memorys_formation_contract_for_every_pass_
 
     home = open_home(_workspace_home(tmp_path), fence=None)
     try:
-        author = capability_formation_author(lambda name: _Capability(), home.artifacts)
+        author = capability_formation_author(lambda name: _Capability(), home.artifacts, should_stop=lambda: False)
         got = author_formation(author, kind=kind, body="what the pass composed",
                                context={"pass": f"{kind}_pass", "record_kind": kind}, fields=["title", "summary"])
     finally:

@@ -206,7 +206,7 @@ def open_entity_runtime(
 
         handlers.update(build_entity_brain_effect_handlers(
             memory_system=home.ms, entity_id=home.entity_id, home_dir=Path(home_dir),
-            author=handler_formation_author(summaries_handler, home.artifacts),
+            author=handler_formation_author(summaries_handler, home.artifacts, should_stop=home.lifecycle.moved),
         ))
     if extra_handlers:
         collisions = sorted(

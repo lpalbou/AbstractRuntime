@@ -2004,3 +2004,33 @@ def test_a_corrupted_phases_file_reads_moved_at_the_next_check(tmp_path: Path) -
     with pytest.raises(LifecycleUnreadable):
         read_lifecycle_generation(home_dir)
     assert fence.moved() and LifecycleFence(home_dir, 0).moved(), "the failed read left the cached truth standing"
+
+
+def test_a_consolidator_given_an_embedder_uses_that_object(tmp_path: Path, monkeypatch) -> None:
+    """The host's own resolved embedder (the gateway's AbstractCore client, possibly in its model-host child) reaches
+    the night unchanged: build_consolidator(embedder=) hands it to open_home and never builds an OpenAICompat
+    embedder from a URL (without it the night's repair refused every vectored record: embedder_unavailable)."""
+    import abstractmemory
+
+    import abstractruntime.identity.chat as chat_mod
+    from abstractruntime.identity.life import build_consolidator
+
+    home_dir = _make_home(tmp_path)
+    write_entity_state(home_dir, "asleep", reason="self-elected sleep: full", mode="dreaming", written_by="self",
+                       fence=LifecycleFence.admit(home_dir))
+    host_embedder = object()
+    seen: Dict[str, Any] = {}
+    monkeypatch.setattr(abstractmemory, "OpenAICompatTextEmbedder",
+                        lambda *a, **k: (_ for _ in ()).throw(AssertionError("built an embedder from a URL")))
+    real_open = chat_mod.open_home
+
+    def recording_open(h, **kw):
+        seen["embedder"] = kw.get("embedder")
+        kw["embedder"] = None  # the stand-in object is no real embedder: the home opens vectorless here
+        return real_open(h, **kw)
+
+    monkeypatch.setattr(chat_mod, "open_home", recording_open)
+    monkeypatch.setattr(abstractmemory, "sleep_pass", lambda *a, **k: {"maintenance": {}, "dream": {}})
+    build_consolidator(home_dir, embedding_model="text-embedding-x", embedder=host_embedder, out=lambda s: None,
+                       fence=LifecycleFence.admit(home_dir))()
+    assert seen["embedder"] is host_embedder

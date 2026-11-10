@@ -5065,6 +5065,9 @@ def build_consolidator(
     llm_for_capability: Optional[Callable[[str], Any]] = None,
     authoring_cap: int = 64,
     fence: LifecycleFence,
+    # The HOST's own resolved embedder (the gateway's AbstractCore client, possibly in its model-host child): handed
+    # to open_home unchanged; when given, nothing is built from embedding_model / embedding_base_url.
+    embedder: Any = None,
 ) -> Callable[[], Optional[Dict[str, Any]]]:
     """The sleep-window pass (maintainer rulings 2026-07-08/09: sleep is
     where the graph is worked on — tending first, then the dream).
@@ -5127,16 +5130,16 @@ def build_consolidator(
     ) -> Optional[Dict[str, Any]]:
         from .chat import open_home
 
-        embedder = None
-        if embedding_model and embedding_model.lower() not in ("", "none", "off"):
+        night_embedder = embedder  # the host's own client, when it gave one: used as it is
+        if night_embedder is None and embedding_model and embedding_model.lower() not in ("", "none", "off"):
             try:
                 from abstractmemory import OpenAICompatTextEmbedder
 
-                embedder = OpenAICompatTextEmbedder(base_url=embedding_base_url, model=embedding_model)
+                night_embedder = OpenAICompatTextEmbedder(base_url=embedding_base_url, model=embedding_model)
             except Exception as e:  # noqa: BLE001
                 out(f"#FALLBACK dream embeddings unavailable ({e}); vectorless bridges only")
 
-        home = open_home(home_dir, embedder=embedder, fence=fence)
+        home = open_home(home_dir, embedder=night_embedder, fence=fence)
         try:
             eid = home.entity_id
             scopes = [("self", eid), ("diary", eid), ("life", eid)]

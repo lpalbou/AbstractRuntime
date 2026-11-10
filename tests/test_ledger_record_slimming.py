@@ -503,7 +503,7 @@ def test_entity_runtime_writes_through_offloading(tmp_path) -> None:
     (home_dir / "manifest.json").write_text(json.dumps({"entity_id": "entity:castor@home-test"}), encoding="utf-8")
     store = SQLiteTripleStore(home_dir / "memory.sqlite3")
     journal = SQLiteJournal(home_dir / "memory.sqlite3")
-    engram(MemorySystem(store=store, journal=journal), spark, owner_id="entity:castor@home-test")
+    engram(MemorySystem(store=store, journal=journal, task_queue=True), spark, owner_id="entity:castor@home-test")
     store.close()
     journal.close()
 

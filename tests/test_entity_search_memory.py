@@ -55,7 +55,7 @@ def _make_home(tmp_path: Path) -> Path:
     db = home_dir / "memory.sqlite3"
     store = SQLiteTripleStore(db)
     journal = SQLiteJournal(db)
-    ms = MemorySystem(store=store, journal=journal)
+    ms = MemorySystem(store=store, journal=journal, task_queue=True)
     assert engram(ms, spark, owner_id=entity_id).created is True
     store.close()
     journal.close()

@@ -28,6 +28,16 @@ from abstractruntime.identity.life import (  # noqa: E402
 )
 
 
+def _birth_author(kind: str, body: str, context: Any) -> Dict[str, Any]:
+    """The test homes' birth author (AbstractMemory 82178c9 engram(author=); production passes the summaries
+    capability at entity creation): an unnamed spark item's TITLE, authored before it forms - its statement stays the
+    operator's words - so a test home starts with nothing pending, as a created entity does."""
+    return {"title": " ".join(str(body).split()[:6]).rstrip(".;,:") or str(kind),
+            "author": {"kind": "capability-model", "id": "summaries"},
+            "reader": {"provider": "test", "model": "birth-author", "thinking": None},
+            "sources": [{"kind": "artifact", "artifact_id": "test-birth-authoring"}]}
+
+
 def _make_home(tmp_path: Path) -> Path:
     import copy
 
@@ -52,7 +62,7 @@ def _make_home(tmp_path: Path) -> Path:
     store = SQLiteTripleStore(db)
     journal = SQLiteJournal(db)
     ms = MemorySystem(store=store, journal=journal, task_queue=True)
-    assert engram(ms, spark, owner_id=entity_id).created is True
+    assert engram(ms, spark, owner_id=entity_id, author=_birth_author).created is True
     # ONE standing drive (dm#89 day gate): a zero-drive desk RESTS
     # (settled_desk), so day-running tests seed a real open question —
     # the graph plane drive_pressure reads (diary projection).
@@ -1638,7 +1648,7 @@ def _make_home_no_drives(tmp_path: Path) -> Path:
     store = SQLiteTripleStore(db)
     journal = SQLiteJournal(db)
     ms = MemorySystem(store=store, journal=journal, task_queue=True)
-    assert engram(ms, spark, owner_id=entity_id).created is True
+    assert engram(ms, spark, owner_id=entity_id, author=_birth_author).created is True
     store.close()
     journal.close()
     _arm_personal(home_dir)

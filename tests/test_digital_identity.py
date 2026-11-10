@@ -620,7 +620,7 @@ def _engrammed_home(home_dir: Path, entity_id: str = "entity:castor@home-test") 
     (home_dir / "manifest.json").write_text(json.dumps({"entity_id": entity_id}), encoding="utf-8")
     store = SQLiteTripleStore(home_dir / "memory.sqlite3")
     journal = SQLiteJournal(home_dir / "memory.sqlite3")
-    ms = MemorySystem(store=store, journal=journal)
+    ms = MemorySystem(store=store, journal=journal, task_queue=True)
     assert engram(ms, spark, owner_id=entity_id).created is True
     store.close()
     journal.close()

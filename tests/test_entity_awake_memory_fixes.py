@@ -236,7 +236,7 @@ def test_bridge_sets_suppress_loop_tail(tmp_path) -> None:
     (home_dir / "manifest.json").write_text(json.dumps({"entity_id": "entity:testee@home-test"}), encoding="utf-8")
     store = SQLiteTripleStore(home_dir / "memory.sqlite3")
     journal = SQLiteJournal(home_dir / "memory.sqlite3")
-    engram(MemorySystem(store=store, journal=journal), spark, owner_id="entity:testee@home-test")
+    engram(MemorySystem(store=store, journal=journal, task_queue=True), spark, owner_id="entity:testee@home-test")
     store.close()
     journal.close()
 
@@ -817,7 +817,7 @@ def test_salvaged_lookback_stamps_the_ended_sessions_phase(tmp_path) -> None:
     db = home_dir / "memory.sqlite3"
     store = SQLiteTripleStore(db)
     journal = SQLiteJournal(db)
-    ms = MemorySystem(store=store, journal=journal)
+    ms = MemorySystem(store=store, journal=journal, task_queue=True)
     assert engram(ms, spark, owner_id=entity_id).created is True
     store.close()
     journal.close()
@@ -942,7 +942,7 @@ def test_standing_state_rotates_daily_and_offers_an_interest(tmp_path) -> None:
     mdb = home / "memory.sqlite3"
     store = SQLiteTripleStore(mdb)
     journal = SQLiteJournal(mdb)
-    ms = MemorySystem(store=store, journal=journal)
+    ms = MemorySystem(store=store, journal=journal, task_queue=True)
     assert engram(ms, spark, owner_id=eid).created is True
     # One standing interest in the graph.
     ms.remember_many(
@@ -1029,7 +1029,7 @@ def test_diary_read_renders_the_birth_trail() -> None:
     db = home_dir / "memory.sqlite3"
     store = SQLiteTripleStore(db)
     journal = SQLiteJournal(db)
-    ms = MemorySystem(store=store, journal=journal)
+    ms = MemorySystem(store=store, journal=journal, task_queue=True)
     assert engram(ms, spark, owner_id=entity_id).created is True
     store.close()
     journal.close()
@@ -1106,7 +1106,7 @@ def test_speak_now_guard_is_silent_in_personal_phase() -> None:
     db = home_dir / "memory.sqlite3"
     store = SQLiteTripleStore(db)
     journal = SQLiteJournal(db)
-    ms = MemorySystem(store=store, journal=journal)
+    ms = MemorySystem(store=store, journal=journal, task_queue=True)
     assert engram(ms, spark, owner_id=entity_id).created is True
     store.close()
     journal.close()

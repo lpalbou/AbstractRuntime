@@ -212,12 +212,14 @@ def test_the_sleep_repairs_birth_labelled_identity_records(tmp_path: Path) -> No
     home = open_home(home_dir, fence=None)
     try:
         eid = home.entity_id
+        seeded = []
         for key, digest, attrs in (
                 ("t0", "Ask before assuming; verify before asserting.", {"precedence": 0, "spark_version": 1}),
                 ("l0", "Report failures and degradations as they happened.", {"precedence": 0, "spark_version": 1,
                                                                              "trait_class": "limit"})):
-            home.ms.remember_many([MemoryRecordInput(kind="trait", title="trait-0", digest=digest, attributes=attrs)],
-                                  scope="self", owner_id=eid, idempotency_key=f"legacy-birth-{key}")
+            seeded += home.ms.remember_many([MemoryRecordInput(kind="trait", title="trait-0", digest=digest,
+                                                               attributes=attrs)],
+                                            scope="self", owner_id=eid, idempotency_key=f"legacy-birth-{key}")
         receipt = declare_missing_metadata(home.ms, scopes=[("self", eid)])
         assert receipt["declared"] >= 2 and receipt["refused"] == 0, receipt
         drained = drain_authoring(home.ms, llm_for_capability=lambda name: _Capability(), artifacts=home.artifacts,
@@ -225,5 +227,6 @@ def test_the_sleep_repairs_birth_labelled_identity_records(tmp_path: Path) -> No
     finally:
         home.close()
     assert drained["authored"] >= 2, drained
-    traits = [r for r in _rows(home_dir, "trait")]
-    assert traits and all(r.attributes.get("title") == TITLE for r in traits), [r.attributes.get("title") for r in traits]
+    traits = [r for r in _rows(home_dir, "trait") if str(r.subject) in {str(g) for g in seeded}]
+    assert len(traits) >= 2 and all(r.attributes.get("title") == TITLE for r in traits), \
+        [r.attributes.get("title") for r in traits]

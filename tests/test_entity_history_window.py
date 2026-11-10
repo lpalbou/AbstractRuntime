@@ -62,7 +62,7 @@ def _make_home(tmp_path: Path, slug: str) -> Path:
     (home_dir / "manifest.json").write_text(json.dumps({"entity_id": entity_id}), encoding="utf-8")
     db = home_dir / "memory.sqlite3"
     store, journal = SQLiteTripleStore(db), SQLiteJournal(db)
-    ms = MemorySystem(store=store, journal=journal)
+    ms = MemorySystem(store=store, journal=journal, task_queue=True)
     assert engram(ms, spark, owner_id=entity_id).created is True
     store.close()
     journal.close()

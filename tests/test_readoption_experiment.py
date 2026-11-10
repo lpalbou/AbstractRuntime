@@ -121,7 +121,7 @@ def open_home(home_dir: Path) -> Home:
     db = home_dir / "memory.sqlite3"  # ONE memory file: store + journal, one seq axis
     store = SQLiteTripleStore(db)
     journal = SQLiteJournal(db)
-    ms = MemorySystem(store=store, journal=journal)
+    ms = MemorySystem(store=store, journal=journal, task_queue=True)  # engram's birth authoring needs the queue
     ledger = SqliteLedgerStore(SqliteDatabase(str(home_dir / "home.sqlite3")))  # the book (runtime plane)
     diary = DiaryStore(entity_id=ENTITY_ID, ledger_store=ledger)
     clock = _CounterClock()

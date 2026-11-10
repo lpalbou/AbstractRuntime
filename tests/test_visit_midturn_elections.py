@@ -56,8 +56,13 @@ def _make_home(tmp_path: Path, slug: str = "electra") -> Path:
     (home_dir / "manifest.json").write_text(json.dumps({"entity_id": entity_id}), encoding="utf-8")
     db = home_dir / "memory.sqlite3"
     store, journal = SQLiteTripleStore(db), SQLiteJournal(db)
-    ms = MemorySystem(store=store, journal=journal)
-    assert engram(ms, spark, owner_id=entity_id).created is True
+    ms = MemorySystem(store=store, journal=journal, task_queue=True)
+    import sys as _sys
+
+    _sys.path.insert(0, str(Path(__file__).parent))
+    from test_entity_life_loop import _birth_author  # births authored, as a created entity's are
+
+    assert engram(ms, spark, owner_id=entity_id, author=_birth_author).created is True
     store.close()
     journal.close()
     return home_dir

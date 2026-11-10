@@ -385,9 +385,35 @@ def _guard_model_call(run: RunState, plan: StepPlan) -> StepPlan:
     )
 
 
-def _guarded_node(handler: Callable[[RunState, Any], StepPlan]) -> Callable[[RunState, Any], StepPlan]:
+def _stamp_loop_position(run: RunState, plan: StepPlan) -> StepPlan:
+    """The reasoning loop's position on its model call: `iteration` (this call's index in the turn, from 1) and
+    `max_iterations` (the turn's cap) on the LLM_CALL payload, so the ledger's `reason` record says "step 2 of 50".
+    Both are the runtime's `_limits` names (core/vars.py): the cycle sets `_limits.current_iteration` when it plans
+    the call (abstractagent react_runtime reason node) and reads the cap BRIDGE seeds at `_limits.max_iterations`.
+    The payload keys are metadata: no handler sends them to a provider and the prompt is unchanged."""
+    eff = plan.effect
+    if eff is None or eff.type != EffectType.LLM_CALL:
+        return plan
+    limits = run.vars.get("_limits")
+    if not isinstance(limits, dict):
+        return plan
+    payload = dict(eff.payload or {})
+    iteration = limits.get("current_iteration")
+    if isinstance(iteration, int) and not isinstance(iteration, bool) and iteration >= 1:
+        payload.setdefault("iteration", iteration)
+    cap = limits.get("max_iterations")
+    if isinstance(cap, int) and not isinstance(cap, bool):
+        payload.setdefault("max_iterations", max(1, cap))  # the cycle's own floor (resolve_max_iterations)
+    return dataclasses.replace(plan, effect=dataclasses.replace(eff, payload=payload))
+
+
+def _guarded_node(handler: Callable[[RunState, Any], StepPlan], *,
+                  loop_position: bool = False) -> Callable[[RunState, Any], StepPlan]:
     def _node(run: RunState, ctx: Any) -> StepPlan:
-        return _guard_model_call(run, handler(run, ctx))
+        plan = handler(run, ctx)
+        if loop_position:
+            plan = _stamp_loop_position(run, plan)
+        return _guard_model_call(run, plan)
 
     return _node
 
@@ -586,6 +612,9 @@ def build_visit_workflow(
                     "turn_id": turn["turn_id"],
                     "participants": list(visit["participants"]),
                     "budget": dict(visit["budget"]),
+                    # Each handle's `topic` (its memory community's key) rides the recorded result, for a
+                    # host's view of the turn; one topics read per recall (seam_handlers._stamp_recall_topics).
+                    "with_topics": True,
                 },
                 result_key="_turn.recall",
             ),
@@ -1758,7 +1787,7 @@ def build_visit_workflow(
                     "scopes": ladder, "view": "working_set", "participants": list(_ns(run, "_visit")["participants"]),
                     "budget": dict(_ns(run, "_visit")["budget"]),
                     "turn_id": f"{turn['turn_id']}:guidance:{fresh[-1]['seq']}",
-                    "channel": "workplace",
+                    "channel": "workplace", "with_topics": True,
                 }, result_key="_visit_guidance.recall"), next_node="VISIT_GUIDANCE_RENDER")
 
         def render_guidance(run: RunState, ctx: Any) -> StepPlan:
@@ -1806,8 +1835,9 @@ def build_visit_workflow(
 
         nodes[str(react_middle.entry)] = guidance_boundary
         # Every model call the middle plans is guarded (a visit never fails on one failed call).
+        # The entry's model call (the loop's `reason`) also carries the loop position (_stamp_loop_position).
         for _mid in list(react_middle.nodes.keys()):
-            nodes[_mid] = _guarded_node(nodes[_mid])
+            nodes[_mid] = _guarded_node(nodes[_mid], loop_position=_mid == str(react_middle.entry))
         nodes["VISIT_GUIDANCE_RENDER"] = render_guidance
         nodes["REASON"] = bridge_node  # RENDER routes in unchanged
         nodes[HARVEST_NODE] = harvest_node  # the middle's declared exit

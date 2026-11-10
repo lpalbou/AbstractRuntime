@@ -235,6 +235,12 @@ class ToolElection:
     # The home artifact this round stored for the election (set by
     # execute_tool_elections when the lane passes an artifact store).
     artifact_id: Optional[str] = None
+    # search_memory only: how many memories and book entries the search
+    # matched (graph + book), the count beside the text the model reads, for
+    # a host's view of the turn (a lane serving tool results copies it as
+    # `hits`, as it copies `artifact_id`). None for every other tool, and for
+    # a search that did not run (no words, an unreadable store).
+    hits: Optional[int] = None
 
 
 def sanitize_tool_surface(text: str, cap: int = 120) -> str:
@@ -1155,7 +1161,11 @@ def _exec_search_memory(e: ToolElection, ctx: ToolExecutionContext) -> str:
     if ctx.search_memory_fn is None:
         ctx.notices.append("#FALLBACK search_memory elected but no resolver wired")
         return "(the search_memory tool is not enabled in this session)"
-    return ctx.search_memory_fn(e.body.strip())
+    out = ctx.search_memory_fn(e.body.strip())
+    # HomeMemoryReader.search_memory answers a str carrying `hits` (memory_reader.SearchMemoryText).
+    hits = getattr(out, "hits", None)
+    e.hits = hits if isinstance(hits, int) and not isinstance(hits, bool) else None
+    return str(out)
 
 
 def _exec_topics(e: ToolElection, ctx: ToolExecutionContext) -> str:

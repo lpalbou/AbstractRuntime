@@ -1260,7 +1260,7 @@ def test_loop_status_carries_stopped_by_after_failure_death(tmp_path: Path) -> N
     """Failure-death visibility (observer/gateway asks 2026-07-09): three
     consecutive tick failures end the loop, and the status file must SAY so
     — a culled loop must not read like a clean stop on /loop status."""
-    from abstractruntime.identity.life import read_loop_status
+    from abstractruntime.identity.life import read_loop_status, write_loop_status
 
     home_dir = _make_home(tmp_path)
 
@@ -1278,6 +1278,28 @@ def test_loop_status_carries_stopped_by_after_failure_death(tmp_path: Path) -> N
     status = read_loop_status(home_dir)
     assert status.get("phase") == "stopped"
     assert status.get("stopped_by") == "failures"
+    # The card shows the note verbatim: one plain sentence with the provider's reason.
+    assert report.last_failure and "provider down" in report.last_failure
+    assert status.get("note") == (f"Stopped after three failed ticks: {report.last_failure.rstrip('.')}. "
+                                  "His memory is intact."), status.get("note")
+    # The next status write clears it (a note describes the phase it was written with).
+    write_loop_status(home_dir, "between", fence=LifecycleFence.admit(home_dir))
+    assert "note" not in read_loop_status(home_dir)
+
+
+def test_a_crashed_loop_s_note_is_a_plain_sentence_the_gateway_still_reads(tmp_path: Path) -> None:
+    """loop_process_status's note for a status file whose process is gone is shown to end users as written; the
+    gateway's entity_phase reads the crash from "process is gone" in it (abstractgateway entity_phase.py)."""
+    from abstractruntime.identity.life import loop_process_status
+
+    home_dir = _make_home(tmp_path)
+    (home_dir / "loop_status").write_text(json.dumps({"phase": "day", "pid": 99999999}), encoding="utf-8")
+    status = loop_process_status(home_dir)
+    assert status["phase"] == "stopped" and status["running"] is False
+    assert status["note"] == ("His own time stopped without a word (the process is gone: a crash or a reboot). "
+                              "His memory is intact.")
+    assert "process is gone" in status["note"]
+    assert "loop_status" not in status["note"]
 
 
 def test_substrate_heal_recovers_a_failing_loop(tmp_path: Path) -> None:

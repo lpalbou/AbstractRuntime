@@ -45,7 +45,20 @@ from __future__ import annotations
 import json
 from typing import Any, Dict, List, Optional, Tuple
 
-__all__ = ["HomeMemoryReader", "memory_tag"]
+__all__ = ["HomeMemoryReader", "SearchMemoryText", "memory_tag"]
+
+
+class SearchMemoryText(str):
+    """What `search_memory` answers: the text the entity reads, with `hits` beside it - how many records of his
+    graph and entries of his book matched (0 when nothing did). A str, so every caller that reads the text is
+    unchanged; the tool executor copies `hits` onto the election (`ToolElection.hits`)."""
+
+    hits: int
+
+    def __new__(cls, text: str, *, hits: int) -> "SearchMemoryText":
+        out = super().__new__(cls, text)
+        out.hits = int(hits)
+        return out
 
 
 def memory_tag(graph_record_id: str) -> str:
@@ -219,7 +232,10 @@ class HomeMemoryReader:
         results are prompt-ephemeral). Absence is a checkable fact, stated
         with its warrant. Diary hits return GIST ONLY (containment: a
         full-text excerpt would disclose private words the reply could then
-        persist); the words stay behind diary_read, a deliberate act."""
+        persist); the words stay behind diary_read, a deliberate act.
+
+        A search that ran answers a `SearchMemoryText` (its `hits`: the graph and book matches); no words or an
+        unreadable store answer a plain str (no count)."""
         needle = " ".join((query or "").split()).lower()
         if not needle:
             return "search_memory needs words to look for (write them in the block body)"
@@ -376,7 +392,8 @@ class HomeMemoryReader:
             "read_memory #tag fetches a memory's full words and connections; "
             "diary_read diary_... fetches a book entry."
         )
-        return "\n".join(lines)
+        # `hits` = the matches the text counts (graph + book); the meaning fill's closest memories are not matches.
+        return SearchMemoryText("\n".join(lines), hits=len(graph_hits) + len(book_hits))
 
     # ------------------------------------------------------------- recent
     def recent_memories(self, window_text: str) -> str:

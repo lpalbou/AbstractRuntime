@@ -6,6 +6,8 @@ negotiated in `a2a/threads/0001-runtime-memory-orchestration/004-memory--to--run
 - `MEMORY_RECALL`  -> `MemorySystem.reconstruct(view="working_set")` : stimulus-driven
   reconstruction of the emergent working set. The runtime owns WHEN to call
   (turn start, or budget pressure); the memory package owns the graph/activation.
+  `with_topics: true` stamps each handle's `topic` (its memory community's key,
+  or None) with ONE communities read per recall (`_stamp_recall_topics`).
 - `MEMORY_ACCESS`  -> `MemorySystem.commit_selection(...)` : the Hebbian trail
   deposit for the records that ACTUALLY entered the prompt. This is the memory
   seam's only strengthening path — the runtime never posts `selected` events
@@ -264,6 +266,35 @@ def _import_record_input():
         ) from e
 
 
+def _stamp_recall_topics(memory_system: Any, handles: List[Dict[str, Any]], *,
+                         scopes: Sequence[Tuple[str, str]], owner_id: str) -> None:
+    """Stamp `topic` on every recalled handle: the stable key of the topic (AbstractMemory community) its record is
+    in now, or None when it is in none (unplaced, or before the home's first sleep with topics). Asked by a
+    MEMORY_RECALL payload's `with_topics: true` (the visit's recalls).
+
+    HOT-PATH COST: ONE read of memory's communities payload per recall (`identity.topics.entity_communities` ->
+    `abstractmemory.community_index.communities`: the current version's members, plus the records placed since it),
+    then one dict lookup per handle by its graph id (`provenance.record_id`, the id community members carry). Never
+    `community_of` per handle: that verb re-reads every community record on each call (measured on a synthetic home:
+    44 handles cost 461 ms at 2,000 records and 3.2 s at 20,000, against 19 ms and 190 ms for the one payload read).
+    The payload read is linear in the home because it also computes each topic's `facts`; memory serves no
+    membership-only read today."""
+    from ...identity.topics import entity_communities
+
+    payload = entity_communities(memory_system, scopes=list(scopes), owner_id=str(owner_id))
+    topic_of: Dict[str, str] = {}
+    for community in payload["communities"]:
+        key = str(community["key"])
+        for member in community["members"]:
+            topic_of[str(member["id"])] = key
+        for record_id in community["provisional_ids"]:
+            topic_of.setdefault(str(record_id), key)
+    for handle in handles:
+        prov = handle.get("provenance") if isinstance(handle.get("provenance"), dict) else {}
+        graph_id = str(prov.get("record_id") or "")
+        handle["topic"] = topic_of.get(graph_id) if graph_id else None
+
+
 def build_memory_seam_effect_handlers(
     *,
     memory_system: Any,
@@ -381,8 +412,23 @@ def build_memory_seam_effect_handlers(
         # JSON-safe result -> ledger truth (runtime replays from this recorded
         # result; it does not re-call reconstruct on replay, per a2a 0001/011 #5).
         out = result.to_dict() if hasattr(result, "to_dict") else result
-        if isinstance(out, dict) and budget_warnings:
-            out["warnings"] = list(out.get("warnings") or []) + budget_warnings
+        extra_warnings = list(budget_warnings)
+        if isinstance(out, dict) and payload.get("with_topics") is True:
+            # The topic of each recalled memory, for a host's view of the turn (the Entity app's live activity
+            # panel). Display only: a topics read that fails leaves the handles without `topic` and says why;
+            # the recall itself stands.
+            if not entity_scope_owner:
+                extra_warnings.append("#FALLBACK with_topics needs a home-bound seam (entity_scope_owner); "
+                                      "the handles carry no topic")
+            else:
+                try:
+                    _stamp_recall_topics(memory_system, list(out.get("handles") or []), scopes=scope_pairs,
+                                         owner_id=entity_scope_owner)
+                except Exception as e:  # noqa: BLE001 - a display annotation never fails a recall
+                    extra_warnings.append(f"#FALLBACK recall topics unavailable ({type(e).__name__}: {e}); "
+                                          "the handles carry no topic")
+        if isinstance(out, dict) and extra_warnings:
+            out["warnings"] = list(out.get("warnings") or []) + extra_warnings
         return EffectOutcome.completed(out)
 
     def _handle_access(run: RunState, effect: Effect, default_next_node: Optional[str]) -> EffectOutcome:

@@ -208,7 +208,9 @@ def build_entity_tool_effect_handlers(*, home: Any) -> Dict[EffectType, EffectHa
             "phase": phase,
             "tools_ran": seen,
             "results": [
-                {"name": e.name, "result": e.result, "artifact_id": e.artifact_id}
+                {"name": e.name, "result": e.result, "artifact_id": e.artifact_id,
+                 # search_memory's match count beside its text (ToolElection.hits); absent for other tools.
+                 **({"hits": e.hits} if e.hits is not None else {})}
                 for e in elections
             ],
             "results_message": results_message,

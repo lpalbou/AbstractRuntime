@@ -51,6 +51,8 @@ def test_correction_is_attributed_recalled_once_and_survives_resume():
     out = rt.tick(workflow=wf, run_id=rid)
     assert len(recalls) == 1
     assert recalls[0]["cue_text"] == "I cannot use stairs." and recalls[0]["channel"] == "workplace"
+    # The correction's recall names each memory's topic too (the live activity panel reads every recall record).
+    assert recalls[0]["with_topics"] is True
     messages = out.output["messages"]
     assert messages[0] == {"role": "user", "content": "Find a route."}
     assert len(messages) == 2

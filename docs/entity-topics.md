@@ -236,6 +236,12 @@ eid = home.entity_id
 payload = memory_facade.communities(home.ms, scopes=[("self", eid), ("diary", eid), ("life", eid)], owner_id=eid)
 ```
 
+### On recalled memories
+
+Every memory a visit recalls carries `topic` in the recall's ledger record: the key of the topic it is in now, or
+null. One communities read per recall, never one per memory; see
+[What a visit turn's ledger records say](entity-runtime.md#what-a-visit-turns-ledger-records-say).
+
 ### Migration from `abstractruntime.identity.communities`
 
 The runtime no longer computes communities or keyword labels. `memory_communities(store)` raises

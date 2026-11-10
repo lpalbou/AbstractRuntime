@@ -6584,6 +6584,34 @@ Effect(type=EffectType.WAIT_EVENT, payload={
   together, so clients can render a chat composer for visit waits and the
   deadline without new transport.
 
+## What a visit turn's ledger records say
+
+A host can show what the entity is doing during a turn by reading the visit run's ledger (AbstractGateway serves it
+at `GET /entities/{name}/visit/{run_id}/ledger`; the Entity app's live activity panel reads it). Three fields exist
+for that view. Each is additive: a reader that does not find one shows what it showed before.
+
+| Record | Field | Type | What it says |
+|---|---|---|---|
+| `memory_recall` step (node `RECALL`, and the recall of a live correction): `result.handles[]` | `topic` | string or null | The stable key of the topic (memory community, [Entity topics](entity-topics.md)) the recalled memory is in now; null when it is in none (not placed yet, or before the first sleep with topics) |
+| `llm_call` step of node `reason`: `effect.payload` | `iteration` | int | This model call's place in the turn's reasoning loop, from 1 |
+| `llm_call` step of node `reason`: `effect.payload` | `max_iterations` | int | The turn's cap on that loop (`_limits.max_iterations`; 50 unless the door sets another) |
+| a `search_memory` tool result | `hits` | int | How many memories and book entries the search matched (the count its text gives); absent for every other tool |
+
+- **Topics cost one read per recall.** The visit's recalls ask for them (`with_topics: true` in the `MEMORY_RECALL`
+  payload); the seam handler reads memory's communities payload once and looks each handle up by its graph id
+  (`provenance.record_id`). The read grows with the home (about 10 ms per 1,000 records on a synthetic home, because
+  memory computes each topic's facts with it). Never `community_of` per handle: 44 handles cost 17 to 24 times more that way. A
+  topics read that fails leaves the recall whole, without `topic`, and a `#FALLBACK recall topics unavailable` line in
+  its `warnings`.
+- **The loop position is metadata.** `iteration` and `max_iterations` are payload keys no handler sends to a
+  provider: the prompt is unchanged. They are read from the runtime's `_limits` (`current_iteration`, which the
+  reasoning loop sets when it plans the call, and `max_iterations`) and written on both the step's started and
+  terminal records.
+- **`hits` comes from the tool executor.** `HomeMemoryReader.search_memory` answers a `SearchMemoryText` (a `str`
+  with `hits`), and `execute_tool_elections` copies the count onto `ToolElection.hits`. The `ENTITY_TOOLS_EXECUTE`
+  result entries carry it. A host that builds its own tool result entries (the gateway's visit `TOOL_CALLS`
+  executor) copies `election.hits` the same way it copies `election.artifact_id`.
+
 ## Cognition profile (`identity/cognition_profile.py`)
 
 The mind (`substrate.yaml`) is what the entity talks with. The cognition
@@ -6915,6 +6943,12 @@ from abstractruntime.integrations.abstractmemory import memory_facade
 eid = home.entity_id
 payload = memory_facade.communities(home.ms, scopes=[("self", eid), ("diary", eid), ("life", eid)], owner_id=eid)
 ```
+
+### On recalled memories
+
+Every memory a visit recalls carries `topic` in the recall's ledger record: the key of the topic it is in now, or
+null. One communities read per recall, never one per memory; see
+[What a visit turn's ledger records say](entity-runtime.md#what-a-visit-turns-ledger-records-say).
 
 ### Migration from `abstractruntime.identity.communities`
 

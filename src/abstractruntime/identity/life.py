@@ -1434,6 +1434,11 @@ LOOP_PHASES = ("day", "between", "stopped", "starting")
 # outlast it.
 LOOP_STATUS_STALE_SECONDS = 2 * ENTITY_LLM_TIMEOUT_FLOOR_S + 600.0
 
+#: loop_process_status's `note` when the status file says a loop runs but its process is gone. Shown verbatim to end
+#: users; AbstractGateway (entity_phase) reads a crash from "process is gone" in it.
+CRASHED_LOOP_NOTE = ("His own time stopped without a word (the process is gone: a crash or a reboot). "
+                     "His memory is intact.")
+
 # SLEEP IS BOUNDED (laurent's ruling, entity spec v5 decision:sleep-is-bounded,
 # c2465): a sleep lasts at most ~1h, then the entity wakes. An explicit
 # `wake_at` on the state write overrides the default. The bound covers REAL
@@ -1539,9 +1544,13 @@ def write_loop_status(
     day_kind: Optional[str] = None, day_cause: Optional[Dict[str, Any]] = None,
     tunables: Optional[Dict[str, Any]] = None,
     owner: Optional[Tuple[Optional[int], Optional[str]]] = None,
+    note: Optional[str] = None,
     fence: Any,
 ) -> None:
     """Best-effort status write; the loop must never die over its status - but it never lands after a Stop.
+
+    `note`: one plain sentence for end users about this status (the failures stop says why, `failures_stop_note`);
+    written only with the phase it describes, so the next write clears it.
 
     FENCED (STOP-LANE-DESIGN §2.2): inside the home state lock, `fence` (required) is checked against the generation
     read there - a loop that outlived a refused kill can no longer write `day` over the Stop's `stopped`
@@ -1585,7 +1594,7 @@ def write_loop_status(
                       sentinel_ok=fence is KILL_SWITCH)
         try:
             _write_loop_status_locked(home_dir, payload, stopped_by=stopped_by, day_kind=day_kind,
-                                      day_cause=day_cause, tunables=tunables, started=started)
+                                      day_cause=day_cause, tunables=tunables, started=started, note=note)
         except OSError:
             pass
 
@@ -1760,7 +1769,8 @@ def _read_loop_status_raw(home_dir: Path) -> Dict[str, Any]:
 
 def _write_loop_status_locked(home_dir: Path, payload: Dict[str, Any], *, stopped_by: Optional[str],
                               day_kind: Optional[str], day_cause: Optional[Dict[str, Any]],
-                              tunables: Optional[Dict[str, Any]], started: Optional[str]) -> None:
+                              tunables: Optional[Dict[str, Any]], started: Optional[str],
+                              note: Optional[str] = None) -> None:
     import json
 
     from ..utils.atomic_files import atomic_write_text
@@ -1787,6 +1797,8 @@ def _write_loop_status_locked(home_dir: Path, payload: Dict[str, Any], *, stoppe
         payload["pid_started_at"] = started
     if stopped_by:
         payload["stopped_by"] = str(stopped_by)
+    if note:
+        payload["note"] = str(note)
     # day_kind: work|personal — which kind of day is open (gateway wave-1
     # ask, 2026-07-20: loop_status carried only day|between|stopped, so the
     # served phase fold had to APPROXIMATE work from the standing order,
@@ -2973,7 +2985,9 @@ def loop_process_status(home_dir: Path) -> Dict[str, Any]:
         pid_int = 0
     if status.get("phase") in ("day", "between") and not (pid_int > 0 and _pid_alive(pid_int)):
         status["phase"] = "stopped"
-        status["note"] = "loop_status said running but the process is gone (crash or reboot)"
+        # Shown verbatim to end users (the Entity app's card). AbstractGateway's entity_phase reads a crash from
+        # "process is gone" in this note: the words stay.
+        status["note"] = CRASHED_LOOP_NOTE
         status["running"] = False
     running = bool(status.get("running"))
 
@@ -3527,6 +3541,8 @@ class LifeReport:
     stopped_by: str = "max_ticks"
     rest_reason: Optional[str] = None
     failures: int = 0
+    # The last failed tick's reason (the provider's words), kept for the failures stop's loop_status note.
+    last_failure: Optional[str] = None
     sleeps: int = 0
     dreams: int = 0
     records: List[TickRecord] = field(default_factory=list)
@@ -3534,6 +3550,19 @@ class LifeReport:
 
 MAX_CONSECUTIVE_TICK_FAILURES = 3
 FAILURE_BACKOFF_SECONDS = 60.0
+_COUNT_WORDS = ("zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten")
+
+
+def failures_stop_note(count: int, reason: str) -> str:
+    """The loop_status `note` of a loop that stopped itself after `count` consecutive failed ticks, `reason` the
+    last failure as the provider gave it. Shown verbatim to end users (the Entity app's card)."""
+    n = int(count)
+    words = _COUNT_WORDS[n] if 0 <= n < len(_COUNT_WORDS) else str(n)
+    why = " ".join(str(reason or "").split()).rstrip(".")
+    return f"Stopped after {words} failed ticks: {why}. His memory is intact." if why else \
+        f"Stopped after {words} failed ticks. His memory is intact."
+
+
 # Day-close look-back wait bound (B1 adversary, 2026-07-13): a LIVE holder
 # that never releases (a hung visit) must not pin the loop in "day" phase
 # forever — after this many polls the look-back defers to the write-ahead
@@ -4217,12 +4246,13 @@ class LifeLoop:
     def _status(self, phase: str, *, stopped_by: Optional[str] = None,
                 day_kind: Optional[str] = None,
                 day_cause: Optional[Dict[str, Any]] = None,
-                tunables: Optional[Dict[str, Any]] = None) -> None:
+                tunables: Optional[Dict[str, Any]] = None,
+                note: Optional[str] = None) -> None:
         if self.state_home is not None:
             try:
                 write_loop_status(self.state_home, phase, stopped_by=stopped_by,
                                   day_kind=day_kind, day_cause=day_cause,
-                                  tunables=tunables, fence=self._fence)
+                                  tunables=tunables, note=note, fence=self._fence)
             except StoppedByOperator:
                 self._stopped_by_operator()  # the Stop's own `stopped` record stands
             except LifecycleUnreadable as e:
@@ -4827,6 +4857,7 @@ class LifeLoop:
                         break
                     except (RuntimeError, Exception) as e:  # noqa: BLE001
                         report.failures += 1
+                        report.last_failure = str(e)
                         consecutive_failures += 1
                         self.out(f"#FALLBACK tick failed ({e}); backing off {FAILURE_BACKOFF_SECONDS:g}s")
                         if consecutive_failures >= MAX_CONSECUTIVE_TICK_FAILURES:
@@ -5101,7 +5132,9 @@ class LifeLoop:
             # writes nothing more - no status, no wake.
             report.stopped_by = self.stop_cause
             return report
-        self._status("stopped", stopped_by=report.stopped_by)
+        self._status("stopped", stopped_by=report.stopped_by,
+                     note=failures_stop_note(MAX_CONSECUTIVE_TICK_FAILURES, report.last_failure or "")
+                     if report.stopped_by == "failures" else None)
         # OWN TIME ENDS AWAKE (contract-phases v2 §10.1; v22 retires v8 IDLE-IS-SLEEP): an ending loop never writes
         # a sleep and never leaves one of its own behind - he is awake and reachable (idle) after it. An operator
         # sleep, a visit posture and the kill switch stand.

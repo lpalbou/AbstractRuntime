@@ -1,16 +1,26 @@
 # AbstractRuntime
 
-**Release 0.19.0:** an unreachable model endpoint parks the run instead of failing it, entity homes gain a cognition
-profile and the five-state life cycle, and nothing an entity's runtime writes lands after the operator's Stop.
-Requires AbstractCore 2.35.0 and AbstractMemory 0.5.0. See [release notes](CHANGELOG.md).
+**Release 0.19.1:** an entity writes a short brief of what it knows about in its sleep and carries it in every
+conversation's system prefix. Requires AbstractCore 2.35.0 and AbstractMemory 0.5.0. See [release notes](CHANGELOG.md).
 
 **AbstractRuntime** is a durable workflow runtime (interrupt → checkpoint → resume) with an append-only execution ledger.
 
 It is designed for long-running workflows that must survive restarts and explicitly model blocking (human input, timers, external events, subworkflows) without keeping Python stacks alive.
 
-**Version:** 0.19.0 • **Python:** 3.10+
+**Version:** 0.19.1 • **Python:** 3.10+
 
 **Status:** pre-1.0 (API may evolve). For production use, pin versions and follow `CHANGELOG.md`.
+
+## What's new in 0.19.1
+
+- **The entity's self-knowledge brief**: at the end of each sleep's topics stage the entity's summaries model writes
+  a brief (at most 400 tokens) of its topics and the trails of thought between them, stored in `<home>/self_brief.md`.
+  Every lane (hosted chat, own time, work, visits) places it right after the identity block of the system prompt, so
+  the cached prefix changes at most once per sleep. A sleep whose topics did not change makes no call; a failure keeps
+  the previous brief. See [docs/entity-topics.md](docs/entity-topics.md).
+- The `topics` tool description stays within AbstractCore's 200-character limit.
+
+No new dependency floor: AbstractCore 2.35.0 and AbstractMemory 0.5.0, as in 0.19.0.
 
 ## What's new in 0.19.0
 

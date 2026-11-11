@@ -172,6 +172,20 @@ Effect(type=EffectType.WAIT_EVENT, payload={
   together, so clients can render a chat composer for visit waits and the
   deadline without new transport.
 
+## A question answered in a visit is resolved
+
+At a visit's close (since 0.19.5), the look-back (node `REFLECT`) lists the entity's open questions that this visit
+asked or touched (one it kept during the visit, or one a turn's recall showed it), each by entry id and title, read
+once per close from memory's open-question set. It offers a ```` ```resolve ```` block: `resolves=<the question's entry id>`,
+`evidence=<the numbered moment that answered it>`, then the answer in the entity's words. The block is captured at
+the result boundary and written through `DIARY_WRITE` as a note carrying `resolves=`; the book confirms the claim
+(`resolves_status: "resolved_open_question"`) and the question is no longer open. The entry's metadata carries
+`resolves` and `resolves_status`, and once confirmed `resolved_record_id` and `resolved_title`. A visit turn whose
+diary entry resolves an open question serves a second notice beside the entry's own:
+`{"kind": "question_resolved", "record_id": <the question's graph id>, "title": <its title>}`
+(`chat.question_resolved_notice`). A block naming no question or giving no answer is refused with its words kept in
+the marker, and the refusal joins the close's `reflection_notices`. The chat lane's look-back is unchanged.
+
 ## What a visit turn's ledger records say
 
 A host can show what the entity is doing during a turn by reading the visit run's ledger (AbstractGateway serves it

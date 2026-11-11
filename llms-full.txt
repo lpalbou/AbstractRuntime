@@ -54,17 +54,31 @@ See llms.txt for the linked index.
 
 # AbstractRuntime
 
-**Release 0.19.4:** a visit opened and closed without a word is not remembered: it forms no memory and no longer
-counts in the entity's track record or as a meeting with the visitor. Requires AbstractCore 2.35.0 and
-AbstractMemory 0.5.1. See [release notes](CHANGELOG.md).
+**Release 0.19.5:** a question the entity asked in a visit is marked resolved when the person answers it: the
+end-of-visit look-back offers a resolve block, the diary records the resolution and the turn carries a
+`question_resolved` notice. Requires AbstractCore 2.35.0 and AbstractMemory 0.5.1. See
+[release notes](CHANGELOG.md).
 
 **AbstractRuntime** is a durable workflow runtime (interrupt → checkpoint → resume) with an append-only execution ledger.
 
 It is designed for long-running workflows that must survive restarts and explicitly model blocking (human input, timers, external events, subworkflows) without keeping Python stacks alive.
 
-**Version:** 0.19.4 • **Python:** 3.10+
+**Version:** 0.19.5 • **Python:** 3.10+
 
 **Status:** pre-1.0 (API may evolve). For production use, pin versions and follow `CHANGELOG.md`.
+
+## What's new in 0.19.5
+
+- **A question the entity asked in a visit is marked resolved when the person answers it** (operator ruling
+  2026-11-11 02:00). The end-of-visit look-back lists the entity's open questions that the visit asked or touched,
+  by entry id and title, and offers a ```` ```resolve ```` block: `resolves=<the question's id>`,
+  `evidence=<the numbered moment that answered it>`, then the answer in the entity's words. The block is written to
+  the diary like a ```` ```diary ```` block; the book confirms the claim and the question is no longer open. The
+  visit's diary records carry `resolves`, `resolves_status`, `resolved_record_id` and `resolved_title`, and a
+  `question_resolved` notice `{kind, record_id, title}` rides the turn's notices beside the diary entry's own. A
+  block naming no question or giving no answer is refused, and said. The chat lane is unchanged.
+
+No new floors (AbstractCore 2.35.0, AbstractMemory 0.5.1).
 
 ## What's new in 0.19.4
 
@@ -6624,6 +6638,20 @@ Effect(type=EffectType.WAIT_EVENT, payload={
 - The ledger wait record carries `wait_key`, `until`, and `details`
   together, so clients can render a chat composer for visit waits and the
   deadline without new transport.
+
+## A question answered in a visit is resolved
+
+At a visit's close (since 0.19.5), the look-back (node `REFLECT`) lists the entity's open questions that this visit
+asked or touched (one it kept during the visit, or one a turn's recall showed it), each by entry id and title, read
+once per close from memory's open-question set. It offers a ```` ```resolve ```` block: `resolves=<the question's entry id>`,
+`evidence=<the numbered moment that answered it>`, then the answer in the entity's words. The block is captured at
+the result boundary and written through `DIARY_WRITE` as a note carrying `resolves=`; the book confirms the claim
+(`resolves_status: "resolved_open_question"`) and the question is no longer open. The entry's metadata carries
+`resolves` and `resolves_status`, and once confirmed `resolved_record_id` and `resolved_title`. A visit turn whose
+diary entry resolves an open question serves a second notice beside the entry's own:
+`{"kind": "question_resolved", "record_id": <the question's graph id>, "title": <its title>}`
+(`chat.question_resolved_notice`). A block naming no question or giving no answer is refused with its words kept in
+the marker, and the refusal joins the close's `reflection_notices`. The chat lane's look-back is unchanged.
 
 ## What a visit turn's ledger records say
 

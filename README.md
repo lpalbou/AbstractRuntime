@@ -1,16 +1,30 @@
 # AbstractRuntime
 
-**Release 0.19.4:** a visit opened and closed without a word is not remembered: it forms no memory and no longer
-counts in the entity's track record or as a meeting with the visitor. Requires AbstractCore 2.35.0 and
-AbstractMemory 0.5.1. See [release notes](CHANGELOG.md).
+**Release 0.19.5:** a question the entity asked in a visit is marked resolved when the person answers it: the
+end-of-visit look-back offers a resolve block, the diary records the resolution and the turn carries a
+`question_resolved` notice. Requires AbstractCore 2.35.0 and AbstractMemory 0.5.1. See
+[release notes](CHANGELOG.md).
 
 **AbstractRuntime** is a durable workflow runtime (interrupt → checkpoint → resume) with an append-only execution ledger.
 
 It is designed for long-running workflows that must survive restarts and explicitly model blocking (human input, timers, external events, subworkflows) without keeping Python stacks alive.
 
-**Version:** 0.19.4 • **Python:** 3.10+
+**Version:** 0.19.5 • **Python:** 3.10+
 
 **Status:** pre-1.0 (API may evolve). For production use, pin versions and follow `CHANGELOG.md`.
+
+## What's new in 0.19.5
+
+- **A question the entity asked in a visit is marked resolved when the person answers it** (operator ruling
+  2026-11-11 02:00). The end-of-visit look-back lists the entity's open questions that the visit asked or touched,
+  by entry id and title, and offers a ```` ```resolve ```` block: `resolves=<the question's id>`,
+  `evidence=<the numbered moment that answered it>`, then the answer in the entity's words. The block is written to
+  the diary like a ```` ```diary ```` block; the book confirms the claim and the question is no longer open. The
+  visit's diary records carry `resolves`, `resolves_status`, `resolved_record_id` and `resolved_title`, and a
+  `question_resolved` notice `{kind, record_id, title}` rides the turn's notices beside the diary entry's own. A
+  block naming no question or giving no answer is refused, and said. The chat lane is unchanged.
+
+No new floors (AbstractCore 2.35.0, AbstractMemory 0.5.1).
 
 ## What's new in 0.19.4
 

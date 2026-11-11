@@ -1205,9 +1205,13 @@
 entity's own sleep after a revoke still writes "own time resumes"), found by the own-time-withdrawn fix (0.19.3).
 Recounted from disk (every <code>.md</code> but <code>README.md</code>, as on 2026-10-28): planned 35 (was 34), proposed 21 (17 + 0865,
 0867, which did not update the count, + these two), completed 42 (was 39), deprecated 15.</p>
+<p>2026-11-11: +2 proposed, 0870 (a visit without a word is taken as the previous summon, so the next visit's identity
+cue can miss a look or voice change) and 0871 (a visit's sleep and wake entries count as sleeps in the life
+statistics), found by the visit-without-words fix (0.19.4). Recounted from disk: planned 35, proposed 23, completed
+42, deprecated 15.</p>
 <ul>
 <li>Planned: 35</li>
-<li>Proposed: 21</li>
+<li>Proposed: 23</li>
 <li>Completed: 42</li>
 <li>Deprecated: 15</li>
 <li>Recurrent: 0</li>
@@ -1626,6 +1630,14 @@ four-digit space rather than the completed records.</p>
 <tr>
 <td>0869</td>
 <td><a href="proposed/0869_wake_after_revoke_still_says_own_time_resumes/">A wake after a revoke still says "own time resumes"</a>: proposed 2026-11-11; <code>_wake_from_self_sleep</code> writes the resume reason without reading the grant.</td>
+</tr>
+<tr>
+<td>0870</td>
+<td><a href="proposed/0870_a_wordless_visit_is_taken_as_the_previous_summon/">A visit without a word is taken as the previous summon</a>: proposed 2026-11-11; the gateway's <code>previous_summon_at</code> reads the newest <code>summon</code> marker, a wordless visit's included, so the next visit's identity cue may not tell a look or voice change made before it.</td>
+</tr>
+<tr>
+<td>0871</td>
+<td><a href="proposed/0871_visit_door_state_entries_count_as_sleeps/">A visit's sleep and wake entries count as sleeps</a>: proposed 2026-11-11; <code>life_sleep_stats</code> counts the visit door's <code>state_history.jsonl</code> rows, so every visit (a wordless one included) adds a sleep; exclude <code>written_by: "visit-door"</code> structurally, gateway + runtime halves.</td>
 </tr>
 <tr>
 <td>0036</td>

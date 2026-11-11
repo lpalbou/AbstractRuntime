@@ -577,6 +577,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#a-question-answered-in-a-visit-is-resolved" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        A question answered in a visit is resolved
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#what-a-visit-turns-ledger-records-say" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1320,6 +1331,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#a-question-answered-in-a-visit-is-resolved" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        A question answered in a visit is resolved
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#what-a-visit-turns-ledger-records-say" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1522,6 +1544,18 @@ deadline (no reaper daemons):</p>
   together, so clients can render a chat composer for visit waits and the
   deadline without new transport.</li>
 </ul>
+<h2 id="a-question-answered-in-a-visit-is-resolved">A question answered in a visit is resolved<a class="headerlink" href="#a-question-answered-in-a-visit-is-resolved" title="Permanent link">&para;</a></h2>
+<p>At a visit's close (since 0.19.5), the look-back (node <code>REFLECT</code>) lists the entity's open questions that this visit
+asked or touched (one it kept during the visit, or one a turn's recall showed it), each by entry id and title, read
+once per close from memory's open-question set. It offers a <code>```resolve</code> block: <code>resolves=&lt;the question's entry id&gt;</code>,
+<code>evidence=&lt;the numbered moment that answered it&gt;</code>, then the answer in the entity's words. The block is captured at
+the result boundary and written through <code>DIARY_WRITE</code> as a note carrying <code>resolves=</code>; the book confirms the claim
+(<code>resolves_status: "resolved_open_question"</code>) and the question is no longer open. The entry's metadata carries
+<code>resolves</code> and <code>resolves_status</code>, and once confirmed <code>resolved_record_id</code> and <code>resolved_title</code>. A visit turn whose
+diary entry resolves an open question serves a second notice beside the entry's own:
+<code>{"kind": "question_resolved", "record_id": &lt;the question's graph id&gt;, "title": &lt;its title&gt;}</code>
+(<code>chat.question_resolved_notice</code>). A block naming no question or giving no answer is refused with its words kept in
+the marker, and the refusal joins the close's <code>reflection_notices</code>. The chat lane's look-back is unchanged.</p>
 <h2 id="what-a-visit-turns-ledger-records-say">What a visit turn's ledger records say<a class="headerlink" href="#what-a-visit-turns-ledger-records-say" title="Permanent link">&para;</a></h2>
 <p>A host can show what the entity is doing during a turn by reading the visit run's ledger (AbstractGateway serves it
 at <code>GET /entities/{name}/visit/{run_id}/ledger</code>; the Entity app's live activity panel reads it). Three fields exist

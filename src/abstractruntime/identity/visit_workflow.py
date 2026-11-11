@@ -63,9 +63,11 @@ from .chat import (
     authored_digest_attributes,
     clean_model_reply,
     compose_system_base,
+    _diary_label,
     diary_notice,
     floored_reflection_digest,
     parse_diary_blocks,
+    question_resolved_notice,
     served_turn,
     sheet_prompt_line,
 )
@@ -437,6 +439,29 @@ def _guarded_node(handler: Callable[[RunState, Any], StepPlan], *,
         return _guard_model_call(run, plan)
 
     return _node
+
+
+def _visit_open_questions(home: ChatHome, visit: Dict[str, Any], sheet: List[Any]) -> List[List[Any]]:
+    """[[entry_id, title or None], ...] - the entity's OPEN questions this visit asked or touched, oldest first (root
+    backlog 1206, operator 2026-11-11 02:00: a question the entity asked in a visit and the visitor answered stayed
+    under OPEN QUESTIONS). Asked = a question it kept during the visit (its projection is on the sheet); touched = a
+    record a turn's recall showed it (`_visit.touched`). Open = memory's own read (`abstractmemory.diary.
+    open_questions`, the card's set: no later believed entry `resolves`/`answers` it; closure folds applied). A
+    question is named by its book entry id (the `resolves=` currency the DIARY_WRITE check reads) and its title as
+    formed (None while it is still being written). One read of the `diary` scope (the only scope diary projections
+    form in), once per visit close."""
+    seen = {str(rid) for rid, _desc in sheet if rid} | {str(g) for g in (visit.get("touched") or []) if g}
+    if not seen:
+        return []
+    from abstractmemory.diary import open_questions
+
+    out: List[List[Any]] = []
+    for a in open_questions(home.ms.store, scope="diary", owner_id=home.entity_id, journal=home.ms.journal, limit=0):
+        attrs = a.attributes if isinstance(a.attributes, dict) else {}
+        entry_id = str(attrs.get("entry_id") or "").strip()
+        if str(a.subject) in seen and entry_id:
+            out.append([entry_id, str(attrs.get("title") or "").strip() or None])
+    return out
 
 
 def build_visit_workflow(
@@ -873,6 +898,11 @@ def build_visit_workflow(
                                   record_id=meta.get("projected_record_id"), title=meta.get("title"))
             if marker and notice:
                 served.append((notice, marker))
+                # The open question this entry resolved, as memory confirmed it (root backlog 1206): served beside
+                # the entry's own notice, opening the question.
+                resolved = question_resolved_notice(meta)
+                if resolved:
+                    served.append((resolved, marker))
         if marked:
             sheet_now = [(str(r), str(d)) for r, d in (visit.get("sheet") or [])]
             sheet_lines = [f"{i}. {d}" for i, (_r, d) in enumerate(sheet_now, start=1)]
@@ -1144,7 +1174,25 @@ def build_visit_workflow(
                         sheet.append([str(projected), f"you kept a diary entry ({meta.get('kind')}): {title}" if title
                                       else f"you kept a diary entry ({meta.get('kind')}) whose title is still being "
                                            "written"])
+                # A resolution memory confirmed this turn: the look-back names it (the resolution->lesson bridge,
+                # the chat lane's `session_resolutions`; root backlog 1206). Keys and the entry's title only.
+                rs = str((meta or {}).get("resolves_status") or "")
+                if rs in ("resolved_open_question", "repaired_open_problem"):
+                    word = "problem" if rs == "repaired_open_problem" else "question"
+                    label = ("a private diary entry" if str(meta.get("visibility") or "") == "private"
+                             else _diary_label(meta, str(meta.get("kind") or "note")))
+                    visit["resolutions"] = list(visit.get("resolutions") or []) + [
+                        [str(meta.get("resolves") or ""), word, label]]
             visit["sheet"] = sheet
+            # The records this turn's recall showed him (graph ids, word-free): with the sheet, what the visit
+            # touched - the look-back lists the open questions among them (root backlog 1206).
+            touched = list(visit.get("touched") or [])
+            for h in list(turn.get("displayed") or []):
+                prov = h.get("provenance") if isinstance(h.get("provenance"), dict) else {}
+                gid = str(prov.get("record_id") or h.get("record_id") or "")
+                if gid and gid not in touched:
+                    touched.append(gid)
+            visit["touched"] = touched
             visit["last_folded_turn"] = turn["turn_id"]
         return StepPlan(
             node_id="ANSWER",
@@ -1243,7 +1291,15 @@ def build_visit_workflow(
         prompt_sheet_lines = [
             f"{i}. {sheet_prompt_line(desc)}" for i, (_rid, desc) in enumerate(sheet, start=1)
         ]
-        prompt = build_reflection_prompt(prompt_sheet_lines)
+        refl = _ns(run, "_reflect")
+        if "open_questions" not in refl:
+            # Read once (a replayed REFLECT re-sends the same prompt, so its effect keeps its idempotency key).
+            refl["open_questions"] = _visit_open_questions(home, visit, sheet)
+        prompt = build_reflection_prompt(
+            prompt_sheet_lines,
+            resolutions=[(str(a), str(b), str(c)) for a, b, c in (visit.get("resolutions") or [])],
+            open_questions=[(str(e), t) for e, t in refl["open_questions"]],
+        )
         session_graph_ids = [rid for rid, _ in sheet if rid][-4:]
         return StepPlan(
             node_id="REFLECT",
@@ -1257,6 +1313,8 @@ def build_visit_workflow(
                     "turn_id": "t-reflect",
                     "anchor_record_ids": session_graph_ids,
                     "anchor_graph_ids": session_graph_ids,
+                    # The numbered moments' graph ids: a ```resolve block's evidence= numbers name them.
+                    "evidence_record_ids": [str(rid) for rid, _ in sheet],
                 },
                 result_key="_reflect.llm",
             ),
@@ -1382,7 +1440,10 @@ def build_visit_workflow(
                 [dict(r) for r in (pending.get("realizations") or [])] + list(_realizations)
             )
             refl["notices"] = (
-                list(notices) + list(i_notes) + list(l_notes) + list(r_notes)
+                # The look-back's own book writes (captured at its result boundary): a refused resolves= claim, an
+                # evidence token naming no moment - said, never only in the ledger (root backlog 1206).
+                [str(w) for w in ((refl.get("llm") or {}).get("act_only_warnings") or [])]
+                + list(notices) + list(i_notes) + list(l_notes) + list(r_notes)
                 + list(t_notes) + list(d_notes)
             )
             refl["stage"] = "summary"

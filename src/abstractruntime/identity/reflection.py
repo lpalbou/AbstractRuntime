@@ -32,6 +32,7 @@ _LESSON_FENCE_RE = re.compile(
 _INTEREST_FENCE_RE = re.compile(r"```interest[^\n`]*\n(.*?)```", re.DOTALL | re.IGNORECASE)
 _TOPIC_FENCE_RE = re.compile(r"```topic[^\n`]*\n(.*?)```", re.DOTALL | re.IGNORECASE)
 _REALIZE_FENCE_RE = re.compile(r"```realize[^\n`]*\n(.*?)```", re.DOTALL | re.IGNORECASE)
+_RESOLVE_FENCE_RE = re.compile(r"```resolve[^\n`]*\n(.*?)```", re.DOTALL | re.IGNORECASE)
 _FEEL_LINE_RE = re.compile(
     r"target\s*=\s*(?P<target>\S+)\s+feeling\s*=\s*(?P<feeling>[+-]?\d+(?:\.\d+)?)"
     r"(?P<rest>.*)$",
@@ -86,6 +87,7 @@ def build_reflection_prompt(
     *,
     resolutions: Optional[List[Tuple[str, str, str]]] = None,
     moment: str = "session",
+    open_questions: Optional[List[Tuple[str, Optional[str]]]] = None,
 ) -> str:
     """The non-leading look-back prompt. `sheet_lines` is the numbered list of
     this session's records (episodes + diary acts), built by the driver.
@@ -104,7 +106,12 @@ def build_reflection_prompt(
     2026-07-21 shrink removed the interest/lesson/question/problem offers
     from the look-back and moved them to a mid-turn offer that produced
     zero records in 17 homes since. The look-back offers them again; the
-    parsers are the same ones the turn uses."""
+    parsers are the same ones the turn uses.
+
+    `open_questions` — (entry_id, title or None while it is being written) of the open questions this session asked
+    or touched (the visit lane passes them; root backlog 1206, operator 2026-11-11 02:00: a question the visit
+    answered stayed open) — lists them and offers a ```resolve block naming the one the session answered. None or
+    empty: no list, no offer (the chat lane's prompt, byte-unchanged)."""
     if moment not in ("session", "tick"):
         raise ValueError(f"build_reflection_prompt: unknown moment {moment!r} (session|tick)")
     sheet = "\n".join(sheet_lines)
@@ -123,6 +130,28 @@ you would want next time - you may keep that as a ```lesson block below.
 The lesson will carry where it came from. If it taught you nothing beyond
 the answer itself, keep nothing.
 """
+    asked = ""
+    if open_questions:
+        listed = "\n".join(
+            f'- {eid}: "{title}"' if title else f"- {eid}: (its title is still being written)"
+            for eid, title in open_questions
+        )
+        span = "session" if moment == "session" else "stretch"
+        asked = ("\n" if bridge else "\n\n") + f"""These questions of yours stand open, and this {span} asked or touched them:
+{listed}
+If this {span} ANSWERED one of them - someone told you, or you found it -
+you may mark it resolved: it leaves your open questions and joins your
+history. Name it by its id, the numbered moment above that answered it,
+then the answer in your own words:
+
+```resolve
+resolves=<the question's id, as listed>
+evidence=<the number of the moment that answered it>
+<the answer, in your own words - one or two lines>
+```
+
+A question this {span} did not answer stays open; mark nothing for it.
+"""
     if moment == "tick":
         opening = """This stretch of your own time is done. Before the next one, look back at it.
 Here is what happened, as your own records of it:"""
@@ -139,7 +168,7 @@ goodbye in a sentence or two - the next summon, you will remember."""
         what = "this session"
     return f"""{opening}
 
-{sheet}{bridge}
+{sheet}{bridge}{asked}
 
 Look at what {what} held and what it leaves alive in you. If nothing below
 applies, say so and keep nothing.
@@ -564,6 +593,70 @@ def parse_realize_blocks(reply: str) -> Tuple[str, List[RealizeElection], List[s
 
     marked = _REALIZE_FENCE_RE.sub(_sub, reply)
     return marked.strip(), realizations, notices
+
+
+@dataclass
+class ResolveElection:
+    """One elected resolution (root backlog 1206): `resolves` = the open question's entry id as he named it (the book
+    checks it: memory's `resolves_status`); `evidence` = the raw tokens of his `evidence=` line (the numbered moments
+    that answered it, resolved by the capture against the look-back's sheet); `text` = the answer, his words, whole.
+    It is written as a diary entry (kind note) carrying `resolves=` - the same DIARY_WRITE a turn's
+    ```diary resolves=<id>``` block takes."""
+
+    resolves: str
+    evidence: List[str]
+    text: str
+
+
+_RESOLVE_RESOLVES_RE = re.compile(r"^\s*resolves\s*=\s*(?P<val>\S+)\s*$", re.IGNORECASE)
+
+
+def parse_resolve_blocks(reply: str) -> Tuple[str, List[ResolveElection], List[str]]:
+    """Extract ```resolve blocks - the look-back's offer to mark an open question this session answered (root backlog
+    1206). Grammar (taught by `build_reflection_prompt(open_questions=...)`):
+
+        ```resolve
+        resolves=<the question's entry id>     (mandatory - which question)
+        evidence=<moment numbers>              (the moments that answered it)
+        <the answer, his words>                (mandatory - the entry's words)
+        ```
+
+    The model DECLARES the resolution; the book confirms it at write time (`resolves_status`); nothing here judges his
+    words. A block naming no question, or giving no answer, is REFUSED loudly with a teaching marker that keeps his
+    words whole (never a silent drop). A kept block's marker is the capture's: the block is replaced by
+    "[kept in diary - note]", the plain marker of the diary entry it becomes (the capture enriches it with the
+    verdict and the reread command). Returns (marked, elections, notices)."""
+    elections: List[ResolveElection] = []
+    notices: List[str] = []
+
+    def _sub(match: re.Match) -> str:
+        resolves = ""
+        evidence: List[str] = []
+        text_lines: List[str] = []
+        for ln in (match.group(1) or "").splitlines():
+            m_res = _RESOLVE_RESOLVES_RE.match(ln)
+            if m_res and not resolves:
+                resolves = m_res.group("val").strip()
+                continue
+            m_ev = _REALIZE_EVIDENCE_RE.match(ln)
+            if m_ev:
+                evidence.extend(t for t in re.split(r"[\s,;]+", m_ev.group("val")) if t)
+                continue
+            if ln.strip():
+                text_lines.append(" ".join(ln.split()))
+        text = "\n".join(text_lines)
+        if not resolves:
+            notices.append("#FALLBACK resolve block refused (no resolves=<the question's id> line)")
+            return (f'[resolution refused - name the question with resolves=<its id>: "{" ".join(text_lines)}"]'
+                    if text_lines else "[resolution refused - name the question with resolves=<its id>]")
+        if not text:
+            notices.append(f"#FALLBACK resolve block refused (resolves={resolves} gave no answer in words)")
+            return f"[resolution of {resolves} refused - say the answer in your own words]"
+        elections.append(ResolveElection(resolves=resolves, evidence=evidence, text=text))
+        return "[kept in diary - note]"
+
+    marked = _RESOLVE_FENCE_RE.sub(_sub, reply)
+    return marked.strip(), elections, notices
 
 
 MAX_TOPIC_WORDS = 4  # a topic is a card key, not prose ("coherence", "presence vs performance")

@@ -57,6 +57,7 @@ def capture_diary_elections(
     anchor_graph_ids: Optional[List[str]] = None,
     rescue_dir: Any = None,
     author_diary: Optional[Callable[[Any, str, bool], Dict[str, Any]]] = None,
+    evidence_record_ids: Optional[List[str]] = None,
 ) -> Tuple[str, List[Dict[str, Any]], List[str]]:
     """G1 WRITE DIRECTION at the result boundary: elections fly to the book
     the moment the reply arrives; only MARKS + word-free metadata rest.
@@ -74,13 +75,37 @@ def capture_diary_elections(
 
     Returns (marked_content, diary_entries_metadata, warnings). Metadata
     per entry: entry_id, kind, visibility, projected_record_id, and gist
-    ONLY for non-private entries (private = the act label alone)."""
-    from .chat import parse_diary_blocks
+    ONLY for non-private entries (private = the act label alone). An entry
+    that claimed `resolves=` also carries `resolves` (the claim as the book
+    stored it) and `resolves_status` (the book's verdict), and, when the
+    verdict confirms an open question or problem, `resolved_record_id` /
+    `resolved_title` (`resolved_visibility` "private" for a private one):
+    keys and the RESOLVED record's title, never the entry's own words
+    (root backlog 1206 - `chat.question_resolved_notice` reads them).
 
-    marked, elections, notices = parse_diary_blocks(content)
-    warnings = list(notices)
-    if not elections:
-        return content, [], warnings
+    ```resolve blocks (the look-back's offer, `reflection.parse_resolve_blocks`)
+    are captured here too, BEFORE the ```diary blocks: each becomes a diary
+    entry (kind note) carrying `resolves=`. `evidence_record_ids` = the
+    graph ids of the moments the look-back numbered (its sheet, 1-based):
+    a block's `evidence=` numbers link the entry to those moments
+    (`anchor_graph_ids`); a token naming no moment is said in a notice and
+    the resolution stands without that link."""
+    from .chat import parse_diary_blocks
+    from .reflection import parse_resolve_blocks
+
+    resolve_elections: List[Any] = []
+    warnings: List[str] = []
+    resolved_content = content
+    if "```resolve" in content.lower():
+        resolved_content, resolve_elections, r_notices = parse_resolve_blocks(content)
+        warnings.extend(r_notices)
+    elections: List[Any] = []
+    if not resolve_elections:
+        marked, elections, notices = parse_diary_blocks(resolved_content)
+        warnings.extend(notices)
+        if not elections:
+            # No book write. The reply as it came (a refused ```resolve block keeps its teaching marker).
+            return resolved_content, [], warnings
     if not str(turn_id or "").strip():
         # Refuse rather than choose between silently LOSING elected words
         # (stripped but unwritten) and silently LEAKING them (unstripped
@@ -102,7 +127,9 @@ def capture_diary_elections(
             "the workflow must pass turn_id so the book write is replay-safe" + suffix
         )
     entries: List[Dict[str, Any]] = []
-    for e in elections:
+
+    def _write(e: Any, text_now: str, graph_anchors: List[str]) -> str:
+        """Write one election through the book and return the reply with its marker enriched."""
         # A PUBLIC entry's summary - and its title when he elected no gist - is authored BEFORE its write (Codex review
         # 2 #10, review 3 #9): the host's summaries capability, called here (`author_diary(run, text, need_title)` ->
         # authored_metadata | authoring_failure); his gist is his title; a private entry's words never leave the book.
@@ -121,7 +148,7 @@ def capture_diary_elections(
                 "explores": getattr(e, "explores", None),
                 "turn_id": turn_id,
                 "anchor_record_ids": list(anchor_record_ids or []),
-                "anchor_graph_ids": list(anchor_graph_ids or []),
+                "anchor_graph_ids": list(graph_anchors),
             }),
             None,
         )
@@ -180,7 +207,7 @@ def capture_diary_elections(
                 + resolved_note
                 + f" - reread: diary_read {entry_id_str}]"
             )
-            marked = marked.replace(plain_marker, enriched, 1)
+            text_now = text_now.replace(plain_marker, enriched, 1)
         meta: Dict[str, Any] = {
             "entry_id": entry_id_str,
             "kind": e.kind,
@@ -199,8 +226,65 @@ def capture_diary_elections(
             # while it is still being written) - never his first line standing in
             # (Codex review 3 #9). The book holds the whole text.
             meta["title"] = out.result.get("title") if isinstance(out.result, dict) else None
+        if e.resolves:
+            # The claim and the book's verdict (root backlog 1206): keys, never his words.
+            meta["resolves"] = str(result.get("resolves") or e.resolves)
+            if result.get("resolves_status"):
+                meta["resolves_status"] = str(result["resolves_status"])
+            if result.get("resolved_record_id"):
+                meta["resolved_record_id"] = str(result["resolved_record_id"])
+                meta["resolved_title"] = str(result.get("resolved_title") or "")
+                if result.get("resolved_visibility"):
+                    meta["resolved_visibility"] = str(result["resolved_visibility"])
         entries.append(meta)
+        return text_now
+
+    if resolve_elections:
+        # The resolutions first: each leaves the plain "[kept in diary - note]" marker a ```diary kind=note block
+        # would, so they are written and their markers enriched BEFORE the diary blocks become markers (the
+        # enrichment replaces the first plain marker it finds).
+        from .chat import DiaryElection
+
+        marked = resolved_content
+        for r in resolve_elections:
+            anchors = list(anchor_graph_ids or [])
+            for gid in _evidence_ids(r.evidence, evidence_record_ids, warnings):
+                if gid not in anchors:
+                    anchors.append(gid)
+            marked = _write(DiaryElection(text=r.text, gist=None, kind="note", visibility="self",
+                                          resolves=r.resolves), marked, anchors)
+        marked, elections, notices = parse_diary_blocks(marked)
+        warnings.extend(notices)
+    for e in elections:
+        marked = _write(e, marked, list(anchor_graph_ids or []))
     return marked, entries, warnings
+
+
+def _evidence_ids(tokens: List[str], sheet_ids: Optional[List[str]], warnings: List[str]) -> List[str]:
+    """The graph ids a ```resolve block's `evidence=` tokens name: a number is a moment of the look-back's numbered
+    sheet (`sheet_ids`, 1-based); a graph id or a unique #tail names a sheet record. A token that names no moment is
+    said (one notice per token); the resolution itself never depends on it (the book's check is the bar)."""
+    ids = [str(x) for x in (sheet_ids or []) if str(x or "").strip()]
+    out: List[str] = []
+    for tok in tokens:
+        bare = str(tok).strip().lstrip("#").rstrip(".)")
+        hit: Optional[str] = None
+        if bare.isdigit():
+            idx = int(bare)
+            hit = ids[idx - 1] if 1 <= idx <= len(ids) else None
+        elif bare in ids:
+            hit = bare
+        elif bare:
+            tails = [rid for rid in ids if rid.endswith(bare)]
+            hit = tails[0] if len(tails) == 1 else None
+        if hit is None:
+            warnings.append(
+                f"#NOTE resolve evidence {tok!r} names no moment of this look-back - the resolution stands without "
+                "that link"
+            )
+        elif hit not in out:
+            out.append(hit)
+    return out
 
 
 def rescue_reply_to_home(
@@ -364,7 +448,8 @@ def wrap_llm_handler_with_act_only(
             # IGNORECASE, so a ```Diary fence missing a lowercase substring
             # check would skip capture and rest the raw private words in
             # run vars + ledger while silently losing the book write.
-            and "```diary" in outcome.result["content"].lower()
+            # A ```resolve block is a diary write too (root backlog 1206).
+            and any(f in outcome.result["content"].lower() for f in ("```diary", "```resolve"))
         ):
             try:
                 marked, entries, capture_warnings = capture_diary_elections(
@@ -376,6 +461,7 @@ def wrap_llm_handler_with_act_only(
                     anchor_graph_ids=payload.get("anchor_graph_ids"),
                     rescue_dir=rescue_dir,
                     author_diary=author_diary,
+                    evidence_record_ids=payload.get("evidence_record_ids"),
                 )
             except ActOnlyResolutionError as e:
                 # Losing elected words silently or leaking them are both

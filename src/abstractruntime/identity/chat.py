@@ -280,6 +280,28 @@ def diary_notice(*, kind: str, visibility: str, record_id: Any, title: Any) -> O
     return out
 
 
+def question_resolved_notice(meta: Any) -> Optional[Dict[str, Any]]:
+    """The structured notice of an open question a diary write RESOLVED (root backlog 1206; operator 2026-11-11 02:00:
+    "an entity asked me a question in a visit, I answered, nothing marked it resolved, no badge"): kind
+    "question_resolved", record_id = the QUESTION's graph projection, title = its title as formed ("" while it is
+    still being written, and for a private question, which is named as private and carries no words).
+
+    `meta` is a diary write's result or the act-only capture's metadata of one entry: the notice exists only when
+    memory's check confirmed the claim (`resolves_status` "resolved_open_question") and the question has a graph
+    record (`resolved_record_id`). The entity declares `resolves=`; the book confirms; nothing here reads his words."""
+    if not isinstance(meta, dict) or meta.get("resolves_status") != "resolved_open_question":
+        return None
+    record_id = str(meta.get("resolved_record_id") or "").strip()
+    if not record_id:
+        return None
+    private = str(meta.get("resolved_visibility") or "").strip().lower() == "private"
+    out: Dict[str, Any] = {"kind": "question_resolved", "record_id": record_id,
+                           "title": "" if private else str(meta.get("resolved_title") or "")}
+    if private:
+        out["visibility"] = "private"
+    return out
+
+
 def served_turn(marked_reply: str, served: List[Tuple[Dict[str, Any], str]]) -> Tuple[str, List[Dict[str, Any]]]:
     """(served reply, notices) from the marked reply and the (notice, marker) pairs of what the turn formed: the
     notices in the order their markers stand in his reply, the reply without those markers (`without_markers`)."""

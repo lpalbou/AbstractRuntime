@@ -262,6 +262,21 @@ def _coerce_receipts(value: Any) -> List[Dict[str, Any]]:
     return out
 
 
+def _projection_row(store: Any, entity_id: str, entry_id: str) -> Any:
+    """The graph PROJECTION record of one diary entry (its `dcterms:abstract` assertion: attributes.entry_id joins the
+    book and graph namespaces), or None when it has none (a chain-only diary, a projection that failed)."""
+    from abstractmemory import TripleQuery
+
+    for scope in ("diary", "life", "self"):
+        for a in store.query(TripleQuery(
+                predicate="dcterms:abstract", scope=scope,
+                owner_id=entity_id, limit=0)):
+            attrs = a.attributes if isinstance(a.attributes, dict) else {}
+            if attrs.get("record_kind") == "diary" and str(attrs.get("entry_id") or "") == entry_id:
+                return a
+    return None
+
+
 def _birth_trail(memory_system: Any, entity_id: str, entry_id: str) -> Dict[str, Any]:
     """The graph trail behind one diary entry (diary---verbatims room,
     2026-07-19): find the entry's PROJECTION record (attributes.entry_id
@@ -280,17 +295,8 @@ def _birth_trail(memory_system: Any, entity_id: str, entry_id: str) -> Dict[str,
         return {}
     from abstractmemory import TripleQuery
 
-    projection_id = ""
-    for scope in ("diary", "life", "self"):
-        for a in store.query(TripleQuery(
-                predicate="dcterms:abstract", scope=scope,
-                owner_id=entity_id, limit=0)):
-            attrs = a.attributes if isinstance(a.attributes, dict) else {}
-            if attrs.get("record_kind") == "diary" and str(attrs.get("entry_id") or "") == entry_id:
-                projection_id = str(a.subject or "")
-                break
-        if projection_id:
-            break
+    row = _projection_row(store, entity_id, entry_id)
+    projection_id = str(row.subject or "") if row is not None else ""
     if not projection_id:
         return {}
     written_amid: List[str] = []
@@ -444,6 +450,7 @@ def build_diary_effect_handlers(
         # both lanes (chat driver + visit capture read the same result).
         resolves_raw = (str(payload.get("resolves")).strip() or None) if payload.get("resolves") else None
         resolves_status: Optional[str] = None
+        resolves_target_private = False
         if resolves_raw:
             try:
                 existing = diary_store.list_entries()
@@ -465,6 +472,7 @@ def build_diary_effect_handlers(
                             target = matches[0]
                             resolves_raw = str(target.get("entry_id"))
                 target_kind = str(target.get("kind")) if target is not None else ""
+                resolves_target_private = target is not None and str(target.get("visibility") or "") == "private"
                 if target is None:
                     resolves_status = "target_not_found"
                 elif target_kind not in ("question", "problem"):
@@ -572,6 +580,20 @@ def build_diary_effect_handlers(
             result["remind_at"] = stored.get("remind_at")
         if resolves_status:
             result["resolves_status"] = resolves_status
+            # The claim as the book stored it (a unique hex tail already widened to the full entry id).
+            result["resolves"] = resolves_raw
+            store = getattr(memory_system, "store", None) if memory_system is not None else None
+            if resolves_status in ("resolved_open_question", "repaired_open_problem") and store is not None:
+                # WHAT was resolved, as the graph holds it (root backlog 1206, operator 2026-11-11 02:00: the answered
+                # question showed no badge): its projection's graph id and title as formed, so a lane can serve the
+                # resolution as a notice that opens the question. A private question carries no words: title "".
+                row = _projection_row(store, eid, resolves_raw)
+                if row is not None:
+                    attrs = row.attributes if isinstance(row.attributes, dict) else {}
+                    result["resolved_record_id"] = str(row.subject)
+                    result["resolved_title"] = "" if resolves_target_private else str(attrs.get("title") or "")
+                    if resolves_target_private:
+                        result["resolved_visibility"] = "private"
             # P2-3 (pathway adversary): repaired_open_problem is the problem
             # lane's SUCCESS - warning on it gaslit his rare wins.
             if resolves_status not in ("resolved_open_question", "repaired_open_problem"):

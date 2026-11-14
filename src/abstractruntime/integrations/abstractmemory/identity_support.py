@@ -117,6 +117,9 @@ def project_diary_entry(
     home_dir: Optional[Any] = None,
     authored: Optional[Dict[str, Any]] = None,
     authoring_failure: Optional[Dict[str, Any]] = None,
+    resolves_status: Optional[str] = None,
+    resolved_record_id: Optional[str] = None,
+    resolved_title: Optional[str] = None,
 ) -> Tuple[Optional[str], List[str]]:
     """Project the MEMORY OF THE ACT of a diary write into the graph.
 
@@ -231,6 +234,14 @@ def project_diary_entry(
             }
         provenance = {"source": "diary-projection", "entry_id": entry_id}
         provenance.update({k: v for k, v in origin.items() if v is not None})
+
+    # Verdicts/record identities are word-free keys, including on private acts. A target's title
+    # is carried only when both the act and the target are public; blank titles are omitted.
+    for key, value in (("resolves_status", resolves_status), ("resolved_record_id", resolved_record_id)):
+        if isinstance(value, str) and value.strip():
+            attributes[key] = value.strip()
+    if not private and isinstance(resolved_title, str) and resolved_title.strip():
+        attributes["resolved_title"] = resolved_title.strip()
 
     # Writer-declared authorship metadata (c5270 P2-2, jointly ruled with
     # memory): projections of machine-worded entries carry the writer's

@@ -896,6 +896,7 @@ def model_catalog(
     hub_page: Optional[int] = None,
     hub_page_size: Optional[int] = None,
     extended: Optional[bool] = None,
+    detail_repo: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Contract C (`model_catalog_v1`): downloadable models with presence and a fit verdict.
 
@@ -913,6 +914,8 @@ def model_catalog(
     asked: Dict[str, Any] = dict(paging)
     if extended:
         asked["extended"] = True
+    if detail_repo:
+        asked["detail_repo"] = str(detail_repo)
     if asked:
         import inspect
 
@@ -930,6 +933,11 @@ def model_catalog(
                 _installed_abstractcore_version(),
                 missing="abstractcore.config.model_catalog.catalog(extended=)",
                 required="an AbstractCore whose catalog accepts extended (backlog 0865)",
+            )
+        if "detail_repo" in asked and "detail_repo" not in params:
+            raise AbstractCoreTooOld(
+                "Selected Hugging Face repository details", _installed_abstractcore_version(),
+                missing="abstractcore.config.model_catalog.catalog(detail_repo=)", required="AbstractCore>=2.35.2",
             )
         kwargs.update(asked)
     return dict(catalog.catalog(q or None, **kwargs))

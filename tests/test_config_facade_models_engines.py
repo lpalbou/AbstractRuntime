@@ -268,6 +268,8 @@ def test_reads_pass_arguments_through_unchanged(fake_core) -> None:
     with pytest.raises(facade.AbstractCoreTooOld) as too_old:
         facade.model_catalog("qwen", hub=True, extended=True)
     assert "Every quant of a model" in str(too_old.value) and "extended" in str(too_old.value)
+    with pytest.raises(facade.AbstractCoreTooOld, match="Selected Hugging Face repository details"):
+        facade.model_catalog("qwen", hub=True, detail_repo="org/Model")
 
     facade.list_installed_models("lmstudio")
     assert fake_core.calls.installed.last() == {"provider": "lmstudio"}
@@ -541,3 +543,14 @@ def test_catalog_pages_pass_through_to_an_abstractcore_that_has_them(fake_core, 
     assert fake_core.calls.catalog.last()["extended"] is True
     facade.model_catalog("qwen", hub=True)  # no page asked: none passed, AbstractCore's default applies
     assert (fake_core.calls.catalog.last()["hub_page"], fake_core.calls.catalog.last()["hub_page_size"]) == (1, 20)
+
+
+def test_selected_repo_details_are_forwarded_exactly(fake_core, monkeypatch):
+    mod = sys.modules["abstractcore.config.model_catalog"]
+    seen = []
+    def selected(q=None, *, detail_repo=None, **kwargs):
+        seen.append((q, detail_repo, kwargs))
+        return {"schema": "model_catalog_v1", "rows": []}
+    monkeypatch.setattr(mod, "catalog", selected)
+    facade.model_catalog("qwen", hub=True, detail_repo="org/Model")
+    assert seen == [("qwen", "org/Model", {"engine": None, "fits": False, "hub": True, "tags": None})]

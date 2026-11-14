@@ -1,15 +1,15 @@
 # AbstractRuntime
 
-**Release 0.19.5:** a question the entity asked in a visit is marked resolved when the person answers it: the
-end-of-visit look-back offers a resolve block, the diary records the resolution and the turn carries a
-`question_resolved` notice. Requires AbstractCore 2.35.0 and AbstractMemory 0.5.1. See
+**Release 0.19.6:** stable diary-resolution verdicts across graph projection and replay,
+bounded Hugging Face discovery through Core, and cancellation protected against stale Runtime
+state publication. Requires AbstractCore 2.35.2 and AbstractMemory 0.5.2. See
 [release notes](CHANGELOG.md).
 
 **AbstractRuntime** is a durable workflow runtime (interrupt → checkpoint → resume) with an append-only execution ledger.
 
 It is designed for long-running workflows that must survive restarts and explicitly model blocking (human input, timers, external events, subworkflows) without keeping Python stacks alive.
 
-**Version:** 0.19.5 • **Python:** 3.10+
+**Version:** 0.19.6 • **Python:** 3.10+
 
 **Status:** pre-1.0 (API may evolve). For production use, pin versions and follow `CHANGELOG.md`.
 

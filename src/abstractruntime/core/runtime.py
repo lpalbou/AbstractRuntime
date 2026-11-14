@@ -22,6 +22,7 @@ from dataclasses import dataclass, asdict, is_dataclass, replace as dataclasses_
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, Optional, List
 import copy
+import functools
 import hashlib
 import inspect
 import json
@@ -528,6 +529,52 @@ class _PerRunLocks:
 
 
 _RESUME_LOCKS = _PerRunLocks()
+
+
+class _RunPublicationCancelled(BaseException):
+    """Internal control transfer: a detached cancellation won publication."""
+    def __init__(self, state: RunState):
+        self.state = state
+
+
+def _detached_run_state(run: RunState) -> RunState:
+    # Dynamic _runtime_* attachments contain stores, connections and locks.
+    # Only the persisted dataclass fields belong to a cancellation snapshot.
+    from dataclasses import fields
+    return RunState(**{field.name: copy.deepcopy(getattr(run, field.name)) for field in fields(RunState)})
+
+
+def _cancelled_publication_as_state(method):
+    @functools.wraps(method)
+    def wrapped(*args, **kwargs):
+        try:
+            return method(*args, **kwargs)
+        except _RunPublicationCancelled as cancelled:
+            return cancelled.state
+    return wrapped
+
+
+def _cancelled_publication_as_none(method):
+    @functools.wraps(method)
+    def wrapped(*args, **kwargs):
+        try:
+            return method(*args, **kwargs)
+        except _RunPublicationCancelled:
+            return None
+    return wrapped
+
+
+def _cancelled_publication_as_effect(method):
+    @functools.wraps(method)
+    def wrapped(*args, **kwargs):
+        try:
+            return method(*args, **kwargs)
+        except _RunPublicationCancelled as cancelled:
+            return EffectOutcome.failed(f"Target run {cancelled.state.run_id} is cancelled; memory-owner update refused")
+    return wrapped
+
+
+
 
 
 @contextmanager
@@ -1753,7 +1800,7 @@ class Runtime:
             run_id=explicit_id,
         )
         if explicit_id is None:
-            self._run_store.save(run)
+            self._save_run_state(run)
             return run, True
         return self._run_store.create_if_absent(run)
 
@@ -1802,6 +1849,23 @@ class Runtime:
         out["_runtime"] = runtime_ns
         return out
 
+    def _save_run_state(self, run: RunState) -> None:
+        """Short publication arbitration, never held during effect execution.
+
+        Runtime objects sharing a store in this writer process share this lock.
+        A detached cancelled snapshot cannot be overwritten by an older tick or
+        command. Raw store writers retain their existing synchronization contract.
+        """
+        with _RESUME_LOCKS.hold("publication:" + run.run_id):
+            # Keep the normal commit path on the store's narrow control read;
+            # large SQLite run documents need not be deserialized per save.
+            probe = getattr(self._run_store, "probe_control", None)
+            control = probe(run.run_id) if callable(probe) else None
+            current = self._run_store.load(run.run_id) if control is None or control[0] == RunStatus.CANCELLED.value else None
+            if current is not None and current.status == RunStatus.CANCELLED and current is not run:
+                raise _RunPublicationCancelled(current)
+            self._run_store.save(run)
+
     def cancel_run(
         self, run_id: str, *, reason: Optional[str] = None, cancelled_by: str = "api"
     ) -> RunState:
@@ -1813,7 +1877,11 @@ class Runtime:
                 return self._cancel_run_commit(run_id, reason=reason, cancelled_by=cancelled_by)
         return self._cancel_run_commit(run_id, reason=reason, cancelled_by=cancelled_by)
 
-    def _cancel_run_commit(
+    def _cancel_run_commit(self, run_id: str, *, reason: Optional[str] = None, cancelled_by: str = "api") -> RunState:
+        with _RESUME_LOCKS.hold("publication:" + run_id):
+            return self._cancel_run_publish(run_id, reason=reason, cancelled_by=cancelled_by)
+
+    def _cancel_run_publish(
         self, run_id: str, *, reason: Optional[str] = None, cancelled_by: str = "api"
     ) -> RunState:
         """Cancel a run.
@@ -1841,7 +1909,7 @@ class Runtime:
         Raises:
             KeyError: If run_id not found.
         """
-        run = self.get_state(run_id)
+        run = _detached_run_state(self.get_state(run_id))
 
         # Terminal states cannot be cancelled
         if run.status in (RunStatus.COMPLETED, RunStatus.FAILED):
@@ -2153,7 +2221,7 @@ class Runtime:
             last_seq = max(seqs)
             runtime_ns["steer_watermark"] = last_seq
             run.updated_at = utc_now_iso()
-            self._run_store.save(run)
+            self._save_run_state(run)
             # The observable ack (H4): "seen" is a durable fact in the run's
             # own ledger. Shaped like the abstract.status convention (an
             # EMIT_EVENT record with a namespaced name) so ledger consumers
@@ -2184,6 +2252,7 @@ class Runtime:
             self._health.record_error("steer_drain", str(e))
             logger.warning("steer sidecar drain failed for run %s: %s", run.run_id, e)
 
+    @_cancelled_publication_as_state
     def pause_run(self, run_id: str, *, reason: Optional[str] = None) -> RunState:
         if question_of(self.get_state(run_id).waiting):
             with _RESUME_LOCKS.hold("question-resolution:" + run_id):
@@ -2233,9 +2302,10 @@ class Runtime:
             )
 
         run.updated_at = utc_now_iso()
-        self._run_store.save(run)
+        self._save_run_state(run)
         return run
 
+    @_cancelled_publication_as_state
     def resume_run(self, run_id: str) -> RunState:
         if question_of(self.get_state(run_id).waiting):
             with _RESUME_LOCKS.hold("question-resolution:" + run_id):
@@ -2270,7 +2340,7 @@ class Runtime:
             self._apply_resume_payload(run, payload={}, override_node=resume_to)
 
         run.updated_at = utc_now_iso()
-        self._run_store.save(run)
+        self._save_run_state(run)
         return run
 
     def get_state(self, run_id: str) -> RunState:
@@ -2456,6 +2526,7 @@ class Runtime:
 
         return warnings
 
+    @_cancelled_publication_as_none
     def update_limits(self, run_id: str, updates: Dict[str, Any]) -> None:
         """Update limits for a running workflow.
 
@@ -2488,7 +2559,7 @@ class Runtime:
             if key in allowed_keys:
                 limits[key] = value
 
-        self._run_store.save(run)
+        self._save_run_state(run)
 
     def add_terminal_hook(self, hook: Callable[[RunState], None]) -> None:
         """Register a best-effort callback invoked when a run reaches a terminal status.
@@ -2681,6 +2752,8 @@ class Runtime:
             # by the next save of the in-memory RunState.
             with run_mutation_lock(run_id):
                 state = self._tick_impl(workflow=workflow, run_id=run_id, max_steps=max_steps, step_gate=step_gate)
+        except _RunPublicationCancelled as cancelled:
+            state = cancelled.state
         except EffectInterrupted:
             # The host stopped on purpose mid-effect: not a breakage of this tick
             # (no `record_error`). The run stays RUNNING at its last durable step;
@@ -2904,26 +2977,30 @@ class Runtime:
 
             # Completion
             if plan.complete_output is not None:
-                controlled = _abort_if_externally_controlled()
-                if controlled is not None:
-                    return controlled
-                run.status = RunStatus.COMPLETED
-                run.output = plan.complete_output
-                run.updated_at = utc_now_iso()
-                # CRASH-ORDERING INVARIANT (0045, docs/architecture.md):
-                # the completion record appends BEFORE the save that makes
-                # completion true. Save-then-append was inversion 1 - a
-                # crash in between minted a COMPLETED run whose ledger
-                # never terminated (the busy-poller incident shape).
-                # Idempotency-keyed so a crash-replay (append landed, save
-                # did not) re-completes without a duplicate terminal record.
-                self._append_completion_record(
-                    run, node_id=plan.node_id,
-                    result={"completed": True, "output": _jsonable(run.output)},
-                )
-                self._run_store.save(run)
-                self._append_terminal_status_event(run)
-                return run
+                with _RESUME_LOCKS.hold("publication:" + run.run_id):
+                    current = self._run_store.load(run.run_id)
+                    if current is not None and current.status == RunStatus.CANCELLED and current is not run:
+                        raise _RunPublicationCancelled(current)
+                    controlled = _abort_if_externally_controlled()
+                    if controlled is not None:
+                        return controlled
+                    run.status = RunStatus.COMPLETED
+                    run.output = plan.complete_output
+                    run.updated_at = utc_now_iso()
+                    # CRASH-ORDERING INVARIANT (0045, docs/architecture.md):
+                    # the completion record appends BEFORE the save that makes
+                    # completion true. Save-then-append was inversion 1 - a
+                    # crash in between minted a COMPLETED run whose ledger
+                    # never terminated (the busy-poller incident shape).
+                    # Idempotency-keyed so a crash-replay (append landed, save
+                    # did not) re-completes without a duplicate terminal record.
+                    self._append_completion_record(
+                        run, node_id=plan.node_id,
+                        result={"completed": True, "output": _jsonable(run.output)},
+                    )
+                    self._save_run_state(run)
+                    self._append_terminal_status_event(run)
+                    return run
 
             # Pure transition
             if plan.effect is None:
@@ -2935,7 +3012,7 @@ class Runtime:
                 _record_transition_predecessor(run, node_id=plan.node_id, next_node=plan.next_node)
                 run.current_node = plan.next_node
                 run.updated_at = utc_now_iso()
-                self._run_store.save(run)
+                self._save_run_state(run)
                 continue
 
             # Effectful step - check for prior completed result (idempotency)
@@ -3102,21 +3179,25 @@ class Runtime:
                 # batch starts and no partial output feeds another model call.
                 # The normal case: the cancel command already persisted
                 # CANCELLED, and the store probe returns it untouched.
-                controlled = _abort_if_externally_controlled()
-                if controlled is not None:
-                    return controlled
-                # A cancel that did not come through `cancel_run` (e.g. a host
-                # signalled the effect directly): end the run CANCELLED here,
-                # with the attribution, rather than leave it RUNNING.
-                details = outcome.result if isinstance(outcome.result, dict) else {}
-                run.status = RunStatus.CANCELLED
-                run.error = str(details.get("reason") or f"Cancelled ({details.get('cancelled_by') or 'unknown'})")
-                run.waiting = None
-                run.updated_at = utc_now_iso()
-                _advance_effect_seq()
-                self._run_store.save(run)
-                self._append_terminal_status_event(run)
-                return run
+                with _RESUME_LOCKS.hold("publication:" + run.run_id):
+                    current = self._run_store.load(run.run_id)
+                    if current is not None and current.status == RunStatus.CANCELLED and current is not run:
+                        raise _RunPublicationCancelled(current)
+                    controlled = _abort_if_externally_controlled()
+                    if controlled is not None:
+                        return controlled
+                    # A cancel that did not come through `cancel_run` (e.g. a host
+                    # signalled the effect directly): end the run CANCELLED here,
+                    # with the attribution, rather than leave it RUNNING.
+                    details = outcome.result if isinstance(outcome.result, dict) else {}
+                    run.status = RunStatus.CANCELLED
+                    run.error = str(details.get("reason") or f"Cancelled ({details.get('cancelled_by') or 'unknown'})")
+                    run.waiting = None
+                    run.updated_at = utc_now_iso()
+                    _advance_effect_seq()
+                    self._save_run_state(run)
+                    self._append_terminal_status_event(run)
+                    return run
 
             if outcome.status == "failed":
                 # OPT-IN FAILURE ABSORPTION (`payload._absorb_failure`, the
@@ -3132,43 +3213,47 @@ class Runtime:
                 # node trace above already recorded the failure honestly.
                 # Retries are unaffected: absorption converts only the
                 # FINAL failed outcome, after the effect policy's retries.
-                absorb = False
-                try:
-                    absorb = bool((effect.payload or {}).get("_absorb_failure"))
-                except Exception:
+                with _RESUME_LOCKS.hold("publication:" + run.run_id):
+                    current = self._run_store.load(run.run_id)
+                    if current is not None and current.status == RunStatus.CANCELLED and current is not run:
+                        raise _RunPublicationCancelled(current)
                     absorb = False
-                if absorb and plan.next_node:
-                    self._health.increment("absorbed_failures_total")
-                    if effect.result_key:
-                        _set_nested(
-                            run.vars,
-                            effect.result_key,
-                            {
-                                "ok": False,
-                                "absorbed_failure": str(outcome.error or "unknown error"),
-                            },
+                    try:
+                        absorb = bool((effect.payload or {}).get("_absorb_failure"))
+                    except Exception:
+                        absorb = False
+                    if absorb and plan.next_node:
+                        self._health.increment("absorbed_failures_total")
+                        if effect.result_key:
+                            _set_nested(
+                                run.vars,
+                                effect.result_key,
+                                {
+                                    "ok": False,
+                                    "absorbed_failure": str(outcome.error or "unknown error"),
+                                },
+                            )
+                        controlled = _abort_if_externally_controlled()
+                        if controlled is not None:
+                            return controlled
+                        _record_transition_predecessor(
+                            run, node_id=plan.node_id, next_node=plan.next_node
                         )
+                        run.current_node = plan.next_node
+                        run.updated_at = utc_now_iso()
+                        _advance_effect_seq()
+                        self._save_run_state(run)
+                        continue
                     controlled = _abort_if_externally_controlled()
                     if controlled is not None:
                         return controlled
-                    _record_transition_predecessor(
-                        run, node_id=plan.node_id, next_node=plan.next_node
-                    )
-                    run.current_node = plan.next_node
+                    run.status = RunStatus.FAILED
+                    run.error = outcome.error or "unknown error"
                     run.updated_at = utc_now_iso()
                     _advance_effect_seq()
-                    self._run_store.save(run)
-                    continue
-                controlled = _abort_if_externally_controlled()
-                if controlled is not None:
-                    return controlled
-                run.status = RunStatus.FAILED
-                run.error = outcome.error or "unknown error"
-                run.updated_at = utc_now_iso()
-                _advance_effect_seq()
-                self._run_store.save(run)
-                self._append_terminal_status_event(run)
-                return run
+                    self._save_run_state(run)
+                    self._append_terminal_status_event(run)
+                    return run
 
             if outcome.status == "waiting":
                 assert outcome.wait is not None
@@ -3180,7 +3265,7 @@ class Runtime:
                 run.waiting = outcome.wait
                 run.updated_at = utc_now_iso()
                 _advance_effect_seq()
-                self._run_store.save(run)
+                self._save_run_state(run)
                 return run
 
             # completed
@@ -3194,23 +3279,27 @@ class Runtime:
             # complete the run in a single StepPlan. Allowing next_node=None
             # makes "end on an effect node" valid (Blueprint-style UX).
             if not plan.next_node:
-                controlled = _abort_if_externally_controlled()
-                if controlled is not None:
-                    return controlled
-                run.status = RunStatus.COMPLETED
-                run.output = {"success": True, "result": outcome.result}
-                run.updated_at = utc_now_iso()
-                _advance_effect_seq()
-                # 0045 invariant: terminal evidence appends before the
-                # commit-point save (the effect's own COMPLETED record
-                # exists already; this is the run-level terminal record).
-                self._append_completion_record(
-                    run, node_id=plan.node_id,
-                    result={"completed": True, "output": _jsonable(run.output)},
-                )
-                self._run_store.save(run)
-                self._append_terminal_status_event(run)
-                return run
+                with _RESUME_LOCKS.hold("publication:" + run.run_id):
+                    current = self._run_store.load(run.run_id)
+                    if current is not None and current.status == RunStatus.CANCELLED and current is not run:
+                        raise _RunPublicationCancelled(current)
+                    controlled = _abort_if_externally_controlled()
+                    if controlled is not None:
+                        return controlled
+                    run.status = RunStatus.COMPLETED
+                    run.output = {"success": True, "result": outcome.result}
+                    run.updated_at = utc_now_iso()
+                    _advance_effect_seq()
+                    # 0045 invariant: terminal evidence appends before the
+                    # commit-point save (the effect's own COMPLETED record
+                    # exists already; this is the run-level terminal record).
+                    self._append_completion_record(
+                        run, node_id=plan.node_id,
+                        result={"completed": True, "output": _jsonable(run.output)},
+                    )
+                    self._save_run_state(run)
+                    self._append_terminal_status_event(run)
+                    return run
             controlled = _abort_if_externally_controlled()
             if controlled is not None:
                 return controlled
@@ -3218,7 +3307,7 @@ class Runtime:
             run.current_node = plan.next_node
             run.updated_at = utc_now_iso()
             _advance_effect_seq()
-            self._run_store.save(run)
+            self._save_run_state(run)
 
         return run
 
@@ -3272,6 +3361,7 @@ class Runtime:
                     int(runtime_ns.get("evidence_warnings_dropped") or 0) + overflow
                 )
 
+    @_cancelled_publication_as_state
     def resume(
         self,
         *,
@@ -3370,7 +3460,7 @@ class Runtime:
         }
         if save:
             run.updated_at = utc_now_iso()
-            self._run_store.save(run)
+            self._save_run_state(run)
         return True
 
     def _waiting_record(
@@ -3853,42 +3943,46 @@ class Runtime:
         # otherwise create an infinite wait/resume loop).
         if resume_to is None:
             # Capture the wait context for observability before clearing it.
-            wait_before = run.waiting
-            wait_reason = None
-            wait_key0 = None
-            try:
-                if wait_before is not None:
-                    r0 = getattr(wait_before, "reason", None)
-                    wait_reason = r0.value if hasattr(r0, "value") else str(r0) if r0 is not None else None
-                    wait_key0 = getattr(wait_before, "wait_key", None)
-            except Exception:
+            with _RESUME_LOCKS.hold("publication:" + run.run_id):
+                current = self._run_store.load(run.run_id)
+                if current is not None and current.status == RunStatus.CANCELLED and current is not run:
+                    raise _RunPublicationCancelled(current)
+                wait_before = run.waiting
                 wait_reason = None
                 wait_key0 = None
+                try:
+                    if wait_before is not None:
+                        r0 = getattr(wait_before, "reason", None)
+                        wait_reason = r0.value if hasattr(r0, "value") else str(r0) if r0 is not None else None
+                        wait_key0 = getattr(wait_before, "wait_key", None)
+                except Exception:
+                    wait_reason = None
+                    wait_key0 = None
 
-            run.status = RunStatus.COMPLETED
-            run.waiting = None
-            run.output = {"success": True, "result": stored_payload}
-            run.updated_at = utc_now_iso()
-            # 0045 invariant (inversion 3 was save-then-append): the
-            # terminal record appends BEFORE the commit-point save; there
-            # is no follow-up tick() to append one later.
-            self._append_completion_record(
-                run, node_id=str(getattr(run, "current_node", None) or "") or "unknown",
-                result={
-                    "completed": True,
-                    "via": "resume",
-                    "wait_reason": wait_reason,
-                    "wait_key": wait_key0,
-                    "output": _jsonable(run.output),
-                },
-            )
-            self._run_store.save(run)
-            self._append_terminal_status_event(run)
-            return run, True
+                run.status = RunStatus.COMPLETED
+                run.waiting = None
+                run.output = {"success": True, "result": stored_payload}
+                run.updated_at = utc_now_iso()
+                # 0045 invariant (inversion 3 was save-then-append): the
+                # terminal record appends BEFORE the commit-point save; there
+                # is no follow-up tick() to append one later.
+                self._append_completion_record(
+                    run, node_id=str(getattr(run, "current_node", None) or "") or "unknown",
+                    result={
+                        "completed": True,
+                        "via": "resume",
+                        "wait_reason": wait_reason,
+                        "wait_key": wait_key0,
+                        "output": _jsonable(run.output),
+                    },
+                )
+                self._save_run_state(run)
+                self._append_terminal_status_event(run)
+                return run, True
 
         self._apply_resume_payload(run, payload=payload, override_node=resume_to)
         run.updated_at = utc_now_iso()
-        self._run_store.save(run)
+        self._save_run_state(run)
         return run, False
 
     # ---------------------------------------------------------------------
@@ -3952,7 +4046,7 @@ class Runtime:
             session_id=None,
             parent_run_id=None,
         )
-        self._run_store.save(run)
+        self._save_run_state(run)
         return run
 
     def _session_memory_run_id(self, session_id: str) -> str:
@@ -3998,7 +4092,7 @@ class Runtime:
             session_id=str(session_id or "").strip() or None,
             parent_run_id=None,
         )
-        self._run_store.save(run)
+        self._save_run_state(run)
         return run
 
     def _resolve_run_tree_root_run(self, run: RunState) -> RunState:
@@ -6113,6 +6207,7 @@ class Runtime:
             }
         )
 
+    @_cancelled_publication_as_effect
     def _handle_memory_tag(self, run: RunState, effect: Effect, default_next_node: Optional[str]) -> EffectOutcome:
         """Handle MEMORY_TAG.
 
@@ -6289,7 +6384,7 @@ class Runtime:
             applied.append(entry)
             if target_run is not run:
                 target_run.updated_at = utc_now_iso()
-                self._run_store.save(target_run)
+                self._save_run_state(target_run)
 
         if not applied:
             if artifact_id:
@@ -6317,6 +6412,7 @@ class Runtime:
         }
         return EffectOutcome.completed(result=result)
 
+    @_cancelled_publication_as_effect
     def _handle_memory_compact(self, run: RunState, effect: Effect, default_next_node: Optional[str]) -> EffectOutcome:
         """Handle MEMORY_COMPACT.
 
@@ -6642,7 +6738,7 @@ class Runtime:
 
         if target_run is not run:
             target_run.updated_at = now_iso()
-            self._run_store.save(target_run)
+            self._save_run_state(target_run)
 
         out = {
             "llm_run_id": sub_run_id,
@@ -6670,6 +6766,7 @@ class Runtime:
         }
         return EffectOutcome.completed(result=result)
 
+    @_cancelled_publication_as_effect
     def _handle_memory_note(self, run: RunState, effect: Effect, default_next_node: Optional[str]) -> EffectOutcome:
         """Handle MEMORY_NOTE.
 
@@ -6869,13 +6966,13 @@ class Runtime:
                 # Persist when mutating a different run than the currently executing one.
                 if base_run is not run:
                     base_run.updated_at = utc_now_iso()
-                    self._run_store.save(base_run)
+                    self._save_run_state(base_run)
             except Exception as e:
                 kept = {"inserted": 0, "skipped": 0, "error": str(e)}
 
         if target_run is not run:
             target_run.updated_at = utc_now_iso()
-            self._run_store.save(target_run)
+            self._save_run_state(target_run)
 
         rendered_tags = json.dumps(clean_tags, ensure_ascii=False, sort_keys=True) if clean_tags else "{}"
         text = f"Stored memory_note span_id={artifact_id} tags={rendered_tags}"
@@ -6898,6 +6995,7 @@ class Runtime:
         }
         return EffectOutcome.completed(result=result)
 
+    @_cancelled_publication_as_effect
     def _handle_memory_rehydrate(self, run: RunState, effect: Effect, default_next_node: Optional[str]) -> EffectOutcome:
         """Handle MEMORY_REHYDRATE.
 
@@ -7046,7 +7144,7 @@ class Runtime:
         # Persist when mutating a different run than the currently executing one.
         if target_run is not run:
             target_run.updated_at = utc_now_iso()
-            self._run_store.save(target_run)
+            self._save_run_state(target_run)
 
         # Normalize output shape to match backlog expectations (`span_id` field, optional kind).
         artifacts_out: list[dict[str, Any]] = []

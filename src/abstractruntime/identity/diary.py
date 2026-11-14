@@ -350,7 +350,8 @@ def build_diary_effect_handlers(
         )
 
     def _project(entry: DiaryEntry, record_hash: Optional[str] = None, *, authored: Optional[Dict[str, Any]] = None,
-                 authoring_failure: Optional[Dict[str, Any]] = None) -> tuple[Optional[str], List[str]]:
+                 authoring_failure: Optional[Dict[str, Any]] = None,
+                 resolution: Optional[Dict[str, Any]] = None) -> tuple[Optional[str], List[str]]:
         """Project the MEMORY OF THE ACT into the graph (findability plane).
 
         The graph involuntarily records that the act happened — "I wrote
@@ -386,6 +387,10 @@ def build_diary_effect_handlers(
             home_dir=home_dir,
             authored=authored,
             authoring_failure=authoring_failure,
+            resolves_status=(resolution or {}).get("resolves_status"),
+            resolved_record_id=(resolution or {}).get("resolved_record_id"),
+            resolved_title=(resolution or {}).get("resolved_title")
+            if (resolution or {}).get("resolved_visibility") != "private" else None,
         )
 
     def _handle_diary_write(run: RunState, effect: Effect, default_next_node: Optional[str]) -> EffectOutcome:
@@ -441,6 +446,17 @@ def build_diary_effect_handlers(
         gist_raw = payload.get("gist")
         gist = gist_raw.strip() if isinstance(gist_raw, str) and gist_raw.strip() else None
 
+        run_id = str(getattr(run, "run_id", "") or "")
+        entry_id = derive_entry_id(run_id=run_id, turn_id=turn_id, text=text)
+        prior_entry = diary_store.get_entry(entry_id)
+        if prior_entry is not None:
+            # A replay returns the immutable act, never a changed claim or visibility from its
+            # retry payload. Resolve against the chain as it stood BEFORE that act; later
+            # entries must not turn its original verdict into a different result.
+            visibility = str(prior_entry.get("visibility") or "self")
+            kind = str(prior_entry.get("kind") or "note")
+            gist = prior_entry.get("gist")
+
         # RESOLVES VALIDATION (adversary F1, 2026-07-18): the ack marker
         # downstream says "resolves your open question <id>" — an UNVERIFIED
         # claim until here (the model often types ids from memory; the
@@ -448,12 +464,16 @@ def build_diary_effect_handlers(
         # the claim AS CLAIMED (his words, his act); the RESULT carries the
         # verdict so enrichment sites assert only what is true. One site,
         # both lanes (chat driver + visit capture read the same result).
-        resolves_raw = (str(payload.get("resolves")).strip() or None) if payload.get("resolves") else None
+        resolution_source = prior_entry if prior_entry is not None else payload
+        resolves_raw = (str(resolution_source.get("resolves")).strip() or None) if resolution_source.get("resolves") else None
         resolves_status: Optional[str] = None
         resolves_target_private = False
         if resolves_raw:
             try:
                 existing = diary_store.list_entries()
+                if prior_entry is not None:
+                    index = next(i for i, item in enumerate(existing) if item.get("entry_id") == entry_id)
+                    existing = existing[:index]
                 target = next(
                     (x for x in existing if str(x.get("entry_id")) == resolves_raw), None
                 )
@@ -506,9 +526,8 @@ def build_diary_effect_handlers(
                     f"DIARY_WRITE digest_method must be a short label (<=64 chars), got {digest_method_raw!r}"
                 )
 
-        run_id = str(getattr(run, "run_id", "") or "")
         entry = DiaryEntry(
-            entry_id=derive_entry_id(run_id=run_id, turn_id=turn_id, text=text),
+            entry_id=entry_id,
             author=eid,
             text=text,
             gist=gist,
@@ -531,6 +550,9 @@ def build_diary_effect_handlers(
                 **({"digest_method": digest_method} if digest_method else {}),
             },
         )
+        if prior_entry is not None:
+            entry = DiaryEntry(**{key: value for key, value in prior_entry.items()
+                                  if key in DiaryEntry.__dataclass_fields__})
 
         try:
             appended = diary_store.append_entry(entry)
@@ -555,7 +577,31 @@ def build_diary_effect_handlers(
         # {title?, summary?, reader}), or why it could not (payload.authoring_failure) - Codex review 2 #10.
         authored = payload.get("authored_metadata") if isinstance(payload.get("authored_metadata"), dict) else None
         failure = payload.get("authoring_failure") if isinstance(payload.get("authoring_failure"), dict) else None
-        projected_record_id, warnings = _project(entry, record_hash, authored=authored, authoring_failure=failure)
+        resolution: Dict[str, Any] = {}
+        metadata_warnings: List[str] = []
+        if resolves_status:
+            resolution = {"resolves_status": resolves_status, "resolves": resolves_raw}
+            store = getattr(memory_system, "store", None) if memory_system is not None else None
+            if resolves_status in ("resolved_open_question", "repaired_open_problem") and store is not None:
+                try:
+                    row = _projection_row(store, eid, resolves_raw)
+                except Exception as exc:
+                    # Keep the committed chain act; postpone projection so replay
+                    # can form its immutable assertion with complete metadata.
+                    row = None
+                    metadata_warnings.append(f"#FALLBACK diary target metadata unavailable; projection deferred for replay: {type(exc).__name__}: {exc}")
+                if row is not None:
+                    attributes = row.attributes if isinstance(row.attributes, dict) else {}
+                    resolution["resolved_record_id"] = str(row.subject)
+                    resolution["resolved_title"] = "" if resolves_target_private else str(attributes.get("title") or "")
+                    if resolves_target_private:
+                        resolution["resolved_visibility"] = "private"
+        if metadata_warnings:
+            projected_record_id, warnings = None, metadata_warnings
+        else:
+            projected_record_id, warnings = _project(
+                entry, record_hash, authored=authored, authoring_failure=failure, resolution=resolution,
+            )
 
         result: Dict[str, Any] = {
             "entry_id": str(stored.get("entry_id") or entry.entry_id),
@@ -579,21 +625,7 @@ def build_diary_effect_handlers(
         if stored.get("remind_at"):
             result["remind_at"] = stored.get("remind_at")
         if resolves_status:
-            result["resolves_status"] = resolves_status
-            # The claim as the book stored it (a unique hex tail already widened to the full entry id).
-            result["resolves"] = resolves_raw
-            store = getattr(memory_system, "store", None) if memory_system is not None else None
-            if resolves_status in ("resolved_open_question", "repaired_open_problem") and store is not None:
-                # WHAT was resolved, as the graph holds it (root backlog 1206, operator 2026-11-11 02:00: the answered
-                # question showed no badge): its projection's graph id and title as formed, so a lane can serve the
-                # resolution as a notice that opens the question. A private question carries no words: title "".
-                row = _projection_row(store, eid, resolves_raw)
-                if row is not None:
-                    attrs = row.attributes if isinstance(row.attributes, dict) else {}
-                    result["resolved_record_id"] = str(row.subject)
-                    result["resolved_title"] = "" if resolves_target_private else str(attrs.get("title") or "")
-                    if resolves_target_private:
-                        result["resolved_visibility"] = "private"
+            result.update(resolution)
             # P2-3 (pathway adversary): repaired_open_problem is the problem
             # lane's SUCCESS - warning on it gaslit his rare wins.
             if resolves_status not in ("resolved_open_question", "repaired_open_problem"):

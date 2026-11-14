@@ -28,7 +28,7 @@ cue can miss a look or voice change) and 0871 (a visit's sleep and wake entries 
 statistics), found by the visit-without-words fix (0.19.4). Recounted from disk: planned 35, proposed 23, completed
 42, deprecated 15.
 
-- Planned: 35
+- Planned: 36
 - Proposed: 23
 - Completed: 42
 - Deprecated: 15

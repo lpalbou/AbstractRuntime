@@ -20,8 +20,8 @@ Fix:
 - Install or upgrade the base Runtime package. LLM/tools integration, common
   remote-light multimodal dependencies, and the MCP worker entry point are part
   of the base install.
-- The current AbstractCore integration expects `abstractcore>=2.35.0`.
-- Entity homes (`open_home`) expect `AbstractMemory>=0.5.1`; 0.4.x fails when a home opens, and 0.5.0 has no
+- The current AbstractCore integration expects `abstractcore>=2.35.2`.
+- Entity homes (`open_home`) expect `AbstractMemory>=0.5.2`; 0.4.x fails when a home opens, and 0.5.0 has no
   `community_keys_of`, so a visit's recalls carry no `topic` and say why in their warnings.
 
 Verify:

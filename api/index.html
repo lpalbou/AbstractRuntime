@@ -636,6 +636,28 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#diary-resolution-projections" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Diary resolution projections
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#selected-hugging-face-repository-details" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Selected Hugging Face repository details
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -1735,6 +1757,28 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#diary-resolution-projections" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Diary resolution projections
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#selected-hugging-face-repository-details" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Selected Hugging Face repository details
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -1818,6 +1862,13 @@
 <li><code>Runtime.get_state(run_id) -&gt; RunState</code> and <code>Runtime.get_ledger(run_id) -&gt; list[dict]</code></li>
 <li>host-facing read APIs for checkpoints and the append-only ledger</li>
 <li><code>Runtime.cancel_run(run_id, reason=None, cancelled_by="api") -&gt; RunState</code></li>
+</ul>
+<p>Cancellation publishes a detached snapshot. Runtime writers in the same writer process
+  arbitrate short state commits separately from effect execution, so a stale tick cannot
+  overwrite cancellation. The publication lock is independent of provider execution. Completion evidence
+  and state publication share that boundary; an already completed run stays completed.
+  Direct store writers must follow the store's synchronization contract.</p>
+<ul>
 <li>persists <code>CANCELLED</code>, then signals every effect of that run (and its in-flight descendants) executing in this process; the running attempt is recorded as <code>cancelled</code> (<code>StepStatus.CANCELLED</code>, never retried) with <code>cancelled_by</code> and <code>reason</code>, and no further effect starts</li>
 <li><code>Runtime.set_default_provider_model(provider=..., model=...)</code></li>
 <li>re-points the default provider/model seeded into new runs; pair it with the pooled client's <code>set_default_provider_model(...)</code> so both agree</li>
@@ -2247,6 +2298,18 @@ inside an effect handler. Details: <a href="../integrations/abstractmemory/">int
 <p><code>abstractruntime.integrations.abstractcore.server_facade.serve_core_request(scope, receive, send, *, token: str, allow_unauthenticated: bool = False)</code> delegates host-admitted ASGI requests with request-scoped Core authentication. See <a href="../integrations/abstractcore/#host-managed-serving">host-managed serving</a> for network and credential responsibilities.</p>
 <h3 id="structured-output-checks">Structured-output checks<a class="headerlink" href="#structured-output-checks" title="Permanent link">&para;</a></h3>
 <p><code>abstractruntime.integrations.abstractcore.structured_facade.parse_response_format(raw) -&gt; (kind, schema, name)</code> checks an OpenAI <code>response_format</code> and raises <code>ResponseFormatError</code> (AbstractCore's own class, with <code>.param</code>) for an unusable one. Both are also exported flat from <code>abstractruntime.integrations.abstractcore</code>. Requires AbstractCore 2.25.0 or newer. See <a href="../integrations/abstractcore/#structured-output-checks-for-hosts-structured-facade">structured-output checks for hosts</a>.</p>
+<h3 id="diary-resolution-projections">Diary resolution projections<a class="headerlink" href="#diary-resolution-projections" title="Permanent link">&para;</a></h3>
+<p>DIARY_WRITE projects <code>resolves</code>, the recorded <code>resolves_status</code>, and an available
+<code>resolved_record_id</code> onto the memory of the act. A public target's <code>resolved_title</code> is
+omitted when either entry is private. A replay uses the stored diary entry and the
+chain prefix before it, preserving its original verdict. Failed target reads or projection
+writes retain the diary act and return labelled warnings; replay can retry the deferred
+projection. Upgrading does not backfill existing graph assertions.</p>
+<h3 id="selected-hugging-face-repository-details">Selected Hugging Face repository details<a class="headerlink" href="#selected-hugging-face-repository-details" title="Permanent link">&para;</a></h3>
+<p><code>config_facade.model_catalog(..., hub=True, detail_repo="org/repo", extended=True)</code>
+forwards one explicit repository detail request to Core. Ordinary searches use summary
+pages and a shared quota cooldown. A Core without this detail operation raises
+<code>AbstractCoreTooOld</code>; missing sizes are not silently filled by per-result lookups.</p>
 
 
 

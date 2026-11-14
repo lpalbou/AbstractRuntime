@@ -334,7 +334,8 @@ def build_diary_effect_handlers(
     the effect fails loudly there).
 
     `memory_system` (optional, duck-typed `remember_many`) enables the graph
-    projection plane; entries with `visibility="private"` never project.
+    projection plane; entries with `visibility="private"` project a content-free
+    act record rather than their words or question/problem type.
 
     `home_dir` (the home these handlers serve) locates the title-failure file
     (`title_failures`): a public entry projected without a gist is recorded

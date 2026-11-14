@@ -2187,7 +2187,7 @@ applies the same rule.</p>
 </ul>
 <h2 id="runtime-owned-integrations">Runtime-owned integrations<a class="headerlink" href="#runtime-owned-integrations" title="Permanent link">&para;</a></h2>
 <h3 id="abstractcore-llm-tools">AbstractCore (LLM + tools)<a class="headerlink" href="#abstractcore-llm-tools" title="Permanent link">&para;</a></h3>
-<p>Requires: <code>pip install abstractruntime</code> (AbstractCore 2.35.0 or newer is part of the base install).</p>
+<p>Requires: <code>pip install abstractruntime</code> (AbstractCore 2.35.2 or newer is part of the base install).</p>
 <p>Implementation: <code>src/abstractruntime/integrations/abstractcore/*</code>.</p>
 <p>Entry points:
 - <code>create_local_runtime(...)</code>, <code>create_remote_runtime(...)</code>, <code>create_hybrid_runtime(...)</code> (<code>src/abstractruntime/integrations/abstractcore/factory.py</code>)
@@ -2265,7 +2265,7 @@ a mind (assert / close / narrow ops) through <code>abstractmemory.graph.MemoryGr
 VisualFlow node type <code>memory_revise</code>. Payload and result: <a href="../integrations/abstractmemory/#memory_revise-memory-reconsideration-as-a-workflow-step">MEMORY_REVISE</a>.</p>
 <h3 id="abstractmemory-facade-host-surface">AbstractMemory facade (host surface)<a class="headerlink" href="#abstractmemory-facade-host-surface" title="Permanent link">&para;</a></h3>
 <p><code>abstractruntime.integrations.abstractmemory.memory_facade</code> is the only way a host reaches AbstractMemory (ADR 0011;
-AbstractMemory 0.5.1+):</p>
+AbstractMemory 0.5.2+):</p>
 <ul>
 <li><code>MemoryFacade.open_mind(path, *, embedder=None, **stores)</code>; <code>MemoryFacade(graph=, ledger_store=, run_store=,
   artifact_store=, diary_store=, event_inbox=, runtime_id=)</code>; <code>.graph</code>, <code>.store</code>, <code>.journal</code></li>

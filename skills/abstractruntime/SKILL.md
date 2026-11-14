@@ -4,7 +4,7 @@ description: Operate AbstractRuntime through durable Python workflows, effect re
 license: MIT
 compatibility: Python 3.10+. Model execution needs a configured AbstractCore provider or server; local engines need the apple or gpu install profile. This skill uses the Python API rather than a Gateway HTTP API.
 metadata:
-  package-version: "0.19.5"
+  package-version: "0.19.6"
 ---
 
 # AbstractRuntime
@@ -22,7 +22,7 @@ folder when state must survive a restart.
 Install the version this skill describes (or newer):
 
 ```bash
-python -m pip install "abstractruntime>=0.19.5"
+python -m pip install "abstractruntime>=0.19.6"
 ```
 
 The base profile includes remote-light AbstractCore integration and the MCP
@@ -271,3 +271,15 @@ the same as duplicate weights.
 - [Automations](https://raw.githubusercontent.com/lpalbou/AbstractRuntime/main/docs/automations.md): schedules, events, permissions and delivery.
 - [Troubleshooting](https://raw.githubusercontent.com/lpalbou/AbstractRuntime/main/docs/troubleshooting.md): symptom-oriented fixes.
 - [Full docs](https://raw.githubusercontent.com/lpalbou/AbstractRuntime/main/llms-full.txt): the expanded documentation corpus.
+
+## Resolution and cancellation reads
+
+Diary resolution claims require a confirmed `resolves_status`; target graph/title fields
+may be absent. Replay preserves the original verdict. Private titles are omitted, and
+upgrading does not backfill historical projections. A failed projection leaves the diary
+act intact with a labelled warning and can be retried. Runtime cancellation uses a short
+publication boundary independent of provider execution; return the canonical state from
+`cancel_run`, because an already completed run remains completed. Direct store writers
+must obey the store's synchronization contract. Selected HF details use
+`config_facade.model_catalog(hub=True, detail_repo="org/repo", extended=True)`; inspect
+Core's structured quota state before retrying.

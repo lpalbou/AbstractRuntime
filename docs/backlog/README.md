@@ -28,7 +28,7 @@ cue can miss a look or voice change) and 0871 (a visit's sleep and wake entries 
 statistics), found by the visit-without-words fix (0.19.4). Recounted from disk: planned 35, proposed 23, completed
 42, deprecated 15.
 
-- Planned: 35
+- Planned: 36
 - Proposed: 23
 - Completed: 42
 - Deprecated: 15
@@ -234,3 +234,5 @@ Recent deprecation:
   carries the unanimous DO-NOT-BUILD list (no async kernel, no tick-loop
   decomposition, no new eventing abstraction, no ledger auto-pruning, no
   client-class merge) — treat it as binding unless the maintainer overrules.
+
+2026-11-14: added planned [1214](planned/1214_durable_diary_resolution_projection.md) for the accepted release-recovery scope (root 1209).

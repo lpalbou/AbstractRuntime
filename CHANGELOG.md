@@ -10,6 +10,17 @@ Unreleased changes live in [`changelog.d/`](changelog.d/README.md), one file per
 
 ## [Unreleased]
 
+## [0.19.6] - 2026-11-14
+
+### Changed
+
+- Requires AbstractCore 2.35.2 and AbstractMemory 0.5.2. The Core configuration facade forwards explicit single-repository Hugging Face details and reports unsupported older Core versions clearly.
+
+### Fixed
+
+- Diary projection and replay retain the original resolution verdict and available target identifiers. Private titles remain omitted. Temporary projection failures retain the diary act with a labelled warning and can be retried; existing projections are not backfilled.
+- Cancellation is protected against stale Runtime state publication, including completion and wait-resume boundaries, without holding the provider execution lock. Memory-owner conflicts return a refusal for the target rather than changing the executing run's identity.
+
 ## [0.19.5] - 2026-11-11
 
 ### Fixed

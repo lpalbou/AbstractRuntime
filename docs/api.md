@@ -77,6 +77,13 @@ Implementation: `src/abstractruntime/core/runtime.py`.
 - `Runtime.get_state(run_id) -> RunState` and `Runtime.get_ledger(run_id) -> list[dict]`
   - host-facing read APIs for checkpoints and the append-only ledger
 - `Runtime.cancel_run(run_id, reason=None, cancelled_by="api") -> RunState`
+
+  Cancellation publishes a detached snapshot. Runtime writers in the same writer process
+  arbitrate short state commits separately from effect execution, so a stale tick cannot
+  overwrite cancellation. The publication lock is independent of provider execution. Completion evidence
+  and state publication share that boundary; an already completed run stays completed.
+  Direct store writers must follow the store's synchronization contract.
+
   - persists `CANCELLED`, then signals every effect of that run (and its in-flight descendants) executing in this process; the running attempt is recorded as `cancelled` (`StepStatus.CANCELLED`, never retried) with `cancelled_by` and `reason`, and no further effect starts
 - `Runtime.set_default_provider_model(provider=..., model=...)`
   - re-points the default provider/model seeded into new runs; pair it with the pooled client's `set_default_provider_model(...)` so both agree
@@ -589,3 +596,19 @@ inside an effect handler. Details: [integrations/abstractmemory.md](integrations
 ### Structured-output checks
 
 `abstractruntime.integrations.abstractcore.structured_facade.parse_response_format(raw) -> (kind, schema, name)` checks an OpenAI `response_format` and raises `ResponseFormatError` (AbstractCore's own class, with `.param`) for an unusable one. Both are also exported flat from `abstractruntime.integrations.abstractcore`. Requires AbstractCore 2.25.0 or newer. See [structured-output checks for hosts](integrations/abstractcore.md#structured-output-checks-for-hosts-structured-facade).
+
+### Diary resolution projections
+
+DIARY_WRITE projects `resolves`, the recorded `resolves_status`, and an available
+`resolved_record_id` onto the memory of the act. A public target's `resolved_title` is
+omitted when either entry is private. A replay uses the stored diary entry and the
+chain prefix before it, preserving its original verdict. Failed target reads or projection
+writes retain the diary act and return labelled warnings; replay can retry the deferred
+projection. Upgrading does not backfill existing graph assertions.
+
+### Selected Hugging Face repository details
+
+`config_facade.model_catalog(..., hub=True, detail_repo="org/repo", extended=True)`
+forwards one explicit repository detail request to Core. Ordinary searches use summary
+pages and a shared quota cooldown. A Core without this detail operation raises
+`AbstractCoreTooOld`; missing sizes are not silently filled by per-result lookups.

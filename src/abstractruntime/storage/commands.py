@@ -24,6 +24,7 @@ from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Protocol, Tuple, runtime_checkable
+from ..utils.atomic_files import replace_file
 
 
 def _utc_now_iso() -> str:
@@ -212,7 +213,7 @@ class JsonFileCommandCursorStore(CommandCursorStore):
         with self._lock:
             try:
                 tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-                tmp.replace(self._path)
+                replace_file(tmp, self._path)
             finally:
                 try:
                     if tmp.exists():
@@ -398,7 +399,7 @@ class JsonlCommandStore(CommandStore):
             tmp = self._path.with_name(f"{self._path.name}.{uuid.uuid4().hex}.tmp")
             try:
                 tmp.write_text("\n".join(kept) + ("\n" if kept else ""), encoding="utf-8")
-                tmp.replace(self._path)
+                replace_file(tmp, self._path)
             finally:
                 try:
                     if tmp.exists():

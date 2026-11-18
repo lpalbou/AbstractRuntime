@@ -2667,6 +2667,11 @@ def _llm_error_is_retryable(exc: Exception) -> bool:
     if isinstance(exc, pickle.PickleError):
         return False
 
+    # The raise site knows a retry is pointless (AbstractCore's CircuitBreakerOpenError: the
+    # provider is not called again before its pause ends, which outlasts this effect's retries).
+    if getattr(exc, "retryable", True) is False:
+        return False
+
     # Harmony generation artifact (gpt-oss on vLLM, maintainer directive
     # 2026-07-09 "maybe it's something our parser could self-correct"): the
     # server's strict openai-harmony parser 400s when the MODEL'S OWN sampled

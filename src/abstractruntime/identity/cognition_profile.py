@@ -64,6 +64,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Tuple
 
 from .substrate import resolve_home_substrate
+from ..utils.atomic_files import replace_file
 
 logger = logging.getLogger(__name__)
 
@@ -512,7 +513,7 @@ def write_cognition_profile(home_dir: Path, profile: Mapping[str, Any]) -> Dict[
             fh.write(text)
             fh.flush()
             os.fsync(fh.fileno())
-        os.replace(tmp_name, target)
+        replace_file(tmp_name, target)
     except BaseException:
         try:
             os.unlink(tmp_name)

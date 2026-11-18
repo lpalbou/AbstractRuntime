@@ -36,6 +36,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Protocol, Union, runtime_checkable
+from ..utils.atomic_files import replace_file
 
 try:  # POSIX: serialize writers across processes too
     import fcntl  # type: ignore
@@ -233,7 +234,7 @@ def _atomic_write_json(path: Path, value: Any) -> None:
         os.fsync(fd)
     finally:
         os.close(fd)
-    os.replace(str(tmp), str(path))
+    replace_file(tmp, path)
     try:
         dfd = os.open(str(path.parent), os.O_RDONLY)
         try:

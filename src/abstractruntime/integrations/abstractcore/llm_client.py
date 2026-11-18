@@ -25,7 +25,6 @@ import mimetypes
 import os
 from pathlib import Path
 import re
-import selectors
 import subprocess
 import sys
 import tempfile
@@ -37,7 +36,7 @@ import wave
 from dataclasses import asdict, dataclass, is_dataclass
 from datetime import datetime, timezone
 from contextlib import contextmanager
-from typing import Any, Dict, List, Mapping, Optional, Protocol, Sequence, Tuple
+from typing import Any, Dict, Iterator, List, Mapping, Optional, Protocol, Sequence, Tuple
 from urllib.parse import quote, urlencode
 
 from .logging import get_logger
@@ -267,23 +266,56 @@ def _spec_lora_adapters(spec: Dict[str, Any]) -> Optional[List[Dict[str, Any]]]:
     return adapters
 
 
-def _register_subprocess_stream(selector: Any, fileobj: Any, label: str) -> None:
-    try:
-        selector.register(fileobj, selectors.EVENT_READ, data=label)
-    except TypeError:
-        selector.register(fileobj, selectors.EVENT_READ)
+# The media child and this process exchange UTF-8, whatever the OS's own encoding. On Windows
+# (cp1252) the child's progress bar ("█") could not be decoded: the reader of its stderr
+# stopped, the pipe filled, and the child waited for ever in a write while it loaded the model.
+# A prompt with a character outside cp1252 would not have reached the child intact either.
+MEDIA_SUBPROCESS_TEXT: Dict[str, Any] = {"encoding": "utf-8", "errors": "replace"}
 
 
-def _subprocess_stream_label(key: Any, *, stdout: Any, stderr: Any) -> str:
-    label = getattr(key, "data", None)
-    if isinstance(label, str) and label:
-        return label
-    fileobj = getattr(key, "fileobj", None)
-    if fileobj is stderr:
-        return "stderr"
-    if fileobj is stdout:
-        return "stdout"
-    return "stdout"
+def _media_subprocess_env() -> Dict[str, str]:
+    env = dict(os.environ)
+    env.setdefault("PYTHONUNBUFFERED", "1")
+    env["PYTHONIOENCODING"] = "utf-8"
+    return env
+
+
+def _subprocess_lines(proc: Any) -> Iterator[Tuple[str, str]]:
+    """Every line a media child process writes, as `("stdout" | "stderr", line)`, until both
+    of its streams end.
+
+    One reader thread per stream and a queue. `selectors` cannot do this on Windows, where it
+    waits on sockets only: the first image generation there raised "[WinError 10038] An
+    operation was attempted on something that is not a socket" and left the child running
+    with nobody reading it."""
+    import queue
+
+    lines: "queue.Queue[Tuple[str, Optional[str]]]" = queue.Queue()
+    streams = [(label, stream) for label, stream in (("stdout", proc.stdout), ("stderr", getattr(proc, "stderr", None))) if stream is not None]
+
+    def pump(label: str, stream: Any) -> None:
+        try:
+            while True:
+                line = stream.readline()
+                if not line:
+                    break
+                lines.put((label, line))
+            for line in str(stream.read() or "").splitlines():
+                lines.put((label, line))
+        except Exception:  # a stream closed under the reader ends like its end
+            pass
+        finally:
+            lines.put((label, None))
+
+    for label, stream in streams:
+        threading.Thread(target=pump, args=(label, stream), name=f"media-subprocess-{label}", daemon=True).start()
+    open_streams = len(streams)
+    while open_streams:
+        label, line = lines.get()
+        if line is None:
+            open_streams -= 1
+        else:
+            yield label, line
 
 
 def _progress_for_remote_job_state(progress: Dict[str, Any], *, job_id: str, state: str) -> Dict[str, Any]:
@@ -2370,8 +2402,7 @@ def _run_local_image_subprocess(
         "specs": _jsonable(specs),
         "media": _jsonable(media or []),
     }
-    env = dict(os.environ)
-    env.setdefault("PYTHONUNBUFFERED", "1")
+    env = _media_subprocess_env()
 
     def _invoke() -> subprocess.Popen[str]:
         return subprocess.Popen(
@@ -2380,6 +2411,7 @@ def _run_local_image_subprocess(
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
+            **MEDIA_SUBPROCESS_TEXT,
             env=env,
         )
 
@@ -2396,13 +2428,6 @@ def _run_local_image_subprocess(
 
         parsed: Optional[Dict[str, Any]] = None
         output_tail: List[str] = []
-        selector = selectors.DefaultSelector()
-        if proc.stdout is not None:
-            _register_subprocess_stream(selector, proc.stdout, "stdout")
-        proc_stderr = getattr(proc, "stderr", None)
-        if proc_stderr is not None:
-            _register_subprocess_stream(selector, proc_stderr, "stderr")
-
         def _consume_stdout_line(line: str) -> None:
             nonlocal parsed
             stripped = str(line).strip()
@@ -2428,45 +2453,8 @@ def _run_local_image_subprocess(
                 output_tail.append(stripped)
                 del output_tail[:-40]
 
-        try:
-            while True:
-                ready = selector.select(timeout=0.25)
-                if not ready:
-                    if proc.poll() is not None:
-                        break
-                    continue
-                for key, _mask in ready:
-                    line = key.fileobj.readline()
-                    if not line:
-                        if proc.poll() is not None:
-                            break
-                        continue
-                    if _subprocess_stream_label(key, stdout=proc.stdout, stderr=proc_stderr) == "stdout":
-                        _consume_stdout_line(line)
-                    else:
-                        _consume_diagnostic_line(line)
-                if proc.poll() is not None:
-                    break
-            if proc.stdout is not None:
-                try:
-                    remaining = proc.stdout.read()
-                except Exception:
-                    remaining = ""
-                for line in str(remaining or "").splitlines():
-                    _consume_stdout_line(line)
-            if proc_stderr is not None:
-                try:
-                    remaining_err = proc_stderr.read()
-                except Exception:
-                    remaining_err = ""
-                for line in str(remaining_err or "").splitlines():
-                    _consume_diagnostic_line(line)
-        finally:
-            try:
-                selector.close()
-            except Exception:
-                pass
-
+        for label, line in _subprocess_lines(proc):
+            (_consume_stdout_line if label == "stdout" else _consume_diagnostic_line)(line)
         returncode = proc.wait()
 
     if returncode != 0:
@@ -2505,8 +2493,7 @@ def _run_local_video_subprocess(
         "specs": _jsonable(specs),
         "media": _jsonable(media or []),
     }
-    env = dict(os.environ)
-    env.setdefault("PYTHONUNBUFFERED", "1")
+    env = _media_subprocess_env()
 
     def _invoke() -> subprocess.Popen[str]:
         return subprocess.Popen(
@@ -2515,6 +2502,7 @@ def _run_local_video_subprocess(
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
+            **MEDIA_SUBPROCESS_TEXT,
             env=env,
         )
 
@@ -2531,13 +2519,6 @@ def _run_local_video_subprocess(
 
         parsed: Optional[Dict[str, Any]] = None
         output_tail: List[str] = []
-        selector = selectors.DefaultSelector()
-        if proc.stdout is not None:
-            _register_subprocess_stream(selector, proc.stdout, "stdout")
-        proc_stderr = getattr(proc, "stderr", None)
-        if proc_stderr is not None:
-            _register_subprocess_stream(selector, proc_stderr, "stderr")
-
         def _consume_stdout_line(line: str) -> None:
             nonlocal parsed
             stripped = str(line).strip()
@@ -2563,45 +2544,8 @@ def _run_local_video_subprocess(
                 output_tail.append(stripped)
                 del output_tail[:-40]
 
-        try:
-            while True:
-                ready = selector.select(timeout=0.25)
-                if not ready:
-                    if proc.poll() is not None:
-                        break
-                    continue
-                for key, _mask in ready:
-                    line = key.fileobj.readline()
-                    if not line:
-                        if proc.poll() is not None:
-                            break
-                        continue
-                    if _subprocess_stream_label(key, stdout=proc.stdout, stderr=proc_stderr) == "stdout":
-                        _consume_stdout_line(line)
-                    else:
-                        _consume_diagnostic_line(line)
-                if proc.poll() is not None:
-                    break
-            if proc.stdout is not None:
-                try:
-                    remaining = proc.stdout.read()
-                except Exception:
-                    remaining = ""
-                for line in str(remaining or "").splitlines():
-                    _consume_stdout_line(line)
-            if proc_stderr is not None:
-                try:
-                    remaining_err = proc_stderr.read()
-                except Exception:
-                    remaining_err = ""
-                for line in str(remaining_err or "").splitlines():
-                    _consume_diagnostic_line(line)
-        finally:
-            try:
-                selector.close()
-            except Exception:
-                pass
-
+        for label, line in _subprocess_lines(proc):
+            (_consume_stdout_line if label == "stdout" else _consume_diagnostic_line)(line)
         returncode = proc.wait()
 
     if returncode != 0:

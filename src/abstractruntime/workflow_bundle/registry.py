@@ -24,6 +24,7 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from .models import WorkflowBundleEntrypoint, WorkflowBundleManifest
 from .reader import open_workflow_bundle
+from ..utils.atomic_files import replace_file
 
 
 class WorkflowBundleRegistryError(ValueError):
@@ -463,7 +464,7 @@ class WorkflowBundleRegistry:
                 raise WorkflowBundleRegistryError(f"Bundle already installed: {dest.name}")
 
             try:
-                tmp_path.replace(dest)
+                replace_file(tmp_path, dest)
             except Exception as e:
                 raise WorkflowBundleRegistryError(f"Failed installing bundle to {dest}: {e}") from e
 

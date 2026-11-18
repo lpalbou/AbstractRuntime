@@ -54,16 +54,13 @@ See llms.txt for the linked index.
 
 # AbstractRuntime
 
-**Release 0.19.6:** stable diary-resolution verdicts across graph projection and replay,
-bounded Hugging Face discovery through Core, and cancellation protected against stale Runtime
-state publication. Requires AbstractCore 2.35.2 and AbstractMemory 0.5.2. See
-[release notes](CHANGELOG.md).
+**Release 0.19.7:** Windows reliability: a run file can be saved while another thread reads it, local image and video generation read their worker process correctly, and vision models can be listed by engine name.
 
 **AbstractRuntime** is a durable workflow runtime (interrupt → checkpoint → resume) with an append-only execution ledger.
 
 It is designed for long-running workflows that must survive restarts and explicitly model blocking (human input, timers, external events, subworkflows) without keeping Python stacks alive.
 
-**Version:** 0.19.6 • **Python:** 3.10+
+**Version:** 0.19.7 • **Python:** 3.10+
 
 **Status:** pre-1.0 (API may evolve). For production use, pin versions and follow `CHANGELOG.md`.
 

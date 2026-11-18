@@ -40,6 +40,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from ..core.models import Effect, EffectType
 from ..core.runtime import EffectOutcome
+from ..utils.atomic_files import replace_file
 
 class ActOnlyResolutionError(RuntimeError):
     """A capture step failed - loud, deterministic, non-retryable (kept
@@ -342,7 +343,7 @@ def rescue_reply_to_home(
                 pass
         tmp = path.with_suffix(".tmp")
         tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-        tmp.replace(path)
+        replace_file(tmp, path)
         return str(path)
     except Exception:
         return None

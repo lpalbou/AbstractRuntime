@@ -31,6 +31,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
+from ..utils.atomic_files import replace_file
 
 
 # Valid artifact ID pattern: alphanumeric, hyphens, underscores
@@ -1551,7 +1552,7 @@ class FileArtifactStore(ArtifactStore):
         try:
             with open(tmp, "wb") as f:
                 f.write(content)
-            tmp.replace(path)
+            replace_file(tmp, path)
         finally:
             try:
                 if tmp.exists():
@@ -1585,7 +1586,7 @@ class FileArtifactStore(ArtifactStore):
         try:
             with open(tmp, "w", encoding="utf-8") as f:
                 json.dump(meta.to_dict(), f, ensure_ascii=False, indent=2)
-            tmp.replace(metadata_path)
+            replace_file(tmp, metadata_path)
         finally:
             try:
                 if tmp.exists():

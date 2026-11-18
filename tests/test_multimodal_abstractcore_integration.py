@@ -550,7 +550,6 @@ def test_local_image_subprocess_native_abort_becomes_python_error(monkeypatch) -
             return None
 
     monkeypatch.setattr(llm_client.subprocess, "Popen", lambda *_args, **_kwargs: _FakeProc())
-    monkeypatch.setattr(llm_client.selectors, "DefaultSelector", _FakeSelector)
 
     with pytest.raises(RuntimeError, match="Local image generation subprocess exited with code 134"):
         _run_local_image_subprocess(
@@ -638,7 +637,6 @@ def test_local_image_subprocess_streams_progress_events(monkeypatch) -> None:
 
     events = []
     monkeypatch.setattr(llm_client.subprocess, "Popen", lambda *_args, **_kwargs: _FakeProc())
-    monkeypatch.setattr(llm_client.selectors, "DefaultSelector", _FakeSelector)
 
     out = _run_local_image_subprocess(
         provider="mlx",
@@ -2723,3 +2721,29 @@ def test_remote_transcription_from_an_older_server_reports_no_language() -> None
     out = _transcribe(_LanguageFactsSender({"text": "hello"}), {"modality": "text", "task": "transcription"})
     assert out["content"] == "hello"
     assert out["metadata"]["language"] is None and out["metadata"]["detected_language"] is None
+
+
+def test_a_media_child_s_output_is_read_from_real_pipes_on_every_os() -> None:
+    """Windows, 2026-11-18: the first image generation raised "[WinError 10038] An operation was
+    attempted on something that is not a socket" (`selectors` on pipes) and left the child
+    running. Real pipes, both streams, interleaved, and what is written without a newline."""
+    import subprocess
+    import sys
+
+    from abstractruntime.integrations.abstractcore.llm_client import _subprocess_lines
+
+    from abstractruntime.integrations.abstractcore.llm_client import MEDIA_SUBPROCESS_TEXT, _media_subprocess_env
+
+    # A progress bar's block character, and more stderr than a pipe holds: on Windows (cp1252)
+    # it stopped the stderr reader, and the child then waited for ever in a write.
+    code = (
+        "import sys; print('one'); print('warn █', file=sys.stderr); print('two é'); "
+        "sys.stderr.write('█' * 300000); sys.stdout.write('tail')"
+    )
+    proc = subprocess.Popen([sys.executable, "-c", code], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                            env=_media_subprocess_env(), **MEDIA_SUBPROCESS_TEXT)
+    seen = list(_subprocess_lines(proc))
+    assert proc.wait(30) == 0
+    assert [line.strip() for label, line in seen if label == "stdout"] == ["one", "two é", "tail"]
+    stderr = [line.strip() for label, line in seen if label == "stderr"]
+    assert stderr[0] == "warn █" and stderr[1] == "█" * 300000

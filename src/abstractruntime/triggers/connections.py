@@ -52,6 +52,7 @@ except Exception:  # pragma: no cover - Windows
     fcntl = None  # type: ignore
 
 from .protocol import TriggerConfigError
+from ..utils.atomic_files import replace_file
 
 CONNECTION_STREAM_PREFIX = "trigger:"
 CONNECTION_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
@@ -81,7 +82,7 @@ def _atomic_write_json(path: Path, value: Any) -> None:
         os.fsync(fd)
     finally:
         os.close(fd)
-    os.replace(str(tmp), str(path))
+    replace_file(tmp, path)
 
 
 def connection_stream(connection_id: str) -> str:

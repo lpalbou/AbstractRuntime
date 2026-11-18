@@ -31,6 +31,7 @@ from ..core.run_attribution import workspace_index_fields
 from ..core.run_attribution import automation_index_fields, is_turn_root, latest_occurrence_of, row_matches
 from ..core.run_identity import verify_run_identity
 from ..core.run_lifecycle import run_lifecycle_index_fields
+from ..utils.atomic_files import open_replaced, replace_file
 
 try:  # POSIX advisory file locks (the JSONL ledger's cross-process append lock)
     import fcntl as _fcntl
@@ -621,7 +622,7 @@ class JsonFileRunStore(RunStore):
                 json.dumps({"version": _SCAN_SIDECAR_VERSION, "entries": snapshot}, separators=(",", ":"), default=str),
                 encoding="utf-8",
             )
-            os.replace(tmp, self._scan_sidecar_path)
+            replace_file(tmp, self._scan_sidecar_path)
         except Exception as e:  # noqa: BLE001 - a failed persist costs a
             # future cold scan, never correctness.
             logger.warning("#FALLBACK scan sidecar persist failed (%s)", e)
@@ -1703,7 +1704,7 @@ class JsonFileRunStore(RunStore):
                 # `asdict` deep-copied the whole vars tree for nothing under
                 # the single-writer contract documented on this class.
                 f.write(dumps_compact(runstate_to_dict(run)))
-            tmp.replace(p)
+            replace_file(tmp, p)
             published = True
             if not is_new and not now_active:
                 # A run that is not active changed its file (it finished, or a finished
@@ -1858,7 +1859,7 @@ class JsonFileRunStore(RunStore):
                     self._run_cache.move_to_end(rid_hint)  # LRU touch
                     return cached[1]
         try:
-            with p.open("r", encoding="utf-8") as f:
+            with open_replaced(p, "r", encoding="utf-8") as f:
                 # The token of the file actually read (a replace after the stat
                 # above must not pair the new content with the old token).
                 with contextlib.suppress(Exception):
@@ -2858,7 +2859,7 @@ class JsonlLedgerStore(LedgerStore):
         try:
             meta = array("q", [idx.ino, idx.size, len(idx.offsets)])
             tmp.write_bytes(_IDX_MAGIC + meta.tobytes() + idx.offsets.tobytes())
-            os.replace(tmp, target)
+            replace_file(tmp, target)
             idx.persisted_size = idx.size
         except OSError:
             with contextlib.suppress(OSError):

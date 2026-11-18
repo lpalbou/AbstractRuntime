@@ -1520,3 +1520,33 @@ def test_local_stt_catalog_without_provider_map_asks_each_provider(monkeypatch) 
         "transformers-asr": ["Qwen/Qwen3-ASR-1.7B"],
     }
     assert "gpt-4o-transcribe" not in payload["stt_models_by_provider"]["faster-whisper"]
+
+
+def test_vision_models_asked_by_engine_name_are_the_provider_s_models_of_that_engine() -> None:
+    """2026-11-18: the recommended NVIDIA image route stores `diffusers` (the engine); the catalog
+    lists that engine's models under `huggingface`. The console then said a downloaded model
+    "is not currently in the discovered image generation catalog for diffusers"."""
+    from abstractruntime.integrations.abstractcore.discovery_queries import _filter_vision_provider_models_response
+
+    response = {
+        "models": [
+            {"id": "black-forest-labs/FLUX.2-klein-4B", "model": "diffusers/black-forest-labs/FLUX.2-klein-4B", "routed_model": "diffusers/black-forest-labs/FLUX.2-klein-4B", "provider": "huggingface", "raw": {"backend": "diffusers"}},
+            {"id": "AbstractFramework/flux.2-klein-4b-8bit", "model": "mlx-gen/AbstractFramework/flux.2-klein-4b-8bit", "provider": "huggingface", "raw": {"backend": "mlx-gen"}},
+            {"id": "gpt-image-2", "model": "gpt-image-2", "provider": "openai", "raw": {"backend": "openai"}},
+        ],
+        "providers": ["openai", "huggingface"],
+        "available_providers": ["huggingface"],
+    }
+    by_engine = _filter_vision_provider_models_response(response, provider="diffusers", providers_only=False)
+    assert [m["id"] for m in by_engine["models"]] == ["black-forest-labs/FLUX.2-klein-4B"]
+    # ...named as the recommended route names them: the id, without the engine in front.
+    assert by_engine["models_by_provider"] == {"diffusers": ["black-forest-labs/FLUX.2-klein-4B"]}
+    assert by_engine["models"][0]["model"] == "black-forest-labs/FLUX.2-klein-4B"
+    assert by_engine["models"][0]["routed_model"] == "diffusers/black-forest-labs/FLUX.2-klein-4B"
+    assert by_engine["models"][0]["provider"] == "diffusers"  # a client that filters by the name it asked for keeps it
+    assert by_engine["providers"] == by_engine["available_providers"] == ["diffusers"] and by_engine["available"] is True
+    # Asked by provider: unchanged, every engine of that provider.
+    by_provider = _filter_vision_provider_models_response(response, provider="huggingface", providers_only=False)
+    assert len(by_provider["models"]) == 2 and list(by_provider["models_by_provider"]) == ["huggingface"]
+    # A name that is neither: nothing.
+    assert _filter_vision_provider_models_response(response, provider="nope", providers_only=False)["models"] == []

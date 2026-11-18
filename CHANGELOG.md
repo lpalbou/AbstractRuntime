@@ -10,6 +10,22 @@ Unreleased changes live in [`changelog.d/`](changelog.d/README.md), one file per
 
 ## [Unreleased]
 
+## [0.19.7] - 2026-11-18
+
+### Fixed
+
+- **Windows: a file can be saved while another thread reads it** (`utils/atomic_files.replace_file`,
+  `open_replaced`). Every atomic rename of the runtime (run store, commands, artifacts, inbox, triggers, profiles,
+  bundles) and the run store's load retry for up to 5 seconds when Windows refuses the operation because the file
+  is open elsewhere. Before, such a save failed the run with "PermissionError: [WinError 5] Access is denied".
+- **Windows: local image and video generation** (`llm_client._subprocess_lines`). The media child process's output
+  is read by one thread per stream, and the child and its parent exchange UTF-8, so generation no longer fails with
+  "[WinError 10038]" or stalls while the model loads.
+- **Vision models can be listed by engine name** (`discovery_queries`): asking for provider `diffusers` returns the
+  Diffusers models of the catalog, named as a capability route names them (`model` is the id without the engine
+  prefix; `routed_model` keeps the routed name).
+- An LLM call refused by an open circuit breaker is not retried by the effect retry policy.
+
 ## [0.19.6] - 2026-11-14
 
 ### Changed

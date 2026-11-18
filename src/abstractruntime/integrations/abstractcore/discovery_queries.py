@@ -452,14 +452,39 @@ def _filter_vision_provider_models_response(
     if not models_by_provider:
         models_by_provider = _vision_models_by_provider(models)
     if wanted:
-        models = [
+        by_provider = [
             item
             for item in models
             if str(item.get("provider") or item.get("owned_by") or "").strip().lower() == wanted
         ]
-        models_by_provider = {
-            key: values for key, values in models_by_provider.items() if str(key or "").strip().lower() == wanted
-        }
+        if by_provider or any(str(key or "").strip().lower() == wanted for key in models_by_provider):
+            models = by_provider
+            models_by_provider = {
+                key: values for key, values in models_by_provider.items() if str(key or "").strip().lower() == wanted
+            }
+        else:
+            # A route may name the ENGINE where the catalog names its provider: the recommended
+            # image route of an NVIDIA host is (`diffusers`, `black-forest-labs/FLUX.2-klein-4B`),
+            # which the catalog lists as (`huggingface`, `diffusers/black-forest-labs/...`).
+            # Asked by engine, answer that engine's models the way the route names them: under
+            # the name asked for, `model` being the id without the engine in front (the routed
+            # name stays in `routed_model`). The console said a downloaded FLUX.2 klein "is not
+            # currently in the discovered image generation catalog for diffusers", and a model
+            # picked from this list is stored as the recommendation would store it.
+            asked = str(provider).strip()
+
+            def engine(item: Dict[str, Any]) -> str:
+                raw = item.get("raw") if isinstance(item.get("raw"), dict) else {}
+                return str(item.get("backend") or raw.get("backend") or "").strip().lower()
+
+            # Listed under the name asked for, so a client that filters by it keeps them.
+            models = [
+                dict(item, provider=asked, owned_by=asked, model=str(item.get("id") or item.get("model") or ""))
+                for item in models
+                if engine(item) == wanted
+            ]
+            models_by_provider = _vision_models_by_provider(models)
+            response = dict(response, providers=[], available_providers=[])
     providers = _dedupe_strings(
         [str(x) for x in response.get("providers") or [] if isinstance(x, str)]
         + [str(x) for x in response.get("available_providers") or [] if isinstance(x, str)]

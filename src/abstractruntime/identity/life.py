@@ -58,7 +58,7 @@ from .lifecycle_fence import signal_bump as _signal_bump
 from .lifecycle_fence import verify as _verify_fence
 from .lifecycle_fence import write_barrier as _write_barrier
 from .tool_policy import PHASE_PERSONAL, PHASE_SLEEP, PHASE_WORK
-from ..utils import os_process
+from ..utils import file_lock, os_process
 
 # The own-time note is INFORMATIONAL, never a mission. It describes the
 # environment and the affordances that exist; it does not tell the entity
@@ -281,20 +281,18 @@ def append_task_status(home_dir: Path, task_id: str, status: str, *, by: str, no
     if str(note or "").strip():
         event["note"] = str(note).strip()
     line = _json.dumps(event, ensure_ascii=False, separators=(",", ":")) + "\n"
-    try:
-        import fcntl
-    except ImportError:  # non-POSIX: a plain single-line append, as the gateway's writer degrades
-        fcntl = None  # type: ignore[assignment]
+    # Where the system has no file lock at all: a plain single-line append, as the gateway's writer degrades.
+    locked = file_lock.available()
     with open(Path(home_dir) / TASK_INBOX_FILENAME, "a", encoding="utf-8") as fh:
-        if fcntl is not None:
-            fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+        if locked:
+            file_lock.lock(fh)
         try:
             fh.write(line)
             fh.flush()
             os.fsync(fh.fileno())
         finally:
-            if fcntl is not None:
-                fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+            if locked:
+                file_lock.unlock(fh)
     return event
 
 
@@ -1702,17 +1700,15 @@ def _claim_loop_status(home_dir: Path, *, fence: Any) -> None:
 
 @contextmanager
 def _spawn_lock(home_dir: Path) -> Iterator[None]:
-    """The start door's flock (`.loop_spawn.lock`, the one spawn_loop_process takes): one start at a time."""
+    """The start door's lock (`.loop_spawn.lock`, the one spawn_loop_process takes): one start at a time, across
+    processes (closing the file releases it)."""
     fh = open(Path(home_dir) / ".loop_spawn.lock", "a+", encoding="utf-8")
     try:
-        try:
-            import fcntl
-
-            fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except ImportError:
-            pass
-        except OSError:
-            raise RuntimeError("another start is already in progress for this home") from None
+        if file_lock.available():
+            try:
+                file_lock.lock(fh, blocking=False)
+            except OSError:
+                raise RuntimeError("another start is already in progress for this home") from None
         yield
     finally:
         fh.close()
@@ -2010,8 +2006,9 @@ PHASES_SCHEMA_VERSION = 1
 #
 # Lock order: the gateway's own per-home lock is the OUTER lock and this one the INNER; no runtime path calls the
 # gateway (or takes any other lock) while holding it. Re-entrant per thread (a nested `with` is a no-op), so a host
-# holds it across "check, then call the runtime writers". Cross-process by fcntl.flock on a dedicated file that is
-# never replaced (stable inode); where there is no fcntl, a per-home in-process lock only.
+# holds it across "check, then call the runtime writers". Cross-process by a file lock (`utils.file_lock`:
+# fcntl.flock, LockFileEx on Windows) on a dedicated file that is never replaced (stable inode); on a system with
+# neither, a per-home in-process lock only.
 HOME_STATE_LOCK_FILENAME = ".phase_state.lock"
 HOME_STATE_LOCK_TIMEOUT_S = 30.0
 LIFECYCLE_GENERATION_KEY = "lifecycle_generation"
@@ -2041,21 +2038,17 @@ def home_state_lock(home_dir: Path, *, timeout_s: Optional[float] = HOME_STATE_L
             depth[key] -= 1
         return
     deadline = None if timeout_s is None else time.monotonic() + float(timeout_s)
-    try:
-        import fcntl
-    except ImportError:  # non-POSIX: one in-process lock per home (no cross-process exclusion there)
-        fcntl = None  # type: ignore[assignment]
     fh = None
     thread_lock: Optional[threading.Lock] = None
-    if fcntl is not None:
+    if file_lock.available():
         fh = open(Path(home_dir) / HOME_STATE_LOCK_FILENAME, "a+", encoding="utf-8")
         try:
             if deadline is None:
-                fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+                file_lock.lock(fh)
             else:
                 while True:
                     try:
-                        fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                        file_lock.lock(fh, blocking=False)
                         break
                     except BlockingIOError:
                         if time.monotonic() >= deadline:
@@ -2065,7 +2058,7 @@ def home_state_lock(home_dir: Path, *, timeout_s: Optional[float] = HOME_STATE_L
         except BaseException:
             fh.close()
             raise
-    else:
+    else:  # no file lock on this system: one in-process lock per home (no cross-process exclusion there)
         with _home_state_registry:
             thread_lock = _home_state_thread_locks.setdefault(key, threading.Lock())
         if not thread_lock.acquire(timeout=-1 if deadline is None else max(0.0, deadline - time.monotonic())):
@@ -2077,7 +2070,7 @@ def home_state_lock(home_dir: Path, *, timeout_s: Optional[float] = HOME_STATE_L
         depth.pop(key, None)
         if fh is not None:
             try:
-                fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+                file_lock.unlock(fh)
             finally:
                 fh.close()
         if thread_lock is not None:
@@ -3037,20 +3030,17 @@ def spawn_loop_process(
     home_dir = Path(home_dir)
 
     # Spawn lock (red-team TOCTOU finding): two simultaneous starts must not
-    # both pass the running check and spawn two lives over one home. flock is
-    # advisory but both start paths (gateway route, CLI via spawn) come here.
+    # both pass the running check and spawn two lives over one home. The lock
+    # is advisory but both start paths (gateway route, CLI via spawn) come here.
     lock_path = home_dir / ".loop_spawn.lock"
     lock_fh = open(lock_path, "a+", encoding="utf-8")
     try:
-        try:
-            import fcntl
-
-            fcntl.flock(lock_fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except ImportError:  # non-POSIX: proceed without the lock (best effort)
-            pass
-        except OSError:
-            lock_fh.close()
-            raise RuntimeError("another start is already in progress for this home")
+        if file_lock.available():  # a system with no file lock proceeds without it (best effort)
+            try:
+                file_lock.lock(lock_fh, blocking=False)
+            except OSError:
+                lock_fh.close()
+                raise RuntimeError("another start is already in progress for this home")
 
         if not isinstance(fence, LifecycleFence):
             raise TypeError(f"spawn_loop_process: fence must be the start's LifecycleFence, not {fence!r}")

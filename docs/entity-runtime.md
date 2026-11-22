@@ -111,6 +111,33 @@ Stop itself (`KILL_SWITCH`: paused, own time revoked, the return cleared, loop s
 still acting. A reader that acts on nothing opens a home with `open_home(home_dir, fence=None)`;
 `open_entity_runtime` always needs a fence.
 
+## The own-time loop is a process: identity and locks (`utils/os_process.py`, `utils/file_lock.py`)
+
+The own-time loop runs in its own process, started by `spawn_loop_process`. Its home records which process that is
+in `loop_status`: the pid and a start token (`pid_started_at`). A pid number is reused by the system; the pid
+together with the start time names one process. Every decision about that process goes through
+`abstractruntime.utils.os_process`, one contract with a POSIX and a Windows implementation:
+
+| Call | Answers | POSIX | Windows |
+|---|---|---|---|
+| `exists(pid)` | is it there (cheap, no subprocess) | `os.kill(pid, 0)` | a process handle |
+| `state(pid)` | `alive`, `gone` or `unknown`; only `gone` confirms a death | `waitpid`, signal 0, `ps` | a process handle |
+| `start_token(pid)` | the incarnation token | `ps -o lstart=` under `LC_ALL=C TZ=UTC` | `win-filetime:<creation time>` |
+| `command(pid)` | what it runs | the `ps` command line | the exact argument list |
+| `terminate(pid, force=, token=)` | end it | SIGTERM, SIGKILL when forced | `TerminateProcess` on a handle checked against `token` |
+| `direct_python(env)` | interpreter and environment for a child whose pid is the one `Popen` returns | `sys.executable` | the base interpreter (a virtual environment's `python.exe` is a launcher) |
+| `detached()` | `Popen` arguments for a child that outlives its parent's terminal | a new session | its own process group, a console without a window |
+
+- **Tokens are written at rest and compared for equality only.** Their spelling per system is fixed. A token of the
+  other spelling never matches, so a home copied to another machine reads "not that process".
+- **A Stop (`hard_stop_loop`) ends a process only when it is verified:** alive, the recorded token, and this home's
+  loop by its own arguments (`<python> -m abstractruntime.identity.life --home <home>`). Anything unknown is
+  refused and said in the result's `reason`; `killed` is true only once the exit is confirmed.
+- **The home's cross-process locks** (the home state lock, the spawn lock, the lifecycle write barrier, the task
+  inbox append) are `abstractruntime.utils.file_lock`: `fcntl.flock` on POSIX, `LockFileEx` on Windows. The lock
+  belongs to the open file, admits several shared holders or one exclusive holder, waits without a limit unless
+  asked not to, and is released when the file is closed (so also when its process dies).
+
 ## Act-only content: references at rest, words only in flight (`identity/act_only.py`)
 
 Diary words must never rest outside the book. When an entity reads its own

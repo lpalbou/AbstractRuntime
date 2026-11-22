@@ -28,3 +28,10 @@
   8.3 short name) is the same home.
 - **A loop started from a console is not ended by a Ctrl+C in that console on Windows** (`os_process.detached`:
   its own process group and a console without a window, where POSIX starts a new session).
+- **The home's locks hold across processes on Windows** (`utils.file_lock`: `fcntl.flock`, `LockFileEx` on
+  Windows; shared and exclusive, waiting without a limit, released when the file is closed). The home state lock,
+  both spawn locks, the lifecycle write barrier and the task inbox append took `fcntl.flock` and, where it does
+  not exist, fell back to a lock inside one process or to none. So on Windows the host and the own-time loop did
+  not exclude each other: two simultaneous starts both launched a loop, and a Stop's generation bump could land
+  between a write's fence check and the write. On Windows the lock sits on one byte far past the end of the file,
+  so the content of a locked file (the task inbox) stays readable and writable.

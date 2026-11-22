@@ -27,7 +27,7 @@ import yaml
 
 try:
     import fcntl
-except ImportError:  # Windows: no flock to count
+except ImportError:  # Windows: no flock to count (its lock is counted as file_lock.lock)
     fcntl = None  # type: ignore[assignment]
 
 sys.path.insert(0, str(Path(__file__).parent))
@@ -37,6 +37,7 @@ from test_entity_phases_runtime import _HookLLM, _history  # noqa: E402
 
 import abstractruntime.identity.life as life  # noqa: E402
 import abstractruntime.identity.lifecycle_fence as lf  # noqa: E402
+from abstractruntime.utils import file_lock  # noqa: E402
 from abstractruntime.identity.chat import TurnCancelled  # noqa: E402
 from abstractruntime.identity.life import (  # noqa: E402
     LifeLoop,
@@ -451,6 +452,8 @@ _COUNTED = (
     (pathlib.Path, "read_text", "Path.read_text"), (pathlib.Path, "read_bytes", "Path.read_bytes"),
     (pathlib.Path, "exists", "Path.exists"), (subprocess, "run", "subprocess.run"),
     (subprocess, "Popen", "subprocess.Popen"), (yaml, "safe_load", "yaml.safe_load"),
+    # The home's cross-process lock on every system (fcntl.flock underneath on POSIX, LockFileEx on Windows).
+    (file_lock, "lock", "file_lock.lock"), (file_lock, "unlock", "file_lock.unlock"),
 ) + (((fcntl, "flock", "flock"),) if fcntl is not None else ())
 
 
@@ -1719,7 +1722,9 @@ def test_the_loop_heartbeat_takes_no_parse_and_no_subprocess(tmp_path: Path, cap
         elapsed = (time.perf_counter_ns() - t0) / n
     assert counts.get("yaml.safe_load", 0) == 0, counts
     assert counts.get("subprocess.run", 0) == 0 and counts.get("subprocess.Popen", 0) == 0, counts
-    assert counts.get("flock") == 2 * n, counts  # acquire + release: the Stop's record is written under the lock
+    # Acquire + release: the Stop's record is written under the lock (one flock call each where flock exists).
+    assert counts.get("file_lock.lock") == n and counts.get("file_lock.unlock") == n, counts
+    assert fcntl is None or counts.get("flock") == 2 * n, counts
     _stop_here(home_dir)
     before = (home_dir / "loop_status").read_bytes()
     with pytest.raises(StoppedByOperator):

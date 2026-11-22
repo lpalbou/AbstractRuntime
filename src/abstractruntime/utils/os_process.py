@@ -47,6 +47,7 @@ from __future__ import annotations
 
 import os
 import sys
+import threading
 from typing import Any, Dict, List, Mapping, Optional, Tuple, Union
 
 __all__ = [
@@ -228,6 +229,7 @@ _ERROR_INVALID_PARAMETER = 87  # OpenProcess: no process has that id
 _PROCESS_COMMAND_LINE_INFORMATION = 60  # NtQueryInformationProcess (Windows 8.1 and later)
 
 _windows_api: Dict[str, Any] = {}
+_windows_api_built = threading.Lock()
 
 
 def _api() -> Dict[str, Any]:
@@ -235,6 +237,13 @@ def _api() -> Dict[str, Any]:
     pointer-sized: left to ctypes' default `int` they are cut to 32 bits."""
     if _windows_api:
         return _windows_api
+    with _windows_api_built:  # built once, whatever the number of threads at first use
+        if not _windows_api:
+            _build_api()
+    return _windows_api
+
+
+def _build_api() -> None:
     import ctypes
     from ctypes import wintypes
 
@@ -268,7 +277,6 @@ def _api() -> Dict[str, Any]:
 
     _windows_api.update(ctypes=ctypes, wintypes=wintypes, kernel32=kernel32, ntdll=ntdll, shell32=shell32,
                         UnicodeString=UnicodeString)
-    return _windows_api
 
 
 class _Handle:

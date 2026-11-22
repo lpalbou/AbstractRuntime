@@ -36,6 +36,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterator, Optional, Tuple, TypeVar, Union
 
+from ..utils import file_lock
 from .chat import TurnCancelled
 
 LIFECYCLE_SIGNAL_FILENAME = ".lifecycle_generation"
@@ -390,7 +391,7 @@ _barrier_held = threading.local()
 @contextmanager
 def write_barrier(home_dir: Union[str, Path], *, exclusive: bool) -> Iterator[None]:
     """Hold the home's write barrier (see WRITE_BARRIER_FILENAME): `exclusive` for the bump, shared for a write
-    section. Cross-process (fcntl.flock on a dedicated file), waiting without a limit - a Stop never fails, and a
+    section. Cross-process (`utils.file_lock` on a dedicated file), waiting without a limit - a Stop never fails, and a
     write section is one fence check plus one store write. Re-entrant per thread; asking for it exclusive while this
     thread holds it shared raises (it would wait on itself). Lock order: the home state lock OUTER, this barrier
     inner, the stores' own locks innermost; a write section never takes the home state lock."""
@@ -404,20 +405,18 @@ def write_barrier(home_dir: Union[str, Path], *, exclusive: bool) -> Iterator[No
             raise RuntimeError("the lifecycle generation cannot move from inside a fenced write section")
         yield  # already held by this thread (shared in shared, anything in exclusive)
         return
-    try:
-        import fcntl
-    except ImportError:  # non-POSIX: no cross-process barrier (the in-process fence still holds)
+    if not file_lock.available():  # a system with no file lock: no barrier (the in-process fence still holds)
         yield
         return
     fh = open(Path(home_dir) / WRITE_BARRIER_FILENAME, "a+", encoding="utf-8")
     try:
-        fcntl.flock(fh.fileno(), fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH)
+        file_lock.lock(fh, shared=not exclusive)
         held[key] = "exclusive" if exclusive else "shared"
         try:
             yield
         finally:
             held.pop(key, None)
-            fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+            file_lock.unlock(fh)
     finally:
         fh.close()
 

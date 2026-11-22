@@ -112,6 +112,55 @@ def test_streamed_tool_calls_accumulate_across_chunks() -> None:
     assert [c["id"] for c in result2["tool_calls"]] == ["c1", "c2"]
 
 
+def test_streamed_tool_call_fragments_are_joined_not_deduplicated() -> None:
+    """OpenAI-style deltas: a named first piece, then nameless `arguments` string
+    pieces addressed by index. The pieces belong to one call — two identical
+    pieces ('"' twice) are both part of the JSON and neither may be dropped."""
+    deltas = [
+        {"tool_calls": [{"id": "c1", "type": "function", "index": 0, "function": {"name": "web_search"}}]},
+        {"tool_calls": [{"index": 0, "function": {"arguments": '{"query":'}}]},
+        {"tool_calls": [{"index": 0, "function": {"arguments": '"'}}]},
+        {"tool_calls": [{"index": 0, "function": {"arguments": "a"}}]},
+        {"tool_calls": [{"index": 0, "function": {"arguments": '"'}}]},
+        {"tool_calls": [{"index": 0, "function": {"arguments": "}"}}], "finish_reason": "tool_calls"},
+    ]
+    result = _normalize_local_streaming_response(iter(deltas))
+    assert len(result["tool_calls"]) == 1
+    assert result["tool_calls"][0]["function"] == {"name": "web_search", "arguments": '{"query":"a"}'}
+
+    parallel = [
+        {"tool_calls": [{"id": "c0", "index": 0, "function": {"name": "a", "arguments": ""}}]},
+        {"tool_calls": [{"id": "c1", "index": 1, "function": {"name": "b", "arguments": ""}}]},
+        {"tool_calls": [{"index": 1, "function": {"arguments": '{"y": 2}'}}]},
+        {"tool_calls": [{"index": 0, "function": {"arguments": '{"x": 1}'}}]},
+    ]
+    result2 = _normalize_local_streaming_response(iter(parallel))
+    assert [(c["id"], c["function"]["arguments"]) for c in result2["tool_calls"]] == [
+        ("c0", '{"x": 1}'),
+        ("c1", '{"y": 2}'),
+    ]
+
+
+def test_streamed_tool_call_snapshots_keep_the_latest_version() -> None:
+    """A provider that re-sends a growing call under one id (cumulative
+    snapshots) must end with the complete arguments, not the first piece —
+    and a re-sent call is never concatenated onto itself."""
+    snapshots = [
+        {"tool_calls": [{"id": "t1", "type": "function", "name": "lookup", "arguments": '{"q'}]},
+        {"tool_calls": [{"id": "t1", "type": "function", "name": "lookup", "arguments": '{"q": "x"}'}]},
+        {"tool_calls": [{"id": "t1", "type": "function", "name": "lookup", "arguments": '{"q": "x"}'}]},
+    ]
+    result = _normalize_local_streaming_response(iter(snapshots))
+    assert result["tool_calls"] == [{"id": "t1", "type": "function", "name": "lookup", "arguments": '{"q": "x"}'}]
+
+    complete = [
+        {"tool_calls": [{"name": "a", "arguments": {"x": 1}, "call_id": "k1"}]},
+        {"tool_calls": [{"name": "a", "arguments": {"x": 1}, "call_id": "k1"}]},
+    ]
+    result2 = _normalize_local_streaming_response(iter(complete))
+    assert result2["tool_calls"] == [{"name": "a", "arguments": {"x": 1}, "call_id": "k1"}]
+
+
 class _RecordingProvider:
     """Fake AbstractCore provider: records the stream kwarg, returns a plain reply."""
 

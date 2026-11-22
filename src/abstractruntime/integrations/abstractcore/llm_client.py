@@ -7451,7 +7451,7 @@ def _normalize_local_streaming_response(
 
     chunks: list[str] = []
     tool_calls: Any = None
-    tool_call_keys: set = set()
+    tool_call_positions: Dict[str, int] = {}
     usage: Any = None
     model: Optional[str] = None
     finish_reason: Optional[str] = None
@@ -7465,14 +7465,66 @@ def _normalize_local_streaming_response(
     # terminal chunk, not a reassembled full response.
     raw_response: Any = None
 
+    def _call_arguments(call: Dict[str, Any]) -> Any:
+        fn = call.get("function")
+        if isinstance(fn, dict) and "arguments" in fn:
+            return fn.get("arguments")
+        return call.get("arguments")
+
+    def _call_name(call: Dict[str, Any]) -> Any:
+        fn = call.get("function")
+        return (fn.get("name") if isinstance(fn, dict) else None) or call.get("name")
+
+    def _append_argument_fragment(call: Dict[str, Any], call_id: str) -> bool:
+        """Join a nameless arguments fragment onto the call it continues.
+
+        OpenAI-style streams send a call's name once and its arguments as string
+        pieces addressed by `index` (or by the same id). Returns False when no
+        earlier call can take the piece."""
+        if not isinstance(tool_calls, list):
+            return False
+        position: Optional[int] = None
+        if call_id:
+            position = tool_call_positions.get(call_id)
+        index = call.get("index")
+        if position is None and isinstance(index, int) and not isinstance(index, bool):
+            for i in range(len(tool_calls) - 1, -1, -1):
+                held = tool_calls[i]
+                if isinstance(held, dict) and held.get("index") == index:
+                    position = i
+                    break
+        if position is None and not call_id and index is None:
+            for i in range(len(tool_calls) - 1, -1, -1):
+                if isinstance(tool_calls[i], dict):
+                    position = i
+                    break
+        if position is None:
+            return False
+        held = dict(tool_calls[position])
+        piece = _call_arguments(call)
+        fn = held.get("function")
+        if isinstance(fn, dict):
+            current = fn.get("arguments")
+            if current is None or isinstance(current, str):
+                held["function"] = {**fn, "arguments": (current or "") + piece}
+        else:
+            current = held.get("arguments")
+            if current is None or isinstance(current, str):
+                held["arguments"] = (current or "") + piece
+        tool_calls[position] = held
+        return True
+
     def _fold_tool_calls(tc: Any) -> None:
         """Accumulate streamed tool calls across chunks (c1017 parity).
 
-        The non-streamed response carries the COMPLETE tool-call list; stream
-        processors may emit calls on separate chunks (or re-send the full list
-        per chunk). Last-non-None-wins silently DROPPED earlier calls in the
-        incremental case — accumulate with id-dedup instead, which is identical
-        for re-sent full lists and lossless for incremental ones."""
+        The non-streamed response carries the COMPLETE tool-call list. A stream
+        may deliver it three ways, and each must end as that same list:
+        - complete calls on separate chunks: appended in order;
+        - the whole list, or a growing snapshot of one call, re-sent under the
+          same id: the latest version replaces the earlier one;
+        - OpenAI-style deltas (a named first piece, then nameless `arguments`
+          string pieces): the pieces are joined onto their call, and are never
+          de-duplicated, because two identical pieces are both part of the JSON."""
         nonlocal tool_calls
         if tc is None:
             return
@@ -7482,17 +7534,25 @@ def _normalize_local_streaming_response(
         if not isinstance(tool_calls, list):
             tool_calls = []
         for call in tc:
+            call_id = ""
             if isinstance(call, dict):
-                key = str(call.get("id") or call.get("call_id") or "") or json.dumps(
-                    _jsonable(call), sort_keys=True, default=str
-                )
+                call_id = str(call.get("id") or call.get("call_id") or "")
+                if (
+                    not _call_name(call)
+                    and isinstance(_call_arguments(call), str)
+                    and _append_argument_fragment(call, call_id)
+                ):
+                    continue
+                key = call_id or json.dumps(_jsonable(call), sort_keys=True, default=str)
             else:
                 key = str(call)
-            if key in tool_call_keys:
+            position = tool_call_positions.get(key)
+            if position is not None:
+                if call_id:
+                    tool_calls[position] = call
                 continue
-            tool_call_keys.add(key)
+            tool_call_positions[key] = len(tool_calls)
             tool_calls.append(call)
-
     def _maybe_capture_ttft(*, content: Any, tool_calls_value: Any, meta: Any) -> None:
         nonlocal ttft_ms
         if ttft_ms is not None:

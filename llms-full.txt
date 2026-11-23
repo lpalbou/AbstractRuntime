@@ -6626,6 +6626,24 @@ together with the start time names one process. Every decision about that proces
   belongs to the open file, admits several shared holders or one exclusive holder, waits without a limit unless
   asked not to, and is released when the file is closed (so also when its process dies).
 
+### A paused host freezes the loop (`identity.life.host_pause`)
+
+A host can pause everything it runs without stopping any entity. The host that starts a loop names its pause
+file in the `ABSTRACTRUNTIME_HOST_PAUSE_FILE` environment variable (`HOST_PAUSE_FILE_ENV`); the file is a JSON
+object such as `{"paused": true, "paused_at": "...", "paused_by": "...", "reason": "..."}`. AbstractGateway's
+pause sets it to its own `gateway_paused.json`.
+
+- `host_pause()` returns that object while `paused` is true, and `None` otherwise: no variable, no file,
+  `paused` false, or a file that cannot be read after one retry.
+- The loop calls it at every boundary. While the host is paused, the loop reads the entity as `paused`: no
+  summon, no tick and no sleep window. The state it reads carries `host_paused: true`, the entity's own state
+  in `held_state`, and the reason `the host is paused`.
+- Nothing is written for a host pause. The entity's state file keeps what it said, so when the pause file is
+  removed the loop continues the same day from where it was.
+
+The Stop fence above is a different control: a Stop ends the entity's own time and moves the lifecycle
+generation, while a host pause holds the loop still and changes nothing in the home.
+
 ## Act-only content: references at rest, words only in flight (`identity/act_only.py`)
 
 Diary words must never rest outside the book. When an entity reads its own

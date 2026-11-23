@@ -3283,6 +3283,41 @@ def await_loop_quiescent(
         sleep_fn(poll_seconds)
 
 
+# The host's pause file (the gateway's `gateway_paused.json`): its path is handed to this process by
+# the host that started it. Operator ruling 2026-11-19: a paused host is a kill switch, "NOTHING
+# moves forward. no automation, no entity, no computation ... that can be resumed later on".
+HOST_PAUSE_FILE_ENV = "ABSTRACTRUNTIME_HOST_PAUSE_FILE"
+
+
+def host_pause() -> Optional[Dict[str, Any]]:
+    """The host's pause while it stands ({paused: true, paused_at, paused_by, reason}), else None.
+
+    Read at the loop's boundaries (`LifeLoop._operator_state`): a paused host freezes the loop
+    exactly as the entity's own `paused` state does (no summon, no tick, no sleep window), and the
+    loop continues where it was when the file is gone. No file named, no file, `paused` false, or a
+    file that cannot be read (the host writes it atomically and reads it the same way: unreadable
+    is not paused): None."""
+    import json
+    import os
+
+    raw = str(os.environ.get(HOST_PAUSE_FILE_ENV) or "").strip()
+    if not raw:
+        return None
+    path = Path(raw)
+    for attempt in (0, 1):
+        try:
+            if not path.exists():
+                return None
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:  # noqa: BLE001 - read while the host replaces it: look once more
+            if attempt == 0:
+                time.sleep(0.05)
+                continue
+            return None
+        return data if isinstance(data, dict) and bool(data.get("paused")) else None
+    return None
+
+
 def read_entity_state(home_dir: Path) -> Dict[str, Any]:
     """Read <home>/state; a missing/corrupt file is awake (loudly for corrupt)."""
     import json
@@ -3738,6 +3773,14 @@ class LifeLoop:
         state = read_entity_state(self.state_home)
         if state.get("warning"):
             self.out(state["warning"])
+        held = host_pause()
+        if held is not None and state.get("state") != "paused":
+            # THE HOST IS PAUSED (its kill switch): every boundary reads `paused`, so the loop freezes
+            # where the entity's own pause freezes it and continues from there at the host's resume.
+            # Nothing is written: his own state file still says what it said (`held_state`).
+            state = {**state, "held_state": state.get("state"), "state": "paused", "host_paused": True,
+                     "reason": "the host is paused",
+                     "changed_at": str(held.get("paused_at") or "") or state.get("changed_at")}
         return state
 
     @staticmethod
@@ -3788,6 +3831,9 @@ class LifeLoop:
             current = read_entity_state(self.state_home)
             if current.get("state") == "paused":
                 self.out("(paused by operator - no sleep window opens under a freeze)")
+                return None
+            if host_pause() is not None:
+                self.out("(the host is paused - no sleep window opens under a freeze)")
                 return None
             if mark_state:
                 try:

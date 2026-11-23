@@ -610,6 +610,107 @@ def test_loop_operator_pause_freezes_mid_day_and_tells_him(tmp_path: Path) -> No
     assert "your day continues" in report.records[1].cue
 
 
+def test_host_pause_reads_the_file_the_host_names(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The host's pause (the gateway's kill switch) is a file whose path the host hands to the loop's
+    process: paused only while that file says so; no path, no file, `paused` false or an unreadable
+    file is not paused."""
+    from abstractruntime.identity.life import HOST_PAUSE_FILE_ENV, host_pause
+
+    pause_file = tmp_path / "gateway_paused.json"
+    monkeypatch.delenv(HOST_PAUSE_FILE_ENV, raising=False)
+    pause_file.write_text(json.dumps({"paused": True}), encoding="utf-8")
+    assert host_pause() is None  # no host named a file
+
+    monkeypatch.setenv(HOST_PAUSE_FILE_ENV, str(pause_file))
+    held = host_pause()
+    assert held is not None and held["paused"] is True
+    pause_file.write_text(json.dumps({"paused": False}), encoding="utf-8")
+    assert host_pause() is None
+    pause_file.write_text("{not json", encoding="utf-8")
+    assert host_pause() is None
+    pause_file.unlink()
+    assert host_pause() is None
+
+
+def test_loop_freezes_while_the_host_is_paused_and_continues_at_its_resume(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Operator ruling 2026-11-19 ("when the gateway is paused, NOTHING moves forward ... that can be
+    resumed later on"): a paused HOST freezes the loop at its boundary exactly as the entity's own
+    pause does: no model call while it stands, the same day continues when it lifts, and his own
+    state file is never written for it."""
+    from abstractruntime.identity.life import HOST_PAUSE_FILE_ENV, read_entity_state
+
+    home_dir = _make_home(tmp_path)
+    pause_file = tmp_path / "gateway_paused.json"
+    monkeypatch.setenv(HOST_PAUSE_FILE_ENV, str(pause_file))
+    llm = _ScriptedLLM(
+        [
+            "First.\nnext: keep going",
+            "Back after the pause.",
+            "Day reflection.",
+        ]
+    )
+    polls = {"n": 0}
+    calls_while_paused: List[int] = []
+    states_while_paused: List[str] = []
+
+    def sleeper(_s: float) -> None:
+        polls["n"] += 1
+        if polls["n"] == 1:
+            pause_file.write_text(
+                json.dumps({"paused": True, "paused_at": "2026-11-19T00:46:32+00:00", "paused_by": "default/admin"}),
+                encoding="utf-8",
+            )
+            calls_while_paused.append(len(llm.calls))
+        elif polls["n"] < 4:
+            calls_while_paused.append(len(llm.calls))
+            states_while_paused.append(str(read_entity_state(home_dir).get("state")))
+        elif polls["n"] == 4:
+            calls_while_paused.append(len(llm.calls))
+            pause_file.unlink()
+
+    loop = LifeLoop(
+        _factory_for(home_dir, llm),
+        tick_seconds=1, ticks_per_day=8, max_ticks=2,
+        state_home=home_dir, sleep_fn=sleeper, out=lambda s: None,
+    )
+    report = loop.run()
+    assert polls["n"] >= 4, "the frozen loop never polled - test wiring broke"
+    assert len(set(calls_while_paused)) == 1, "a model call was made while the host was paused"
+    assert set(states_while_paused) == {"awake"}, "the host's pause must never be written into his state"
+    assert report.ticks == 2
+    assert report.days == 1  # the pause did NOT close the day
+    assert "the pause has lifted" in report.records[1].cue
+    assert "your day continues" in report.records[1].cue
+
+
+def test_host_pause_blocks_the_sleep_window(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """No sleep window (consolidation, dreams) opens under a paused host, and nothing is written."""
+    from abstractruntime.identity.life import HOST_PAUSE_FILE_ENV, read_entity_state
+
+    home_dir = _make_home(tmp_path)
+    pause_file = tmp_path / "gateway_paused.json"
+    pause_file.write_text(json.dumps({"paused": True}), encoding="utf-8")
+    monkeypatch.setenv(HOST_PAUSE_FILE_ENV, str(pause_file))
+    dreamed: List[str] = []
+    said: List[str] = []
+
+    def on_sleep():  # noqa: ANN202
+        dreamed.append("ran")
+        return {"formed": True}
+
+    loop = LifeLoop(
+        lambda: (_ for _ in ()).throw(AssertionError("no session in this test")),
+        tick_seconds=0, ticks_per_day=1, max_ticks=1,
+        state_home=home_dir, on_sleep=on_sleep, out=said.append,
+    )
+    assert loop._sleep_window("rest") is None
+    assert dreamed == []
+    assert any("the host is paused" in line for line in said)
+    assert read_entity_state(home_dir)["state"] == "awake"
+
+
 def test_loop_status_phases_and_await_quiescent(tmp_path: Path) -> None:
     """The programmatic-yield surface: the loop writes day/between/stopped
     phases; await_loop_quiescent blocks on an open day, passes when between,

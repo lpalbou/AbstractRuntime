@@ -58,6 +58,7 @@ from .lifecycle_fence import signal_bump as _signal_bump
 from .lifecycle_fence import verify as _verify_fence
 from .lifecycle_fence import write_barrier as _write_barrier
 from .tool_policy import PHASE_PERSONAL, PHASE_SLEEP, PHASE_WORK
+from ..utils import file_lock, os_process
 
 # The own-time note is INFORMATIONAL, never a mission. It describes the
 # environment and the affordances that exist; it does not tell the entity
@@ -280,20 +281,18 @@ def append_task_status(home_dir: Path, task_id: str, status: str, *, by: str, no
     if str(note or "").strip():
         event["note"] = str(note).strip()
     line = _json.dumps(event, ensure_ascii=False, separators=(",", ":")) + "\n"
-    try:
-        import fcntl
-    except ImportError:  # non-POSIX: a plain single-line append, as the gateway's writer degrades
-        fcntl = None  # type: ignore[assignment]
+    # Where the system has no file lock at all: a plain single-line append, as the gateway's writer degrades.
+    locked = file_lock.available()
     with open(Path(home_dir) / TASK_INBOX_FILENAME, "a", encoding="utf-8") as fh:
-        if fcntl is not None:
-            fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+        if locked:
+            file_lock.lock(fh)
         try:
             fh.write(line)
             fh.flush()
             os.fsync(fh.fileno())
         finally:
-            if fcntl is not None:
-                fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+            if locked:
+                file_lock.unlock(fh)
     return event
 
 
@@ -1498,34 +1497,17 @@ def sleep_bound_deadline(
 
 
 def _pid_start_time(pid: Any) -> Optional[str]:
-    """The OS-recorded start time of `pid`, as ps prints it (lstart) — the
-    PID-IDENTITY TOKEN (gateway state-wave adversary 2, 2026-07-13): a pid
-    number can be recycled to an unrelated process, but (pid, start time)
-    identifies ONE process incarnation. Writer stamps its own; readers
-    compare the file's stamp against the CURRENT holder of that pid —
-    mismatch = recycled pid = corpse, regardless of phase. None on any
-    failure (no ps, no such pid): callers degrade to pid-alive-only plus
-    the day-staleness belt, never block on the token."""
-    import os
-    import subprocess
-
-    try:
-        out = subprocess.run(
-            ["ps", "-p", str(int(pid)), "-o", "lstart="],
-            capture_output=True, text=True, timeout=5,
-            # PINNED ENV (whole-package adversary P1, reproduced live: a
-            # writer under LC_ALL=C and a reader under fr_FR.UTF-8 render
-            # DIFFERENT lstart strings for the same process — the token
-            # then reads a live loop as a corpse, and the one-summon /
-            # spawn checks pass over an open day: a second loop over one
-            # home). Writer and reader must render identically regardless
-            # of who launched them (launchd vs terminal vs gateway).
-            env={**os.environ, "LC_ALL": "C", "TZ": "UTC"},
-        )
-        text = (out.stdout or "").strip()
-        return text or None
-    except Exception:  # noqa: BLE001 - the token is an upgrade, never a gate
-        return None
+    """The OS-recorded start time of `pid` — the PID-IDENTITY TOKEN (gateway
+    state-wave adversary 2, 2026-07-13): a pid number can be recycled to an
+    unrelated process, but (pid, start time) identifies ONE process
+    incarnation. Writer stamps its own; readers compare the file's stamp
+    against the CURRENT holder of that pid — mismatch = recycled pid =
+    corpse, regardless of phase. None on any failure (no such pid, no answer
+    from the system): callers degrade to pid-alive-only plus the
+    day-staleness belt, never block on the token. Its spelling per system
+    (`ps` lstart under a pinned locale; `win-filetime:<n>` on Windows) is
+    `utils.os_process.start_token`'s."""
+    return os_process.start_token(pid)
 
 
 _OWN_START_TIME: Dict[str, Optional[str]] = {}  # lazy one-shot cache (module scope)
@@ -1718,17 +1700,15 @@ def _claim_loop_status(home_dir: Path, *, fence: Any) -> None:
 
 @contextmanager
 def _spawn_lock(home_dir: Path) -> Iterator[None]:
-    """The start door's flock (`.loop_spawn.lock`, the one spawn_loop_process takes): one start at a time."""
+    """The start door's lock (`.loop_spawn.lock`, the one spawn_loop_process takes): one start at a time, across
+    processes (closing the file releases it)."""
     fh = open(Path(home_dir) / ".loop_spawn.lock", "a+", encoding="utf-8")
     try:
-        try:
-            import fcntl
-
-            fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except ImportError:
-            pass
-        except OSError:
-            raise RuntimeError("another start is already in progress for this home") from None
+        if file_lock.available():
+            try:
+                file_lock.lock(fh, blocking=False)
+            except OSError:
+                raise RuntimeError("another start is already in progress for this home") from None
         yield
     finally:
         fh.close()
@@ -2026,8 +2006,9 @@ PHASES_SCHEMA_VERSION = 1
 #
 # Lock order: the gateway's own per-home lock is the OUTER lock and this one the INNER; no runtime path calls the
 # gateway (or takes any other lock) while holding it. Re-entrant per thread (a nested `with` is a no-op), so a host
-# holds it across "check, then call the runtime writers". Cross-process by fcntl.flock on a dedicated file that is
-# never replaced (stable inode); where there is no fcntl, a per-home in-process lock only.
+# holds it across "check, then call the runtime writers". Cross-process by a file lock (`utils.file_lock`:
+# fcntl.flock, LockFileEx on Windows) on a dedicated file that is never replaced (stable inode); on a system with
+# neither, a per-home in-process lock only.
 HOME_STATE_LOCK_FILENAME = ".phase_state.lock"
 HOME_STATE_LOCK_TIMEOUT_S = 30.0
 LIFECYCLE_GENERATION_KEY = "lifecycle_generation"
@@ -2057,21 +2038,17 @@ def home_state_lock(home_dir: Path, *, timeout_s: Optional[float] = HOME_STATE_L
             depth[key] -= 1
         return
     deadline = None if timeout_s is None else time.monotonic() + float(timeout_s)
-    try:
-        import fcntl
-    except ImportError:  # non-POSIX: one in-process lock per home (no cross-process exclusion there)
-        fcntl = None  # type: ignore[assignment]
     fh = None
     thread_lock: Optional[threading.Lock] = None
-    if fcntl is not None:
+    if file_lock.available():
         fh = open(Path(home_dir) / HOME_STATE_LOCK_FILENAME, "a+", encoding="utf-8")
         try:
             if deadline is None:
-                fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+                file_lock.lock(fh)
             else:
                 while True:
                     try:
-                        fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                        file_lock.lock(fh, blocking=False)
                         break
                     except BlockingIOError:
                         if time.monotonic() >= deadline:
@@ -2081,7 +2058,7 @@ def home_state_lock(home_dir: Path, *, timeout_s: Optional[float] = HOME_STATE_L
         except BaseException:
             fh.close()
             raise
-    else:
+    else:  # no file lock on this system: one in-process lock per home (no cross-process exclusion there)
         with _home_state_registry:
             thread_lock = _home_state_thread_locks.setdefault(key, threading.Lock())
         if not thread_lock.acquire(timeout=-1 if deadline is None else max(0.0, deadline - time.monotonic())):
@@ -2093,7 +2070,7 @@ def home_state_lock(home_dir: Path, *, timeout_s: Optional[float] = HOME_STATE_L
         depth.pop(key, None)
         if fh is not None:
             try:
-                fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+                file_lock.unlock(fh)
             finally:
                 fh.close()
         if thread_lock is not None:
@@ -2710,8 +2687,6 @@ def hard_stop_loop(home_dir: Path, *, reason: str = "", requested_by: str = "adm
     Zero entity control is structural: this function is host-side only; no
     entity tool reaches it, and the loop cannot veto a signal.
     """
-    import os
-    import signal
     import time as _time
 
     home_dir = Path(home_dir)
@@ -2764,13 +2739,14 @@ def hard_stop_loop(home_dir: Path, *, reason: str = "", requested_by: str = "adm
     escalated = False
     signal_name: Optional[str] = None
     if verified:
+        # Ended through os_process: SIGTERM then SIGKILL on POSIX; on Windows one immediate termination, on a
+        # handle that is checked against the recorded token (the pid cannot change hands in between).
         try:
-            os.kill(pid, signal.SIGTERM)
-            signal_name = "SIGTERM"
+            signal_name = os_process.terminate(pid, token=stamped_token)
         except ProcessLookupError:
             pass
         except OSError as e:
-            outcome = f"refused: SIGTERM was not delivered ({e})"
+            outcome = f"refused: the stop signal was not delivered ({e})"
         # Short grace for the interpreter to die - NOT for ceremony (there is none in a freeze); then escalate,
         # but only over the SAME verified incarnation (it may have died, or the pid been reused, meanwhile).
         deadline = _time.monotonic() + 3.0
@@ -2783,9 +2759,8 @@ def hard_stop_loop(home_dir: Path, *, reason: str = "", requested_by: str = "adm
             still, why = _verified_loop_incarnation(pid, stamped_token, home_dir)
             if still:
                 try:
-                    os.kill(pid, signal.SIGKILL)
+                    signal_name = os_process.terminate(pid, force=True, token=stamped_token)
                     escalated = True
-                    signal_name = "SIGKILL"
                 except OSError:
                     pass
                 deadline = _time.monotonic() + 1.0
@@ -2865,12 +2840,40 @@ def _verified_loop_incarnation(pid: int, token: str, home_dir: Path) -> Tuple[bo
     return True, ""
 
 
-def _is_loop_invocation(command: Optional[str], home_dir: Path) -> bool:
-    """True when `command` (ps's command line) runs the loop module for this home: `<python> -m
+def _is_loop_invocation(command: Any, home_dir: Path) -> bool:
+    """True when `command` (what `_pid_command` read) runs the loop module for this home: `<python> -m
     abstractruntime.identity.life --home <home>` with the module directly after the interpreter (the argv
-    spawn_loop_process uses) - never the module name appearing later as an argument."""
+    spawn_loop_process uses) - never the module name appearing later as an argument.
+
+    `command` is the exact argument list where the system gives one (Windows: the arguments are compared one by
+    one, the interpreter's own path is not read, and a path with a space is one argument), else ps's command line
+    (arguments joined by spaces)."""
+    import os
+
     if not command:
         return False
+
+    def homes() -> set:
+        spelled = {str(Path(home_dir))}
+        try:
+            spelled.add(str(Path(home_dir).resolve()))
+        except (OSError, RuntimeError):
+            pass
+        return spelled
+
+    if not isinstance(command, str):
+        args = [str(a) for a in command]
+        if len(args) < 5 or " ".join(args[1:3]) != LOOP_MODULE_ARGV or args[3] != "--home":
+            return False
+        # One folder has several spellings there (letter case, an 8.3 short name such as ASTROD~1): the loop's own
+        # argument is compared as written and as the system resolves it.
+        named = {args[4]}
+        try:
+            if os.path.isabs(args[4]):
+                named.add(str(Path(args[4]).resolve()))
+        except (OSError, RuntimeError):
+            pass
+        return bool({os.path.normcase(n) for n in named} & {os.path.normcase(h) for h in homes()})
     _head, sep, rest = command.partition(" ")
     if not sep:
         return False
@@ -2878,70 +2881,23 @@ def _is_loop_invocation(command: Optional[str], home_dir: Path) -> bool:
     if not rest.startswith(prefix):
         return False
     tail = rest[len(prefix):]
-    homes = {str(Path(home_dir))}
-    try:
-        homes.add(str(Path(home_dir).resolve()))
-    except (OSError, RuntimeError):
-        pass
-    return any(tail == h or tail.startswith(h + " ") for h in homes)
+    return any(tail == h or tail.startswith(h + " ") for h in homes())
 
 
 def _pid_state(pid: Any) -> str:
-    """"gone" (reaped here, ESRCH, or a zombie), "alive", or "unknown" (permission denied or no answer). Only
-    "gone" confirms an exit (Codex review 2026-11-09 #7: a denied permission is not a death)."""
-    import os
-    import subprocess
-
-    try:
-        pid = int(pid)
-    except (TypeError, ValueError):
-        return "unknown"
-    try:
-        done, _status = os.waitpid(pid, os.WNOHANG)
-        if done == pid:
-            return "gone"
-    except ChildProcessError:
-        pass
-    except OSError:
-        pass
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return "gone"
-    except PermissionError:
-        return "unknown"
-    except OSError:
-        return "unknown"
-    try:
-        out = subprocess.run(
-            ["ps", "-p", str(pid), "-o", "stat="], capture_output=True, text=True, timeout=5,
-            env={**os.environ, "LC_ALL": "C", "TZ": "UTC"},
-        )
-        stat = (out.stdout or "").strip().upper()
-    except Exception:  # noqa: BLE001
-        return "alive"  # it answered signal 0: it exists
-    return "gone" if stat.startswith("Z") else "alive"
+    """"gone" (reaped here, no such process, or a zombie), "alive", or "unknown" (permission denied or no answer).
+    Only "gone" confirms an exit (Codex review 2026-11-09 #7: a denied permission is not a death)."""
+    return os_process.state(pid)
 
 
 # The loop's own command-line mark: spawn_loop_process and the CLI run `python -m abstractruntime.identity.life`.
 LOOP_MODULE_ARGV = "-m abstractruntime.identity.life"
 
 
-def _pid_command(pid: Any) -> Optional[str]:
-    """The command line of `pid` as ps prints it (None on any failure)."""
-    import os
-    import subprocess
-
-    try:
-        out = subprocess.run(
-            ["ps", "-p", str(int(pid)), "-o", "command="],
-            capture_output=True, text=True, timeout=5,
-            env={**os.environ, "LC_ALL": "C", "TZ": "UTC"},
-        )
-        text = (out.stdout or "").strip()
-        return text or None
-    except Exception:  # noqa: BLE001
-        return None
+def _pid_command(pid: Any) -> Any:
+    """What `pid` runs: its argument list where the system gives one (Windows), else its command line as ps prints
+    it. None on any failure. Read by `_is_loop_invocation` only."""
+    return os_process.command(pid)
 
 
 def fast_forward_loop_commands(home_dir: Path) -> int:
@@ -3070,25 +3026,21 @@ def spawn_loop_process(
     import json
     import os
     import subprocess
-    import sys
 
     home_dir = Path(home_dir)
 
     # Spawn lock (red-team TOCTOU finding): two simultaneous starts must not
-    # both pass the running check and spawn two lives over one home. flock is
-    # advisory but both start paths (gateway route, CLI via spawn) come here.
+    # both pass the running check and spawn two lives over one home. The lock
+    # is advisory but both start paths (gateway route, CLI via spawn) come here.
     lock_path = home_dir / ".loop_spawn.lock"
     lock_fh = open(lock_path, "a+", encoding="utf-8")
     try:
-        try:
-            import fcntl
-
-            fcntl.flock(lock_fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except ImportError:  # non-POSIX: proceed without the lock (best effort)
-            pass
-        except OSError:
-            lock_fh.close()
-            raise RuntimeError("another start is already in progress for this home")
+        if file_lock.available():  # a system with no file lock proceeds without it (best effort)
+            try:
+                file_lock.lock(lock_fh, blocking=False)
+            except OSError:
+                lock_fh.close()
+                raise RuntimeError("another start is already in progress for this home")
 
         if not isinstance(fence, LifecycleFence):
             raise TypeError(f"spawn_loop_process: fence must be the start's LifecycleFence, not {fence!r}")
@@ -3145,8 +3097,11 @@ def spawn_loop_process(
         # it moved); the child is told that generation and refuses to start (writing nothing) once it moved.
         _reserve_loop_start(home_dir, fence=fence)
 
+        # The interpreter that IS the loop process: the pid recorded below must be the pid the child claims the home
+        # with (a Windows virtual environment's `sys.executable` is a launcher whose child is the interpreter).
+        python, env = os_process.direct_python()
         argv = [
-            sys.executable,
+            python,
             "-m",
             "abstractruntime.identity.life",
             "--home", str(home_dir),
@@ -3178,7 +3133,6 @@ def spawn_loop_process(
         # the boundary: absolutize inherited entries against OUR cwd, and
         # guarantee the tree THIS process imported abstractruntime from is
         # on the child's path (works for editable/dev and installed alike).
-        env = dict(os.environ)
         py_parts = [p for p in (env.get("PYTHONPATH") or "").split(os.pathsep) if p]
         abs_parts = [str(Path(p).resolve()) for p in py_parts]
         own_tree = str(Path(__file__).resolve().parents[2])
@@ -3219,7 +3173,7 @@ def spawn_loop_process(
                 stdin=subprocess.DEVNULL,
                 cwd=str(home_dir),
                 env=env,
-                start_new_session=True,  # survives host restarts; the inbox stays the brake
+                **os_process.detached(),  # survives host restarts; the inbox stays the brake
             )
         try:
             # The child's start-time token (one ps per spawn, read before the lock): a reused pid never keeps the
@@ -3277,37 +3231,19 @@ def spawn_loop_process(
 
 def _pid_alive_reaped(pid: Any) -> bool:
     """`_pid_alive` after reaping `pid` when it is OUR exited child (a child refused at its boot is a zombie in its
-    spawner until reaped, and a zombie answers signal 0). One waitpid + one kill: no subprocess."""
-    import os
-
-    try:
-        pid = int(pid)
-    except (TypeError, ValueError):
+    spawner until reaped, and a zombie answers signal 0). No subprocess."""
+    if os_process.reap(pid):
         return False
-    try:
-        done, _status = os.waitpid(pid, os.WNOHANG)
-        if done == pid:
-            return False
-    except ChildProcessError:
-        pass
-    except OSError:
-        pass
     return _pid_alive(pid)
 
 
 def _pid_alive(pid: Any) -> bool:
-    """os.kill(pid, 0) liveness probe. DELIBERATE: EPERM (a live process we
-    may not signal) lands in OSError and reads as DEAD — the safe direction
+    """The cheap liveness probe (`os_process.exists`: signal 0 on POSIX, a process handle on Windows; no
+    subprocess). DELIBERATE: a live process we may not look at (EPERM) reads as DEAD — the safe direction
     for every current caller (doors don't wait on it, freeze won't SIGKILL
     it). Do not "fix" this into signaling paths without splitting the two
     meanings (gateway adversary 2, finding 4)."""
-    import os
-
-    try:
-        os.kill(int(pid), 0)
-        return True
-    except (OSError, TypeError, ValueError):
-        return False
+    return os_process.exists(pid)
 
 
 def visitor_waiting(state: Dict[str, Any]) -> bool:

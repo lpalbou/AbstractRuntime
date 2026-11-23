@@ -621,10 +621,15 @@ def _fake_loop(tmp_path: Path, home_dir: Path, *, home_arg: Any = None):
     (mods.parent / "__init__.py").write_text("", encoding="utf-8")
     (mods / "__init__.py").write_text("", encoding="utf-8")
     (mods / "life.py").write_text("import time\ntime.sleep(300)\n", encoding="utf-8")
+    from abstractruntime.utils import os_process
+
+    # As spawn_loop_process starts it: the interpreter itself (never a virtual environment's launcher), so the pid
+    # is the loop's own.
+    python, env = os_process.direct_python({**os.environ, "PYTHONPATH": str(tmp_path / "fakemods")})
     return subprocess.Popen(
-        [sys.executable, "-m", "abstractruntime.identity.life", "--home", str(home_arg or home_dir),
+        [python, "-m", "abstractruntime.identity.life", "--home", str(home_arg or home_dir),
          "--provider", "stub"],
-        env={**os.environ, "PYTHONPATH": str(tmp_path / "fakemods")}, cwd=str(tmp_path),
+        env=env, cwd=str(tmp_path),
     )
 
 
@@ -660,7 +665,8 @@ def test_hard_stop_kills_this_homes_loop_and_never_records_the_caller(tmp_path: 
         _settle(proc)
         _status_for(home_dir, proc.pid, _pid_start_time(proc.pid))
         first = hard_stop_loop(home_dir, reason="drill", requested_by="admin")
-        assert first["killed"] is True and first["pid"] == proc.pid and first["signal"] == "SIGTERM", first
+        sent = "TerminateProcess" if sys.platform == "win32" else "SIGTERM"
+        assert first["killed"] is True and first["pid"] == proc.pid and first["signal"] == sent, first
         assert first["reason"] == "killed" and first["requested_reason"] == "drill"
         assert proc.poll() is not None
         raw = json.loads((home_dir / "loop_status").read_text(encoding="utf-8"))
@@ -715,6 +721,8 @@ def test_hard_stop_fails_closed_on_anything_but_this_homes_verified_loop(tmp_pat
                 p.kill()
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX signals: a SIGTERM that is delivered and survived, then "
+                    "EPERM on signal 0. Windows ends a process through a handle, which cannot be survived")
 def test_killed_only_on_a_confirmed_exit_never_on_a_denied_permission(tmp_path: Path, monkeypatch) -> None:
     """Codex #7: after SIGTERM the process stops answering signal 0 with EPERM (a permission change); that is not a
     death - killed stays False and no SIGKILL goes to an incarnation that cannot be re-verified."""

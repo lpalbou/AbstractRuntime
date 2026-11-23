@@ -10,7 +10,6 @@ import ast
 import builtins
 import collections
 import contextlib
-import fcntl
 import inspect
 import io
 import json
@@ -26,6 +25,11 @@ from typing import Any, Dict, Iterator, List
 import pytest
 import yaml
 
+try:
+    import fcntl
+except ImportError:  # Windows: no flock to count (its lock is counted as file_lock.lock)
+    fcntl = None  # type: ignore[assignment]
+
 sys.path.insert(0, str(Path(__file__).parent))
 
 from test_entity_life_loop import _factory_for, _make_home  # noqa: E402
@@ -33,6 +37,7 @@ from test_entity_phases_runtime import _HookLLM, _history  # noqa: E402
 
 import abstractruntime.identity.life as life  # noqa: E402
 import abstractruntime.identity.lifecycle_fence as lf  # noqa: E402
+from abstractruntime.utils import file_lock  # noqa: E402
 from abstractruntime.identity.chat import TurnCancelled  # noqa: E402
 from abstractruntime.identity.life import (  # noqa: E402
     LifeLoop,
@@ -445,9 +450,11 @@ def test_a_loop_given_a_moved_fence_writes_nothing(tmp_path: Path) -> None:
 _COUNTED = (
     (builtins, "open", "open"), (io, "open", "open"), (os, "open", "os.open"), (os, "stat", "os.stat"),
     (pathlib.Path, "read_text", "Path.read_text"), (pathlib.Path, "read_bytes", "Path.read_bytes"),
-    (pathlib.Path, "exists", "Path.exists"), (fcntl, "flock", "flock"), (subprocess, "run", "subprocess.run"),
+    (pathlib.Path, "exists", "Path.exists"), (subprocess, "run", "subprocess.run"),
     (subprocess, "Popen", "subprocess.Popen"), (yaml, "safe_load", "yaml.safe_load"),
-)
+    # The home's cross-process lock on every system (fcntl.flock underneath on POSIX, LockFileEx on Windows).
+    (file_lock, "lock", "file_lock.lock"), (file_lock, "unlock", "file_lock.unlock"),
+) + (((fcntl, "flock", "flock"),) if fcntl is not None else ())
 
 
 @contextlib.contextmanager
@@ -725,6 +732,48 @@ def _wait_for(predicate, what: str, timeout_s: float = 90.0) -> None:
         if time.monotonic() > deadline:
             raise AssertionError(f"timed out waiting for {what}")
         time.sleep(0.05)
+
+
+def test_a_spawned_loop_is_the_recorded_process_and_a_stop_ends_exactly_it(tmp_path: Path, monkeypatch) -> None:
+    """The whole lane with nothing stubbed but the model (2026-11-22; it could not run on Windows at all): the real
+    door spawns a real loop; the pid the spawner recorded IS the process that claimed the home and calls the model
+    (in a Windows virtual environment `sys.executable` is a launcher, and the loop was its child); the status reads
+    running with that process's own start token; and a real Stop verifies that incarnation by its token and its
+    arguments, ends it, and confirms the death."""
+    from abstractruntime.identity.life import spawn_loop_process
+    from abstractruntime.utils import os_process
+
+    home_dir = _make_home(tmp_path)
+    site = tmp_path / "fake-model-site"
+    site.mkdir()
+    (site / "sitecustomize.py").write_text(_FAKE_SITE, encoding="utf-8")
+    talk = tmp_path / "model-talk"
+    talk.mkdir()
+    monkeypatch.setenv("FENCE_FAKE_LLM_DIR", str(talk))
+    monkeypatch.setenv("PYTHONPATH", os.pathsep.join([str(site), str(RUNTIME_SRC.parent)]))
+    monkeypatch.delenv("ABSTRACTGATEWAY_AUTH_TOKEN", raising=False)
+    started = spawn_loop_process(home_dir, provider="lmstudio", model="fake-model", tick_seconds=0.0,
+                                 ticks_per_day=3, rest_minutes=30.0, first_day_unconditional=True,
+                                 fence=LifecycleFence.admit(home_dir))
+    pid = int(started["pid"])
+    try:
+        _wait_for(lambda: (talk / "called").exists(), "the child's first model call")
+        calling = json.loads((talk / "calls.jsonl").read_text(encoding="utf-8").splitlines()[0])["pid"]
+        assert calling == pid, "the process that runs the loop is not the one the spawner recorded"
+        raw = json.loads((home_dir / "loop_status").read_text(encoding="utf-8"))
+        assert raw["pid"] == pid and raw["phase"] in ("day", "between"), raw
+        assert raw["pid_started_at"] == os_process.start_token(pid), "the loop stamped another incarnation's token"
+        assert life.read_loop_status(home_dir)["running"] is True
+        assert life._verified_loop_incarnation(pid, raw["pid_started_at"], home_dir) == (True, "")
+        stop = hard_stop_loop(home_dir, reason="operator stop")
+        assert stop["killed"] is True and stop["pid"] == pid and stop["reason"] == "killed", stop
+        assert life._pid_state(pid) == "gone"
+        status = json.loads((home_dir / "loop_status").read_text(encoding="utf-8"))
+        assert status["phase"] == "stopped" and status["stopped_by"] == "kill_switch", status
+    finally:
+        (talk / "go").write_text("", encoding="utf-8")
+        if life._pid_state(pid) != "gone":
+            os_process.terminate(pid, force=True)
 
 
 def test_loop_process_refused_after_stop(tmp_path: Path, monkeypatch) -> None:
@@ -1673,7 +1722,9 @@ def test_the_loop_heartbeat_takes_no_parse_and_no_subprocess(tmp_path: Path, cap
         elapsed = (time.perf_counter_ns() - t0) / n
     assert counts.get("yaml.safe_load", 0) == 0, counts
     assert counts.get("subprocess.run", 0) == 0 and counts.get("subprocess.Popen", 0) == 0, counts
-    assert counts.get("flock") == 2 * n, counts  # acquire + release: the Stop's record is written under the lock
+    # Acquire + release: the Stop's record is written under the lock (one flock call each where flock exists).
+    assert counts.get("file_lock.lock") == n and counts.get("file_lock.unlock") == n, counts
+    assert fcntl is None or counts.get("flock") == 2 * n, counts
     _stop_here(home_dir)
     before = (home_dir / "loop_status").read_bytes()
     with pytest.raises(StoppedByOperator):

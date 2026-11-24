@@ -23,7 +23,7 @@
       
       
       <link rel="icon" href="../assets/images/favicon.png">
-      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.8.1">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.8.2">
     
     
       
@@ -2191,7 +2191,8 @@ email-triggered automation, <code>"ask"</code> means every tool call asks except
 a read-only mount (<code>_runtime.workspace_read_only_paths</code>): file tools and VisualFlow writers that target a path inside
 the mount are refused, reads work. Commands and code (<code>execute_command</code>, <code>shell_exec</code>, <code>local_helper_start</code>,
 AbstractAgent's <code>execute_python</code>) run inside an OS sandbox built from the same workspaces (macOS <code>sandbox-exec</code>, Linux
-<code>bwrap</code>/Landlock), so they cannot write into the mount either; on a host with no sandbox they are refused. Every later turn in the discussion session keeps the same setup, whoever starts it, and
+<code>bwrap</code>/Landlock, a Windows restricted token), so they cannot write into the mount either; where the host cannot sandbox
+them they are refused. Every later turn in the discussion session keeps the same setup, whoever starts it, and
 the discussion never writes back into the automation's session, state or ledger.</p>
 <p>Docs: <code>automations.md#discussions</code>, <code>automations.md#read-only-mounts</code>.</p>
 <h2 id="can-several-processes-share-one-run-store">Can several processes share one run store?<a class="headerlink" href="#can-several-processes-share-one-run-store" title="Permanent link">&para;</a></h2>

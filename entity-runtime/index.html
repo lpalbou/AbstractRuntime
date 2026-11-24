@@ -23,7 +23,7 @@
       
       
       <link rel="icon" href="../assets/images/favicon.png">
-      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.8.1">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.8.2">
     
     
       
@@ -540,6 +540,34 @@
       
     </span>
   </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-own-time-loop-is-a-process-identity-and-locks-utilsos_processpy-utilsfile_lockpy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The own-time loop is a process: identity and locks (utils/os_process.py, utils/file_lock.py)
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="The own-time loop is a process: identity and locks (utils/os_process.py, utils/file_lock.py)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#a-paused-host-freezes-the-loop-identitylifehost_pause" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        A paused host freezes the loop (identity.life.host_pause)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
   
 </li>
       
@@ -1298,6 +1326,34 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#the-own-time-loop-is-a-process-identity-and-locks-utilsos_processpy-utilsfile_lockpy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The own-time loop is a process: identity and locks (utils/os_process.py, utils/file_lock.py)
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="The own-time loop is a process: identity and locks (utils/os_process.py, utils/file_lock.py)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#a-paused-host-freezes-the-loop-identitylifehost_pause" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        A paused host freezes the loop (identity.life.host_pause)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#act-only-content-references-at-rest-words-only-in-flight-identityact_onlypy" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1492,6 +1548,92 @@ Stop itself (<code>KILL_SWITCH</code>: paused, own time revoked, the return clea
 <code>ert.readmit(LifecycleFence.admit(home_dir))</code> (<code>ChatHome.readmit</code> for a home) once no run of the old generation is
 still acting. A reader that acts on nothing opens a home with <code>open_home(home_dir, fence=None)</code>;
 <code>open_entity_runtime</code> always needs a fence.</p>
+<h2 id="the-own-time-loop-is-a-process-identity-and-locks-utilsos_processpy-utilsfile_lockpy">The own-time loop is a process: identity and locks (<code>utils/os_process.py</code>, <code>utils/file_lock.py</code>)<a class="headerlink" href="#the-own-time-loop-is-a-process-identity-and-locks-utilsos_processpy-utilsfile_lockpy" title="Permanent link">&para;</a></h2>
+<p>The own-time loop runs in its own process, started by <code>spawn_loop_process</code>. Its home records which process that is
+in <code>loop_status</code>: the pid and a start token (<code>pid_started_at</code>). A pid number is reused by the system; the pid
+together with the start time names one process. Every decision about that process goes through
+<code>abstractruntime.utils.os_process</code>, one contract with a POSIX and a Windows implementation:</p>
+<table>
+<thead>
+<tr>
+<th>Call</th>
+<th>Answers</th>
+<th>POSIX</th>
+<th>Windows</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>exists(pid)</code></td>
+<td>is it there (cheap, no subprocess)</td>
+<td><code>os.kill(pid, 0)</code></td>
+<td>a process handle</td>
+</tr>
+<tr>
+<td><code>state(pid)</code></td>
+<td><code>alive</code>, <code>gone</code> or <code>unknown</code>; only <code>gone</code> confirms a death</td>
+<td><code>waitpid</code>, signal 0, <code>ps</code></td>
+<td>a process handle</td>
+</tr>
+<tr>
+<td><code>start_token(pid)</code></td>
+<td>the incarnation token</td>
+<td><code>ps -o lstart=</code> under <code>LC_ALL=C TZ=UTC</code></td>
+<td><code>win-filetime:&lt;creation time&gt;</code></td>
+</tr>
+<tr>
+<td><code>command(pid)</code></td>
+<td>what it runs</td>
+<td>the <code>ps</code> command line</td>
+<td>the exact argument list</td>
+</tr>
+<tr>
+<td><code>terminate(pid, force=, token=)</code></td>
+<td>end it</td>
+<td>SIGTERM, SIGKILL when forced</td>
+<td><code>TerminateProcess</code> on a handle checked against <code>token</code></td>
+</tr>
+<tr>
+<td><code>direct_python(env)</code></td>
+<td>interpreter and environment for a child whose pid is the one <code>Popen</code> returns</td>
+<td><code>sys.executable</code></td>
+<td>the base interpreter (a virtual environment's <code>python.exe</code> is a launcher)</td>
+</tr>
+<tr>
+<td><code>detached()</code></td>
+<td><code>Popen</code> arguments for a child that outlives its parent's terminal</td>
+<td>a new session</td>
+<td>its own process group, a console without a window</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li><strong>Tokens are written at rest and compared for equality only.</strong> Their spelling per system is fixed. A token of the
+  other spelling never matches, so a home copied to another machine reads "not that process".</li>
+<li><strong>A Stop (<code>hard_stop_loop</code>) ends a process only when it is verified:</strong> alive, the recorded token, and this home's
+  loop by its own arguments (<code>&lt;python&gt; -m abstractruntime.identity.life --home &lt;home&gt;</code>). Anything unknown is
+  refused and said in the result's <code>reason</code>; <code>killed</code> is true only once the exit is confirmed.</li>
+<li><strong>The home's cross-process locks</strong> (the home state lock, the spawn lock, the lifecycle write barrier, the task
+  inbox append) are <code>abstractruntime.utils.file_lock</code>: <code>fcntl.flock</code> on POSIX, <code>LockFileEx</code> on Windows. The lock
+  belongs to the open file, admits several shared holders or one exclusive holder, waits without a limit unless
+  asked not to, and is released when the file is closed (so also when its process dies).</li>
+</ul>
+<h3 id="a-paused-host-freezes-the-loop-identitylifehost_pause">A paused host freezes the loop (<code>identity.life.host_pause</code>)<a class="headerlink" href="#a-paused-host-freezes-the-loop-identitylifehost_pause" title="Permanent link">&para;</a></h3>
+<p>A host can pause everything it runs without stopping any entity. The host that starts a loop names its pause
+file in the <code>ABSTRACTRUNTIME_HOST_PAUSE_FILE</code> environment variable (<code>HOST_PAUSE_FILE_ENV</code>); the file is a JSON
+object such as <code>{"paused": true, "paused_at": "...", "paused_by": "...", "reason": "..."}</code>. AbstractGateway's
+pause sets it to its own <code>gateway_paused.json</code>.</p>
+<ul>
+<li><code>host_pause()</code> returns that object while <code>paused</code> is true, and <code>None</code> otherwise: no variable, no file,
+  <code>paused</code> false, or a file that cannot be read after one retry.</li>
+<li>The loop calls it at every boundary. While the host is paused, the loop reads the entity as <code>paused</code>: no
+  summon, no tick and no sleep window. The state it reads carries <code>host_paused: true</code>, the entity's own state
+  in <code>held_state</code>, and the reason <code>the host is paused</code>.</li>
+<li>Nothing is written for a host pause. The entity's state file keeps what it said, so when the pause file is
+  removed the loop continues the same day from where it was.</li>
+</ul>
+<p>The Stop fence above is a different control: a Stop ends the entity's own time and moves the lifecycle
+generation, while a host pause holds the loop still and changes nothing in the home.</p>
 <h2 id="act-only-content-references-at-rest-words-only-in-flight-identityact_onlypy">Act-only content: references at rest, words only in flight (<code>identity/act_only.py</code>)<a class="headerlink" href="#act-only-content-references-at-rest-words-only-in-flight-identityact_onlypy" title="Permanent link">&para;</a></h2>
 <p>Diary words must never rest outside the book. When an entity reads its own
 diary mid-visit, the <strong>durable transcript carries a typed reference</strong>, not

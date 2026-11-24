@@ -40,6 +40,7 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 _logger = logging.getLogger(__name__)
 
 from abstractruntime.utils.workspace_paths import (
+    EVERYTHING,
     WorkspacePathError,
     WorkspacePathResolution,
     build_workspace_mounts,
@@ -600,7 +601,7 @@ def _workspace_lines(scope: WorkspaceScope) -> List[str]:
             out.append("Allowed workspaces:")
             out.extend(f"  {json.dumps(s)} ({_mode_words(scope, s)})" for s in listed)
     if scope.access_mode == "all_except_ignored":
-        everything_else = "read-only" if (scope.read_only or "/" in scope.read_only_paths) else "read & write"
+        everything_else = "read-only" if (scope.read_only or EVERYTHING in scope.read_only_paths) else "read & write"
         out.append(f"Everything else: ({everything_else})")
     return out
 
@@ -686,11 +687,11 @@ def sandbox_stamp(scope: WorkspaceScope) -> Dict[str, Any]:
     - refused: the ignored paths; builtin_refused/builtin_allowed: the host's protection."""
     root = str(resolve_no_strict(scope.root))
     posture = "any_except_denied" if scope.access_mode == "all_except_ignored" else "allowed_only"
-    default_mode = "ro" if (scope.read_only or "/" in scope.read_only_paths) else "rw"
+    default_mode = "ro" if (scope.read_only or EVERYTHING in scope.read_only_paths) else "rw"
     rows: Dict[str, str] = {}
     candidates: List[Path] = list(scope.allowed_paths) if scope.access_mode != "workspace_only" else []
     for raw in scope.read_only_paths:
-        if raw != "/":
+        if raw != EVERYTHING:
             p = Path(raw)
             if not _is_blocked(path=p, scope=scope) and (
                 scope.access_mode == "all_except_ignored" or any(_under_or_equal(p, a) for a in candidates + [scope.root])

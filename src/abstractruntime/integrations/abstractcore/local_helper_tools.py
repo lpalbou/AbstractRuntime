@@ -21,6 +21,7 @@ these helpers. The registry is process-local and non-durable.
 import itertools
 import os
 import shlex
+import shutil
 import signal
 import socket
 import subprocess
@@ -302,6 +303,28 @@ def helper_scope(run_namespace: str) -> str:
     return rid
 
 
+def _split_command(raw: str) -> list[str]:
+    """The words of a command line, by the platform's own rules: a POSIX shell's, or on
+    Windows the ones programs are started with there (a backslash is a path separator, not
+    an escape: `python C:\\app\\serve.py` keeps its path)."""
+    if os.name != "nt":
+        return shlex.split(raw)
+    import ctypes
+    from ctypes import wintypes
+
+    split = ctypes.windll.shell32.CommandLineToArgvW
+    split.restype, split.argtypes = ctypes.POINTER(wintypes.LPWSTR), [wintypes.LPCWSTR, ctypes.POINTER(ctypes.c_int)]
+    count = ctypes.c_int()
+    words = split(raw, ctypes.byref(count))
+    if not words:
+        raise ValueError("not a command line")
+    try:
+        return [words[i] for i in range(count.value)]
+    finally:
+        ctypes.windll.kernel32.LocalFree.argtypes = [ctypes.c_void_p]
+        ctypes.windll.kernel32.LocalFree(words)
+
+
 def _parse_command(command: str) -> tuple[Optional[list[str]], Optional[str]]:
     raw = str(command or "").strip()
     if not raw:
@@ -309,7 +332,7 @@ def _parse_command(command: str) -> tuple[Optional[list[str]], Optional[str]]:
     if "`" in raw or "$(" in raw:
         return None, "shell substitution is not available here"
     try:
-        argv = shlex.split(raw)
+        argv = _split_command(raw)
     except ValueError as exc:
         return None, f"could not parse command ({exc})"
     if not argv:
@@ -317,6 +340,9 @@ def _parse_command(command: str) -> tuple[Optional[list[str]], Optional[str]]:
     for tok in argv:
         if tok in _SHELL_TOKENS:
             return None, f"shell operator {tok!r} is not available here"
+    if os.name == "nt":
+        # A program is started by its file: `npm` is npm.cmd, found as a shell would find it.
+        argv[0] = shutil.which(argv[0]) or argv[0]
     return argv, None
 
 

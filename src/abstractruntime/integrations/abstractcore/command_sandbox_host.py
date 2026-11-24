@@ -7,7 +7,7 @@ boundary. Pure re-exports, no logic, so nothing can drift from Core:
 - `configure_host(*, env, unsandboxed_commands_allowed=False)`: set once at boot (same values
   again = no-op; different values = RuntimeError).
 - `host_policy()`: {configured, unsandboxed_commands_allowed, env_keys, kind} (names only).
-- `host_sandbox_kind(posture="allowed_only")`: "macos-sandbox-exec" | "linux-bwrap" |
+- `host_sandbox_kind(posture="allowed_only")`: "macos-sandbox-exec" | "linux-bwrap" | "windows-restricted-token" |
   "linux-landlock" | "none".
 - `KIND_LABELS`, `KIND_NONE`.
 - `reset_host_for_tests()`: tests only, forget the host policy.

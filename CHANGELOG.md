@@ -10,6 +10,76 @@ Unreleased changes live in [`changelog.d/`](changelog.d/README.md), one file per
 
 ## [Unreleased]
 
+## [0.20.0] - 2026-11-24
+
+### Added
+
+- **An own-time loop freezes while its host is paused** (`identity.life.host_pause`). A host that pauses (the
+  gateway's kill switch) names its pause file in `ABSTRACTRUNTIME_HOST_PAUSE_FILE` for the processes it starts.
+  The loop reads it at every boundary and treats a paused host as the entity's own `paused` state: no summon, no
+  tick, no sleep window while it stands, and the same day continues when it lifts. The entity's state file is not
+  written for it.
+- **One contract for "the process behind a pid", with a Windows implementation** (`utils.os_process`): `exists`,
+  `reap`, `state` (`alive` / `gone` / `unknown`), `start_token`, `command`, `terminate`, `direct_python` and
+  `detached`. POSIX keeps `os.kill(pid, 0)`, `os.waitpid` and `ps` as before. Windows asks the kernel through a
+  process handle (ctypes, no new dependency): none of the three exists there. The incarnation token written in
+  `loop_status` is unchanged on POSIX; on Windows it is `win-filetime:<process creation time>`.
+
+### Changed
+
+- **Commands run sandboxed on Windows with AbstractCore 2.38.0 or newer.** `execute_command` and
+  `local_helper_start` were refused there. With a run set to "Allow everything, refuse listed workspaces" and
+  read & write by default, they run inside AbstractCore's Windows sandbox (`windows-restricted-token`), built
+  from the same workspace stamp as on macOS and Linux; a run set to "Deny everything, allow listed workspaces"
+  or to a read-only default has its commands refused with the reason. The runtime needs no configuration for
+  it, and its AbstractCore floor is unchanged.
+
+### Fixed
+
+- **A streamed tool call that is sent again keeps its latest version** (`integrations/abstractcore/llm_client.py`).
+  When a provider re-sent a call under the same id, the streaming fold kept the first version it saw, so a call
+  that was streamed as it grew was recorded with incomplete arguments. The fold now keeps the latest version, and
+  the recorded tool calls match the non-streamed result. Calls delivered on separate chunks and re-sent full
+  lists are recorded as before. With AbstractCore 2.37.0 or newer, the providers deliver each streamed native
+  tool call once and complete; with an older AbstractCore, a call streamed by an OpenAI-compatible server can
+  still be recorded with its name and no arguments.
+- **A read-only default holds on Windows** (`utils.workspace_paths`). A host states "everything is read-only
+  except these folders" with the read-only root `/` plus the writable folders. On Windows `/` is not an
+  absolute path, so the root was dropped: file tools wrote anywhere, and the command sandbox stamp said read &
+  write by default. `/` is the read-only root that means everything on every platform (`EVERYTHING`), honoured
+  by `read_only_paths`, `is_read_only_target`, the workspace description in the prompt and `sandbox_stamp`.
+- **A local helper's command line is read by Windows rules on Windows** (`local_helper_start`). The command
+  was split with POSIX shell rules, which treat a backslash as an escape: `python C:\app\serve.py` lost its
+  separators, and a program installed as a `.cmd` file (`npm`, `npx`) was not found. On Windows the command
+  line is split the way programs are started there, and the program is located as a shell locates it.
+- **An entity's own time runs on Windows** (`identity.life`). The own-time loop could not start there: it crashed
+  at its boot on `os.waitpid(pid, os.WNOHANG)` (`os.WNOHANG` does not exist on Windows), and the `starting` status
+  it left made every later `read_loop_status` raise, so the host showed "not running" and each Retry met the same
+  error. Liveness, the incarnation token, the command line and the Stop now go through `utils.os_process`
+  (`_pid_alive`, `_pid_alive_reaped`, `_pid_state`, `_pid_start_time`, `_pid_command` keep their names).
+- **The pid recorded for a spawned loop is the loop's own** (`spawn_loop_process`). In a Windows virtual
+  environment `sys.executable` is a launcher whose child is the interpreter, so the recorded pid named the launcher
+  and the loop's boot claim would refuse the home as held by another process. The loop is started with the
+  interpreter itself (`os_process.direct_python`, the way `multiprocessing` starts its children) and keeps the
+  environment.
+- **A Stop ends the loop on Windows** (`hard_stop_loop`). It raised on `signal.SIGKILL` after own time was revoked
+  and before `stopped` was written, and could verify no loop at all (no token, no command line). It now ends the
+  verified incarnation through a handle whose creation time is checked against the recorded token; `signal` in its
+  result is `TerminateProcess` there.
+- **A loop is recognised by its arguments, not by a split at the first space** (`_is_loop_invocation`): where the
+  system gives the exact argument list (Windows), each argument is compared, the interpreter's path is not read, a
+  home path with a space is one argument, and a home named by another spelling of the same folder (letter case, an
+  8.3 short name) is the same home.
+- **A loop started from a console is not ended by a Ctrl+C in that console on Windows** (`os_process.detached`:
+  its own process group and a console without a window, where POSIX starts a new session).
+- **The home's locks hold across processes on Windows** (`utils.file_lock`: `fcntl.flock`, `LockFileEx` on
+  Windows; shared and exclusive, waiting without a limit, released when the file is closed). The home state lock,
+  both spawn locks, the lifecycle write barrier and the task inbox append took `fcntl.flock` and, where it does
+  not exist, fell back to a lock inside one process or to none. So on Windows the host and the own-time loop did
+  not exclude each other: two simultaneous starts both launched a loop, and a Stop's generation bump could land
+  between a write's fence check and the write. On Windows the lock sits on one byte far past the end of the file,
+  so the content of a locked file (the task inbox) stays readable and writable.
+
 ## [0.19.7] - 2026-11-18
 
 ### Fixed

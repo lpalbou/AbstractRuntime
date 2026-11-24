@@ -124,7 +124,8 @@ Not through its file tools. A discussion works in its own writable workspace and
 a read-only mount (`_runtime.workspace_read_only_paths`): file tools and VisualFlow writers that target a path inside
 the mount are refused, reads work. Commands and code (`execute_command`, `shell_exec`, `local_helper_start`,
 AbstractAgent's `execute_python`) run inside an OS sandbox built from the same workspaces (macOS `sandbox-exec`, Linux
-`bwrap`/Landlock), so they cannot write into the mount either; on a host with no sandbox they are refused. Every later turn in the discussion session keeps the same setup, whoever starts it, and
+`bwrap`/Landlock, a Windows restricted token), so they cannot write into the mount either; where the host cannot sandbox
+them they are refused. Every later turn in the discussion session keeps the same setup, whoever starts it, and
 the discussion never writes back into the automation's session, state or ledger.
 
 Docs: `automations.md#discussions`, `automations.md#read-only-mounts`.

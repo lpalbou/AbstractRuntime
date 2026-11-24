@@ -212,6 +212,9 @@ READ_ONLY_PATHS_KEY = "workspace_read_only_paths"
 # read-only roots, they ride `_runtime` or the top-level key; a child run never adds its own (it
 # inherits the parent's exactly), so a child cannot reopen a parent's read-only root.
 WRITABLE_PATHS_KEY = "workspace_writable_paths"
+# The read-only root that means EVERYTHING (the host's read-only default). It has this one
+# spelling on every platform: on Windows "/" is not an absolute path, and no drive is everything.
+EVERYTHING = "/"
 
 
 def _real_root(raw: object) -> Optional[str]:
@@ -219,6 +222,8 @@ def _real_root(raw: object) -> Optional[str]:
 
     if not isinstance(raw, str) or not raw.strip():
         return None
+    if raw.strip() == EVERYTHING:
+        return EVERYTHING
     path = Path(raw.strip()).expanduser()
     if not path.is_absolute():
         return None  # a mount is an absolute root; relative entries are ignored
@@ -265,14 +270,17 @@ def is_read_only_target(target: Path, read_only_roots: Iterable[str], writable_r
     """True when `target` (already a realpath) is under a read-only root R and no writable
     exception W with target ⊆ W ⊊ R exists (the more specific rule wins; a writable path equal to a
     read-only root is no exception — read-only wins on a tie)."""
-    writable = [Path(w) for w in writable_roots]
+    writable = [str(w) for w in writable_roots]
     for root in read_only_roots:
-        r = Path(root)
-        if not is_under_path(target, r):
+        if not _contains(root, target):
             continue
-        if not any(is_under_path(target, w) and is_under_path(w, r) and w != r for w in writable):
+        if not any(_contains(w, target) and _contains(root, Path(w)) and Path(w) != Path(root) for w in writable):
             return True
     return False
+
+
+def _contains(root: str, path: Path) -> bool:
+    return root == EVERYTHING or is_under_path(path, Path(root))
 
 
 def path_is_read_only(vars_obj: object, path: object) -> bool:

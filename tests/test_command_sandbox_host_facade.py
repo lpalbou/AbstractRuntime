@@ -12,7 +12,16 @@ def test_facade_is_pure_reexport():
     assert facade.host_sandbox_kind is core.host_sandbox_kind
     assert facade.KIND_LABELS is core.KIND_LABELS and facade.KIND_NONE == core.KIND_NONE
     assert facade.reset_host_for_tests is core._reset_host_for_tests
-    assert sorted(facade.__all__) == ["KIND_LABELS", "KIND_NONE", "configure_host", "host_policy", "host_sandbox_kind", "reset_host_for_tests"]
+    assert sorted(facade.__all__) == ["KIND_LABELS", "KIND_NONE", "configure_host", "host_policy", "host_sandbox_kind", "host_unprotected_volumes", "reset_host_for_tests"]
+
+
+def test_unprotected_volumes_come_from_the_core_at_call_time(monkeypatch):
+    # The drives the Windows sandbox cannot protect, as AbstractCore reports them (read when
+    # asked, so a test or a host can replace Core's probe); an older Core without the probe: none.
+    monkeypatch.setattr(core, "windows_unprotected_volumes", lambda: {"F:\\": "drive F: has no permissions (exFAT)"}, raising=False)
+    assert facade.host_unprotected_volumes() == {"F:\\": "drive F: has no permissions (exFAT)"}
+    monkeypatch.delattr(core, "windows_unprotected_volumes")
+    assert facade.host_unprotected_volumes() == {}
 
 
 def test_facade_configures_the_core_host_policy():

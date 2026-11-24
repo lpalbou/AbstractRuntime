@@ -90,9 +90,28 @@ def _machine_is_the_tree(t, monkeypatch):
         monkeypatch.setattr(core_sandbox, "_windows_low_places", lambda *a, **k: (str(t / "home/AppData/LocalLow"),))
     if hasattr(core_sandbox, "_windows_state_folder"):
         monkeypatch.setattr(core_sandbox, "_windows_state_folder", lambda *a, **k: str(t / "machine/state"))
+    if hasattr(core_sandbox, "windows_unprotected_volumes"):
+        monkeypatch.setattr(core_sandbox, "windows_unprotected_volumes", lambda *a, **k: {})
     real_rules = getattr(core_sandbox, "windows_rules", None)
     if real_rules is None:
         return
+    real_policy = core_sandbox.windows_policy
+
+    def checked_policy(rules, *args, **kwargs):
+        # What the launcher is handed: rules, folders to label, the state folder (its lock).
+        import base64
+        import json
+        import zlib
+
+        text = real_policy(rules, *args, **kwargs)
+        policy = json.loads(zlib.decompress(base64.urlsafe_b64decode(text)))
+        paths = [p for r in policy.get("rules", []) for p in r[1:]] + list(policy.get("label") or [])
+        paths += ([policy["state"]] if policy.get("state") else []) + list((policy.get("unprotected") or {}).keys())
+        outside = [p for p in paths if not inside(p)]
+        assert not outside, f"SAFETY: the launcher's policy names places outside the test tree, nothing was launched: {outside}"
+        return text
+
+    monkeypatch.setattr(core_sandbox, "windows_policy", checked_policy)
 
     def inside(p: str) -> bool:
         real = os.path.normcase(os.path.realpath(p))

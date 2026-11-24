@@ -1,3 +1,11 @@
+### Added
+
+- **`host_unprotected_volumes()` in the command-sandbox host facade**
+  (`integrations/abstractcore/command_sandbox_host.py`). The drives AbstractCore's Windows sandbox cannot
+  protect (no permissions, as FAT/exFAT, or a network share), each with AbstractCore's sentence, read when asked
+  (`abstractcore.tools.sandbox.windows_unprotected_volumes`, AbstractCore 2.39.0); `{}` on other platforms and
+  with an older AbstractCore. AbstractGateway names those drives in its command-sandbox state.
+
 ### Changed
 
 - **The Windows end-to-end sandbox tests cover every workspace shape** (`tests/test_r12_workspace_sandbox_windows.py`).

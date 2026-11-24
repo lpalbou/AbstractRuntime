@@ -76,6 +76,39 @@ def t(tmp_path) -> Path:
     return root
 
 
+@pytest.fixture(autouse=True)
+def _machine_is_the_tree(t, monkeypatch):
+    """No rule, integrity label or state file of these tests may land outside the test tree.
+    AbstractCore's Windows sandbox reads three views of the real machine (the user data roots
+    refused under "Deny everything", the folders Windows already labels Low, its own state
+    folder): each is replaced by a folder of the tree, and every rule set is checked before
+    the launcher runs."""
+    if hasattr(core_sandbox, "_windows_user_data_roots"):
+        monkeypatch.setattr(core_sandbox, "_windows_user_data_roots", lambda *a, **k: (str(t / "home"),))
+    if hasattr(core_sandbox, "_windows_low_places"):
+        (t / "home/AppData/LocalLow").mkdir(parents=True, exist_ok=True)
+        monkeypatch.setattr(core_sandbox, "_windows_low_places", lambda *a, **k: (str(t / "home/AppData/LocalLow"),))
+    if hasattr(core_sandbox, "_windows_state_folder"):
+        monkeypatch.setattr(core_sandbox, "_windows_state_folder", lambda *a, **k: str(t / "machine/state"))
+    real_rules = getattr(core_sandbox, "windows_rules", None)
+    if real_rules is None:
+        return
+
+    def inside(p: str) -> bool:
+        real = os.path.normcase(os.path.realpath(p))
+        return real.startswith(os.path.normcase(str(t)).rstrip(os.sep) + os.sep)
+
+    def confined(spec):
+        rules = real_rules(spec)
+        outside = [r for r in rules for p in r[1:] if not inside(p)]
+        assert not outside, f"SAFETY: a sandbox rule outside the test tree, nothing was launched: {outside}"
+        if hasattr(core_sandbox, "_windows_state_folder"):
+            assert inside(core_sandbox._windows_state_folder())
+        return rules
+
+    monkeypatch.setattr(core_sandbox, "windows_rules", confined)
+
+
 def _vars(t: Path, *, posture: str = "any_except_denied", default_ro: bool = False, **extra) -> Dict[str, Any]:
     """Run vars exactly as the gateway's apply_workspace_policy flattens them."""
     root = str(t / "data/workspaces/session-1")

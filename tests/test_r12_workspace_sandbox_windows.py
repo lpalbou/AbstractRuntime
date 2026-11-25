@@ -41,7 +41,7 @@ EVERY_SHAPE = sys.platform == "win32" and KIND is not None and core_sandbox.host
 NEEDS_EVERY_SHAPE = pytest.mark.skipif(
     not EVERY_SHAPE,
     reason='needs an AbstractCore whose Windows sandbox enforces "Deny everything, allow listed workspaces" and the '
-    "read-only default (the release after abstractcore 2.38.0, backlog 1341)",
+    "read-only default (abstractcore 2.39.0 or newer; 2.38.0 enforces neither)",
 )
 SHAPES = [
     pytest.param("any_except_denied", False, id="any-rw"),

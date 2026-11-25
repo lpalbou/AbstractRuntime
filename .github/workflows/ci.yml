@@ -98,6 +98,9 @@ jobs:
         run: |
           python -m pip install -U pip
           python -m pip install -e ".[test]"
+          # The newest AbstractCore, whatever index page the pip cache restored: this job
+          # exists to run the sandbox AbstractCore ships now.
+          python -m pip install --upgrade --no-cache-dir abstractcore
       - name: Pytest (sandbox tests must run, not skip)
         run: |
           python -m pytest -rs -p no:cacheprovider \
@@ -124,7 +127,10 @@ jobs:
 
   # The same proof on Windows, where AbstractCore (2.38.0 or newer) sandboxes commands with a
   # restricted token: tests/test_r12_workspace_sandbox_windows.py skips everywhere else, so this
-  # job FAILS unless every one of its tests ran and passed here.
+  # job FAILS unless its tests ran and passed here. The only skips allowed depend on the
+  # AbstractCore installed (the latest on PyPI): with one that enforces every workspace shape
+  # (2.39.0 or newer), only the older-Core refusal test; with an older one (2.38.x), only the
+  # tests of the two newer shapes, whose reason names the AbstractCore they need.
   windows-sandbox:
     name: Windows command sandbox (restricted token)
     runs-on: windows-latest
@@ -138,6 +144,9 @@ jobs:
         run: |
           python -m pip install -U pip
           python -m pip install -e ".[test]"
+          # The newest AbstractCore, whatever index page the pip cache restored: this job
+          # exists to run the sandbox AbstractCore ships now.
+          python -m pip install --upgrade --no-cache-dir abstractcore
       - name: Pytest (sandbox tests must run, not skip)
         run: >
           python -m pytest -rs -p no:cacheprovider
@@ -148,14 +157,30 @@ jobs:
         run: |
           import sys
           import xml.etree.ElementTree as ET
+          from importlib.metadata import version
 
+          from abstractcore.tools import sandbox
+
+          every_shape = sandbox.host_sandbox_kind("allowed_only") == "windows-restricted-token"
+          print(f"abstractcore {version('abstractcore')}: every workspace shape sandboxed = {every_shape}")
           cases = list(ET.parse("sandbox-junit.xml").getroot().iter("testcase"))
           skipped = [c for c in cases if c.find("skipped") is not None]
           failed = [c for c in cases if c.find("failure") is not None or c.find("error") is not None]
           print(f"sandbox tests: {len(cases)} collected, {len(cases) - len(skipped) - len(failed)} passed, {len(skipped)} skipped, {len(failed)} failed")
+
+          def allowed(case):
+              name, why = case.get("name") or "", case.find("skipped").get("message") or ""
+              if every_shape:  # nothing may skip but the test of what an older Core refuses
+                  return name.startswith("test_an_older_abstractcore_refuses") and "enforces every shape" in why
+              # An older Core: only the two newer shapes, and the reason names the Core they need.
+              return ("[any-ro]" in name or "[allow-list]" in name) and "needs an AbstractCore" in why and "2.39.0" in why
+
+          unexpected = [c for c in skipped if not allowed(c)]
           for c in skipped:
-              print("SKIPPED:", c.get("name"), "-", (c.find("skipped").get("message") or ""))
-          if len(cases) < 8 or skipped or failed:
+              print("SKIPPED" + ("" if allowed(c) else " (NOT ALLOWED)") + ":", c.get("name"), "-", (c.find("skipped").get("message") or ""))
+          if not every_shape:
+              print("NOTE: the installed AbstractCore does not sandbox every shape: the two newer shapes were not exercised.")
+          if len(cases) < 8 or unexpected or failed:
               sys.exit("The sandbox tests did not all run and pass on this Windows host.")
 
   build:

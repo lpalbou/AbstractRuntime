@@ -1,12 +1,12 @@
 # AbstractRuntime
 
-**Release 0.20.0:** an entity's own-time loop freezes while its host is paused; on Windows, own time runs, a read-only default holds, local helper commands keep their paths, and commands run inside AbstractCore's Windows sandbox (AbstractCore 2.38.0 or newer); a streamed tool call that is sent again keeps its latest version.
+**Release 0.21.0:** on Windows, commands run inside AbstractCore's sandbox under every workspace setting (AbstractCore 2.39.0 or newer), and hosts can name the drives that sandbox cannot protect (`command_sandbox_host.host_unprotected_volumes`).
 
 **AbstractRuntime** is a durable workflow runtime (interrupt → checkpoint → resume) with an append-only execution ledger.
 
 It is designed for long-running workflows that must survive restarts and explicitly model blocking (human input, timers, external events, subworkflows) without keeping Python stacks alive.
 
-**Version:** 0.20.0 • **Python:** 3.10+
+**Version:** 0.21.0 • **Python:** 3.10+
 
 **Status:** pre-1.0 (API may evolve). For production use, pin versions and follow `CHANGELOG.md`.
 

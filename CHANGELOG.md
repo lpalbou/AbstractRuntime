@@ -10,6 +10,38 @@ Unreleased changes live in [`changelog.d/`](changelog.d/README.md), one file per
 
 ## [Unreleased]
 
+## [0.21.0] - 2026-11-25
+
+### Added
+
+- **`host_unprotected_volumes()` in the command-sandbox host facade**
+  (`integrations/abstractcore/command_sandbox_host.py`). The drives AbstractCore's Windows sandbox cannot
+  protect (no permissions, as FAT/exFAT, or a network share), each with AbstractCore's sentence, read when asked
+  (`abstractcore.tools.sandbox.windows_unprotected_volumes`, AbstractCore 2.39.0); `{}` on other platforms and
+  with an older AbstractCore. AbstractGateway names those drives in its command-sandbox state.
+
+### Changed
+
+- **Commands are sandboxed on Windows under every workspace setting**, with AbstractCore 2.39.0 or newer:
+  "Deny everything, allow listed workspaces" and a read-only default now run confined instead of being refused.
+  Nothing in the runtime changes for that (the stamp already carried both shapes). The AbstractCore floor stays
+  `abstractcore>=2.35.2`: with an older AbstractCore, the facade reports no unprotected drive and those two shapes
+  are refused with AbstractCore's reason while the run continues, as before.
+- **The Windows end-to-end sandbox tests cover every workspace shape** (`tests/test_r12_workspace_sandbox_windows.py`).
+  Through the runtime's real tool path (gateway-shaped run vars, the TOOL_CALLS handler, AbstractCore's
+  `execute_command` and the runtime's local helper), "Allow everything, refuse listed workspaces" with read &
+  write and with read-only by default, and "Deny everything, allow listed workspaces", are each checked: refused
+  rows, built-in refusals and the other folders of the data folder unreadable and unwritable, read-only rows
+  unwritable, an allowed row inside a refused one, the run's own folder and its `TEMP`, and an unlisted folder
+  writable only under read & write by default, each with a positive control. AbstractCore's views of the real
+  machine (user data roots, Low places, its state folder, the drive probe) are replaced by test folders and the
+  launcher's policy is checked before every launch. The two newer shapes run when AbstractCore's Windows sandbox
+  enforces them (`host_sandbox_kind("allowed_only")`) and skip, naming abstractcore 2.39.0, before; on such an
+  older AbstractCore the test that they are refused while the run continues runs instead.
+- **CI `windows-sandbox`** accepts exactly the skips the installed AbstractCore explains: with 2.39.0 or newer
+  only the older-Core refusal test, with 2.38.x only the two newer shapes (and it says they were not exercised);
+  any other skip, a failure, or fewer than 8 tests fails the job.
+
 ## [0.20.0] - 2026-11-24
 
 ### Added
